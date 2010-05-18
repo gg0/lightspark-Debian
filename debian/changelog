@@ -7,7 +7,7 @@ lightspark (0.3.1-1) UNRELEASED; urgency=low
 
  -- Didier Raboud <didier@raboud.com>  Tue, 18 May 2010 16:35:17 +0200
 
-lightspark (0.3.1-ubuntu3) lucid; urgency=low
+lightspark (0.3.1-0ubuntu3) lucid; urgency=low
 
   * Beta release
   * Improved robustness

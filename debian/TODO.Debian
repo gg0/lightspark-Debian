@@ -1,0 +1,4 @@
+Debian package TODO list:
+    - use alternatives (see swfdec debian package)
+    - Add Provide/Replace/Conflict: swf-player ?
+    - see swfdec shlibs.local

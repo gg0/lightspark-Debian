@@ -2,9 +2,11 @@ lightspark (0.3.1-1) UNRELEASED; urgency=low
 
   * Initial upload to Debian (Closes: #582120)
     - Re-use upstream's PPA packaging. Thanks to Alessandro Pignotti !
-  * Set myself as Maintainer, put DMUA.
+  * debian/control:
+    - Set myself as Maintainer, put DMUA.
+    - Adapt Vcs-* fields to Debian's collab-maint.
+    - Arch is all
   * Use 3.0 (quilt) source package format.
-  * Adapt Vcs-* fields to Debian's collab-maint.
 
  -- Didier Raboud <didier@raboud.com>  Tue, 18 May 2010 16:35:17 +0200
 

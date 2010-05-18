@@ -3,7 +3,10 @@ Section: utils
 Priority: optional
 Maintainer: Didier Raboud <didier@raboud.com>
 DM-Upload-Allowed: yes
-Build-Depends: cmake, cdbs, nasm, debhelper (>= 7), llvm-dev (>= 2.7), libsdl1.2-dev, libgl1-mesa-dev, libxext-dev, libcurl4-gnutls-dev | libcurl4-openssl-dev, libxml2-dev, zlib1g-dev, libnspr4-dev, libavcodec-dev, libpcre3-dev, libftgl-dev, libglew1.5-dev, xulrunner-dev, libgtkglext1-dev 
+Build-Depends: cmake, nasm, debhelper (>= 7.0.50),
+               llvm-dev (>= 2.7), libsdl1.2-dev, libgl1-mesa-dev, libxext-dev, libcurl4-gnutls-dev,
+               libxml2-dev, zlib1g-dev, libnspr4-dev, libavcodec-dev, libpcre3-dev, libftgl-dev, libglew1.5-dev,
+               xulrunner-dev, libgtkglext1-dev 
 Standards-Version: 3.8.4
 Homepage: http://lightspark.sf.net
 Vcs-Git: git://git.debian.org/collab-maint/lightspark.git
@@ -12,7 +15,7 @@ Vcs-Browser: http://git.debian.org/?p=collab-maint/lightspark.git
 Package: lightspark
 Architecture: all
 Depends: ${shlibs:Depends}, ${misc:Depends}, ttf-liberation
-Description: Experimental high-performance SWF (Adobe Flash) player
+Description: High-performance SWF player (experimental)
  Lightspark is a free Flash player for Linux which aims for high-performance
  by using modern technologies such as JIT compilation and OpenGL shaders.
  .
@@ -30,7 +33,7 @@ Description: Experimental high-performance SWF (Adobe Flash) player
 Package: mozilla-plugin-lightspark
 Architecture: all
 Depends: ${shlibs:Depends}, ${misc:Depends}, lightspark (= ${binary:Version})
-Description: Experimental high-performance SWF (Adobe Flash) player
+Description: High-performance SWF player - Mozilla Plugin (experimental)
  Lightspark is a free Flash player for Linux which aims for high-performance
  by using modern technologies such as JIT compilation and OpenGL shaders.
  .
@@ -45,4 +48,4 @@ Description: Experimental high-performance SWF (Adobe Flash) player
    hardware. Designed from scratch after the official Flash documentation was
    released.
  .
- Mozilla plugin package
+ This package contains the mozilla plugin.

@@ -6,6 +6,7 @@ lightspark (0.3.1-1) UNRELEASED; urgency=low
     - Set myself as Maintainer, put DMUA.
     - Adapt Vcs-* fields to Debian's collab-maint.
     - Arch is all
+  * Move from cdbs to dh7 tiny style
   * Use 3.0 (quilt) source package format.
 
  -- Didier Raboud <didier@raboud.com>  Tue, 18 May 2010 16:35:17 +0200

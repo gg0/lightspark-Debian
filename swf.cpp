@@ -203,14 +203,18 @@ bool SystemState::shouldTerminate() const
 
 void SystemState::setError(string& c)
 {
-	error=true;
-	errorCause=c;
-	timerThread->stop();
-	if(renderThread)
+	//We record only the first error for easier fix and reporting
+	if(!error)
 	{
-		//Disable timed rendering
-		removeJob(renderThread);
-		renderThread->draw();
+		error=true;
+		errorCause=c;
+		timerThread->stop();
+		if(renderThread)
+		{
+			//Disable timed rendering
+			removeJob(renderThread);
+			renderThread->draw();
+		}
 	}
 }
 
@@ -879,7 +883,7 @@ void* RenderThread::gtkplug_worker(RenderThread* th)
 	profile->setTag("Render");
 	FTTextureFont font("/usr/share/fonts/truetype/ttf-liberation/LiberationSerif-Regular.ttf");
 	if(font.Error())
-		throw RunTimeException("Unable to load font",sys->getOrigin().raw_buf());
+		throw RunTimeException("Unable to load font");
 	
 	font.FaceSize(20);
 
@@ -1081,7 +1085,7 @@ void* RenderThread::npapi_worker(RenderThread* th)
 	profile->setTag("Render");
 	FTTextureFont font("/usr/share/fonts/truetype/ttf-liberation/LiberationSerif-Regular.ttf");
 	if(font.Error())
-		throw RunTimeException("Unable to load font",sys->getOrigin().raw_buf());
+		throw RunTimeException("Unable to load font");
 	
 	font.FaceSize(20);
 
@@ -1228,7 +1232,7 @@ bool RenderThread::loadShaderPrograms()
 	const char *fs = NULL;
 	fs = dataFileRead(DATADIR "/lightspark.frag");
 	if(fs==NULL)
-		throw RunTimeException("Fragment shader code not found",sys->getOrigin().raw_buf());
+		throw RunTimeException("Fragment shader code not found");
 	glShaderSource(f, 1, &fs,NULL);
 	free((void*)fs);
 
@@ -1255,7 +1259,7 @@ bool RenderThread::loadShaderPrograms()
 
 	fs = dataFileRead(DATADIR "/lightspark.vert");
 	if(fs==NULL)
-		throw RunTimeException("Vertex shader code not found",sys->getOrigin().raw_buf());
+		throw RunTimeException("Vertex shader code not found");
 	glShaderSource(v, 1, &fs,NULL);
 	free((void*)fs);
 
@@ -1426,10 +1430,15 @@ void RootMovieClip::initialize()
 		//Now signal the completion for this root
 		sys->currentVm->addEvent(loaderInfo,Class<Event>::getInstanceS("init"));
 		//Wait for handling of all previous events
-		SynchronizationEvent* sync=new SynchronizationEvent;
-		sys->currentVm->addEvent(NULL, sync);
-		sync->wait();
-		sync->decRef();
+		SynchronizationEvent* se=new SynchronizationEvent;
+		bool added=sys->currentVm->addEvent(NULL, se);
+		if(!added)
+		{
+			se->decRef();
+			throw RunTimeException("Could not add event");
+		}
+		se->wait();
+		se->decRef();
 	}
 }
 
@@ -1577,7 +1586,7 @@ void* RenderThread::sdl_worker(RenderThread* th)
 	profile->setTag("Render");
 	FTTextureFont font("/usr/share/fonts/truetype/ttf-liberation/LiberationSerif-Regular.ttf");
 	if(font.Error())
-		throw RunTimeException("Unable to load font",sys->getOrigin().raw_buf());
+		throw RunTimeException("Unable to load font");
 	
 	font.FaceSize(20);
 	try

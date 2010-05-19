@@ -55,7 +55,7 @@ Package: lightspark-dbg
 Architecture: any
 Section: debug
 Depends: ${shlibs:Depends}, ${misc:Depends}, 
- lightspark (= ${binary:Version},
+ lightspark (= ${binary:Version}),
  mozilla-plugin-lightspark (= ${binary:Version})
 Description: High-performance SWF player (experimental) - Debug symbols
  Lightspark is a free Flash player for Linux which aims for high-performance

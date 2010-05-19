@@ -4,4 +4,4 @@
 	dh $@
 
 override_dh_auto_configure:
-	dh_auto_configure -- -DCOMPILE_PLUGIN=1 -DCMAKE_BUILD_TYPE=Release
+	dh_auto_configure -- -DCOMPILE_PLUGIN=1 -DCMAKE_BUILD_TYPE=Debian

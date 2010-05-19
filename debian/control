@@ -54,6 +54,7 @@ Description: High-performance SWF player - Mozilla Plugin (experimental)
 Package: lightspark-dbg
 Architecture: any
 Section: debug
+Priority: extra
 Depends: ${shlibs:Depends}, ${misc:Depends}, 
  lightspark (= ${binary:Version}),
  mozilla-plugin-lightspark (= ${binary:Version})

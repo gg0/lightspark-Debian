@@ -34,7 +34,7 @@ ENDIF(UNIX)
 SET(LIBSPARK_SOURCES ../swf.cpp ../swftypes.cpp ../tags.cpp ../geometry.cpp ../actions.cpp ../frame.cpp ../input.cpp ../streams.cpp ../tags_stub.cpp ../logger.cpp ../vm.cpp ../asobjects.cpp ../abc.cpp ../abc_codesynt.cpp ../abc_opcodes.cpp ../flashdisplay.cpp ../flashevents.cpp ../textfile.cpp ../thread_pool.cpp ../flashgeom.cpp ../flashnet.cpp ../flashsystem.cpp ../flashutils.cpp ../compat.cpp ../abc_interpreter.cpp ../flashexternal.cpp ../flashtext.cpp ../flashmedia.cpp ../flv.cpp ../netutils.cpp ../timer.cpp ../decoder.cpp ../threading.cpp ../flashxml.cpp)
 IF(${CMAKE_SYSTEM_PROCESSOR} MATCHES "i[3-6]86")
 	SET(LIBSPARK_SOURCES ${LIBSPARK_SOURCES} ../fastpaths_32.asm)
-ELSEIF(${CMAKE_SYSTEM_PROCESSOR} STREQUAL "x86_64")
+ELSEIF(${CMAKE_SYSTEM_PROCESSOR} MATCHES "x86_64|amd64")
 	SET(LIBSPARK_SOURCES ${LIBSPARK_SOURCES} ../fastpaths_64.asm)
 ELSE()
 	MESSAGE(SEND_ERROR "Platform ${CMAKE_SYSTEM_PROCESSOR} not supported")
@@ -47,6 +47,7 @@ TARGET_LINK_LIBRARIES(lightsparkplugin ${lib_pthread} ${lib_glew} ${EXTRA_LIBS_L
 SET_TARGET_PROPERTIES(lightsparkplugin PROPERTIES LINK_FLAGS "-Wl,--as-needed")
 #UNIX?
 IF(UNIX)
-	INSTALL(FILES ${CMAKE_CURRENT_BINARY_DIR}/liblightsparkplugin.so DESTINATION /usr/lib/mozilla/plugins)
+	INSTALL(FILES ${CMAKE_CURRENT_BINARY_DIR}/liblightsparkplugin.so DESTINATION ${PLUGIN_DIRECTORY})
+	INSTALL(TARGETS lightsparkplugin DESTINATION ${PLUGIN_DIRECTORY})
 ENDIF(UNIX)
 

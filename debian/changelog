@@ -1,4 +1,4 @@
-lightspark (0.3.4-1) UNRELEASED; urgency=low
+lightspark (0.3.4-1~exp0) UNRELEASED; urgency=low
 
   * Initial upload to Debian (Closes: #582120)
     - Re-use upstream's PPA packaging. Thanks to Alessandro Pignotti !
@@ -10,12 +10,13 @@ lightspark (0.3.4-1) UNRELEASED; urgency=low
     - Correct "we" typos
   * Add a -dbg package.
   * debian/copyright: Update.
+  * debian/watch: Update using githubredir.debian.net; thanks to Gunnar Wolf !
   * Move from cdbs to dh7 tiny style
   * Cleanup:
     - Remove empty README.Debian
   * Use 3.0 (quilt) source package format.
 
- -- Didier Raboud <didier@raboud.com>  Wed, 19 May 2010 13:56:19 +0200
+ -- Didier Raboud <didier@raboud.com>  Thu, 20 May 2010 11:33:11 +0200
 
 lightspark (0.3.4-0ubuntu1) lucid; urgency=low
 

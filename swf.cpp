@@ -470,11 +470,11 @@ void RenderThread::wait()
 {
 	if(terminated)
 		return;
-	//Signal potentially blocing semaphore
+	terminated=true;
+	//Signal potentially blocking semaphore
 	sem_post(&render);
 	int ret=pthread_join(t,NULL);
 	assert(ret==0);
-	terminated=true;
 }
 
 InputThread::InputThread(SystemState* s,ENGINE e, void* param):m_sys(s),t(0),terminated(false),
@@ -1228,26 +1228,34 @@ void* RenderThread::npapi_worker(RenderThread* th)
 bool RenderThread::loadShaderPrograms()
 {
 	//Create render program
+	assert(glCreateShader);
 	GLuint f = glCreateShader(GL_FRAGMENT_SHADER);
 	
 	const char *fs = NULL;
 	fs = dataFileRead(DATADIR "/lightspark.frag");
 	if(fs==NULL)
 		throw RunTimeException("Fragment shader code not found");
+	assert(glShaderSource);
 	glShaderSource(f, 1, &fs,NULL);
 	free((void*)fs);
 
 	bool ret=true;
 	char str[1024];
 	int a;
+	assert(glCompileShader);
 	glCompileShader(f);
+	assert(glGetShaderInfoLog);
 	glGetShaderInfoLog(f,1024,&a,str);
 	LOG(LOG_NO_INFO,"Fragment shader compilation " << str);
 
+	assert(glCreateProgram);
 	gpu_program = glCreateProgram();
+	assert(glAttachShader);
 	glAttachShader(gpu_program,f);
 
+	assert(glLinkProgram);
 	glLinkProgram(gpu_program);
+	assert(glGetProgramiv);
 	glGetProgramiv(gpu_program,GL_LINK_STATUS,&a);
 	if(a==GL_FALSE)
 	{
@@ -1479,6 +1487,11 @@ void RenderThread::commonGLInit(int width, int height, unsigned int t2[3])
 	{
 		LOG(LOG_ERROR,"Cannot initialize GLEW");
 		cout << glewGetErrorString(err) << endl;
+		::abort();
+	}
+	if(!GLEW_VERSION_2_0)
+	{
+		LOG(LOG_ERROR,"Video card does not support OpenGL 2.0... Aborting");
 		::abort();
 	}
 

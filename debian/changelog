@@ -1,4 +1,4 @@
-lightspark (0.3.6-1~exp0) UNRELEASED; urgency=low
+lightspark (0.3.6-1~exp0) experimental; urgency=low
 
   * Initial upload to Debian (Closes: #582120)
     - Re-use upstream's PPA packaging. Thanks to Alessandro Pignotti !
@@ -6,7 +6,7 @@ lightspark (0.3.6-1~exp0) UNRELEASED; urgency=low
     - Set myself as Maintainer, put DMUA.
     - Adapt Vcs-* fields to Debian's collab-maint.
     - Arch is any
-    - Use llvm-2.7-dev instead of llvm-dev (> 2.7)
+    - Use llvm-2.7-dev in addition to llvm-dev (> 2.7)
     - Correct "we" typos
   * Add a -dbg package.
   * debian/copyright: Update.
@@ -16,7 +16,7 @@ lightspark (0.3.6-1~exp0) UNRELEASED; urgency=low
     - Remove empty README.Debian
   * Use 3.0 (quilt) source package format.
 
- -- Didier Raboud <didier@raboud.com>  Thu, 20 May 2010 11:35:23 +0200
+ -- Didier Raboud <didier@raboud.com>  Fri, 21 May 2010 11:27:27 +0200
 
 lightspark (0.3.6-0ubuntu1) lucid; urgency=low
 

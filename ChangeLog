@@ -1,3 +1,18 @@
+Version 0.3.9
+-------------
+
+More complete cleanup of GL resources
+
+Version 0.3.8
+-------------
+
+Solved deadlock issues when using FlashBlock
+
+Version 0.3.7
+-------------
+
+Improved stability and relaxed graphics requirements
+
 Version 0.3.6
 -------------
 Be more careful about glew initialization

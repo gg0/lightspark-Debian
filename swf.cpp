@@ -56,7 +56,7 @@ extern TLSDATA SystemState* sys;
 extern TLSDATA RenderThread* rt;
 extern TLSDATA ParseThread* pt;
 
-SWF_HEADER::SWF_HEADER(istream& in)
+SWF_HEADER::SWF_HEADER(istream& in):valid(false)
 {
 	in >> Signature[0] >> Signature[1] >> Signature[2];
 
@@ -72,22 +72,23 @@ SWF_HEADER::SWF_HEADER(istream& in)
 	else
 	{
 		LOG(LOG_NO_INFO,"No SWF file signature found");
-		abort();
+		return;
 	}
 	pt->version=Version;
 	in >> FrameSize >> FrameRate >> FrameCount;
-	LOG(LOG_NO_INFO,"FrameRate " << (FrameRate/256) << '.' << (FrameRate%256));
 	float frameRate=FrameRate;
 	frameRate/=256;
+	LOG(LOG_NO_INFO,"FrameRate " << frameRate);
 
 	pt->root->setFrameRate(frameRate);
 	//TODO: setting render rate should be done when the clip is added to the displaylist
 	sys->setRenderRate(frameRate);
 	pt->root->version=Version;
 	pt->root->fileLenght=FileLength;
+	valid=true;
 }
 
-RootMovieClip::RootMovieClip(LoaderInfo* li, bool isSys):initialized(false),frameRate(0),toBind(false)
+RootMovieClip::RootMovieClip(LoaderInfo* li, bool isSys):initialized(false),parsingIsFailed(false),frameRate(0),toBind(false)
 {
 	root=this;
 	sem_init(&mutex,0,1);
@@ -114,6 +115,15 @@ RootMovieClip::~RootMovieClip()
 	sem_destroy(&new_frame);
 	sem_destroy(&sem_valid_rate);
 	sem_destroy(&sem_valid_size);
+}
+
+void RootMovieClip::parsingFailed()
+{
+	//The parsing is failed, we have no change to be ever valid
+	parsingIsFailed=true;
+	sem_post(&new_frame);
+	sem_post(&sem_valid_size);
+	sem_post(&sem_valid_rate);
 }
 
 void RootMovieClip::bindToName(const tiny_string& n)
@@ -184,6 +194,8 @@ SystemState::~SystemState()
 	std::map<tiny_string, Class_base*>::iterator it=classes.begin();
 	for(;it!=classes.end();++it)
 		it->second->decRef();
+
+	sem_destroy(&terminated);
 }
 
 bool SystemState::isOnError() const
@@ -391,12 +403,19 @@ ParseThread::ParseThread(RootMovieClip* r,istream& in):f(in)
 	sem_init(&ended,0,0);
 }
 
+ParseThread::~ParseThread()
+{
+	sem_destroy(&ended);
+}
+
 void ParseThread::execute()
 {
 	pt=this;
 	try
 	{
 		SWF_HEADER h(f);
+		if(!h.valid)
+			throw ParseException("Not an SWF file");
 		root->setFrameSize(h.getFrameSize());
 		root->setFrameCount(h.FrameCount);
 
@@ -448,6 +467,8 @@ void ParseThread::execute()
 	}
 	catch(LightsparkException& e)
 	{
+		LOG(LOG_ERROR,"Exception in ParseThread " << e.what());
+		root->parsingFailed();
 		sys->setError(e.cause);
 	}
 	pt=NULL;
@@ -457,8 +478,8 @@ void ParseThread::execute()
 
 void ParseThread::threadAbort()
 {
-	//TODO: implement
-	::abort();
+	//Tell the our RootMovieClip that the parsing is ending
+	root->parsingFailed();
 }
 
 void ParseThread::wait()
@@ -1013,6 +1034,7 @@ void* RenderThread::gtkplug_worker(RenderThread* th)
 	glDisable(GL_TEXTURE_2D);
 	gdk_gl_drawable_gl_end(glDrawable);
 	delete p;
+	th->commonGLDeinit(t2);
 	return NULL;
 }
 #endif
@@ -1050,13 +1072,18 @@ void* RenderThread::npapi_worker(RenderThread* th)
 		LOG(LOG_ERROR,"glX not present");
 		return NULL;
 	}
-	int attrib[10]={GLX_BUFFER_SIZE,24,GLX_VISUAL_ID,p->visual,GLX_DEPTH_SIZE,24,None};
+	int attrib[10]={GLX_BUFFER_SIZE,24,GLX_DEPTH_SIZE,24,None};
 	GLXFBConfig* fb=glXChooseFBConfig(d, 0, attrib, &a);
 	if(!fb)
 	{
-		attrib[0]=0;
-		fb=glXChooseFBConfig(d, 0, NULL, &a);
-		LOG(LOG_ERROR,"Falling back to no depth and no stencil");
+		attrib[2]=None;
+		fb=glXChooseFBConfig(d, 0, attrib, &a);
+		LOG(LOG_ERROR,"Falling back to no depth buffer");
+	}
+	if(!fb)
+	{
+		LOG(LOG_ERROR,"Could not find any GLX configuration");
+		::abort();
 	}
 	int i;
 	for(i=0;i<a;i++)
@@ -1221,6 +1248,10 @@ void* RenderThread::npapi_worker(RenderThread* th)
 		::abort();
 	}
 	glDisable(GL_TEXTURE_2D);
+	th->commonGLDeinit(t2);
+	glXMakeContextCurrent(d,None,None,NULL);
+	glXDestroyContext(d,th->mContext);
+	XCloseDisplay(d);
 	delete p;
 }
 #endif
@@ -1291,7 +1322,7 @@ bool RenderThread::loadShaderPrograms()
 	return true;
 }
 
-#ifndef WIN32
+#if 0
 void* RenderThread::glx_worker(RenderThread* th)
 {
 	sys=th->m_sys;
@@ -1472,6 +1503,8 @@ void RootMovieClip::Render()
 
 		sem_post(&sem_frames);
 		sem_wait(&new_frame);
+		if(parsingIsFailed)
+			return;
 		sem_wait(&sem_frames);
 	}
 
@@ -1479,9 +1512,18 @@ void RootMovieClip::Render()
 	sem_post(&sem_frames);
 }
 
+void RenderThread::commonGLDeinit(unsigned int t2[3])
+{
+	glDeleteTextures(1,&rt->data_tex);
+	glDeleteTextures(3,t2);
+	glBindFramebuffer(GL_FRAMEBUFFER,0);
+	glDeleteFramebuffers(1,&rt->fboId);
+}
+
 void RenderThread::commonGLInit(int width, int height, unsigned int t2[3])
 {
 	//Now we can initialize GLEW
+	glewExperimental = GL_TRUE;
 	GLenum err = glewInit();
 	if (GLEW_OK != err)
 	{
@@ -1536,6 +1578,7 @@ void RenderThread::commonGLInit(int width, int height, unsigned int t2[3])
 	glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,GL_CLAMP);
 	glTexEnvf( GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE );
 
+	while(glGetError()!=GL_NO_ERROR);
 	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, 0);
 
 	glBindTexture(GL_TEXTURE_2D,t2[1]);
@@ -1568,8 +1611,13 @@ void RenderThread::commonGLInit(int width, int height, unsigned int t2[3])
 	GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
 	if(status != GL_FRAMEBUFFER_COMPLETE)
 	{
-		//cout << status << endl;
-		abort();
+		LOG(LOG_ERROR,"Incomplete FBO status " << status << "... Aborting");
+		while(err!=GL_NO_ERROR)
+		{
+			LOG(LOG_ERROR,"GL errors during initialization: " << err);
+			err=glGetError();
+		}
+		::abort();
 	}
 }
 
@@ -1584,7 +1632,6 @@ void* RenderThread::sdl_worker(RenderThread* th)
 	rt->height=height;
 	th->interactive_buffer=new uint32_t[width*height];
 	unsigned int t2[3];
-	SDL_Init(SDL_INIT_VIDEO);
 	SDL_GL_SetAttribute( SDL_GL_RED_SIZE, 8 );
 	SDL_GL_SetAttribute( SDL_GL_GREEN_SIZE, 8 );
 	SDL_GL_SetAttribute( SDL_GL_BLUE_SIZE, 8 );
@@ -1755,6 +1802,7 @@ void* RenderThread::sdl_worker(RenderThread* th)
 		LOG(LOG_ERROR, "Exception caught " << e);
 		::abort();
 	}
+	th->commonGLDeinit(t2);
 	return NULL;
 }
 
@@ -1813,6 +1861,7 @@ void RootMovieClip::setFrameRate(float f)
 {
 	frameRate=f;
 	//Now frame rate is valid, start the rendering
+
 	sys->addTick(1000/f,this);
 	sem_post(&sem_valid_rate);
 }

@@ -126,8 +126,6 @@ void NPDownloader::dlStartCallback(void* t)
 	cerr << "Start download for " << th->url << endl;
 	th->started=true;
 	NPError e=NPN_GetURLNotify(th->instance, th->url.raw_buf(), NULL, th);
-	//NPError e=NPN_GetURLNotify(th->instance, "http://www.google.com", "_blank", th);
-	//NPError e=NPN_GetURL(instance, "http://www.google.com", "_blank");
 	if(e!=NPERR_NO_ERROR)
 		abort();
 }
@@ -142,8 +140,7 @@ char* NPP_GetMIMEDescription(void)
 //
 NPError NS_PluginInitialize()
 {
-//	Log::initLogging(LOG_NOT_IMPLEMENTED);
-	Log::initLogging(LOG_NO_INFO);
+	Log::initLogging(LOG_ERROR);
 	return NPERR_NO_ERROR;
 }
 
@@ -271,6 +268,8 @@ nsPluginInstance::nsPluginInstance(NPP aInstance, int16_t argc, char** argn, cha
 			sys->setOrigin(argv[i]);
 		}
 	}
+	m_sys.downloadManager=new NPDownloadManager(mInstance);
+	m_sys.addJob(&m_pt);
 }
 
 int nsPluginInstance::hexToInt(char c)
@@ -289,6 +288,8 @@ nsPluginInstance::~nsPluginInstance()
 {
 	//Shutdown the system
 	//cerr << "instance dying" << endl;
+	swf_buf.destroy();
+	m_pt.stop();
 	m_sys.setShutdownFlag();
 	m_sys.wait();
 	if(m_rt)
@@ -354,7 +355,10 @@ NPError nsPluginInstance::SetWindow(NPWindow* aWindow)
 	mWidth = aWindow->width;
 	mHeight = aWindow->height;
 	if(mHeight==0 || mHeight==0)
-		assert(false);
+	{
+		LOG(LOG_ERROR,"No size in SetWindow");
+		return FALSE;
+	}
 	if (mWindow == (Window) aWindow->window)
 	{
 		// The page with the plugin is being resized.
@@ -399,8 +403,6 @@ NPError nsPluginInstance::SetWindow(NPWindow* aWindow)
 		sys=NULL;
 		m_sys.inputThread=m_it;
 		m_sys.renderThread=m_rt;
-		m_sys.downloadManager=new NPDownloadManager(mInstance);
-		m_sys.addJob(&m_pt);
 	}
 	//draw();
 	return TRUE;
@@ -454,6 +456,8 @@ NPError nsPluginInstance::DestroyStream(NPStream *stream, NPError reason)
 		NPDownloader* dl=static_cast<NPDownloader*>(stream->pdata);
 		dl->terminate();
 	}
+	else
+		LOG(LOG_NO_INFO, "DestroyStream on main stream?");
 	return NPERR_NO_ERROR;
 }
 

@@ -303,9 +303,8 @@ ASObject* DefineEditTextTag::instance() const
 {
 	DefineEditTextTag* ret=new DefineEditTextTag(*this);
 	//TODO: check
-	assert(bindedTo==NULL);
-	ret->prototype=Class<TextField>::getClass();
-	ret->prototype->incRef();
+	assert_and_throw(bindedTo==NULL);
+	ret->setPrototype(Class<TextField>::getClass());
 	return ret;
 }
 
@@ -324,6 +323,7 @@ DefineSpriteTag::DefineSpriteTag(RECORDHEADER h, std::istream& in):DictionaryTag
 	do
 	{
 		tag=factory.readTag();
+		sys->tagsStorage.push_back(tag);
 		switch(tag->getType())
 		{
 			case DICT_TAG:
@@ -372,14 +372,10 @@ ASObject* DefineSpriteTag::instance() const
 	if(bindedTo)
 	{
 		//A class is binded to this tag
-		ret->prototype=bindedTo;
+		ret->setPrototype(bindedTo);
 	}
 	else
-	{
-		//A default object is always linked
-		ret->prototype=Class<MovieClip>::getClass();
-	}
-	ret->prototype->incRef();
+		ret->setPrototype(Class<MovieClip>::getClass());
 	ret->bootstrap();
 	return ret;
 }
@@ -574,11 +570,10 @@ DefineFont3Tag::DefineFont3Tag(RECORDHEADER h, std::istream& in):FontTag(h,in)
 		in >> t;
 		CodeTableOffset=t;
 	}
+	GlyphShapeTable.resize(NumGlyphs);
 	for(int i=0;i<NumGlyphs;i++)
 	{
-		SHAPE t;
-		in >> t;
-		GlyphShapeTable.push_back(t);
+		in >> GlyphShapeTable[i];
 	}
 	for(int i=0;i<NumGlyphs;i++)
 	{
@@ -860,9 +855,8 @@ std::ostream& operator<<(std::ostream& s, const Vector2& p)
 ASObject* DefineMorphShapeTag::instance() const
 {
 	DefineMorphShapeTag* ret=new DefineMorphShapeTag(*this);
-	assert(bindedTo==NULL);
-	ret->prototype=Class<MorphShape>::getClass();
-	ret->prototype->incRef();
+	assert_and_throw(bindedTo==NULL);
+	ret->setPrototype(Class<MorphShape>::getClass());
 	return ret;
 }
 
@@ -904,9 +898,7 @@ void DefineShapeTag::Render()
 
 	if(cached.size()==0)
 	{
-		SHAPERECORD* cur=&(Shapes.ShapeRecords);
-
-		FromShaperecordListToShapeVector(cur,cached);
+		FromShaperecordListToShapeVector(Shapes.ShapeRecords,cached);
 
 		for(unsigned int i=0;i<cached.size();i++)
 			cached[i].BuildFromEdges(&Shapes.FillStyles.FillStyles);
@@ -959,9 +951,7 @@ void DefineShape2Tag::Render()
 
 	if(cached.size()==0)
 	{
-		SHAPERECORD* cur=&(Shapes.ShapeRecords);
-
-		FromShaperecordListToShapeVector(cur,cached);
+		FromShaperecordListToShapeVector(Shapes.ShapeRecords,cached);
 
 		for(unsigned int i=0;i<cached.size();i++)
 			cached[i].BuildFromEdges(&Shapes.FillStyles.FillStyles);
@@ -979,7 +969,7 @@ void DefineShape2Tag::Render()
 	std::vector < GeomShape >::iterator it=cached.begin();
 	for(;it!=cached.end();it++)
 	{
-		assert(it->color <= Shapes.FillStyles.FillStyleCount);
+		assert_and_throw(it->color <= Shapes.FillStyles.FillStyleCount);
 		it->Render();
 	}
 
@@ -1017,9 +1007,7 @@ void DefineShape4Tag::Render()
 
 	if(cached.size()==0)
 	{
-		SHAPERECORD* cur=&(Shapes.ShapeRecords);
-
-		FromShaperecordListToShapeVector(cur,cached);
+		FromShaperecordListToShapeVector(Shapes.ShapeRecords,cached);
 
 		for(unsigned int i=0;i<cached.size();i++)
 			cached[i].BuildFromEdges(&Shapes.FillStyles.FillStyles);
@@ -1053,26 +1041,9 @@ void DefineShape4Tag::Render()
 void DefineShape3Tag::Render()
 {
 	LOG(LOG_TRACE,"DefineShape3 Render "<< ShapeId);
-/*	if(texture==0)
-	{
-		glPushAttrib(GL_TEXTURE_BIT);
-		glGenTextures(1,&texture);
-		glBindTexture(GL_TEXTURE_2D,texture);
-
-		glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_LINEAR);
-		glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_LINEAR);
-		glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,GL_CLAMP);
-
-		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, (ShapeBounds.Xmax-ShapeBounds.Xmin)/10, 
-				(ShapeBounds.Ymax-ShapeBounds.Ymin)/10, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
-		glTexEnvf( GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE );
-		glPopAttrib();
-	}*/
 	if(cached.size()==0)
 	{
-		SHAPERECORD* cur=&(Shapes.ShapeRecords);
-
-		FromShaperecordListToShapeVector(cur,cached);
+		FromShaperecordListToShapeVector(Shapes.ShapeRecords,cached);
 
 		for(unsigned int i=0;i<cached.size();i++)
 			cached[i].BuildFromEdges(&Shapes.FillStyles.FillStyles);
@@ -1091,7 +1062,7 @@ void DefineShape3Tag::Render()
 	std::vector < GeomShape >::iterator it=cached.begin();
 	for(;it!=cached.end();it++)
 	{
-		assert(it->color <= Shapes.FillStyles.FillStyleCount);
+		assert_and_throw(it->color <= Shapes.FillStyles.FillStyleCount);
 		it->Render();
 	}
 
@@ -1128,7 +1099,7 @@ Vector2 DefineShape3Tag::debugRender(FTFont* font, bool deep)
 * * \param cur SHAPERECORD list head
 * * \param shapes a vector to be populated with the shapes */
 
-void lightspark::FromShaperecordListToShapeVector(SHAPERECORD* cur, vector<GeomShape>& shapes)
+void lightspark::FromShaperecordListToShapeVector(const vector<SHAPERECORD>& shapeRecords, vector<GeomShape>& shapes)
 {
 	int startX=0;
 	int startY=0;
@@ -1137,8 +1108,9 @@ void lightspark::FromShaperecordListToShapeVector(SHAPERECORD* cur, vector<GeomS
 
 	ShapesBuilder shapesBuilder;
 
-	while(cur)
+	for(unsigned int i=0;i<shapeRecords.size();i++)
 	{
+		const SHAPERECORD* cur=&shapeRecords[i];
 		if(cur->TypeFlag)
 		{
 			if(cur->StraightFlag)
@@ -1196,7 +1168,6 @@ void lightspark::FromShaperecordListToShapeVector(SHAPERECORD* cur, vector<GeomS
 				color0=cur->FillStyle0;
 			}
 		}
-		cur=cur->next;
 	}
 
 	shapesBuilder.outputShapes(shapes);
@@ -1205,9 +1176,7 @@ void lightspark::FromShaperecordListToShapeVector(SHAPERECORD* cur, vector<GeomS
 void DefineFont3Tag::genGlyphShape(vector<GeomShape>& s, int glyph)
 {
 	SHAPE& shape=GlyphShapeTable[glyph];
-	SHAPERECORD* cur=&(shape.ShapeRecords);
-
-	FromShaperecordListToShapeVector(cur,s);
+	FromShaperecordListToShapeVector(shape.ShapeRecords,cached);
 
 	for(unsigned int i=0;i<s.size();i++)
 		s[i].BuildFromEdges(NULL);
@@ -1247,9 +1216,7 @@ void DefineFont3Tag::genGlyphShape(vector<GeomShape>& s, int glyph)
 void DefineFont2Tag::genGlyphShape(vector<GeomShape>& s, int glyph)
 {
 	SHAPE& shape=GlyphShapeTable[glyph];
-	SHAPERECORD* cur=&(shape.ShapeRecords);
-
-	FromShaperecordListToShapeVector(cur,s);
+	FromShaperecordListToShapeVector(shape.ShapeRecords,cached);
 
 	for(unsigned int i=0;i<s.size();i++)
 		s[i].BuildFromEdges(NULL);
@@ -1289,9 +1256,7 @@ void DefineFont2Tag::genGlyphShape(vector<GeomShape>& s, int glyph)
 void DefineFontTag::genGlyphShape(vector<GeomShape>& s,int glyph)
 {
 	SHAPE& shape=GlyphShapeTable[glyph];
-	SHAPERECORD* cur=&(shape.ShapeRecords);
-
-	FromShaperecordListToShapeVector(cur,s);
+	FromShaperecordListToShapeVector(shape.ShapeRecords,cached);
 
 	for(unsigned int i=0;i<s.size();i++)
 		s[i].BuildFromEdges(NULL);
@@ -1360,18 +1325,24 @@ void PlaceObject2Tag::execute(MovieClip* parent, list < pair< PlaceInfo, IDispla
 			localRoot=parent->root;
 		DictionaryTag* dict=localRoot->dictionaryLookup(CharacterId);
 		toAdd=dynamic_cast<IDisplayListElem*>(dict->instance());
-		assert(toAdd);
+		assert_and_throw(toAdd);
 
 		//Object should be constructed even if not binded
-		if(toAdd->prototype && sys->currentVm)
+		if(toAdd->getPrototype() && sys->currentVm)
 		{
 			//Object expect to have the matrix set when created
 			if(PlaceFlagHasMatrix)
 				toAdd->setMatrix(Matrix);
 			//We now ask the VM to construct this object
-			ConstructObjectEvent* e=new ConstructObjectEvent(toAdd,toAdd->prototype);
-			sys->currentVm->addEvent(NULL,e);
+			ConstructObjectEvent* e=new ConstructObjectEvent(toAdd,toAdd->getPrototype());
+			bool added=sys->currentVm->addEvent(NULL,e);
+			if(!added)
+			{
+				e->decRef();
+				throw RunTimeException("Could not add event");
+			}
 			e->wait();
+			e->decRef();
 		}
 
 		if(PlaceFlagHasColorTransform)
@@ -1402,7 +1373,8 @@ void PlaceObject2Tag::execute(MovieClip* parent, list < pair< PlaceInfo, IDispla
 		LOG(LOG_NO_INFO,"Registering ID " << CharacterId << " with name " << Name);
 		if(!PlaceFlagMove)
 		{
-			assert(toAdd);
+			assert_and_throw(toAdd);
+			toAdd->incRef();
 			parent->setVariableByQName((const char*)Name,"",toAdd);
 		}
 		else
@@ -1439,6 +1411,9 @@ void PlaceObject2Tag::execute(MovieClip* parent, list < pair< PlaceInfo, IDispla
 		else
 			LOG(LOG_ERROR,"no char to move at depth " << Depth << " name " << Name);
 	}
+
+	if(toAdd)
+		toAdd->decRef();
 }
 
 PlaceObject2Tag::PlaceObject2Tag(RECORDHEADER h, std::istream& in):DisplayListTag(h,in)
@@ -1673,13 +1648,9 @@ ASObject* DefineSoundTag::instance() const
 	if(bindedTo)
 	{
 		//A class is binded to this tag
-		ret->prototype=bindedTo;
+		ret->setPrototype(bindedTo);
 	}
 	else
-	{
-		//A default object is always linked
-		ret->prototype=Class<Sound>::getClass();
-	}
-	ret->prototype->incRef();
+		ret->setPrototype(Class<Sound>::getClass());
 	return ret;
 }

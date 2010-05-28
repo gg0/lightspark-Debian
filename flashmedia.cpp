@@ -33,7 +33,7 @@ REGISTER_CLASS_NAME(Sound);
 
 void SoundTransform::sinit(Class_base* c)
 {
-	c->setConstructor(new Function(_constructor));
+	c->setConstructor(Class<IFunction>::getFunction(_constructor));
 }
 
 ASFUNCTIONBODY(SoundTransform,_constructor)
@@ -44,35 +44,27 @@ ASFUNCTIONBODY(SoundTransform,_constructor)
 
 void Video::sinit(Class_base* c)
 {
-	c->setConstructor(new Function(_constructor));
+	c->setConstructor(Class<IFunction>::getFunction(_constructor));
 	c->super=Class<DisplayObject>::getClass();
 	c->max_level=c->super->max_level+1;
 }
 
 void Video::buildTraits(ASObject* o)
 {
-	o->setGetterByQName("videoWidth","",new Function(_getVideoWidth));
-	o->setGetterByQName("videoHeight","",new Function(_getVideoHeight));
-	o->setGetterByQName("width","",new Function(Video::_getWidth));
-	o->setSetterByQName("width","",new Function(Video::_setWidth));
-	o->setGetterByQName("height","",new Function(Video::_getHeight));
-	o->setSetterByQName("height","",new Function(Video::_setHeight));
-	o->setVariableByQName("attachNetStream","",new Function(attachNetStream));
+	o->setGetterByQName("videoWidth","",Class<IFunction>::getFunction(_getVideoWidth));
+	o->setGetterByQName("videoHeight","",Class<IFunction>::getFunction(_getVideoHeight));
+	o->setGetterByQName("width","",Class<IFunction>::getFunction(Video::_getWidth));
+	o->setSetterByQName("width","",Class<IFunction>::getFunction(Video::_setWidth));
+	o->setGetterByQName("height","",Class<IFunction>::getFunction(Video::_getHeight));
+	o->setSetterByQName("height","",Class<IFunction>::getFunction(Video::_setHeight));
+	o->setVariableByQName("attachNetStream","",Class<IFunction>::getFunction(attachNetStream));
 }
 
 void Video::Render()
 {
 	if(!initialized)
 	{
-		glGenTextures(1,&videoTexture);
-
-		//Per texture initialization
-		glBindTexture(GL_TEXTURE_2D, videoTexture);
-		glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_LINEAR);
-		glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_LINEAR);
-		glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,GL_CLAMP);
-		
-		glTexEnvf( GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE );
+		videoTexture.init(0,0,GL_LINEAR);
 		initialized=true;
 	}
 
@@ -89,9 +81,9 @@ void Video::Render()
 
 		rt->glAcquireFramebuffer(0,width,0,height);
 
-		glBindTexture(GL_TEXTURE_2D, videoTexture);
-
 		bool frameReady=netStream->copyFrameToTexture(videoTexture);
+		videoTexture.bind();
+		videoTexture.setTexScale(rt->fragmentTexScaleUniform);
 
 		//Enable texture lookup and YUV to RGB conversion
 		if(frameReady)
@@ -144,7 +136,7 @@ bool Video::getBounds(number_t& xmin, number_t& xmax, number_t& ymin, number_t& 
 ASFUNCTIONBODY(Video,_constructor)
 {
 	Video* th=Class<Video>::cast(obj);
-	assert_and_throw(argslen<2);
+	assert_and_throw(argslen<=2);
 	if(0 < argslen)
 		th->width=args[0]->toInt();
 	if(1 < argslen)
@@ -201,7 +193,7 @@ ASFUNCTIONBODY(Video,attachNetStream)
 	Video* th=Class<Video>::cast(obj);
 	assert_and_throw(argslen==1);
 	//Validate the parameter
-	if(args[0]->prototype!=Class<NetStream>::getClass())
+	if(args[0]->getPrototype()!=Class<NetStream>::getClass())
 		::abort();
 
 	//Acquire the netStream
@@ -214,7 +206,7 @@ ASFUNCTIONBODY(Video,attachNetStream)
 
 void Sound::sinit(Class_base* c)
 {
-	c->setConstructor(new Function(_constructor));
+	c->setConstructor(Class<IFunction>::getFunction(_constructor));
 	c->super=Class<EventDispatcher>::getClass();
 	c->max_level=c->super->max_level+1;
 }

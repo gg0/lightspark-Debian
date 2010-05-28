@@ -12,9 +12,10 @@ Official TODO Queue:
 -) Check that setGetter, setSetter and initSlot are used only during initialization
 -) handle private methods, which should be getted on the same level
 -) stick to current level change or use flag to getVariable.../setVariable
--) add classes for number, int, and boolean
 -) use fontconfig to avoid dependance on ttf-liberation
 -) Add Named Objects to frames and not to clips
 -) Support mozilla Out of process plugin mode - Waiting for multithreaded GTK support from mozilla
 -) Conditional scaling of FontGlyph based on version
 -) Why std::istream catches our exeptions?
+-) Add a finally interface to Jobs so they may decRef themselves
+-) Add conditional usage of NPOT textures

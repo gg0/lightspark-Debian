@@ -45,7 +45,11 @@ private:
 	ASObject* getInstance(bool construct, ASObject* const* args, const unsigned int argslen);
 	DictionaryTag const* tag;
 public:
-	Class_inherit(const tiny_string& name):Class_base(name),tag(NULL){}
+	Class_inherit(const tiny_string& name):Class_base(name),tag(NULL)
+	{
+		bool ret=sys->classes.insert(std::make_pair(name,this)).second;
+		assert_and_throw(ret && "Class name collision found");
+	}
 	void buildInstanceTraits(ASObject* o) const;
 	void bindTag(DictionaryTag const* t)
 	{
@@ -61,11 +65,8 @@ private:
 	//This function is instantiated always because of inheritance
 	T* getInstance(bool construct, ASObject* const* args, const unsigned int argslen)
 	{
-		//TODO: Add interface T to ret
 		T* ret=new T;
-		ret->prototype=this;
-		//As we are the prototype we should incRef ourself
-		incRef();
+		ret->setPrototype(this);
 		if(construct)
 			handleConstruction(ret,args,argslen,true);
 		return ret;
@@ -80,11 +81,8 @@ public:
 	static T* getInstanceS(ARG1 a1)
 	{
 		Class<T>* c=Class<T>::getClass();
-		//TODO: Add interface T to ret
 		T* ret=new T(a1);
-		ret->prototype=c;
-		//As we are the prototype we should incRef ourself
-		c->incRef();
+		ret->setPrototype(c);
 		c->handleConstruction(ret,NULL,0,true);
 		return ret;
 	}
@@ -92,11 +90,8 @@ public:
 	static T* getInstanceS(ARG1 a1, ARG2 a2)
 	{
 		Class<T>* c=Class<T>::getClass();
-		//TODO: Add interface T to ret
 		T* ret=new T(a1,a2);
-		ret->prototype=c;
-		//As we are the prototype we should incRef ourself
-		c->incRef();
+		ret->setPrototype(c);
 		c->handleConstruction(ret,NULL,0,true);
 		return ret;
 	}
@@ -127,40 +122,6 @@ public:
 	void buildInstanceTraits(ASObject* o) const
 	{
 		T::buildTraits(o);
-	}
-};
-
-//Specialized class for uint
-template<>
-class Class<UInteger>: public Class_base
-{
-private:
-	Class<UInteger>():Class_base("uint"){}
-	ASObject* getInstance(bool construct, ASObject* const* args, const unsigned int argslen)
-	{
-		abort();
-		return NULL;
-	}
-public:
-	static Class<UInteger>* getClass(const tiny_string& name)
-	{
-		std::map<tiny_string, Class_base*>::iterator it=sys->classes.find(name);
-		Class<UInteger>* ret=NULL;
-		if(it==sys->classes.end()) //This class is not yet in the map, create it
-		{
-			ret=new Class<UInteger>;
-			UInteger::sinit(ret);
-			sys->classes.insert(std::make_pair(name,ret));
-		}
-		else
-			ret=static_cast<Class<UInteger>*>(it->second);
-
-		ret->incRef();
-		return ret;
-	}
-	void buildInstanceTraits(ASObject* o) const
-	{
-		abort();
 	}
 };
 

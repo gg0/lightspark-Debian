@@ -40,7 +40,7 @@ namespace lightspark
 enum TAGTYPE {TAG=0,DISPLAY_LIST_TAG,SHOW_TAG,CONTROL_TAG,DICT_TAG,END_TAG};
 
 void ignore(std::istream& i, int count);
-void FromShaperecordListToShapeVector(SHAPERECORD* cur, std::vector<GeomShape>& shapes);
+void FromShaperecordListToShapeVector(const std::vector<SHAPERECORD>& shapeRecords, std::vector<GeomShape>& shapes);
 
 class Tag
 {
@@ -117,7 +117,9 @@ public:
 
 	ASObject* instance() const
 	{
-		return new DefineShapeTag(*this);
+		DefineShapeTag* ret=new DefineShapeTag(*this);
+		ret->setPrototype(Class<Shape>::getClass());
+		return ret;
 	}
 };
 
@@ -143,7 +145,9 @@ public:
 
 	ASObject* instance() const
 	{
-		return new DefineShape2Tag(*this);
+		DefineShape2Tag* ret=new DefineShape2Tag(*this);
+		ret->setPrototype(Class<Shape>::getClass());
+		return ret;
 	}
 };
 
@@ -168,7 +172,9 @@ public:
 
 	ASObject* instance() const
 	{
-		return new DefineShape3Tag(*this);
+		DefineShape3Tag* ret=new DefineShape3Tag(*this);
+		ret->setPrototype(Class<Shape>::getClass());
+		return ret;
 	}
 };
 
@@ -195,7 +201,9 @@ public:
 
 	ASObject* instance() const
 	{
-		return new DefineShape4Tag(*this);
+		DefineShape4Tag* ret=new DefineShape4Tag(*this);
+		ret->setPrototype(Class<Shape>::getClass());
+		return ret;
 	}
 };
 
@@ -414,15 +422,12 @@ private:
 	UI32 Reserved;
 public:
 	DefineBinaryDataTag(RECORDHEADER h,std::istream& s);
-	~DefineBinaryDataTag(){delete[] bytes;}
 	virtual int getId(){return Tag;} 
 
 	ASObject* instance() const
 	{
 		DefineBinaryDataTag* ret=new DefineBinaryDataTag(*this);
-		//An object is always linked
-		ret->prototype=Class<ByteArray>::getClass();
-		ret->prototype->incRef();
+		ret->setPrototype(Class<ByteArray>::getClass());
 		return ret;
 	}
 };

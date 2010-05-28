@@ -127,8 +127,14 @@ uint32_t sync_stream::getFree()
 	return freeBytes;
 }
 
-zlib_filter::zlib_filter():consumed(0),available(0)
+zlib_filter::zlib_filter():compressed(false),consumed(0),available(0)
 {
+}
+
+zlib_filter::~zlib_filter()
+{
+	if(compressed)
+		inflateEnd(&strm);
 }
 
 bool zlib_filter::initialize()
@@ -242,7 +248,8 @@ zlib_filter::pos_type zlib_filter::seekoff(off_type off, ios_base::seekdir dir,i
 zlib_file_filter::zlib_file_filter(const char* file_name)
 {
 	f=fopen(file_name,"rb");
-	assert(f!=NULL);
+	if(f==NULL)
+		throw lightspark::RunTimeException("File does not exists");
 }
 
 int zlib_file_filter::provideBuffer(int limit)

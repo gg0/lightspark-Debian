@@ -42,8 +42,12 @@ extern TLSDATA SystemState* sys;
 
 REGISTER_CLASS_NAME(Array);
 REGISTER_CLASS_NAME2(ASQName,"QName");
+REGISTER_CLASS_NAME2(IFunction,"Function");
+REGISTER_CLASS_NAME2(UInteger,"uint");
+REGISTER_CLASS_NAME(Boolean);
+REGISTER_CLASS_NAME(Integer);
+REGISTER_CLASS_NAME(Number);
 REGISTER_CLASS_NAME(Namespace);
-REGISTER_CLASS_NAME(ASObject);
 REGISTER_CLASS_NAME(Date);
 REGISTER_CLASS_NAME(RegExp);
 REGISTER_CLASS_NAME(Math);
@@ -58,22 +62,22 @@ Array::Array()
 
 void Array::sinit(Class_base* c)
 {
-	c->setConstructor(new Function(_constructor));
+	c->setConstructor(Class<IFunction>::getFunction(_constructor));
 }
 
 void Array::buildTraits(ASObject* o)
 {
-	o->setGetterByQName("length","",new Function(_getLength));
-	o->ASObject::setVariableByQName("pop","",new Function(_pop));
-	o->ASObject::setVariableByQName("shift",AS3,new Function(shift));
-	o->ASObject::setVariableByQName("unshift","",new Function(unshift));
-	o->ASObject::setVariableByQName("join",AS3,new Function(join));
-	o->ASObject::setVariableByQName("push",AS3,new Function(_push));
-	o->ASObject::setVariableByQName("sort",AS3,new Function(_sort));
-	o->ASObject::setVariableByQName("concat",AS3,new Function(_concat));
-	o->ASObject::setVariableByQName("indexOf",AS3,new Function(indexOf));
-	o->ASObject::setVariableByQName("filter",AS3,new Function(filter));
-	o->ASObject::setVariableByQName("splice",AS3,new Function(splice));
+	o->setGetterByQName("length","",Class<IFunction>::getFunction(_getLength));
+	o->ASObject::setVariableByQName("pop","",Class<IFunction>::getFunction(_pop));
+	o->ASObject::setVariableByQName("shift",AS3,Class<IFunction>::getFunction(shift));
+	o->ASObject::setVariableByQName("unshift","",Class<IFunction>::getFunction(unshift));
+	o->ASObject::setVariableByQName("join",AS3,Class<IFunction>::getFunction(join));
+	o->ASObject::setVariableByQName("push",AS3,Class<IFunction>::getFunction(_push));
+	o->ASObject::setVariableByQName("sort",AS3,Class<IFunction>::getFunction(_sort));
+	o->ASObject::setVariableByQName("concat",AS3,Class<IFunction>::getFunction(_concat));
+	o->ASObject::setVariableByQName("indexOf",AS3,Class<IFunction>::getFunction(indexOf));
+	o->ASObject::setVariableByQName("filter",AS3,Class<IFunction>::getFunction(filter));
+	o->ASObject::setVariableByQName("splice",AS3,Class<IFunction>::getFunction(splice));
 }
 
 ASFUNCTIONBODY(Array,_constructor)
@@ -123,16 +127,16 @@ ASFUNCTIONBODY(Array,splice)
 {
 	Array* th=static_cast<Array*>(obj);
 	
-	assert(argslen==2);
+	assert_and_throw(argslen==2);
 	
 	int startIndex=args[0]->toInt();
 	int deleteCount=args[1]->toUInt();
 	int totalSize=th->data.size();
 	
 	//A negative startIndex is relative to the end
-	assert(abs(startIndex)<totalSize);
+	assert_and_throw(abs(startIndex)<totalSize);
 	startIndex=(startIndex+totalSize)%totalSize;
-	assert((startIndex+deleteCount)<=totalSize);
+	assert_and_throw((startIndex+deleteCount)<=totalSize);
 	
 	Array* ret=Class<Array>::getInstanceS();
 	ret->data.reserve(deleteCount);
@@ -161,12 +165,12 @@ ASFUNCTIONBODY(Array,join)
 ASFUNCTIONBODY(Array,indexOf)
 {
 	Array* th=static_cast<Array*>(obj);
-	assert(argslen==1);
+	assert_and_throw(argslen==1);
 	int ret=-1;
 	ASObject* arg0=args[0];
 	for(unsigned int i=0;i<th->data.size();i++)
 	{
-		assert(th->data[i].type==DATA_OBJECT);
+		assert_and_throw(th->data[i].type==DATA_OBJECT);
 		if(ABCVm::strictEquals(th->data[i].data,arg0))
 		{
 			ret=i;
@@ -180,7 +184,7 @@ ASFUNCTIONBODY(Array,filter)
 {
 	//TODO: really implement
 	Array* th=static_cast<Array*>(obj);
-	//assert(th->data.size()==0);
+	//assert_and_throw(th->data.size()==0);
 	LOG(LOG_NOT_IMPLEMENTED,"Array::filter STUB");
 	Array* ret=Class<Array>::getInstanceS();
 	ret->data=th->data;
@@ -194,7 +198,7 @@ ASFUNCTIONBODY(Array,_concat)
 	ret->data=th->data;
 	if(argslen>=1 && args[0]->getObjectType()==T_ARRAY)
 	{
-		assert(argslen==1);
+		assert_and_throw(argslen==1);
 		Array* tmp=Class<Array>::cast(args[0]);
 		ret->data.insert(ret->data.end(),tmp->data.begin(),tmp->data.end());
 	}
@@ -307,7 +311,7 @@ ASFUNCTIONBODY(ASXML,load)
 
 bool Array::isEqual(ASObject* r)
 {
-	assert(implEnable);
+	assert_and_throw(implEnable);
 	if(r->getObjectType()!=T_ARRAY)
 		return false;
 	else
@@ -330,7 +334,7 @@ bool Array::isEqual(ASObject* r)
 
 intptr_t Array::getVariableByMultiname_i(const multiname& name)
 {
-	assert(implEnable);
+	assert_and_throw(implEnable);
 	unsigned int index=0;
 	if(!isValidMultiname(name,index))
 		return ASObject::getVariableByMultiname_i(name);
@@ -368,7 +372,7 @@ objAndLevel Array::getVariableByMultiname(const multiname& name, bool skip_impl,
 	if(skip_impl || !implEnable)
 		return ASObject::getVariableByMultiname(name,skip_impl,enableOverride);
 		
-	assert(name.ns.size()>0);
+	assert_and_throw(name.ns.size()>0);
 	if(name.ns[0].name!="")
 		return ASObject::getVariableByMultiname(name,skip_impl,enableOverride);
 
@@ -402,7 +406,7 @@ objAndLevel Array::getVariableByMultiname(const multiname& name, bool skip_impl,
 
 void Array::setVariableByMultiname_i(const multiname& name, intptr_t value)
 {
-	assert(implEnable);
+	assert_and_throw(implEnable);
 	unsigned int index=0;
 	if(!isValidMultiname(name,index))
 	{
@@ -429,7 +433,7 @@ bool Array::isValidMultiname(const multiname& name, unsigned int& index)
 {
 	//First of all the multiname has to contain the null namespace
 	//As the namespace vector is sorted, we check only the first one
-	assert(name.ns.size()!=0);
+	assert_and_throw(name.ns.size()!=0);
 	if(name.ns[0].name!="")
 		return false;
 
@@ -440,7 +444,7 @@ bool Array::isValidMultiname(const multiname& name, unsigned int& index)
 		//We try to convert this to an index, otherwise bail out
 		case multiname::NAME_STRING:
 			len=name.name_s.len();
-			assert(len);
+			assert_and_throw(len);
 			for(int i=0;i<len;i++)
 			{
 				if(name.name_s[i]<'0' || name.name_s[i]>'9')
@@ -466,7 +470,7 @@ bool Array::isValidMultiname(const multiname& name, unsigned int& index)
 
 void Array::setVariableByMultiname(const multiname& name, ASObject* o, bool enableOverride)
 {
-	assert(implEnable);
+	assert_and_throw(implEnable);
 	unsigned int index=0;
 	if(!isValidMultiname(name,index))
 		return ASObject::setVariableByMultiname(name,o,enableOverride);
@@ -501,7 +505,7 @@ bool Array::isValidQName(const tiny_string& name, const tiny_string& ns, unsigne
 {
 	if(ns!="")
 		return false;
-	assert(name.len()!=0);
+	assert_and_throw(name.len()!=0);
 	index=0;
 	//First we try to convert the string name to an index, at the first non-digit
 	//we bail out
@@ -518,7 +522,7 @@ bool Array::isValidQName(const tiny_string& name, const tiny_string& ns, unsigne
 
 void Array::setVariableByQName(const tiny_string& name, const tiny_string& ns, ASObject* o, bool find_back, bool skip_impl)
 {
-	assert(implEnable);
+	assert_and_throw(implEnable);
 	unsigned int index=0;
 	if(!isValidQName(name,ns,index))
 	{
@@ -554,7 +558,7 @@ void Array::setVariableByQName(const tiny_string& name, const tiny_string& ns, A
 
 objAndLevel Array::getVariableByQName(const tiny_string& name, const tiny_string& ns, bool skip_impl)
 {
-	assert(implEnable);
+	assert_and_throw(implEnable);
 	throw UnsupportedException("Array::getVariableByQName not completely implemented");
 	return objAndLevel(NULL,0);
 /*	ASObject* ret;
@@ -620,30 +624,33 @@ ASFUNCTIONBODY(ASString,_getLength)
 
 void ASString::sinit(Class_base* c)
 {
-	//c->setConstructor(new Function(_constructor));
+	//c->setConstructor(Class<IFunction>::getFunction(_constructor));
 	c->setConstructor(NULL);
 }
 
 void ASString::buildTraits(ASObject* o)
 {
-	o->setVariableByQName("toString","",new Function(ASObject::_toString));
-	o->setVariableByQName("split",AS3,new Function(split));
-	o->setVariableByQName("substr",AS3,new Function(substr));
-	o->setVariableByQName("replace",AS3,new Function(replace));
-	o->setVariableByQName("concat",AS3,new Function(concat));
-	o->setVariableByQName("indexOf",AS3,new Function(indexOf));
-	o->setVariableByQName("charCodeAt",AS3,new Function(charCodeAt));
-	o->setVariableByQName("slice",AS3,new Function(slice));
-	o->setVariableByQName("toLowerCase",AS3,new Function(toLowerCase));
-	o->setGetterByQName("length","",new Function(_getLength));
+	o->setVariableByQName("toString","",Class<IFunction>::getFunction(ASObject::_toString));
+	o->setVariableByQName("split",AS3,Class<IFunction>::getFunction(split));
+	o->setVariableByQName("substr",AS3,Class<IFunction>::getFunction(substr));
+	o->setVariableByQName("replace",AS3,Class<IFunction>::getFunction(replace));
+	o->setVariableByQName("concat",AS3,Class<IFunction>::getFunction(concat));
+	o->setVariableByQName("indexOf",AS3,Class<IFunction>::getFunction(indexOf));
+	o->setVariableByQName("charCodeAt",AS3,Class<IFunction>::getFunction(charCodeAt));
+	o->setVariableByQName("slice",AS3,Class<IFunction>::getFunction(slice));
+	o->setVariableByQName("toLowerCase",AS3,Class<IFunction>::getFunction(toLowerCase));
+	o->setGetterByQName("length","",Class<IFunction>::getFunction(_getLength));
 }
 
 Array::~Array()
 {
-	for(unsigned int i=0;i<data.size();i++)
+	if(sys && !sys->finalizingDestruction)
 	{
-		if(data[i].type==DATA_OBJECT && data[i].data)
-			data[i].data->decRef();
+		for(unsigned int i=0;i<data.size();i++)
+		{
+			if(data[i].type==DATA_OBJECT && data[i].data)
+				data[i].data->decRef();
+		}
 	}
 }
 
@@ -689,7 +696,7 @@ ASFUNCTIONBODY(ASString,substr)
 
 tiny_string Array::toString(bool debugMsg)
 {
-	assert(implEnable);
+	assert_and_throw(implEnable);
 	if(debugMsg)
 		return ASObject::toString(debugMsg);
 	return toString_priv();
@@ -722,16 +729,16 @@ tiny_string Array::toString_priv() const
 
 bool Array::nextValue(unsigned int index, ASObject*& out)
 {
-	assert(implEnable);
-	assert(index<data.size());
-	assert(data[index].type==DATA_OBJECT);
+	assert_and_throw(implEnable);
+	assert_and_throw(index<data.size());
+	assert_and_throw(data[index].type==DATA_OBJECT);
 	out=data[index].data;
 	return true;
 }
 
 bool Array::hasNext(unsigned int& index, bool& out)
 {
-	assert(implEnable);
+	assert_and_throw(implEnable);
 	out=index<data.size();
 	index++;
 	return true;
@@ -754,20 +761,20 @@ tiny_string ASString::toString_priv() const
 
 tiny_string ASString::toString(bool debugMsg)
 {
-	assert(implEnable);
+	assert_and_throw(implEnable);
 	return toString_priv();
 }
 
 double ASString::toNumber()
 {
-	assert(implEnable);
+	assert_and_throw(implEnable);
 	//TODO: implement conversion that checks for validity
 	return atof(data.c_str());
 }
 
 int32_t ASString::toInt()
 {
-	assert(implEnable);
+	assert_and_throw(implEnable);
 	if(data.empty() || !isdigit(data[0]))
 		return 0;
 	return atoi(data.c_str());
@@ -786,7 +793,7 @@ tiny_string Undefined::toString(bool debugMsg)
 
 bool ASString::isEqual(ASObject* r)
 {
-	assert(implEnable);
+	assert_and_throw(implEnable);
 	//TODO: check conversion
 	if(r->getObjectType()==T_STRING)
 	{
@@ -799,7 +806,7 @@ bool ASString::isEqual(ASObject* r)
 
 bool ASString::isLess(ASObject* r)
 {
-	assert(implEnable);
+	assert_and_throw(implEnable);
 	//TODO: Implement ECMA-262 11.8.5 algorithm
 	//Number comparison has the priority over strings
 	if(r->getObjectType()==T_INTEGER)
@@ -847,7 +854,7 @@ ASFUNCTIONBODY(Integer,_toString)
 	char buf[20];
 	if(argslen==1)
 		radix=args[0]->toUInt();
-	assert(radix==10 || radix==16);
+	assert_and_throw(radix==10 || radix==16);
 	if(radix==10)
 		snprintf(buf,20,"%i",th->val);
 	else if(radix==16)
@@ -1000,19 +1007,19 @@ Date::Date():year(-1),month(-1),date(-1),hour(-1),minute(-1),second(-1),millisec
 
 void Date::sinit(Class_base* c)
 {
-	c->setConstructor(new Function(_constructor));
+	c->setConstructor(Class<IFunction>::getFunction(_constructor));
 }
 
 void Date::buildTraits(ASObject* o)
 {
-	o->setVariableByQName("getTimezoneOffset","",new Function(getTimezoneOffset));
-	o->setVariableByQName("valueOf","",new Function(valueOf));
-	o->setVariableByQName("getTime",AS3,new Function(getTime));
-	o->setVariableByQName("getFullYear","",new Function(getFullYear));
-	o->setVariableByQName("getHours",AS3,new Function(getHours));
-	o->setVariableByQName("getMinutes",AS3,new Function(getMinutes));
-	o->setVariableByQName("getSeconds",AS3,new Function(getMinutes));
-	//o->setVariableByQName("toString",AS3,new Function(ASObject::_toString));
+	o->setVariableByQName("getTimezoneOffset","",Class<IFunction>::getFunction(getTimezoneOffset));
+	o->setVariableByQName("valueOf","",Class<IFunction>::getFunction(valueOf));
+	o->setVariableByQName("getTime",AS3,Class<IFunction>::getFunction(getTime));
+	o->setVariableByQName("getFullYear","",Class<IFunction>::getFunction(getFullYear));
+	o->setVariableByQName("getHours",AS3,Class<IFunction>::getFunction(getHours));
+	o->setVariableByQName("getMinutes",AS3,Class<IFunction>::getFunction(getMinutes));
+	o->setVariableByQName("getSeconds",AS3,Class<IFunction>::getFunction(getMinutes));
+	//o->setVariableByQName("toString",AS3,Class<IFunction>::getFunction(ASObject::_toString));
 }
 
 ASFUNCTIONBODY(Date,_constructor)
@@ -1031,44 +1038,37 @@ ASFUNCTIONBODY(Date,_constructor)
 ASFUNCTIONBODY(Date,getTimezoneOffset)
 {
 	LOG(LOG_NOT_IMPLEMENTED,"getTimezoneOffset");
-	return new Number(120);
+	return abstract_d(120);
 }
 
 ASFUNCTIONBODY(Date,getFullYear)
 {
 	Date* th=static_cast<Date*>(obj);
-	return new Number(th->year);
+	return abstract_d(th->year);
 }
 
 ASFUNCTIONBODY(Date,getHours)
 {
 	Date* th=static_cast<Date*>(obj);
-	return new Number(th->hour);
+	return abstract_d(th->hour);
 }
 
 ASFUNCTIONBODY(Date,getMinutes)
 {
 	Date* th=static_cast<Date*>(obj);
-	return new Number(th->minute);
+	return abstract_d(th->minute);
 }
 
 ASFUNCTIONBODY(Date,getTime)
 {
 	Date* th=static_cast<Date*>(obj);
-	return new Number(th->toInt());
+	return abstract_d(th->toInt());
 }
 
 ASFUNCTIONBODY(Date,valueOf)
 {
 	Date* th=static_cast<Date*>(obj);
-	return new Number(th->toInt());
-}
-
-bool Date::toInt(int& ret)
-{
-	assert(implEnable);
-	ret=toInt();
-	return true;
+	return abstract_d(th->toInt());
 }
 
 int Date::toInt()
@@ -1088,7 +1088,7 @@ int Date::toInt()
 
 tiny_string Date::toString(bool debugMsg)
 {
-	assert(implEnable);
+	assert_and_throw(implEnable);
 	return toString_priv();
 }
 
@@ -1115,10 +1115,10 @@ IFunction::IFunction():closure_this(NULL),closure_level(-1),bound(false),overrid
 ASFUNCTIONBODY(IFunction,apply)
 {
 	IFunction* th=static_cast<IFunction*>(obj);
-	assert(argslen==2);
+	assert_and_throw(argslen==2);
 
 	//Validate parameters
-	assert(args[1]->getObjectType()==T_ARRAY);
+	assert_and_throw(args[1]->getObjectType()==T_ARRAY);
 	Array* array=Class<Array>::cast(args[1]);
 
 	int len=array->size();
@@ -1150,10 +1150,10 @@ ASObject* SyntheticFunction::call(ASObject* obj, ASObject* const* args, int numA
 	{
 		//We passed the hot function threshold, synt the function
 		val=mi->synt_method();
-		assert(val);
+		assert_and_throw(val);
 	}
 
-	assert(mi->needsArgs()==false);
+	assert_and_throw(mi->needsArgs()==false);
 
 	//Prepare arguments
 	int args_len=mi->numArgs();
@@ -1178,7 +1178,7 @@ ASObject* SyntheticFunction::call(ASObject* obj, ASObject* const* args, int numA
 
 	//Fixup missing parameters
 	unsigned int missing_params=args_len-i;
-	assert(missing_params<=mi->option_count);
+	assert_and_throw(missing_params<=mi->option_count);
 	int starting_options=mi->option_count-missing_params;
 
 	for(unsigned int j=starting_options;j<mi->option_count;j++)
@@ -1187,7 +1187,7 @@ ASObject* SyntheticFunction::call(ASObject* obj, ASObject* const* args, int numA
 		i++;
 	}
 	
-	assert(i==mi->numArgs());
+	assert_and_throw(i==mi->numArgs());
 
 	if(mi->needsRest()) //TODO
 	{
@@ -1221,8 +1221,8 @@ ASObject* SyntheticFunction::call(ASObject* obj, ASObject* const* args, int numA
 
 	//Now pop this context and reset the level correctly
 	tl=getVm()->popObjAndLevel();
-	assert(tl.cur_this==obj);
-	assert(tl.cur_this->getLevel()==realLevel);
+	assert_and_throw(tl.cur_this==obj);
+	assert_and_throw(tl.cur_this->getLevel()==realLevel);
 	obj->resetLevel();
 
 	tl=getVm()->getCurObjAndLevel();
@@ -1239,31 +1239,33 @@ ASObject* Function::call(ASObject* obj, ASObject* const* args,int num_args, int 
 	if(bound && closure_this)
 	{
 		LOG(LOG_CALLS,"Calling with closure " << this);
-		ret=val(closure_this,args,num_args);
+		obj->decRef();
+		obj=closure_this;
+		obj->incRef();
 	}
-	else
-		ret=val(obj,args,num_args);
+	ret=val(obj,args,num_args);
 
 	for(int i=0;i<num_args;i++)
 		args[i]->decRef();
+	obj->decRef();
 	return ret;
 }
 
 void Math::sinit(Class_base* c)
 {
-	c->setVariableByQName("PI","",new Number(M_PI));
-	c->setVariableByQName("sqrt","",new Function(sqrt));
-	c->setVariableByQName("atan2","",new Function(atan2));
-	c->setVariableByQName("max","",new Function(_max));
-	c->setVariableByQName("min","",new Function(_min));
-	c->setVariableByQName("abs","",new Function(abs));
-	c->setVariableByQName("sin","",new Function(sin));
-	c->setVariableByQName("cos","",new Function(cos));
-	c->setVariableByQName("floor","",new Function(floor));
-	c->setVariableByQName("ceil","",new Function(ceil));
-	c->setVariableByQName("round","",new Function(round));
-	c->setVariableByQName("random","",new Function(random));
-	c->setVariableByQName("pow","",new Function(pow));
+	c->setVariableByQName("PI","",abstract_d(M_PI));
+	c->setVariableByQName("sqrt","",Class<IFunction>::getFunction(sqrt));
+	c->setVariableByQName("atan2","",Class<IFunction>::getFunction(atan2));
+	c->setVariableByQName("max","",Class<IFunction>::getFunction(_max));
+	c->setVariableByQName("min","",Class<IFunction>::getFunction(_min));
+	c->setVariableByQName("abs","",Class<IFunction>::getFunction(abs));
+	c->setVariableByQName("sin","",Class<IFunction>::getFunction(sin));
+	c->setVariableByQName("cos","",Class<IFunction>::getFunction(cos));
+	c->setVariableByQName("floor","",Class<IFunction>::getFunction(floor));
+	c->setVariableByQName("ceil","",Class<IFunction>::getFunction(ceil));
+	c->setVariableByQName("round","",Class<IFunction>::getFunction(round));
+	c->setVariableByQName("random","",Class<IFunction>::getFunction(random));
+	c->setVariableByQName("pow","",Class<IFunction>::getFunction(pow));
 }
 
 ASFUNCTIONBODY(Math,atan2)
@@ -1366,14 +1368,14 @@ RegExp::RegExp():global(false),ignoreCase(false),lastIndex(0)
 
 void RegExp::sinit(Class_base* c)
 {
-	c->setConstructor(new Function(_constructor));
+	c->setConstructor(Class<IFunction>::getFunction(_constructor));
 }
 
 void RegExp::buildTraits(ASObject* o)
 {
-	o->setVariableByQName("exec",AS3,new Function(exec));
-	o->setVariableByQName("test",AS3,new Function(test));
-	o->setGetterByQName("global","",new Function(_getGlobal));
+	o->setVariableByQName("exec",AS3,Class<IFunction>::getFunction(exec));
+	o->setVariableByQName("test",AS3,Class<IFunction>::getFunction(test));
+	o->setGetterByQName("global","",Class<IFunction>::getFunction(_getGlobal));
 }
 
 ASFUNCTIONBODY(RegExp,_constructor)
@@ -1417,12 +1419,12 @@ ASFUNCTIONBODY(RegExp,exec)
 	opt.set_caseless(th->ignoreCase);
 
 	pcrecpp::RE pcreRE(th->re,opt);
-	assert(th->lastIndex==0);
+	assert_and_throw(th->lastIndex==0);
 	const tiny_string& arg0=args[0]->toString();
 	LOG(LOG_CALLS,"re: " << th->re);
 	int numberOfCaptures=pcreRE.NumberOfCapturingGroups();
 	LOG(LOG_CALLS,"capturing groups " << numberOfCaptures);
-	assert(numberOfCaptures!=-1);
+	assert_and_throw(numberOfCaptures!=-1);
 	//The array of captured groups
 	pcrecpp::Arg** captures=new pcrecpp::Arg*[numberOfCaptures];
 	//The array of strings
@@ -1448,11 +1450,11 @@ ASFUNCTIONBODY(RegExp,test)
 	opt.set_caseless(th->ignoreCase);
 
 	pcrecpp::RE pcreRE(th->re,opt);
-	assert(th->lastIndex==0);
+	assert_and_throw(th->lastIndex==0);
 	const tiny_string& arg0=args[0]->toString();
 
 	bool ret=pcreRE.PartialMatch(arg0.raw_buf());
-	return new Boolean(ret);
+	return abstract_b(ret);
 }
 
 ASFUNCTIONBODY(ASString,slice)
@@ -1473,8 +1475,8 @@ ASFUNCTIONBODY(ASString,charCodeAt)
 	LOG(LOG_CALLS,"ASString::charCodeAt not really implemented");
 	ASString* th=static_cast<ASString*>(obj);
 	unsigned int index=args[0]->toInt();
-	assert(index>=0 && index<th->data.size());
-	return new Integer(th->data[index]);
+	assert_and_throw(index>=0 && index<th->data.size());
+	return abstract_i(th->data[index]);
 }
 
 ASFUNCTIONBODY(ASString,indexOf)
@@ -1485,7 +1487,7 @@ ASFUNCTIONBODY(ASString,indexOf)
 	if(argslen>1)
 		startIndex=args[1]->toInt();
 	
-	assert(startIndex==0);
+	assert_and_throw(startIndex==0);
 	bool found=false;
 	unsigned int i;
 	for(i=startIndex;i<th->data.size();i++)
@@ -1507,9 +1509,9 @@ ASFUNCTIONBODY(ASString,indexOf)
 	}
 
 	if(!found)
-		return new Integer(-1);
+		return abstract_i(-1);
 	else
-		return new Integer(i);
+		return abstract_i(i);
 }
 
 ASFUNCTIONBODY(ASString,toLowerCase)
@@ -1540,9 +1542,9 @@ ASFUNCTIONBODY(ASString,replace)
 	}
 	while(index<(int)ret->data.size());
 
-	assert(argslen==2 && args[1]->getObjectType()==T_STRING);
+	assert_and_throw(argslen==2 && args[1]->getObjectType()==T_STRING);
 
-	if(args[0]->prototype==Class<RegExp>::getClass())
+	if(args[0]->getPrototype()==Class<RegExp>::getClass())
 	{
 		RegExp* re=static_cast<RegExp*>(args[0]);
 
@@ -1592,6 +1594,16 @@ Class_base::~Class_base()
 
 	if(super)
 		super->decRef();
+	
+	//Destroy all the object reference by us
+	if(!referencedObjects.empty())
+	{
+		cout << "Class " << class_name << " references " << referencedObjects.size() << endl;
+		set<ASObject*>::iterator it=referencedObjects.begin();
+		for(;it!=referencedObjects.end();it++)
+			delete *it;
+	}
+	
 }
 
 void Class_base::addImplementedInterface(const multiname& i)
@@ -1632,7 +1644,7 @@ void Class_base::recursiveBuild(ASObject* target)
 
 void Class_base::setConstructor(IFunction* c)
 {
-	assert(constructor==NULL);
+	assert_and_throw(constructor==NULL);
 	constructor=c;
 }
 
@@ -1650,30 +1662,64 @@ void Class_base::handleConstruction(ASObject* target, ASObject* const* args, uns
 	}*/
 	if(buildAndLink)
 	{
-		assert(!target->initialized);
+		assert_and_throw(!target->initialized);
 		//HACK: suppress implementation handling of variables just now
 		bool bak=target->implEnable;
 		target->implEnable=false;
 		recursiveBuild(target);
 		//And restore it
 		target->implEnable=bak;
-		assert(target->getLevel()==max_level);
+		assert_and_throw(target->getLevel()==max_level);
 	#ifndef NDEBUG
 		target->initialized=true;
 	#endif
 	}
 
 	//As constructors are not binded, we should change here the level
-	assert(max_level==target->getLevel());
+	assert_and_throw(max_level==target->getLevel());
 	if(constructor)
 	{
 		LOG(LOG_CALLS,"Calling Instance init " << class_name);
-
+		target->incRef();
 		ASObject* ret=constructor->call(target,args,argslen,max_level);
-		assert(ret==NULL);
+		assert_and_throw(ret==NULL);
 	}
 }
 
+void Class_base::acquireObject(ASObject* ob)
+{
+	Locker l(referencedObjectsMutex);
+	bool ret=referencedObjects.insert(ob).second;
+	assert_and_throw(ret);
+}
+
+void Class_base::abandonObject(ASObject* ob)
+{
+	Locker l(referencedObjectsMutex);
+	set<ASObject>::size_type ret=referencedObjects.erase(ob);
+	if(ret!=1)
+	{
+		cout << ret << endl;
+		cout << class_name << endl;
+		::abort();
+	}
+}
+
+void Class_base::cleanUp()
+{
+	Variables.destroyContents();
+	if(constructor)
+	{
+		constructor->decRef();
+		constructor=NULL;
+	}
+
+	if(super)
+	{
+		super->decRef();
+		super=NULL;
+	}
+}
 
 ASObject* Class_inherit::getInstance(bool construct, ASObject* const* args, const unsigned int argslen)
 {
@@ -1681,19 +1727,16 @@ ASObject* Class_inherit::getInstance(bool construct, ASObject* const* args, cons
 	if(tag)
 	{
 		ret=tag->instance();
-		assert(ret);
+		assert_and_throw(ret);
 	}
 	else
 	{
-		assert(super);
+		assert_and_throw(super);
 		//Our super should not construct, we are going to do it ourselves
 		ret=super->getInstance(false,NULL,0);
 	}
 	//We override the prototype
-	ret->prototype->decRef();
-	//As we are the prototype we should incRef ourself
-	ret->prototype=this;
-	incRef();
+	ret->setPrototype(this);
 	if(construct)
 		handleConstruction(ret,args,argslen,true);
 	return ret;
@@ -1701,7 +1744,7 @@ ASObject* Class_inherit::getInstance(bool construct, ASObject* const* args, cons
 
 void Class_inherit::buildInstanceTraits(ASObject* o) const
 {
-	assert(class_index!=-1);
+	assert_and_throw(class_index!=-1);
 	//The class is declared in the script and has an index
 	LOG(LOG_CALLS,"Building instance traits");
 
@@ -1752,7 +1795,7 @@ const std::vector<Class_base*>& Class_base::getInterfaces() const
 		for(unsigned int i=0;i<interfaces.size();i++)
 		{
 			ASObject* interface_obj=getGlobal()->getVariableByMultiname(interfaces[i]).obj;
-			assert(interface_obj && interface_obj->getObjectType()==T_CLASS);
+			assert_and_throw(interface_obj && interface_obj->getObjectType()==T_CLASS);
 			Class_base* inter=static_cast<Class_base*>(interface_obj);
 
 			interfaces_added.push_back(inter);
@@ -1776,7 +1819,7 @@ void Class_base::linkInterface(ASObject* obj) const
 	for(unsigned int i=0;i<getInterfaces().size();i++)
 		getInterfaces()[i]->linkInterface(obj);
 
-	assert(context);
+	assert_and_throw(context);
 
 	//Link traits of this interface
 	for(unsigned int j=0;j<context->instances[class_index].trait_count;j++)
@@ -1789,7 +1832,7 @@ void Class_base::linkInterface(ASObject* obj) const
 	{
 		LOG(LOG_CALLS,"Calling interface init for " << class_name);
 		ASObject* ret=constructor->call(obj,NULL,0,max_level);
-		assert(ret==NULL);
+		assert_and_throw(ret==NULL);
 	}
 }
 
@@ -1818,9 +1861,9 @@ tiny_string Class_base::getQualifiedClassName() const
 		return class_name;
 	else
 	{
-		assert(context);
+		assert_and_throw(context);
 		int name_index=context->instances[class_index].name;
-		assert(name_index);
+		assert_and_throw(name_index);
 		const multiname* mname=context->getMultiname(name_index,NULL);
 		return mname->qualifiedString();
 	}
@@ -1828,7 +1871,7 @@ tiny_string Class_base::getQualifiedClassName() const
 
 void ASQName::sinit(Class_base* c)
 {
-	c->setConstructor(new Function(_constructor));
+	c->setConstructor(Class<IFunction>::getFunction(_constructor));
 }
 
 ASFUNCTIONBODY(ASQName,_constructor)
@@ -1837,8 +1880,8 @@ ASFUNCTIONBODY(ASQName,_constructor)
 	if(argslen!=2)
 		throw UnsupportedException("ArgumentError");
 
-	assert(args[0]->getObjectType()==T_STRING || args[0]->getObjectType()==T_NAMESPACE);
-	assert(args[1]->getObjectType()==T_STRING);
+	assert_and_throw(args[0]->getObjectType()==T_STRING || args[0]->getObjectType()==T_NAMESPACE);
+	assert_and_throw(args[1]->getObjectType()==T_STRING);
 
 	switch(args[0]->getObjectType())
 	{
@@ -1863,7 +1906,7 @@ ASFUNCTIONBODY(ASQName,_constructor)
 
 void Namespace::sinit(Class_base* c)
 {
-	c->setConstructor(new Function(_constructor));
+	c->setConstructor(Class<IFunction>::getFunction(_constructor));
 }
 
 void Namespace::buildTraits(ASObject* o)
@@ -1872,14 +1915,14 @@ void Namespace::buildTraits(ASObject* o)
 
 ASFUNCTIONBODY(Namespace,_constructor)
 {
-	assert(argslen==0);
+	assert_and_throw(argslen==0);
 	return NULL;
 }
 
 void InterfaceClass::lookupAndLink(ASObject* o, const tiny_string& name, const tiny_string& interfaceNs)
 {
 	ASObject* ret=o->getVariableByQName(name,"").obj;
-	assert(ret);
+	assert_and_throw(ret);
 	ret->incRef();
 	o->setVariableByQName(name,interfaceNs,ret);
 }
@@ -1908,3 +1951,19 @@ bool UInteger::isEqual(ASObject* o)
 	}
 }
 
+Class<IFunction>* Class<IFunction>::getClass()
+{
+	std::map<tiny_string, Class_base*>::iterator it=sys->classes.find(ClassName<IFunction>::name);
+	Class<IFunction>* ret=NULL;
+	if(it==sys->classes.end()) //This class is not yet in the map, create it
+	{
+		ret=new Class<IFunction>;
+		IFunction::sinit(ret);
+		sys->classes.insert(std::make_pair(ClassName<IFunction>::name,ret));
+	}
+	else
+		ret=static_cast<Class<IFunction>*>(it->second);
+
+	ret->incRef();
+	return ret;
+}

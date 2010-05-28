@@ -21,11 +21,13 @@
 #define ASOBJECTS_H
 #include <vector>
 #include <list>
+#include <set>
 #include "swftypes.h"
 #include "frame.h"
 #include "input.h"
 #include "compat.h"
 #include "exceptions.h"
+#include "threading.h"
 
 namespace lightspark
 {
@@ -63,6 +65,9 @@ private:
 	}
 	void recursiveBuild(ASObject* target);
 	IFunction* constructor;
+	//Naive garbage collection until reference cycles are detected
+	Mutex referencedObjectsMutex;
+	std::set<ASObject*> referencedObjects;
 
 public:
 	Class_base* super;
@@ -73,8 +78,8 @@ public:
 	int max_level;
 	void handleConstruction(ASObject* target, ASObject* const* args, unsigned int argslen, bool buildAndLink);
 	void setConstructor(IFunction* c);
-	Class_base(const tiny_string& name):use_protected(false),constructor(NULL),super(NULL),context(NULL),class_name(name),class_index(-1),
-		max_level(0) {type=T_CLASS;}
+	Class_base(const tiny_string& name):use_protected(false),constructor(NULL),referencedObjectsMutex("referencedObjects"),super(NULL),
+		context(NULL),class_name(name),class_index(-1),	max_level(0) {type=T_CLASS;}
 	~Class_base();
 	virtual ASObject* getInstance(bool construct, ASObject* const* args, const unsigned int argslen)=0;
 	objAndLevel getVariableByMultiname(const multiname& name, bool skip_impl, bool enableOverride=true)
@@ -120,6 +125,11 @@ public:
 	bool isSubClass(const Class_base* cls) const;
 	tiny_string getQualifiedClassName() const;
 	tiny_string toString(bool debugMsg);
+	
+	//DEPRECATED: naive garbage collector
+	void abandonObject(ASObject* ob);
+	void acquireObject(ASObject* ob);
+	void cleanUp();
 };
 
 class Class_object: public Class_base
@@ -201,9 +211,16 @@ public:
 
 class IFunction: public ASObject
 {
+CLASSBUILDABLE(IFunction);
+protected:
+	IFunction();
+	virtual IFunction* clone()=0;
+	ASObject* closure_this;
+	int closure_level;
+	bool bound;
+	IFunction* overriden_by;
 public:
 	ASFUNCTION(apply);
-	IFunction();
 	virtual ASObject* call(ASObject* obj, ASObject* const* args,int num_args, int level)=0;
 	IFunction* bind(ASObject* c, int level)
 	{
@@ -244,42 +261,46 @@ public:
 	{
 		return overriden_by!=NULL;
 	}
-protected:
-	virtual IFunction* clone()=0;
-	ASObject* closure_this;
-	int closure_level;
-	bool bound;
-	IFunction* overriden_by;
 };
 
 class Function : public IFunction
 {
+friend class Class<IFunction>;
 public:
 	typedef ASObject* (*as_function)(ASObject*, ASObject* const *, const unsigned int);
+private:
+	as_function val;
 	Function(){}
 	Function(as_function v):val(v){}
+	Function* clone()
+	{
+		return new Function(*this);
+	}
+public:
 	ASObject* call(ASObject* obj, ASObject* const* args, int num_args, int level);
 	IFunction* toFunction();
 	bool isEqual(ASObject* r)
 	{
 		abort();
 	}
-
-private:
-	as_function val;
-	Function* clone()
-	{
-		return new Function(*this);
-	}
 };
 
 class SyntheticFunction : public IFunction
 {
 friend class ABCVm;
-//friend void ASObject::handleConstruction(ASObject* const* args, unsigned int argslen, bool buildAndLink);
+friend class Class<IFunction>;
 public:
 	typedef ASObject* (*synt_function)(call_context* cc);
+private:
+	int hit_count;
+	method_info* mi;
+	synt_function val;
 	SyntheticFunction(method_info* m);
+	SyntheticFunction* clone()
+	{
+		return new SyntheticFunction(*this);
+	}
+public:
 	ASObject* call(ASObject* obj, ASObject* const* args,int num_args, int level);
 	IFunction* toFunction();
 	std::vector<ASObject*> func_scope;
@@ -301,30 +322,58 @@ public:
 	{
 		func_scope.push_back(s);
 	}
+};
 
+//Specialized class for IFunction
+template<>
+class Class<IFunction>: public Class_base
+{
 private:
-	int hit_count;
-	method_info* mi;
-	synt_function val;
-	SyntheticFunction* clone()
+	Class<IFunction>():Class_base("Function"){}
+	ASObject* getInstance(bool construct, ASObject* const* args, const unsigned int argslen)
 	{
-		return new SyntheticFunction(*this);
+		abort();
+		return NULL;
+	}
+public:
+	static Class<IFunction>* getClass();
+	static Function* getFunction(Function::as_function v)
+	{
+		Class<IFunction>* c=Class<IFunction>::getClass();
+		Function* ret=new Function(v);
+		ret->setPrototype(c);
+		//c->handleConstruction(ret,NULL,0,true);
+		return ret;
+	}
+	static SyntheticFunction* getSyntheticFunction(method_info* m)
+	{
+		Class<IFunction>* c=Class<IFunction>::getClass();
+		SyntheticFunction* ret=new SyntheticFunction(m);
+		ret->setPrototype(c);
+		c->handleConstruction(ret,NULL,0,true);
+		return ret;
+	}
+	void buildInstanceTraits(ASObject* o) const
+	{
 	}
 };
 
 class Boolean: public ASObject
 {
 friend bool Boolean_concrete(ASObject* obj);
+CLASSBUILDABLE(Boolean);
 private:
 	bool val;
-public:
+	Boolean(){}
 	Boolean(bool v):val(v){type=T_BOOLEAN;}
+public:
 	int32_t toInt()
 	{
 		return val;
 	}
 	bool isEqual(ASObject* r);
 	tiny_string toString(bool debugMsg);
+	static void buildTraits(ASObject* o){};
 };
 
 class Undefined : public ASObject
@@ -339,16 +388,17 @@ public:
 
 class ASString: public ASObject
 {
+CLASSBUILDABLE(ASString);
 private:
 	tiny_string toString_priv() const;
-public:
-	std::string data;
-	static void sinit(Class_base* c);
-	static void buildTraits(ASObject* o);
 	ASString();
 	ASString(const std::string& s);
 	ASString(const tiny_string& s);
 	ASString(const char* s);
+public:
+	std::string data;
+	static void sinit(Class_base* c);
+	static void buildTraits(ASObject* o);
 	ASFUNCTION(split);
 	ASFUNCTION(_getLength);
 	ASFUNCTION(replace);
@@ -376,11 +426,12 @@ public:
 class ASQName: public ASObject
 {
 friend class ABCContext;
+CLASSBUILDABLE(ASQName);
 private:
 	tiny_string uri;
 	tiny_string local_name;
-public:
 	ASQName(){type=T_QNAME;}
+public:
 	static void sinit(Class_base*);
 	ASFUNCTION(_constructor);
 };
@@ -389,11 +440,12 @@ class Namespace: public ASObject
 {
 friend class ASQName;
 friend class ABCContext;
+CLASSBUILDABLE(Namespace);
 private:
 	tiny_string uri;
-public:
 	Namespace(){type=T_NAMESPACE;}
 	Namespace(const tiny_string& _uri):uri(_uri){type=T_NAMESPACE;}
+public:
 	static void sinit(Class_base*);
 	static void buildTraits(ASObject* o);
 	ASFUNCTION(_constructor);
@@ -417,15 +469,16 @@ struct data_slot
 class Array: public ASObject
 {
 friend class ABCVm;
+CLASSBUILDABLE(Array);
 protected:
 	std::vector<data_slot> data;
 	void outofbounds() const;
+	Array();
 public:
 	//These utility methods are also used by ByteArray 
 	static bool isValidMultiname(const multiname& name, unsigned int& index);
 	static bool isValidQName(const tiny_string& name, const tiny_string& ns, unsigned int& index);
 
-	Array();
 	virtual ~Array();
 	static void sinit(Class_base*);
 	static void buildTraits(ASObject* o);
@@ -502,17 +555,16 @@ friend class Array;
 friend class ABCVm;
 friend class ABCContext;
 friend ASObject* abstract_i(intptr_t i);
+CLASSBUILDABLE(Integer);
 private:
 	int32_t val;
+	Integer(int32_t v=0):val(v){type=T_INTEGER;}
+	Integer(Manager* m):ASObject(m),val(0){type=T_INTEGER;}
 public:
-	Integer(int32_t v=0):val(v){type=T_INTEGER;
-		setVariableByQName("toString",AS3,new Function(Integer::_toString));
-	}
-	Integer(Manager* m):ASObject(m),val(0){type=T_INTEGER;
-		setVariableByQName("toString",AS3,new Function(Integer::_toString));
-	}
+	static void buildTraits(ASObject* o){
+		o->setVariableByQName("toString",AS3,Class<IFunction>::getFunction(Integer::_toString));
+	};
 	ASFUNCTION(_toString);
-	virtual ~Integer(){}
 	tiny_string toString(bool debugMsg);
 	int32_t toInt()
 	{
@@ -555,11 +607,13 @@ class Number : public ASObject
 {
 friend ASObject* abstract_d(number_t i);
 friend class ABCContext;
+CLASSBUILDABLE(Number);
 private:
 	double val;
-public:
+	Number(){}
 	Number(double v):val(v){type=T_NUMBER;}
 	Number(Manager* m):ASObject(m),val(0){type=T_NUMBER;}
+public:
 	tiny_string toString(bool debugMsg);
 	unsigned int toUInt()
 	{
@@ -579,9 +633,9 @@ public:
 	{
 		return val;
 	}
-//	operator double() const {return val;}
 	bool isLess(ASObject* o);
 	bool isEqual(ASObject* o);
+	static void buildTraits(ASObject* o){};
 };
 
 class ASMovieClipLoader: public ASObject
@@ -607,6 +661,7 @@ public:
 
 class Date: public ASObject
 {
+CLASSBUILDABLE(Date);
 private:
 	int year;
 	int month;
@@ -616,8 +671,8 @@ private:
 	int second;
 	int millisecond;
 	int32_t toInt();
-public:
 	Date();
+public:
 	static void sinit(Class_base*);
 	static void buildTraits(ASObject* o);
 	ASFUNCTION(_constructor);
@@ -629,7 +684,6 @@ public:
 	ASFUNCTION(valueOf);
 	tiny_string toString(bool debugMsg=false);
 	tiny_string toString_priv() const;
-	bool toInt(int& ret);
 };
 
 //Internal objects used to store traits declared in scripts and object placed, but not yet valid
@@ -682,14 +736,15 @@ public:
 
 class RegExp: public ASObject
 {
+CLASSBUILDABLE(RegExp);
 friend class ASString;
 private:
 	std::string re;
 	bool global;
 	bool ignoreCase;
 	int lastIndex;
-public:
 	RegExp();
+public:
 	static void sinit(Class_base* c);
 	static void buildTraits(ASObject* o);
 	ASFUNCTION(_constructor);

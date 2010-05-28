@@ -17,33 +17,41 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
-#include "flashxml.h"
-#include "swf.h"
+#ifndef _GRAPHICS_H
+#define _GRAPHICS_H
+
+#include <GL/glew.h>
 #include "compat.h"
-#include "class.h"
 
-using namespace std;
-using namespace lightspark;
-
-extern TLSDATA SystemState* sys;
-extern TLSDATA RenderThread* rt;
-
-REGISTER_CLASS_NAME(XMLDocument);
-
-void XMLDocument::sinit(Class_base* c)
+namespace lightspark
 {
-	c->setConstructor(Class<IFunction>::getFunction(_constructor));
-	c->super=Class<ASObject>::getClass();
-	c->max_level=c->super->max_level+1;
-}
 
-void XMLDocument::buildTraits(ASObject* o)
+void cleanGLErrors();
+
+class TextureBuffer
 {
-}
+private:
+	GLuint texId;
+	GLenum filtering;
+	uint32_t allocWidth;
+	uint32_t allocHeight;
+	uint32_t width;
+	uint32_t height;
+	bool inited;
+	uint32_t nearestPOT(uint32_t a) const;
+	void setAllocSize(uint32_t w, uint32_t h);
+public:
+	TextureBuffer(bool initNow, uint32_t width=0, uint32_t height=0, GLenum filtering=GL_NEAREST);
+	~TextureBuffer();
+	GLuint getId() {return texId;}
+	void init();
+	void init(uint32_t width, uint32_t height, GLenum filtering=GL_NEAREST);
+	void bind();
+	void unbind();
+	void setTexScale(GLuint uniformLocation);
+	void setBGRAData(uint8_t* bgraData, uint32_t w, uint32_t h);
+	void resize(uint32_t width, uint32_t height);
+};
 
-ASFUNCTIONBODY(XMLDocument,_constructor)
-{
-	XMLDocument* th=static_cast<XMLDocument*>(obj);
-	return NULL;
-}
-
+};
+#endif

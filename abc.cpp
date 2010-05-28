@@ -49,6 +49,7 @@ using namespace lightspark;
 extern TLSDATA SystemState* sys;
 TLSDATA Manager* iManager=NULL;
 TLSDATA Manager* dManager=NULL;
+TLSDATA bool isVmThread=false;;
 
 DoABCTag::DoABCTag(RECORDHEADER h, std::istream& in):ControlTag(h,in)
 {
@@ -65,6 +66,11 @@ DoABCTag::DoABCTag(RECORDHEADER h, std::istream& in):ControlTag(h,in)
 		LOG(LOG_ERROR,"Corrupted ABC data: missing " << dest-in.tellg());
 		throw ParseException("Not complete ABC data");
 	}
+}
+
+DoABCTag::~DoABCTag()
+{
+	delete context;
 }
 
 void DoABCTag::execute(RootMovieClip*)
@@ -112,7 +118,9 @@ void SymbolClassTag::execute(RootMovieClip* root)
 			DictionaryTag* t=root->dictionaryLookup(Tags[i]);
 			ASObject* base=dynamic_cast<ASObject*>(t);
 			assert_and_throw(base!=NULL);
-			sys->currentVm->addEvent(NULL,new BindClassEvent(base,(const char*)Names[i]));
+			BindClassEvent* e=new BindClassEvent(base,(const char*)Names[i]);
+			sys->currentVm->addEvent(NULL,e);
+			e->decRef();
 		}
 	}
 }
@@ -140,10 +148,10 @@ void ABCVm::registerClasses()
 	//Register predefined types, ASObject are enough for not implemented classes
 	Global.setVariableByQName("Object","",Class<ASObject>::getClass());
 	Global.setVariableByQName("Class","",Class_object::getClass());
-	Global.setVariableByQName("Number","",new Number(0.0));
-	Global.setVariableByQName("Boolean","",new Boolean(false));
-	Global.setVariableByQName("NaN","",new Number(numeric_limits<double>::quiet_NaN()));
-	Global.setVariableByQName("Infinity","",new Number(numeric_limits<double>::infinity()));
+	Global.setVariableByQName("Number","",Class<Number>::getClass());
+	Global.setVariableByQName("Boolean","",Class<Boolean>::getClass());
+	Global.setVariableByQName("NaN","",abstract_d(numeric_limits<double>::quiet_NaN()));
+	Global.setVariableByQName("Infinity","",abstract_d(numeric_limits<double>::infinity()));
 	Global.setVariableByQName("String","",Class<ASString>::getClass());
 	Global.setVariableByQName("Array","",Class<Array>::getClass());
 	Global.setVariableByQName("Function","",Class_function::getClass());
@@ -152,22 +160,22 @@ void ABCVm::registerClasses()
 	Global.setVariableByQName("Date","",Class<Date>::getClass());
 	Global.setVariableByQName("RegExp","",Class<RegExp>::getClass());
 	Global.setVariableByQName("QName","",Class<ASQName>::getClass());
-	Global.setVariableByQName("uint","",Class<UInteger>::getClass("uint"));
+	Global.setVariableByQName("uint","",Class<UInteger>::getClass());
 
-	Global.setVariableByQName("print","",new Function(print));
-	Global.setVariableByQName("trace","",new Function(print));
-	Global.setVariableByQName("parseInt","",new Function(parseInt));
-	Global.setVariableByQName("parseFloat","",new Function(parseFloat));
-	Global.setVariableByQName("int","",new Function(_int));
-	Global.setVariableByQName("unescape","",new Function(unescape));
-	Global.setVariableByQName("toString","",new Function(ASObject::_toString));
+	Global.setVariableByQName("print","",Class<IFunction>::getFunction(print));
+	Global.setVariableByQName("trace","",Class<IFunction>::getFunction(print));
+	Global.setVariableByQName("parseInt","",Class<IFunction>::getFunction(parseInt));
+	Global.setVariableByQName("parseFloat","",Class<IFunction>::getFunction(parseFloat));
+	Global.setVariableByQName("int","",Class<IFunction>::getFunction(_int));
+	Global.setVariableByQName("unescape","",Class<IFunction>::getFunction(unescape));
+	Global.setVariableByQName("toString","",Class<IFunction>::getFunction(ASObject::_toString));
 
 	Global.setVariableByQName("MovieClip","flash.display",Class<MovieClip>::getClass());
 	Global.setVariableByQName("DisplayObject","flash.display",Class<DisplayObject>::getClass());
 	Global.setVariableByQName("Loader","flash.display",Class<Loader>::getClass());
 	Global.setVariableByQName("LoaderInfo","flash.display",Class<LoaderInfo>::getClass());
-	Global.setVariableByQName("SimpleButton","flash.display",new ASObject);
-	Global.setVariableByQName("InteractiveObject","flash.display",Class<ASObject>::getClass("InteractiveObject")),
+	Global.setVariableByQName("SimpleButton","flash.display",Class<ASObject>::getClass("SimpleButton"));
+	Global.setVariableByQName("InteractiveObject","flash.display",Class<InteractiveObject>::getClass()),
 	Global.setVariableByQName("DisplayObjectContainer","flash.display",Class<DisplayObjectContainer>::getClass());
 	Global.setVariableByQName("Sprite","flash.display",Class<Sprite>::getClass());
 	Global.setVariableByQName("Shape","flash.display",Class<Shape>::getClass());
@@ -195,10 +203,10 @@ void ABCVm::registerClasses()
 	Global.setVariableByQName("Dictionary","flash.utils",Class<Dictionary>::getClass());
 	Global.setVariableByQName("Proxy","flash.utils",Class<Proxy>::getClass());
 	Global.setVariableByQName("Timer","flash.utils",Class<Timer>::getClass());
-	Global.setVariableByQName("getQualifiedClassName","flash.utils",new Function(getQualifiedClassName));
-	Global.setVariableByQName("getQualifiedSuperclassName","flash.utils",new Function(getQualifiedSuperclassName));
-	Global.setVariableByQName("getDefinitionByName","flash.utils",new Function(getDefinitionByName));
-	Global.setVariableByQName("getTimer","flash.utils",new Function(getTimer));
+	Global.setVariableByQName("getQualifiedClassName","flash.utils",Class<IFunction>::getFunction(getQualifiedClassName));
+	Global.setVariableByQName("getQualifiedSuperclassName","flash.utils",Class<IFunction>::getFunction(getQualifiedSuperclassName));
+	Global.setVariableByQName("getDefinitionByName","flash.utils",Class<IFunction>::getFunction(getDefinitionByName));
+	Global.setVariableByQName("getTimer","flash.utils",Class<IFunction>::getFunction(getTimer));
 
 	Global.setVariableByQName("ColorTransform","flash.geom",Class<ColorTransform>::getClass());
 	Global.setVariableByQName("Rectangle","flash.geom",Class<Rectangle>::getClass());
@@ -222,7 +230,7 @@ void ABCVm::registerClasses()
 	Global.setVariableByQName("NetStatusEvent","flash.events",Class<NetStatusEvent>::getClass());
 	Global.setVariableByQName("KeyboardEvent","flash.events",Class<KeyboardEvent>::getClass());
 
-	Global.setVariableByQName("LocalConnection","flash.net",new ASObject);
+	Global.setVariableByQName("LocalConnection","flash.net",Class<ASObject>::getClass("LocalConnection"));
 	Global.setVariableByQName("NetConnection","flash.net",Class<NetConnection>::getClass());
 	Global.setVariableByQName("NetStream","flash.net",Class<NetStream>::getClass());
 	Global.setVariableByQName("URLLoader","flash.net",Class<URLLoader>::getClass());
@@ -244,7 +252,7 @@ void ABCVm::registerClasses()
 	Global.setVariableByQName("ContextMenu","flash.ui",Class<ASObject>::getClass("ContextMenu"));
 	Global.setVariableByQName("ContextMenuItem","flash.ui",Class<ASObject>::getClass("ContextMenuItem"));
 
-	Global.setVariableByQName("isNaN","",new Function(isNaN));
+	Global.setVariableByQName("isNaN","",Class<IFunction>::getFunction(isNaN));
 }
 
 //This function is used at compile time
@@ -929,10 +937,10 @@ ABCVm::ABCVm(SystemState* s):m_sys(s),terminated(false),shutdown(false)
 	sem_init(&event_queue_mutex,0,1);
 	sem_init(&sem_event_count,0,0);
 	m_sys=s;
-	int_manager=new Manager;
-	number_manager=new Manager;
+	int_manager=new Manager(15);
+	number_manager=new Manager(15);
 	//Push a dummy default context
-	pushObjAndLevel(new ASObject,0);
+	pushObjAndLevel(Class<ASObject>::getInstanceS(),0);
 	LOG(LOG_NO_INFO,"Global is " << &Global);
 	pthread_create(&t,NULL,(thread_worker)Run,this);
 }
@@ -962,12 +970,8 @@ int ABCVm::getEventQueueSize()
 	return events_queue.size();
 }
 
-void ABCVm::handleEvent()
+void ABCVm::handleEvent(pair<EventDispatcher*,Event*> e)
 {
-	sem_wait(&event_queue_mutex);
-	pair<EventDispatcher*,Event*> e=events_queue.front();
-	events_queue.pop_front();
-	sem_post(&event_queue_mutex);
 	e.second->check();
 	if(e.first)
 	{
@@ -1037,9 +1041,19 @@ void ABCVm::handleEvent()
 * * \param ev event that will be sent */
 bool ABCVm::addEvent(EventDispatcher* obj ,Event* ev)
 {
-	//If the system should terminate new event are not accepted
+	//If the system should terminate new events are not accepted
 	if(m_sys->shouldTerminate())
 		return false;
+	//If the event is a synchronization and we are running in the VM context
+	//we should handle it immidiately to avoid deadlock
+	if(isVmThread && (ev->getEventType()==SYNC || ev->getEventType()==CONSTRUCT_OBJECT))
+	{
+		assert(obj==NULL);
+		ev->incRef();
+		handleEvent(pair<EventDispatcher*,Event*>(NULL, ev));
+		return true;
+	}
+
 	sem_wait(&event_queue_mutex);
 	if(obj)
 		obj->incRef();
@@ -1089,8 +1103,8 @@ void ABCVm::buildClassAndInjectBase(const string& s, ASObject* base, ASObject* c
 	if(isRoot)
 	{
 		assert_and_throw(base);
-		base->prototype=derived_class_tmp;
-		derived_class_tmp->incRef();
+		//Let's override the class
+		base->setPrototype(derived_class_tmp);
 		getVm()->pushObjAndLevel(base,derived_class_tmp->max_level);
 		derived_class_tmp->handleConstruction(base,args,argslen,true);
 		thisAndLevel tl=getVm()->popObjAndLevel();
@@ -1254,7 +1268,7 @@ void ABCContext::exec()
 		method_info* m=get_method(scripts[i].init);
 
 		LOG(LOG_CALLS, "Building script traits: " << scripts[i].trait_count );
-		SyntheticFunction* mf=new SyntheticFunction(m);
+		SyntheticFunction* mf=Class<IFunction>::getSyntheticFunction(m);
 		mf->addToScope(getGlobal());
 
 		for(unsigned int j=0;j<scripts[i].trait_count;j++)
@@ -1263,7 +1277,7 @@ void ABCContext::exec()
 	//The last script entry has to be run
 	LOG(LOG_CALLS, "Last script (Entry Point)");
 	method_info* m=get_method(scripts[i].init);
-	SyntheticFunction* entry=new SyntheticFunction(m);
+	SyntheticFunction* entry=Class<IFunction>::getSyntheticFunction(m);
 	entry->addToScope(getGlobal());
 
 	LOG(LOG_CALLS, "Building entry script traits: " << scripts[i].trait_count );
@@ -1278,6 +1292,7 @@ void ABCContext::exec()
 void ABCVm::Run(ABCVm* th)
 {
 	sys=th->m_sys;
+	isVmThread=true;
 	iManager=th->int_manager;
 	dManager=th->number_manager;
 	if(th->m_sys->useJit)
@@ -1319,8 +1334,9 @@ void ABCVm::Run(ABCVm* th)
 		{
 			sem_wait(&th->sem_event_count);
 			if(th->shutdown)
-			{
 				bailOut=true;
+			if(bailOut)
+			{
 				//If the queue is empty stop immediately
 				if(th->events_queue.empty())
 					break;
@@ -1328,11 +1344,16 @@ void ABCVm::Run(ABCVm* th)
 					LOG(LOG_NO_INFO,th->events_queue.size() << " events missing before exit");
 			}
 			Chronometer chronometer;
-			th->handleEvent();
+			sem_wait(&th->event_queue_mutex);
+			pair<EventDispatcher*,Event*> e=th->events_queue.front();
+			th->events_queue.pop_front();
+			sem_post(&th->event_queue_mutex);
+			th->handleEvent(e);
 			profile->accountTime(chronometer.checkpoint());
 		}
 		catch(LightsparkException& e)
 		{
+			LOG(LOG_ERROR,"Error in VM " << e.cause);
 			th->m_sys->setError(e.cause);
 			bailOut=true;
 		}
@@ -1484,9 +1505,9 @@ ASObject* ABCContext::getConstant(int kind, int index)
 			assert_and_throw(constant_pool.namespaces[index].name);
 			return Class<Namespace>::getInstanceS(getString(constant_pool.namespaces[index].name));
 		case 0x0a: //False
-			return new Boolean(false);
+			return abstract_b(false);
 		case 0x0b: //True
-			return new Boolean(true);
+			return abstract_b(true);
 		case 0x0c: //Null
 			return new Null;
 		default:
@@ -1535,7 +1556,7 @@ void ABCContext::buildTrait(ASObject* obj, const traits_info* t, bool bind, IFun
 			LOG(LOG_CALLS,"Getter trait: " << ns << "::" << name << " #" << t->method);
 			//syntetize method and create a new LLVM function object
 			method_info* m=&methods[t->method];
-			IFunction* f=new SyntheticFunction(m);
+			IFunction* f=Class<IFunction>::getSyntheticFunction(m);
 
 			//We have to override if there is a method with the same name,
 			//even if the namespace are different, if both are protected
@@ -1591,7 +1612,7 @@ void ABCContext::buildTrait(ASObject* obj, const traits_info* t, bool bind, IFun
 			//syntetize method and create a new LLVM function object
 			method_info* m=&methods[t->method];
 
-			IFunction* f=new SyntheticFunction(m);
+			IFunction* f=Class<IFunction>::getSyntheticFunction(m);
 
 			//We have to override if there is a method with the same name,
 			//even if the namespace are different, if both are protected
@@ -1646,7 +1667,7 @@ void ABCContext::buildTrait(ASObject* obj, const traits_info* t, bool bind, IFun
 			LOG(LOG_CALLS,"Method trait: " << ns << "::" << name << " #" << t->method);
 			//syntetize method and create a new LLVM function object
 			method_info* m=&methods[t->method];
-			IFunction* f=new SyntheticFunction(m);
+			IFunction* f=Class<IFunction>::getSyntheticFunction(m);
 
 			//We have to override if there is a method with the same name,
 			//even if the namespace are different, if both are protected
@@ -2202,9 +2223,7 @@ ASFUNCTIONBODY(lightspark,parseInt)
 	if(args[0]->getObjectType()==T_UNDEFINED)
 		return new Undefined;
 	else
-	{
-		return new Integer(atoi(args[0]->toString().raw_buf()));
-	}
+		return abstract_i(atoi(args[0]->toString().raw_buf()));
 }
 
 ASFUNCTIONBODY(lightspark,parseFloat)
@@ -2212,9 +2231,7 @@ ASFUNCTIONBODY(lightspark,parseFloat)
 	if(args[0]->getObjectType()==T_UNDEFINED)
 		return new Undefined;
 	else
-	{
-		return new Number(atof(args[0]->toString().raw_buf()));
-	}
+		return abstract_d(atof(args[0]->toString().raw_buf()));
 }
 
 ASFUNCTIONBODY(lightspark,isNaN)

@@ -35,10 +35,6 @@
 #include <set>
 #include "swf.h"
 
-/*#ifdef exception_info
-#undef exception_info
-#endif*/
-
 namespace lightspark
 {
 
@@ -142,6 +138,7 @@ struct multiname_info
 	std::vector<u30> param_types;
 	multiname* cached;
 	multiname_info():cached(NULL){}
+	~multiname_info(){delete cached;}
 };
 
 struct cpool_info
@@ -592,7 +589,7 @@ private:
 	//Event handling
 	bool shutdown;
 	std::deque<std::pair<EventDispatcher*,Event*> > events_queue;
-	void handleEvent();
+	void handleEvent(std::pair<EventDispatcher*,Event*> e);
 
 	void buildClassAndInjectBase(const std::string& n, ASObject*, ASObject* const* a, const unsigned int argslen, bool isRoot);
 
@@ -639,6 +636,7 @@ private:
 	pthread_t thread;
 public:
 	DoABCTag(RECORDHEADER h, std::istream& in);
+	~DoABCTag();
 	void execute(RootMovieClip* root);
 };
 

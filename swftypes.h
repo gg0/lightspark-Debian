@@ -31,6 +31,7 @@
 #include "logger.h"
 #include <stdlib.h>
 #include <string.h>
+#include <assert.h>
 #include "exceptions.h"
 #include <arpa/inet.h>
 
@@ -42,6 +43,9 @@ namespace lightspark
 #define ASFUNCTIONBODY(c,name) \
 	ASObject* c::name(ASObject* obj, ASObject* const* args, const unsigned int argslen)
 
+#define CLASSBUILDABLE(className) \
+	friend class Class<className>; 
+
 enum SWFOBJECT_TYPE { T_OBJECT=0, T_INTEGER=1, T_NUMBER=2, T_FUNCTION=3, T_UNDEFINED=4, T_NULL=5, T_STRING=6, 
 	T_DEFINABLE=7, T_BOOLEAN=8, T_ARRAY=9, T_CLASS=10, T_QNAME=11, T_NAMESPACE=12, T_UINTEGER=13, T_PROXY=14};
 
@@ -51,8 +55,9 @@ typedef double number_t;
 
 class ASObject;
 class ABCContext;
-class Class_base;
 class IFunction;
+class Class_base;
+template<class T> class Class;
 struct arrayElem;
 
 class tiny_string
@@ -363,7 +368,9 @@ class Manager
 friend class ASObject;
 private:
 	std::vector<ASObject*> available;
+	uint32_t max;
 public:
+	Manager(uint32_t m):max(m){}
 template<class T>
 	T* get();
 	void put(ASObject* o);
@@ -425,6 +432,7 @@ private:
 	~variables_map();
 public:
 	void dumpVariables();
+	void destroyContents();
 };
 
 //Atomic operations: placeholders until C++0x is supported in GCC
@@ -443,18 +451,22 @@ class ASObject
 friend class Manager;
 friend class ABCVm;
 friend class ABCContext;
-friend class SystemState;
+friend class Class_base; //Needed for forced cleanup
+CLASSBUILDABLE(ASObject);
 protected:
 	//ASObject* asprototype; //HUMM.. ok the prototype, actually class, should be renamed
 	//maps variable name to namespace and var
 	variables_map Variables;
+	ASObject(Manager* m=NULL);
 	ASObject(const ASObject& o);
+	virtual ~ASObject();
 	SWFOBJECT_TYPE type;
 private:
 	int32_t ref_count;
 	Manager* manager;
 	int cur_level;
 	virtual int _maxlevel();
+	Class_base* prototype;
 
 public:
 #ifndef NDEBUG
@@ -463,19 +475,18 @@ public:
 	int getRefCount(){ return ref_count; }
 #endif
 	bool implEnable;
-	Class_base* prototype;
-	ASObject(Manager* m=NULL);
+	void setPrototype(Class_base* c);
+	Class_base* getPrototype() const { return prototype; }
 	ASFUNCTION(_constructor);
 	ASFUNCTION(_getPrototype);
 	ASFUNCTION(_setPrototype);
 	ASFUNCTION(_toString);
-	virtual ~ASObject();
 	void check() const;
 	void incRef()
 	{
 		//std::cout << "incref " << this << std::endl;
 		atomic_increment(&ref_count);
-		assert_and_throw(ref_count>0);
+		assert(ref_count>0);
 	}
 	void decRef()
 	{
@@ -590,7 +601,7 @@ public:
 
 inline void Manager::put(ASObject* o)
 {
-	if(available.size()>15)
+	if(available.size()>max)
 		delete o;
 	else
 		available.push_back(o);
@@ -609,7 +620,7 @@ T* Manager::get()
 	}
 	else
 	{
-		T* ret=new T(this);
+		T* ret=Class<T>::getInstanceS(this);
 		//std::cout << "newing" << ret << std::endl;
 		return ret;
 	}
@@ -1078,37 +1089,36 @@ class SHAPERECORD
 {
 public:
 	SHAPE* parent;
-	UB TypeFlag;
-	UB StateNewStyles;
-	UB StateLineStyle;
-	UB StateFillStyle1;
-	UB StateFillStyle0;
-	UB StateMoveTo;
+	bool TypeFlag;
+	bool StateNewStyles;
+	bool StateLineStyle;
+	bool StateFillStyle1;
+	bool StateFillStyle0;
+	bool StateMoveTo;
 
-	UB MoveBits;
-	SB MoveDeltaX;
-	SB MoveDeltaY;
+	uint32_t MoveBits;
+	int32_t MoveDeltaX;
+	int32_t MoveDeltaY;
 
 	unsigned int FillStyle1;
 	unsigned int FillStyle0;
 	unsigned int LineStyle;
 
 	//Edge record
-	UB StraightFlag;
-	UB NumBits;
-	UB GeneralLineFlag;
-	UB VertLineFlag;
-	SB DeltaX;
-	SB DeltaY;
+	bool StraightFlag;
+	uint32_t NumBits;
+	bool GeneralLineFlag;
+	bool VertLineFlag;
+	int32_t DeltaX;
+	int32_t DeltaY;
 
-	SB ControlDeltaX;
-	SB ControlDeltaY;
-	SB AnchorDeltaX;
-	SB AnchorDeltaY;
+	int32_t ControlDeltaX;
+	int32_t ControlDeltaY;
+	int32_t AnchorDeltaX;
+	int32_t AnchorDeltaY;
 
-	SHAPERECORD* next;
-
-	SHAPERECORD():next(0){};
+//	SHAPERECORD():TypeFlag(false),StateNewStyles(false),StateLineStyle(false),StateFillStyle1(false),StateFillStyle0(false),
+//		StateMoveTo(false),MoveDeltaX(0),MoveDeltaY(0),DeltaX(0),DeltaY(0){};
 	SHAPERECORD(SHAPE* p,BitStream& bs);
 };
 
@@ -1153,12 +1163,12 @@ class SHAPE
 	friend std::istream& operator>>(std::istream& stream, SHAPEWITHSTYLE& v);
 public:
 	SHAPE():fillOffset(0),lineOffset(0){}
-	virtual ~SHAPE(){}
+	virtual ~SHAPE(){};
 	UB NumFillBits;
 	UB NumLineBits;
 	unsigned int fillOffset;
 	unsigned int lineOffset;
-	SHAPERECORD ShapeRecords;
+	std::vector<SHAPERECORD> ShapeRecords;
 };
 
 class SHAPEWITHSTYLE : public SHAPE

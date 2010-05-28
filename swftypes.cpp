@@ -28,7 +28,6 @@
 #include <algorithm>
 #include <stdlib.h>
 #include <math.h>
-#include <assert.h>
 #include "swf.h"
 #include "geometry.h"
 #include "class.h"
@@ -36,6 +35,8 @@
 
 using namespace std;
 using namespace lightspark;
+
+REGISTER_CLASS_NAME(ASObject);
 
 extern TLSDATA SystemState* sys;
 extern TLSDATA RenderThread* rt;
@@ -45,7 +46,7 @@ extern TLSDATA Manager* dManager;
 
 tiny_string ASObject::toString(bool debugMsg)
 {
-	assert(ref_count>0);
+	check();
 	if(debugMsg==false && hasPropertyByQName("toString",""))
 	{
 		objAndLevel obj_toString=getVariableByQName("toString","");
@@ -53,7 +54,7 @@ tiny_string ASObject::toString(bool debugMsg)
 		{
 			IFunction* f_toString=static_cast<IFunction*>(obj_toString.obj);
 			ASObject* ret=f_toString->call(this,NULL,0,obj_toString.level);
-			assert(ret->getObjectType()==T_STRING);
+			assert_and_throw(ret->getObjectType()==T_STRING);
 			return ret->toString();
 		}
 	}
@@ -62,8 +63,7 @@ tiny_string ASObject::toString(bool debugMsg)
 
 bool ASObject::isLess(ASObject* r)
 {
-	assert(ref_count>0);
-
+	check();
 	if(hasPropertyByQName("valueOf",""))
 	{
 		if(r->hasPropertyByQName("valueOf","")==false)
@@ -72,9 +72,9 @@ bool ASObject::isLess(ASObject* r)
 		objAndLevel obj1=getVariableByQName("valueOf","");
 		objAndLevel obj2=r->getVariableByQName("valueOf","");
 
-		assert(obj1.obj!=NULL && obj2.obj!=NULL);
+		assert_and_throw(obj1.obj!=NULL && obj2.obj!=NULL);
 
-		assert(obj1.obj->getObjectType()==T_FUNCTION && obj2.obj->getObjectType()==T_FUNCTION);
+		assert_and_throw(obj1.obj->getObjectType()==T_FUNCTION && obj2.obj->getObjectType()==T_FUNCTION);
 		IFunction* f1=static_cast<IFunction*>(obj1.obj);
 		IFunction* f2=static_cast<IFunction*>(obj2.obj);
 
@@ -94,19 +94,19 @@ bool ASObject::isLess(ASObject* r)
 
 bool ASObject::hasNext(unsigned int& index, bool& out)
 {
-	assert(implEnable);
+	assert_and_throw(implEnable);
 	return false;
 }
 
 bool ASObject::nextName(unsigned int index, ASObject*& out)
 {
-	assert(implEnable);
+	assert_and_throw(implEnable);
 	return false;
 }
 
 bool ASObject::nextValue(unsigned int index, ASObject*& out)
 {
-	assert(implEnable);
+	assert_and_throw(implEnable);
 	return false;
 }
 
@@ -118,8 +118,8 @@ void ASObject::buildTraits(ASObject* o)
 
 tiny_string multiname::qualifiedString() const
 {
-	assert(ns.size()==1);
-	assert(name_type==NAME_STRING);
+	assert_and_throw(ns.size()==1);
+	assert_and_throw(name_type==NAME_STRING);
 	//TODO: what if the ns is empty
 	if(false && ns[0].name=="")
 		return name_s;
@@ -134,8 +134,7 @@ tiny_string multiname::qualifiedString() const
 
 bool ASObject::isEqual(ASObject* r)
 {
-	assert(ref_count>0);
-
+	check();
 	//if we are comparing the same object the answer is true
 	if(this==r)
 		return true;
@@ -147,13 +146,13 @@ bool ASObject::isEqual(ASObject* r)
 	{
 		objAndLevel func_equals=getVariableByQName("equals","");
 
-		assert(func_equals.obj!=NULL);
+		assert_and_throw(func_equals.obj!=NULL);
 
-		assert(func_equals.obj->getObjectType()==T_FUNCTION);
+		assert_and_throw(func_equals.obj->getObjectType()==T_FUNCTION);
 		IFunction* func=static_cast<IFunction*>(func_equals.obj);
 
 		ASObject* ret=func->call(this,&r,1,func_equals.level);
-		assert(ret->getObjectType()==T_BOOLEAN);
+		assert_and_throw(ret->getObjectType()==T_BOOLEAN);
 
 		LOG(LOG_CALLS,"Overloaded isEqual");
 		return Boolean_concrete(ret);
@@ -168,9 +167,9 @@ bool ASObject::isEqual(ASObject* r)
 		objAndLevel obj1=getVariableByQName("valueOf","");
 		objAndLevel obj2=r->getVariableByQName("valueOf","");
 
-		assert(obj1.obj!=NULL && obj2.obj!=NULL);
+		assert_and_throw(obj1.obj!=NULL && obj2.obj!=NULL);
 
-		assert(obj1.obj->getObjectType()==T_FUNCTION && obj2.obj->getObjectType()==T_FUNCTION);
+		assert_and_throw(obj1.obj->getObjectType()==T_FUNCTION && obj2.obj->getObjectType()==T_FUNCTION);
 		IFunction* f1=static_cast<IFunction*>(obj1.obj);
 		IFunction* f2=static_cast<IFunction*>(obj2.obj);
 
@@ -239,8 +238,7 @@ obj_var* variables_map::findObjVar(const tiny_string& n, const tiny_string& ns, 
 
 bool ASObject::hasPropertyByQName(const tiny_string& name, const tiny_string& ns)
 {
-	assert(ref_count>0);
-
+	check();
 	//We look in all the object's levels
 	int level=(prototype)?(prototype->max_level):0;
 	return (Variables.findObjVar(name, ns, level, false, true)!=NULL);
@@ -248,8 +246,7 @@ bool ASObject::hasPropertyByQName(const tiny_string& name, const tiny_string& ns
 
 bool ASObject::hasPropertyByMultiname(const multiname& name)
 {
-	assert(ref_count>0);
-
+	check();
 	//We look in all the object's levels
 	int level=(prototype)?(prototype->max_level):0;
 	return (Variables.findObjVar(name, level, false, true)!=NULL);
@@ -257,15 +254,15 @@ bool ASObject::hasPropertyByMultiname(const multiname& name)
 
 void ASObject::setGetterByQName(const tiny_string& name, const tiny_string& ns, IFunction* o)
 {
-	assert(ref_count>0);
-	assert(!initialized);
+	check();
+	assert_and_throw(!initialized);
 	//Getters are inserted with the current level of the prototype chain
 	int level=cur_level;
 	obj_var* obj=Variables.findObjVar(name,ns,level,true,false);
 	if(obj->getter!=NULL)
 	{
 		//This happens when interfaces are declared multiple times
-		assert(o==obj->getter);
+		assert_and_throw(o==obj->getter);
 		return;
 	}
 	obj->getter=o;
@@ -273,15 +270,15 @@ void ASObject::setGetterByQName(const tiny_string& name, const tiny_string& ns, 
 
 void ASObject::setSetterByQName(const tiny_string& name, const tiny_string& ns, IFunction* o)
 {
-	assert(ref_count>0);
-	assert(!initialized);
+	check();
+	assert_and_throw(!initialized);
 	//Setters are inserted with the current level of the prototype chain
 	int level=cur_level;
 	obj_var* obj=Variables.findObjVar(name,ns,level,true,false);
 	if(obj->setter!=NULL)
 	{
 		//This happens when interfaces are declared multiple times
-		assert(o==obj->setter);
+		assert_and_throw(o==obj->setter);
 		return;
 	}
 	obj->setter=o;
@@ -289,7 +286,7 @@ void ASObject::setSetterByQName(const tiny_string& name, const tiny_string& ns, 
 
 void ASObject::deleteVariableByMultiname(const multiname& name)
 {
-	assert(ref_count>0);
+	assert_and_throw(ref_count>0);
 
 	//Find out if the variable is declared more than once
 	obj_var* obj=NULL;
@@ -311,7 +308,7 @@ void ASObject::deleteVariableByMultiname(const multiname& name)
 	if(count==0)
 		return;
 
-	assert(count==1);
+	assert_and_throw(count==1);
 
 	//Now dereference the values
 	//TODO: maybe we can look on the previous levels
@@ -346,7 +343,7 @@ void ASObject::setVariableByMultiname(const multiname& name, ASObject* o, bool e
 
 	if(obj==NULL)
 	{
-		assert(level==cur_level);
+		assert_and_throw(level==cur_level);
 		obj=Variables.findObjVar(name,level,true,false);
 	}
 
@@ -360,18 +357,18 @@ void ASObject::setVariableByMultiname(const multiname& name, ASObject* o, bool e
 			setter=setter->getOverride();
 
 		//One argument can be passed without creating an array
+		incRef();
 		ASObject* ret=setter->call(this,&o,1,level);
-		assert(ret==NULL);
+		assert_and_throw(ret==NULL);
 		LOG(LOG_CALLS,"End of setter");
 	}
 	else
 	{
-		assert(!obj->getter);
+		assert_and_throw(!obj->getter);
 		if(obj->var)
 			obj->var->decRef();
 		obj->var=o;
 	}
-	check();
 }
 
 void ASObject::setVariableByQName(const tiny_string& name, const tiny_string& ns, ASObject* o, bool find_back, bool skip_impl)
@@ -385,7 +382,7 @@ void ASObject::setVariableByQName(const tiny_string& name, const tiny_string& ns
 	if(obj==NULL)
 	{
 		//When the var is not found level should not be modified
-		assert(cur_level==level);
+		assert_and_throw(cur_level==level);
 		obj=Variables.findObjVar(name,ns,level,true,false);
 	}
 
@@ -395,14 +392,15 @@ void ASObject::setVariableByQName(const tiny_string& name, const tiny_string& ns
 		LOG(LOG_CALLS,"Calling the setter");
 
 		IFunction* setter=obj->setter->getOverride();
+		incRef();
 		//One argument can be passed without creating an array
 		ASObject* ret=setter->call(this,&o,1,level);
-		assert(ret==NULL);
+		assert_and_throw(ret==NULL);
 		LOG(LOG_CALLS,"End of setter");
 	}
 	else
 	{
-		assert(!obj->getter);
+		assert_and_throw(!obj->getter);
 		if(obj->var)
 			obj->var->decRef();
 		obj->var=o;
@@ -425,15 +423,15 @@ void variables_map::killObjVar(const multiname& mname, int level)
 			name.name=mname.name_s;
 			break;
 		default:
-			assert("Unexpected name kind" && false);
+			assert_and_throw("Unexpected name kind" && false);
 	}
 
 
 	const pair<var_iterator, var_iterator> ret=Variables.equal_range(name);
-	assert(ret.first!=ret.second);
+	assert_and_throw(ret.first!=ret.second);
 
 	//Find the namespace
-	assert(!mname.ns.empty());
+	assert_and_throw(!mname.ns.empty());
 	for(unsigned int i=0;i<mname.ns.size();i++)
 	{
 		const tiny_string& ns=mname.ns[i].name;
@@ -466,7 +464,7 @@ obj_var* variables_map::findObjVar(const multiname& mname, int& level, bool crea
 			name.name=mname.name_s;
 			break;
 		default:
-			assert("Unexpected name kind" && false);
+			assert_and_throw("Unexpected name kind" && false);
 	}
 
 	const var_iterator ret_begin=Variables.lower_bound(name);
@@ -481,7 +479,7 @@ obj_var* variables_map::findObjVar(const multiname& mname, int& level, bool crea
 	for(;ret!=ret_end;ret++)
 	{
 		//Check if one the namespace is already present
-		assert(!mname.ns.empty());
+		assert_and_throw(!mname.ns.empty());
 		//We can use binary search, as the namespace are ordered
 		if(binary_search(mname.ns.begin(),mname.ns.end(),ret->second.first))
 		{
@@ -541,7 +539,7 @@ ASFUNCTIONBODY(ASObject,_setPrototype)
 void ASObject::initSlot(unsigned int n,const tiny_string& name, const tiny_string& ns)
 {
 	//Should be correct to use the level on the prototype chain
-	assert(!initialized);
+	assert_and_throw(!initialized);
 	Variables.initSlot(n,cur_level,name,ns);
 }
 
@@ -552,7 +550,7 @@ intptr_t ASObject::getVariableByMultiname_i(const multiname& name)
 	check();
 
 	ASObject* ret=getVariableByMultiname(name).obj;
-	assert(ret);
+	assert_and_throw(ret);
 	return ret->toInt();
 }
 
@@ -581,7 +579,7 @@ objAndLevel ASObject::getVariableByMultiname(const multiname& name, bool skip_im
 
 	if(obj!=NULL)
 	{
-		assert(level!=-1);
+		assert_and_throw(level!=-1);
 		if(obj->getter)
 		{
 			//Call the getter
@@ -596,9 +594,10 @@ objAndLevel ASObject::getVariableByMultiname(const multiname& name, bool skip_im
 			IFunction* getter=obj->getter;
 			if(enableOverride)
 				getter=getter->getOverride();
+			incRef();
 			ASObject* ret=getter->call(this,NULL,0,level);
 			LOG(LOG_CALLS,"End of getter");
-			assert(ret);
+			assert_and_throw(ret);
 			//The returned value is already owned by the caller
 			ret->fake_decRef();
 			//TODO: check
@@ -606,8 +605,8 @@ objAndLevel ASObject::getVariableByMultiname(const multiname& name, bool skip_im
 		}
 		else
 		{
-			assert(!obj->setter);
-			assert(obj->var);
+			assert_and_throw(!obj->setter);
+			assert_and_throw(obj->var);
 			return objAndLevel(obj->var,level);
 		}
 	}
@@ -616,7 +615,7 @@ objAndLevel ASObject::getVariableByMultiname(const multiname& name, bool skip_im
 		//Check if we should do lazy definition
 		if(name.name_s=="toString")
 		{
-			ASObject* ret=new Function(ASObject::_toString);
+			ASObject* ret=Class<IFunction>::getFunction(ASObject::_toString);
 			setVariableByQName("toString","",ret);
 			//Added at level 0, as Object is always the base
 			return objAndLevel(ret,0);
@@ -630,7 +629,7 @@ objAndLevel ASObject::getVariableByMultiname(const multiname& name, bool skip_im
 		{
 			//Create on the fly a Function
 			//HACK: both call and apply should be included in the Function object
-			return objAndLevel(new Function(IFunction::apply),0);
+			return objAndLevel(Class<IFunction>::getFunction(IFunction::apply),0);
 		}
 
 		//It has not been found yet, ask the prototype
@@ -657,6 +656,7 @@ objAndLevel ASObject::getVariableByQName(const tiny_string& name, const tiny_str
 			//Call the getter
 			LOG(LOG_CALLS,"Calling the getter");
 			IFunction* getter=obj->getter->getOverride();
+			incRef();
 			ASObject* ret=getter->call(this,NULL,0,level);
 			LOG(LOG_CALLS,"End of getter");
 			//The variable is already owned by the caller
@@ -748,7 +748,7 @@ std::ostream& lightspark::operator<<(std::ostream& s, const multiname& r)
 void ASObject::check() const
 {
 	//Put here a bunch of safety check on the object
-	assert(ref_count>0);
+	assert_and_throw(ref_count>0);
 	//Heavyweight stuff
 #ifdef EXPENSIVE_DEBUG
 	variables_map::const_var_iterator it=Variables.Variables.begin();
@@ -902,9 +902,9 @@ std::istream& lightspark::operator>>(std::istream& s, RGBA& v)
 void LINESTYLEARRAY::appendStyles(const LINESTYLEARRAY& r)
 {
 	unsigned int count = LineStyleCount + r.LineStyleCount;
-	assert(version!=-1);
+	assert_and_throw(version!=-1);
 
-	assert(r.version==version);
+	assert_and_throw(r.version==version);
 	if(version<4)
 		LineStyles.insert(LineStyles.end(),r.LineStyles.begin(),r.LineStyles.end());
 	else
@@ -914,7 +914,7 @@ void LINESTYLEARRAY::appendStyles(const LINESTYLEARRAY& r)
 
 std::istream& lightspark::operator>>(std::istream& s, LINESTYLEARRAY& v)
 {
-	assert(v.version!=-1);
+	assert_and_throw(v.version!=-1);
 	s >> v.LineStyleCount;
 	if(v.LineStyleCount==0xff)
 		LOG(LOG_ERROR,"Line array extended not supported");
@@ -955,7 +955,7 @@ std::istream& lightspark::operator>>(std::istream& s, MORPHLINESTYLEARRAY& v)
 
 void FILLSTYLEARRAY::appendStyles(const FILLSTYLEARRAY& r)
 {
-	assert(version!=-1);
+	assert_and_throw(version!=-1);
 	unsigned int count = FillStyleCount + r.FillStyleCount;
 
 	FillStyles.insert(FillStyles.end(),r.FillStyles.begin(),r.FillStyles.end());
@@ -964,7 +964,7 @@ void FILLSTYLEARRAY::appendStyles(const FILLSTYLEARRAY& r)
 
 std::istream& lightspark::operator>>(std::istream& s, FILLSTYLEARRAY& v)
 {
-	assert(v.version!=-1);
+	assert_and_throw(v.version!=-1);
 	s >> v.FillStyleCount;
 	if(v.FillStyleCount==0xff)
 		LOG(LOG_ERROR,"Fill array extended not supported");
@@ -997,19 +997,13 @@ std::istream& lightspark::operator>>(std::istream& s, SHAPE& v)
 	BitStream bs(s);
 	v.NumFillBits=UB(4,bs);
 	v.NumLineBits=UB(4,bs);
-	v.ShapeRecords=SHAPERECORD(&v,bs);
-	if(v.ShapeRecords.TypeFlag + v.ShapeRecords.StateNewStyles+v.ShapeRecords.StateLineStyle+v.ShapeRecords.StateFillStyle1+
-			v.ShapeRecords.StateFillStyle0+v.ShapeRecords.StateMoveTo)
+	do
 	{
-		SHAPERECORD* cur=&(v.ShapeRecords);
-		while(1)
-		{
-			cur->next=new SHAPERECORD(&v,bs);
-			cur=cur->next;
-			if(cur->TypeFlag+cur->StateNewStyles+cur->StateLineStyle+cur->StateFillStyle1+cur->StateFillStyle0+cur->StateMoveTo==0)
-				break;
-		}
+		v.ShapeRecords.push_back(SHAPERECORD(&v,bs));
 	}
+	while(v.ShapeRecords.back().TypeFlag || v.ShapeRecords.back().StateNewStyles || v.ShapeRecords.back().StateLineStyle || 
+			v.ShapeRecords.back().StateFillStyle1 || v.ShapeRecords.back().StateFillStyle0 || 
+			v.ShapeRecords.back().StateMoveTo);
 	return s;
 }
 
@@ -1021,19 +1015,13 @@ std::istream& lightspark::operator>>(std::istream& s, SHAPEWITHSTYLE& v)
 	BitStream bs(s);
 	v.NumFillBits=UB(4,bs);
 	v.NumLineBits=UB(4,bs);
-	v.ShapeRecords=SHAPERECORD(&v,bs);
-	if(v.ShapeRecords.TypeFlag+v.ShapeRecords.StateNewStyles+v.ShapeRecords.StateLineStyle+v.ShapeRecords.StateFillStyle1+
-			v.ShapeRecords.StateFillStyle0+v.ShapeRecords.StateMoveTo)
+	do
 	{
-		SHAPERECORD* cur=&(v.ShapeRecords);
-		while(1)
-		{
-			cur->next=new SHAPERECORD(&v,bs);
-			cur=cur->next;
-			if(cur->TypeFlag+cur->StateNewStyles+cur->StateLineStyle+cur->StateFillStyle1+cur->StateFillStyle0+cur->StateMoveTo==0)
-				break;
-		}
+		v.ShapeRecords.push_back(SHAPERECORD(&v,bs));
 	}
+	while(v.ShapeRecords.back().TypeFlag || v.ShapeRecords.back().StateNewStyles || v.ShapeRecords.back().StateLineStyle || 
+			v.ShapeRecords.back().StateFillStyle1 || v.ShapeRecords.back().StateFillStyle0 || 
+			v.ShapeRecords.back().StateMoveTo);
 	return s;
 }
 
@@ -1250,7 +1238,8 @@ void FILLSTYLE::setFragmentProgram() const
 		float r,g,b,a;
 	};
 
-	glBindTexture(GL_TEXTURE_2D,rt->data_tex);
+	//TODO: CHECK do we need to do this when the tex is not being used?
+	rt->dataTex.bind();
 
 	if(FillStyleType==0x00)
 	{
@@ -1283,7 +1272,7 @@ void FILLSTYLE::setFragmentProgram() const
 			buffer[i].b=float(c.Blue)/256.0f;
 			buffer[i].a=1;
 
-			assert(grad_index<Gradient.GradientRecords.size());
+			assert_and_throw(grad_index<Gradient.GradientRecords.size());
 			if(Gradient.GradientRecords[grad_index].Ratio==i)
 			{
 				color_l=color_r;
@@ -1313,7 +1302,8 @@ void FILLSTYLE::setFragmentProgram() const
 
 void FILLSTYLE::fixedColor(float r, float g, float b)
 {
-	glBindTexture(GL_TEXTURE_2D,rt->data_tex);
+	//TODO: CHECK: do we need to this here?
+	rt->dataTex.bind();
 
 	//Let's abuse of glColor and glTexCoord to transport
 	//custom information
@@ -1352,6 +1342,7 @@ std::istream& lightspark::operator>>(std::istream& s, FILLSTYLE& v)
 	else
 	{
 		LOG(LOG_ERROR,"Not supported fill style " << (int)v.FillStyleType << "... Aborting");
+		throw ParseException("Not supported fill style");
 	}
 	return s;
 }
@@ -1393,7 +1384,8 @@ GLYPHENTRY::GLYPHENTRY(TEXTRECORD* p,BitStream& bs):parent(p)
 	GlyphAdvance = SB(parent->parent->AdvanceBits,bs);
 }
 
-SHAPERECORD::SHAPERECORD(SHAPE* p,BitStream& bs):parent(p),next(0)
+SHAPERECORD::SHAPERECORD(SHAPE* p,BitStream& bs):parent(p),TypeFlag(false),StateNewStyles(false),StateLineStyle(false),StateFillStyle1(false),
+	StateFillStyle0(false),StateMoveTo(false),MoveDeltaX(0),MoveDeltaY(0),DeltaX(0),DeltaY(0)
 {
 	TypeFlag = UB(1,bs);
 	if(TypeFlag)
@@ -1523,7 +1515,7 @@ std::istream& lightspark::operator>>(std::istream& stream, MATRIX& v)
 
 std::istream& lightspark::operator>>(std::istream& stream, BUTTONRECORD& v)
 {
-	assert(v.buttonVersion==2);
+	assert_and_throw(v.buttonVersion==2);
 	BitStream bs(stream);
 
 	UB(2,bs);
@@ -1574,7 +1566,7 @@ std::istream& lightspark::operator>>(std::istream& stream, FILTER& v)
 			break;
 		default:
 			LOG(LOG_ERROR,"Unsupported Filter Id " << (int)v.FilterID);
-			::abort();
+			throw ParseException("Unsupported Filter Id");
 	}
 	return stream;
 }
@@ -1616,6 +1608,13 @@ void DictionaryDefinable::define(ASObject* g)
 
 variables_map::~variables_map()
 {
+	destroyContents();
+}
+
+void variables_map::destroyContents()
+{
+	if(sys->finalizingDestruction) //Objects are being destroyed by the relative classes
+		return;
 	var_iterator it=Variables.begin();
 	for(;it!=Variables.end();it++)
 	{
@@ -1626,9 +1625,10 @@ variables_map::~variables_map()
 		if(it->second.second.getter)
 			it->second.second.getter->decRef();
 	}
+	Variables.clear();
 }
 
-ASObject::ASObject(Manager* m):type(T_OBJECT),ref_count(1),manager(m),cur_level(0),implEnable(true),prototype(NULL)
+ASObject::ASObject(Manager* m):type(T_OBJECT),ref_count(1),manager(m),cur_level(0),prototype(NULL),implEnable(true)
 {
 #ifndef NDEBUG
 	//Stuff only used in debugging
@@ -1636,7 +1636,7 @@ ASObject::ASObject(Manager* m):type(T_OBJECT),ref_count(1),manager(m),cur_level(
 #endif
 }
 
-ASObject::ASObject(const ASObject& o):type(o.type),ref_count(1),manager(NULL),cur_level(0),implEnable(true),prototype(o.prototype)
+ASObject::ASObject(const ASObject& o):type(o.type),ref_count(1),manager(NULL),cur_level(0),prototype(o.prototype),implEnable(true)
 {
 	if(prototype)
 		prototype->incRef();
@@ -1646,13 +1646,31 @@ ASObject::ASObject(const ASObject& o):type(o.type),ref_count(1),manager(NULL),cu
 	initialized=false;
 	#endif
 
-	assert(o.Variables.size()==0);
+	assert_and_throw(o.Variables.size()==0);
+}
+
+void ASObject::setPrototype(Class_base* c)
+{
+	if(prototype)
+	{
+		prototype->abandonObject(this);
+		prototype->decRef();
+	}
+	prototype=c;
+	if(prototype)
+	{
+		prototype->acquireObject(this);
+		prototype->incRef();
+	}
 }
 
 ASObject::~ASObject()
 {
-	if(prototype)
+	if(prototype && !sys->finalizingDestruction)
+	{
 		prototype->decRef();
+		prototype->abandonObject(this);
+	}
 }
 
 int ASObject::_maxlevel()
@@ -1670,15 +1688,15 @@ Class_base* ASObject::getActualPrototype() const
 	Class_base* ret=prototype;
 	if(ret==NULL)
 	{
-		assert(type==T_CLASS);
+		assert_and_throw(type==T_CLASS);
 		return NULL;
 	}
 
 	for(int i=prototype->max_level;i>cur_level;i--)
 		ret=ret->super;
 
-	assert(ret->max_level==cur_level);
-	assert(ret);
+	assert_and_throw(ret);
+	assert_and_throw(ret->max_level==cur_level);
 	return ret;
 }
 
@@ -1710,7 +1728,7 @@ void variables_map::setSlot(unsigned int n,ASObject* o)
 {
 	if(n-1<slots_vars.size())
 	{
-		assert(slots_vars[n-1]!=Variables.end());
+		assert_and_throw(slots_vars[n-1]!=Variables.end());
 		if(slots_vars[n-1]->second.second.setter)
 			throw UnsupportedException("setSlot has setters");
 		slots_vars[n-1]->second.second.var->decRef();
@@ -1741,13 +1759,14 @@ ASObject* ASObject::getValueAt(int index)
 {
 	int level;
 	obj_var* obj=Variables.getValueAt(index,level);
-	assert(obj);
+	assert_and_throw(obj);
 	ASObject* ret;
 	if(obj->getter)
 	{
 		//Call the getter
 		LOG(LOG_CALLS,"Calling the getter");
 		IFunction* getter=obj->getter->getOverride();
+		incRef();
 		ret=getter->call(this,NULL,0,level);
 		ret->fake_decRef();
 		LOG(LOG_CALLS,"End of getter");
@@ -1838,7 +1857,7 @@ ASObject* lightspark::abstract_d(number_t i)
 
 ASObject* lightspark::abstract_b(bool i)
 {
-	return new Boolean(i);
+	return Class<Boolean>::getInstanceS(i);
 }
 
 ASObject* lightspark::abstract_i(intptr_t i)
@@ -1855,7 +1874,7 @@ void lightspark::stringToQName(const tiny_string& tmp, tiny_string& name, tiny_s
 	{
 		if(tmp[i]==':')
 		{
-			assert(tmp[i-1]==':');
+			assert_and_throw(tmp[i-1]==':');
 			ns=tmp.substr(0,i-1);
 			name=tmp.substr(i+1,tmp.len());
 			return;

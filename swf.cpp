@@ -88,11 +88,11 @@ SWF_HEADER::SWF_HEADER(istream& in):valid(false)
 	valid=true;
 }
 
-RootMovieClip::RootMovieClip(LoaderInfo* li, bool isSys):initialized(false),parsingIsFailed(false),frameRate(0),toBind(false)
+RootMovieClip::RootMovieClip(LoaderInfo* li, bool isSys):initialized(false),parsingIsFailed(false),frameRate(0),mutexFrames("mutexFrame"),
+	toBind(false)
 {
 	root=this;
 	sem_init(&mutex,0,1);
-	sem_init(&sem_frames,0,1);
 	sem_init(&new_frame,0,0);
 	sem_init(&sem_valid_size,0,0);
 	sem_init(&sem_valid_rate,0,0);
@@ -102,16 +102,12 @@ RootMovieClip::RootMovieClip(LoaderInfo* li, bool isSys):initialized(false),pars
 
 	//We set the protoype to a generic MovieClip
 	if(!isSys)
-	{
-		prototype=Class<MovieClip>::getClass();
-		prototype->incRef();
-	}
+		setPrototype(Class<MovieClip>::getClass());
 }
 
 RootMovieClip::~RootMovieClip()
 {
 	sem_destroy(&mutex);
-	sem_destroy(&sem_frames);
 	sem_destroy(&new_frame);
 	sem_destroy(&sem_valid_rate);
 	sem_destroy(&sem_valid_size);
@@ -128,14 +124,14 @@ void RootMovieClip::parsingFailed()
 
 void RootMovieClip::bindToName(const tiny_string& n)
 {
-	assert(toBind==false);
+	assert_and_throw(toBind==false);
 	toBind=true;
 	bindName=n;
 }
 
 SystemState::SystemState():RootMovieClip(NULL,true),renderRate(0),error(false),shutdown(false),showProfilingData(false),
 	showInteractiveMap(false),showDebug(false),xOffset(0),yOffset(0),currentVm(NULL),inputThread(NULL),
-	renderThread(NULL),useInterpreter(true),useJit(false), downloadManager(NULL)
+	renderThread(NULL),finalizingDestruction(false),useInterpreter(true),useJit(false), downloadManager(NULL)
 {
 	//Do needed global initialization
 	curl_global_init(CURL_GLOBAL_ALL);
@@ -152,8 +148,7 @@ SystemState::SystemState():RootMovieClip(NULL,true),renderRate(0),error(false),s
 	stage=Class<Stage>::getInstanceS();
 	startTime=compat_msectiming();
 	
-	prototype=Class<MovieClip>::getClass();
-	prototype->incRef();
+	setPrototype(Class<MovieClip>::getClass());
 }
 
 void SystemState::setUrl(const tiny_string& url)
@@ -164,7 +159,7 @@ void SystemState::setUrl(const tiny_string& url)
 
 void SystemState::parseParameters(istream& i)
 {
-	ASObject* ret=new ASObject;
+	ASObject* ret=Class<ASObject>::getInstanceS();
 	while(!i.eof())
 	{
 		string name,value;
@@ -190,10 +185,36 @@ SystemState::~SystemState()
 	delete currentVm;
 	delete timerThread;
 
-	//decRef all registered classes
+	//decRef all our object before destroying classes
+	Variables.destroyContents();
+	loaderInfo->decRef();
+	loaderInfo=NULL;
+
+	//We are already being destroyed, make our prototype abandon us
+	setPrototype(NULL);
+	
+	//Destroy the contents of all the classes
 	std::map<tiny_string, Class_base*>::iterator it=classes.begin();
 	for(;it!=classes.end();++it)
-		it->second->decRef();
+		it->second->cleanUp();
+
+	finalizingDestruction=true;
+	
+	//Also destroy all frames
+	frames.clear();
+
+	//Destroy all registered classes
+	it=classes.begin();
+	for(;it!=classes.end();++it)
+	{
+		//DEPRECATED: to force garbage collection we delete all the classes
+		delete it->second;
+		//it->second->decRef()
+	}
+
+	//Also destroy all tags
+	for(unsigned int i=0;i<tagsStorage.size();i++)
+		delete tagsStorage[i];
 
 	sem_destroy(&terminated);
 }
@@ -425,6 +446,7 @@ void ParseThread::execute()
 		while(!done)
 		{
 			Tag* tag=factory.readTag();
+			sys->tagsStorage.push_back(tag);
 			switch(tag->getType())
 			{
 				case END_TAG:
@@ -495,7 +517,7 @@ void RenderThread::wait()
 	//Signal potentially blocking semaphore
 	sem_post(&render);
 	int ret=pthread_join(t,NULL);
-	assert(ret==0);
+	assert_and_throw(ret==0);
 }
 
 InputThread::InputThread(SystemState* s,ENGINE e, void* param):m_sys(s),t(0),terminated(false),
@@ -513,7 +535,7 @@ InputThread::InputThread(SystemState* s,ENGINE e, void* param):m_sys(s),t(0),ter
 		
 		//Let's hook into the Xt event handling of the browser
 		X11Intrinsic::Widget xtwidget = X11Intrinsic::XtWindowToWidget(npapi_params->display, npapi_params->window);
-		assert(xtwidget);
+		assert_and_throw(xtwidget);
 
 		//mXtwidget = xtwidget;
 		long event_mask = ExposureMask|PointerMotionMask|ButtonPressMask|KeyPressMask;
@@ -678,7 +700,7 @@ void InputThread::addListener(InteractiveObject* ob)
 #ifndef NDEBUG
 	vector<InteractiveObject*>::const_iterator it=find(listeners.begin(),listeners.end(),ob);
 	//Object is already register, should not happen
-	assert(it==listeners.end());
+	assert_and_throw(it==listeners.end());
 #endif
 	
 	//Register the listener
@@ -760,8 +782,8 @@ void InputThread::disableDrag()
 }
 
 RenderThread::RenderThread(SystemState* s,ENGINE e,void* params):m_sys(s),terminated(false),inputNeeded(false),
-	interactive_buffer(NULL),fbAcquired(false),frameCount(0),secsCount(0),selectedDebug(NULL),currentId(0),
-	materialOverride(false)
+	interactive_buffer(NULL),fbAcquired(false),frameCount(0),secsCount(0),dataTex(false),mainTex(false),tempTex(false),
+	inputTex(false),hasNPOTTextures(false),selectedDebug(NULL),currentId(0),materialOverride(false)
 {
 	LOG(LOG_NO_INFO,"RenderThread this=" << this);
 	m_sys=s;
@@ -780,8 +802,8 @@ RenderThread::RenderThread(SystemState* s,ENGINE e,void* params):m_sys(s),termin
 		npapi_params=(NPAPI_params*)params;
 		pthread_create(&t,NULL,(thread_worker)npapi_worker,this);
 	}
-	clock_gettime(CLOCK_REALTIME,&ts);
 #endif
+	clock_gettime(CLOCK_REALTIME,&ts);
 }
 
 RenderThread::~RenderThread()
@@ -850,7 +872,7 @@ void RenderThread::glBlitFramebuffer(number_t xmin, number_t xmax, number_t ymin
 	glEnable(GL_BLEND);
 	glDrawBuffer(GL_COLOR_ATTACHMENT0);
 
-	glBindTexture(GL_TEXTURE_2D,rt->spare_tex);
+	rt->tempTex.bind();
 	glBegin(GL_QUADS);
 		glVertex2f(xmin,ymin);
 		glVertex2f(xmax,ymin);
@@ -882,13 +904,12 @@ void* RenderThread::gtkplug_worker(RenderThread* th)
 	rt->width=window_width;
 	rt->height=window_height;
 	th->interactive_buffer=new uint32_t[window_width*window_height];
-	unsigned int t2[3];
 	gdk_threads_enter();
 	GtkWidget* container=p->container;
 	gtk_widget_show(container);
 	gdk_gl_init(0, 0);
 	GdkGLConfig* glConfig=gdk_gl_config_new_by_mode((GdkGLConfigMode)(GDK_GL_MODE_RGBA|GDK_GL_MODE_DOUBLE|GDK_GL_MODE_DEPTH));
-	assert(glConfig);
+	assert_and_throw(glConfig);
 	
 	GtkWidget* drawing_area = gtk_drawing_area_new ();
 	//gtk_widget_set_size_request (drawing_area, 0, 0);
@@ -899,8 +920,8 @@ void* RenderThread::gtkplug_worker(RenderThread* th)
 	GdkGLContext *glContext = gtk_widget_get_gl_context (drawing_area);
 	GdkGLDrawable *glDrawable = gtk_widget_get_gl_drawable(drawing_area);	
 	bool ret=gdk_gl_drawable_gl_begin(glDrawable,glContext);
-	assert(ret);
-	th->commonGLInit(window_width, window_height, t2);
+	assert_and_throw(ret);
+	th->commonGLInit(window_width, window_height);
 	ThreadProfile* profile=sys->allocateProfiler(RGB(200,0,0));
 	profile->setTag("Render");
 	FTTextureFont font("/usr/share/fonts/truetype/ttf-liberation/LiberationSerif-Regular.ttf");
@@ -925,12 +946,12 @@ void* RenderThread::gtkplug_worker(RenderThread* th)
 
 			gdk_threads_enter();
 			bool ret=gdk_gl_drawable_gl_begin(glDrawable,glContext);
-			assert(ret);
+			assert_and_throw(ret);
 			gdk_gl_drawable_swap_buffers(glDrawable);
 
 			if(th->inputNeeded)
 			{
-				glBindTexture(GL_TEXTURE_2D,t2[2]);
+				th->inputTex.bind();
 				glGetTexImage(GL_TEXTURE_2D,0,GL_BGRA,GL_UNSIGNED_BYTE,th->interactive_buffer);
 				th->inputNeeded=false;
 				sem_post(&th->inputDone);
@@ -974,7 +995,8 @@ void* RenderThread::gtkplug_worker(RenderThread* th)
 			glDrawBuffer(GL_BACK);
 			glUseProgram(0);
 
-			glBindTexture(GL_TEXTURE_2D,((sys->showInteractiveMap)?t2[2]:t2[0]));
+			TextureBuffer* curBuf=((th->m_sys->showInteractiveMap)?&th->inputTex:&th->mainTex);
+			curBuf->bind();
 			glBegin(GL_QUADS);
 				glTexCoord2f(0,1);
 				glVertex2i(0,0);
@@ -1030,11 +1052,11 @@ void* RenderThread::gtkplug_worker(RenderThread* th)
 		::abort();
 	}
 	ret=gdk_gl_drawable_gl_begin(glDrawable,glContext);
-	assert(ret);
+	assert_and_throw(ret);
 	glDisable(GL_TEXTURE_2D);
 	gdk_gl_drawable_gl_end(glDrawable);
 	delete p;
-	th->commonGLDeinit(t2);
+	th->commonGLDeinit();
 	return NULL;
 }
 #endif
@@ -1061,8 +1083,7 @@ void* RenderThread::npapi_worker(RenderThread* th)
 	rt->width=window_width;
 	rt->height=window_height;
 	th->interactive_buffer=new uint32_t[window_width*window_height];
-	unsigned int t2[3];
-
+	
 	Display* d=XOpenDisplay(NULL);
 
 	int a,b;
@@ -1107,7 +1128,7 @@ void* RenderThread::npapi_worker(RenderThread* th)
 	if(!glXIsDirect(d,th->mContext))
 		printf("Indirect!!\n");
 
-	th->commonGLInit(window_width, window_height, t2);
+	th->commonGLInit(window_width, window_height);
 	
 	ThreadProfile* profile=sys->allocateProfiler(RGB(200,0,0));
 	profile->setTag("Render");
@@ -1173,7 +1194,7 @@ void* RenderThread::npapi_worker(RenderThread* th)
 
 				if(th->inputNeeded)
 				{
-					glBindTexture(GL_TEXTURE_2D,t2[2]);
+					th->inputTex.bind();
 					glGetTexImage(GL_TEXTURE_2D,0,GL_BGRA,GL_UNSIGNED_BYTE,th->interactive_buffer);
 					th->inputNeeded=false;
 					sem_post(&th->inputDone);
@@ -1201,7 +1222,9 @@ void* RenderThread::npapi_worker(RenderThread* th)
 				glClearColor(0,0,0,1);
 				glClear(GL_COLOR_BUFFER_BIT);
 
-				glBindTexture(GL_TEXTURE_2D,((sys->showInteractiveMap)?t2[2]:t2[0]));
+				TextureBuffer* curBuf=((th->m_sys->showInteractiveMap)?&th->inputTex:&th->mainTex);
+				curBuf->bind();
+				curBuf->setTexScale(th->fragmentTexScaleUniform);
 				glColor4f(0,0,1,0);
 				glBegin(GL_QUADS);
 					glTexCoord2f(0,1);
@@ -1242,17 +1265,18 @@ void* RenderThread::npapi_worker(RenderThread* th)
 			profile->accountTime(chronometer.checkpoint());
 		}
 	}
-	catch(const char* e)
+	catch(LightsparkException& e)
 	{
-		LOG(LOG_ERROR,"Exception caught " << e);
-		::abort();
+		LOG(LOG_ERROR,"Exception in RenderThread " << e.what());
+		sys->setError(e.cause);
 	}
 	glDisable(GL_TEXTURE_2D);
-	th->commonGLDeinit(t2);
+	th->commonGLDeinit();
 	glXMakeContextCurrent(d,None,None,NULL);
 	glXDestroyContext(d,th->mContext);
 	XCloseDisplay(d);
 	delete p;
+	return NULL;
 }
 #endif
 
@@ -1322,137 +1346,6 @@ bool RenderThread::loadShaderPrograms()
 	return true;
 }
 
-#if 0
-void* RenderThread::glx_worker(RenderThread* th)
-{
-	sys=th->m_sys;
-	rt=th;
-
-	RECT size=sys->getFrameSize();
-	int width=size.Xmax/10;
-	int height=size.Ymax/10;
-
-	int attrib[20];
-	attrib[0]=GLX_RGBA;
-	attrib[1]=GLX_DOUBLEBUFFER;
-	attrib[2]=GLX_DEPTH_SIZE;
-	attrib[3]=24;
-	attrib[4]=GLX_RED_SIZE;
-	attrib[5]=8;
-	attrib[6]=GLX_GREEN_SIZE;
-	attrib[7]=8;
-	attrib[8]=GLX_BLUE_SIZE;
-	attrib[9]=8;
-	attrib[10]=GLX_ALPHA_SIZE;
-	attrib[11]=8;
-
-	attrib[12]=None;
-
-	XVisualInfo *vi;
-	XSetWindowAttributes swa;
-	Colormap cmap; 
-	th->mDisplay = XOpenDisplay(0);
-	vi = glXChooseVisual(th->mDisplay, DefaultScreen(th->mDisplay), attrib);
-
-	int a;
-	attrib[0]=GLX_VISUAL_ID;
-	attrib[1]=vi->visualid;
-	attrib[2]=GLX_DEPTH_SIZE;
-	attrib[3]=24;
-	attrib[4]=GLX_RED_SIZE;
-	attrib[5]=8;
-	attrib[6]=GLX_GREEN_SIZE;
-	attrib[7]=8;
-	attrib[8]=GLX_BLUE_SIZE;
-	attrib[9]=8;
-	attrib[10]=GLX_ALPHA_SIZE;
-	attrib[11]=8;
-	attrib[12]=GLX_DRAWABLE_TYPE;
-	attrib[13]=GLX_PBUFFER_BIT;
-
-	attrib[14]=None;
-	GLXFBConfig* fb=glXChooseFBConfig(th->mDisplay, 0, attrib, &a);
-
-	//We create a pair of context, window and offscreen
-	th->mContext = glXCreateContext(th->mDisplay, vi, 0, GL_TRUE);
-
-	attrib[0]=GLX_PBUFFER_WIDTH;
-	attrib[1]=width;
-	attrib[2]=GLX_PBUFFER_HEIGHT;
-	attrib[3]=height;
-	attrib[4]=None;
-	th->mPbuffer = glXCreatePbuffer(th->mDisplay, fb[0], attrib);
-
-	XFree(fb);
-
-	cmap = XCreateColormap(th->mDisplay, RootWindow(th->mDisplay, vi->screen), vi->visual, AllocNone);
-	swa.colormap = cmap; 
-	swa.border_pixel = 0; 
-	swa.event_mask = StructureNotifyMask; 
-
-	th->mWindow = XCreateWindow(th->mDisplay, RootWindow(th->mDisplay, vi->screen), 100, 100, width, height, 0, vi->depth, 
-			InputOutput, vi->visual, CWBorderPixel|CWEventMask|CWColormap, &swa);
-	
-	XMapWindow(th->mDisplay, th->mWindow);
-	glXMakeContextCurrent(th->mDisplay, th->mWindow, th->mWindow, th->mContext); 
-
-	glEnable( GL_DEPTH_TEST );
-	glDepthFunc(GL_LEQUAL);
-
-	glViewport(0,0,width,height);
-	glMatrixMode(GL_PROJECTION);
-	glLoadIdentity();
-	glOrtho(0,width,height,0,-100,0);
-	glScalef(0.1,0.1,1);
-
-	glMatrixMode(GL_MODELVIEW);
-
-	unsigned int t;
-	glGenTextures(1,&t);
-
-	glBindTexture(GL_TEXTURE_1D,t);
-
-	glTexParameteri(GL_TEXTURE_1D,GL_TEXTURE_MIN_FILTER,GL_NEAREST);
-	glTexParameteri(GL_TEXTURE_1D,GL_TEXTURE_MAG_FILTER,GL_NEAREST);
-	glTexParameteri(GL_TEXTURE_1D,GL_TEXTURE_WRAP_S,GL_CLAMP);
-
-	//Load shaders
-	rt->loadShaderPrograms();
-	int tex=glGetUniformLocation(rt->gpu_program,"g_tex");
-	glUniform1i(tex,0);
-	glUseProgram(rt->gpu_program);
-
-	float* buffer=new float[640*240];
-	try
-	{
-		while(1)
-		{
-			sem_wait(&th->render);
-			glXSwapBuffers(th->mDisplay,th->mWindow);
-			RGB bg=sys->getBackground();
-			glClearColor(bg.Red/255.0F,bg.Green/255.0F,bg.Blue/255.0F,0);
-			glClearDepth(0xffff);
-			glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
-			glLoadIdentity();
-
-			sys->Render();
-
-			if(sys->isShuttingDown())
-			{
-				delete[] buffer;
-				pthread_exit(0);
-			}
-		}
-	}
-	catch(const char* e)
-	{
-		LOG(LOG_ERROR, "Exception caught " << e);
-		delete[] buffer;
-		::abort();
-	}
-}
-#endif
-
 float RenderThread::getIdAt(int x, int y)
 {
 	//TODO: use floating point textures
@@ -1494,33 +1387,30 @@ bool RootMovieClip::getBounds(number_t& xmin, number_t& xmax, number_t& ymin, nu
 
 void RootMovieClip::Render()
 {
-	sem_wait(&sem_frames);
+	Locker l(mutexFrames);
 	while(1)
 	{
 		//Check if the next frame we are going to play is available
 		if(state.next_FP<frames.size())
 			break;
 
-		sem_post(&sem_frames);
+		l.unlock();
 		sem_wait(&new_frame);
 		if(parsingIsFailed)
 			return;
-		sem_wait(&sem_frames);
+		l.lock();
 	}
 
 	MovieClip::Render();
-	sem_post(&sem_frames);
 }
 
-void RenderThread::commonGLDeinit(unsigned int t2[3])
+void RenderThread::commonGLDeinit()
 {
-	glDeleteTextures(1,&rt->data_tex);
-	glDeleteTextures(3,t2);
 	glBindFramebuffer(GL_FRAMEBUFFER,0);
 	glDeleteFramebuffers(1,&rt->fboId);
 }
 
-void RenderThread::commonGLInit(int width, int height, unsigned int t2[3])
+void RenderThread::commonGLInit(int width, int height)
 {
 	//Now we can initialize GLEW
 	glewExperimental = GL_TRUE;
@@ -1538,12 +1428,7 @@ void RenderThread::commonGLInit(int width, int height, unsigned int t2[3])
 	}
 
 	//Load shaders
-	rt->loadShaderPrograms();
-
-	int tex=glGetUniformLocation(rt->gpu_program,"g_tex1");
-	glUniform1i(tex,0);
-
-	glUseProgram(rt->gpu_program);
+	loadShaderPrograms();
 
 	glDisable(GL_DEPTH_TEST);
 	glDepthFunc(GL_ALWAYS);
@@ -1557,55 +1442,39 @@ void RenderThread::commonGLInit(int width, int height, unsigned int t2[3])
 	glOrtho(0,width,0,height,-100,0);
 
 	glMatrixMode(GL_MODELVIEW);
-
-	GLuint dt;
-	glGenTextures(1,&dt);
-	rt->data_tex=dt;
-
 	glActiveTexture(GL_TEXTURE0);
-	glBindTexture(GL_TEXTURE_2D,dt);
 
-	glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_NEAREST);
-	glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_NEAREST);
-	glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,GL_CLAMP);
- 	glTexEnvf( GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE );
+	dataTex.init();
 
- 	glGenTextures(3,t2);
-	glBindTexture(GL_TEXTURE_2D,t2[0]);
+	mainTex.init(width, height, GL_NEAREST);
 
-	glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_NEAREST);
-	glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_NEAREST);
-	glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,GL_CLAMP);
+	tempTex.init(width, height, GL_NEAREST);
+
+	inputTex.init(width, height, GL_NEAREST);
+
+	//Set uniforms
+	cleanGLErrors();
+	glUseProgram(blitter_program);
+	int texScale=glGetUniformLocation(blitter_program,"texScale");
+	mainTex.setTexScale(texScale);
+	cleanGLErrors();
+
+	glUseProgram(gpu_program);
+	cleanGLErrors();
+	int tex=glGetUniformLocation(gpu_program,"g_tex1");
+	glUniform1i(tex,0);
+	fragmentTexScaleUniform=glGetUniformLocation(gpu_program,"texScale");
+	glUniform2f(fragmentTexScaleUniform,1,1);
+	cleanGLErrors();
+
+	//Default to replace
 	glTexEnvf( GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE );
-
-	while(glGetError()!=GL_NO_ERROR);
-	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, 0);
-
-	glBindTexture(GL_TEXTURE_2D,t2[1]);
-	rt->spare_tex=t2[1];
-
-	glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_NEAREST);
-	glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_NEAREST);
-	glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,GL_CLAMP);
-	glTexEnvf( GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE );
-
-	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, 0);
-
-	glBindTexture(GL_TEXTURE_2D,t2[2]);
-
-	glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_NEAREST);
-	glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_NEAREST);
-	glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,GL_CLAMP);
-	glTexEnvf( GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE );
-
-	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, 0);
-	
 	// create a framebuffer object
-	glGenFramebuffers(1, &rt->fboId);
-	glBindFramebuffer(GL_FRAMEBUFFER, rt->fboId);
-	glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,GL_TEXTURE_2D, t2[0], 0);
-	glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1,GL_TEXTURE_2D, t2[1], 0);
-	glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT2,GL_TEXTURE_2D, t2[2], 0);
+	glGenFramebuffers(1, &fboId);
+	glBindFramebuffer(GL_FRAMEBUFFER, fboId);
+	glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,GL_TEXTURE_2D, mainTex.getId(), 0);
+	glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1,GL_TEXTURE_2D, tempTex.getId(), 0);
+	glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT2,GL_TEXTURE_2D, inputTex.getId(), 0);
 	
 	// check FBO status
 	GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
@@ -1631,7 +1500,6 @@ void* RenderThread::sdl_worker(RenderThread* th)
 	rt->width=width;
 	rt->height=height;
 	th->interactive_buffer=new uint32_t[width*height];
-	unsigned int t2[3];
 	SDL_GL_SetAttribute( SDL_GL_RED_SIZE, 8 );
 	SDL_GL_SetAttribute( SDL_GL_GREEN_SIZE, 8 );
 	SDL_GL_SetAttribute( SDL_GL_BLUE_SIZE, 8 );
@@ -1641,7 +1509,7 @@ void* RenderThread::sdl_worker(RenderThread* th)
 	SDL_GL_SetAttribute( SDL_GL_DOUBLEBUFFER, 1 );
 
 	SDL_SetVideoMode( width, height, 24, SDL_OPENGL );
-	th->commonGLInit(width, height, t2);
+	th->commonGLInit(width, height);
 
 	ThreadProfile* profile=sys->allocateProfiler(RGB(200,0,0));
 	profile->setTag("Render");
@@ -1664,7 +1532,7 @@ void* RenderThread::sdl_worker(RenderThread* th)
 
 			if(th->inputNeeded)
 			{
-				glBindTexture(GL_TEXTURE_2D,t2[2]);
+				th->inputTex.bind();
 				glGetTexImage(GL_TEXTURE_2D,0,GL_BGRA,GL_UNSIGNED_BYTE,th->interactive_buffer);
 				th->inputNeeded=false;
 				sem_post(&th->inputDone);
@@ -1742,10 +1610,12 @@ void* RenderThread::sdl_worker(RenderThread* th)
 
 				glBindFramebuffer(GL_FRAMEBUFFER, 0);
 				glDrawBuffer(GL_BACK);
-				glUseProgram(0);
 				glDisable(GL_BLEND);
 
-				glBindTexture(GL_TEXTURE_2D,((sys->showInteractiveMap)?t2[2]:t2[0]));
+				TextureBuffer* curBuf=((th->m_sys->showInteractiveMap)?&th->inputTex:&th->mainTex);
+				curBuf->bind();
+				curBuf->setTexScale(th->fragmentTexScaleUniform);
+				glColor4f(0,0,1,0);
 				glBegin(GL_QUADS);
 					glTexCoord2f(0,1);
 					glVertex2i(0,0);
@@ -1759,6 +1629,7 @@ void* RenderThread::sdl_worker(RenderThread* th)
 				
 				if(th->m_sys->showDebug)
 				{
+					glUseProgram(0);
 					glDisable(GL_TEXTURE_2D);
 					if(th->selectedDebug)
 						th->selectedDebug->debugRender(&font, true);
@@ -1769,6 +1640,7 @@ void* RenderThread::sdl_worker(RenderThread* th)
 
 				if(th->m_sys->showProfilingData)
 				{
+					glUseProgram(0);
 					glColor3f(0,0,0);
 					char frameBuf[20];
 					snprintf(frameBuf,20,"Frame %u",th->m_sys->state.FP);
@@ -1797,12 +1669,12 @@ void* RenderThread::sdl_worker(RenderThread* th)
 		}
 		glDisable(GL_TEXTURE_2D);
 	}
-	catch(const char* e)
+	catch(LightsparkException& e)
 	{
-		LOG(LOG_ERROR, "Exception caught " << e);
-		::abort();
+		LOG(LOG_ERROR,"Exception in RenderThread " << e.what());
+		sys->setError(e.cause);
 	}
-	th->commonGLDeinit(t2);
+	th->commonGLDeinit();
 	return NULL;
 }
 
@@ -1831,20 +1703,20 @@ void RenderThread::tick()
 
 void RootMovieClip::setFrameCount(int f)
 {
-	sem_wait(&sem_frames);
+	Locker l(mutexFrames);
 	totalFrames=f;
 	state.max_FP=f;
-	assert(cur_frame==&frames.back());
+	//TODO, maybe the next is a regular assert
+	assert_and_throw(cur_frame==&frames.back());
 	//Reserving guarantees than the vector is never invalidated
 	frames.reserve(f);
 	cur_frame=&frames.back();
-	sem_post(&sem_frames);
 }
 
 void RootMovieClip::setFrameSize(const lightspark::RECT& f)
 {
 	frameSize=f;
-	assert(f.Xmin==0 && f.Ymin==0);
+	assert_and_throw(f.Xmin==0 && f.Ymin==0);
 	sem_post(&sem_valid_size);
 }
 
@@ -1896,7 +1768,7 @@ void RootMovieClip::addToFrame(ControlTag* t)
 
 void RootMovieClip::commitFrame(bool another)
 {
-	sem_wait(&sem_frames);
+	Locker l(mutexFrames);
 	framesLoaded=frames.size();
 	if(another)
 	{
@@ -1905,8 +1777,8 @@ void RootMovieClip::commitFrame(bool another)
 	}
 	else
 		cur_frame=NULL;
-	
-	assert(frames.size()<=frames.capacity());
+
+	assert_and_throw(frames.size()<=frames.capacity());
 
 	if(framesLoaded==1)
 	{
@@ -1914,16 +1786,15 @@ void RootMovieClip::commitFrame(bool another)
 		bootstrap();
 	}
 	sem_post(&new_frame);
-	sem_post(&sem_frames);
 }
 
 void RootMovieClip::revertFrame()
 {
-	sem_wait(&sem_frames);
-	assert(frames.size() && framesLoaded==(frames.size()-1));
+	Locker l(mutexFrames);
+	//TODO: The next should be a regular assert
+	assert_and_throw(frames.size() && framesLoaded==(frames.size()-1));
 	frames.pop_back();
 	cur_frame=NULL;
-	sem_post(&sem_frames);
 }
 
 RGB RootMovieClip::getBackground()

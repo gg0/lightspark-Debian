@@ -16,7 +16,7 @@ lightspark (0.3.9-1~exp0) experimental; urgency=low
     - Remove empty README.Debian
   * Use 3.0 (quilt) source package format.
 
- -- Didier Raboud <didier@raboud.com>  Fri, 21 May 2010 11:27:27 +0200
+ -- Didier Raboud <didier@raboud.com>  Wed, 26 May 2010 12:21:20 +0200
 
 lightspark (0.3.9-0ubuntu1) lucid; urgency=low
 
@@ -37,7 +37,6 @@ lightspark (0.3.7-ubuntu1) lucid; urgency=low
  -- Alessandro Pignotti <a.pignotti@sssup.it>  Fri, 21 May 2010 23:12:25 +0200
 
 lightspark (0.3.6-ubuntu1) lucid; urgency=low
->>>>>>> upstream/0.3.9
 
   * New release
 

@@ -395,7 +395,7 @@ void ThreadProfile::plot(uint32_t maxTime, FTFont* font)
 		{
 			//New tag, flush the old one if present
 			if(curTag)
-				font->Render(curTag->c_str() ,-1,FTPoint(curTagX,max(curTagY-curTagH,0)));
+				font->Render(curTag->c_str() ,-1,FTPoint(curTagX,imax(curTagY-curTagH,0)));
 			//Measure tag
 			FTBBox tagBox=font->BBox(data[i].tag.c_str(),-1);
 			curTagLen=(tagBox.Upper()-tagBox.Lower()).X();
@@ -407,11 +407,11 @@ void ThreadProfile::plot(uint32_t maxTime, FTFont* font)
 		if(curTag)
 		{
 			if(relx<(curTagX+curTagLen))
-				curTagY=min(curTagY,data[i].timing*height/maxTime);
+				curTagY=imin(curTagY,data[i].timing*height/maxTime);
 			else
 			{
 				//Tag is before this sample
-				font->Render(curTag->c_str() ,-1,FTPoint(curTagX,max(curTagY-curTagH,0)));
+				font->Render(curTag->c_str() ,-1,FTPoint(curTagX,imax(curTagY-curTagH,0)));
 				curTag=NULL;
 			}
 		}
@@ -903,7 +903,6 @@ void* RenderThread::gtkplug_worker(RenderThread* th)
 
 	rt->width=window_width;
 	rt->height=window_height;
-	th->interactive_buffer=new uint32_t[window_width*window_height];
 	gdk_threads_enter();
 	GtkWidget* container=p->container;
 	gtk_widget_show(container);
@@ -1046,10 +1045,10 @@ void* RenderThread::gtkplug_worker(RenderThread* th)
 			profile->accountTime(chronometer.checkpoint());
 		}
 	}
-	catch(const char* e)
+	catch(LightsparkException& e)
 	{
-		LOG(LOG_ERROR,"Exception caught " << e);
-		::abort();
+		LOG(LOG_ERROR,"Exception in RenderThread " << e.what() << " " << e.cause);
+		sys->setError(e.cause);
 	}
 	ret=gdk_gl_drawable_gl_begin(glDrawable,glContext);
 	assert_and_throw(ret);
@@ -1082,7 +1081,6 @@ void* RenderThread::npapi_worker(RenderThread* th)
 
 	rt->width=window_width;
 	rt->height=window_height;
-	th->interactive_buffer=new uint32_t[window_width*window_height];
 	
 	Display* d=XOpenDisplay(NULL);
 
@@ -1349,7 +1347,8 @@ bool RenderThread::loadShaderPrograms()
 float RenderThread::getIdAt(int x, int y)
 {
 	//TODO: use floating point textures
-	return (interactive_buffer[y*width+x]&0xff)/255.0f;
+	uint32_t allocWidth=inputTex.getAllocWidth();
+	return (interactive_buffer[y*allocWidth+x]&0xff)/255.0f;
 }
 
 void RootMovieClip::initialize()
@@ -1427,6 +1426,9 @@ void RenderThread::commonGLInit(int width, int height)
 		::abort();
 	}
 
+	if(GLEW_ARB_texture_non_power_of_two)
+		hasNPOTTextures=true;
+
 	//Load shaders
 	loadShaderPrograms();
 
@@ -1451,6 +1453,8 @@ void RenderThread::commonGLInit(int width, int height)
 	tempTex.init(width, height, GL_NEAREST);
 
 	inputTex.init(width, height, GL_NEAREST);
+	//Allocated buffer for texture readback
+	interactive_buffer=new uint32_t[inputTex.getAllocWidth()*inputTex.getAllocHeight()];
 
 	//Set uniforms
 	cleanGLErrors();
@@ -1499,7 +1503,6 @@ void* RenderThread::sdl_worker(RenderThread* th)
 	int height=size.Ymax/20;
 	rt->width=width;
 	rt->height=height;
-	th->interactive_buffer=new uint32_t[width*height];
 	SDL_GL_SetAttribute( SDL_GL_RED_SIZE, 8 );
 	SDL_GL_SetAttribute( SDL_GL_GREEN_SIZE, 8 );
 	SDL_GL_SetAttribute( SDL_GL_BLUE_SIZE, 8 );

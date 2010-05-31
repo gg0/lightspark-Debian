@@ -30,6 +30,7 @@
 #include "swftypes.h"
 #include <sstream>
 #include <limits>
+#include <math.h>
 #include "swf.h"
 #include "flashevents.h"
 #include "flashdisplay.h"
@@ -960,7 +961,9 @@ void ABCVm::wait()
 	if(!terminated)
 	{
 		if(pthread_join(t,NULL)!=0)
-			abort();
+		{
+			LOG(LOG_ERROR,"pthread_join in ABCVm failed");
+		}
 		terminated=true;
 	}
 }

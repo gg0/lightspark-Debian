@@ -77,7 +77,7 @@ FFMpegDecoder::FFMpegDecoder(uint8_t* initdata, uint32_t datalen):curBuffer(0),c
 	codecContext->extradata_size=datalen;
 
 	if(avcodec_open(codecContext, codec)<0)
-		abort();
+		throw RunTimeException("Cannot open decoder");
 
 	frameIn=avcodec_alloc_frame();
 }
@@ -141,7 +141,7 @@ bool FFMpegDecoder::decodeData(uint8_t* data, uint32_t datalen)
 	int frameOk=0;
 	avcodec_decode_video(codecContext, frameIn, &frameOk, data, datalen);
 	if(frameOk==0)
-		abort();
+		throw RunTimeException("Cannot decode frame");
 	assert(codecContext->pix_fmt==PIX_FMT_YUV420P);
 
 	const uint32_t height=codecContext->height;
@@ -160,9 +160,13 @@ void FFMpegDecoder::copyFrameToBuffers(const AVFrame* frameIn, uint32_t width, u
 	//Only one thread may access the tail
 	if(buffers[bufferTail][0]==NULL)
 	{
+#ifdef WIN32
+		//FIXME!!
+#else
 		posix_memalign((void**)&buffers[bufferTail][0], 16, bufferSize);
 		posix_memalign((void**)&buffers[bufferTail][1], 16, bufferSize/4);
 		posix_memalign((void**)&buffers[bufferTail][2], 16, bufferSize/4);
+#endif
 	}
 	int offset[3]={0,0,0};
 	for(uint32_t y=0;y<height;y++)

@@ -4,16 +4,16 @@
     Copyright (C) 2009,2010  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
+    it under the terms of the GNU Lesser General Public License as published by
     the Free Software Foundation, either version 3 of the License, or
     (at your option) any later version.
 
     This program is distributed in the hope that it will be useful,
     but WITHOUT ANY WARRANTY; without even the implied warranty of
     MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
+    GNU Lesser General Public License for more details.
 
-    You should have received a copy of the GNU General Public License
+    You should have received a copy of the GNU Lesser General Public License
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
@@ -74,12 +74,10 @@ void Video::Render()
 		videoWidth=netStream->getVideoWidth();
 		videoHeight=netStream->getVideoHeight();
 
-		float matrix[16];
-		getMatrix().get4DMatrix(matrix);
-		glPushMatrix();
-		glMultMatrixf(matrix);
+		MatrixApplier ma(getMatrix());
 
-		rt->glAcquireFramebuffer(0,width,0,height);
+		if(!isSimple())
+			rt->glAcquireTempBuffer(0,width,0,height);
 
 		bool frameReady=netStream->copyFrameToTexture(videoTexture);
 		videoTexture.bind();
@@ -107,7 +105,8 @@ void Video::Render()
 			sem_post(&mutex);
 		}
 
-		rt->glBlitFramebuffer(0,width,0,height);
+		if(!isSimple())
+			rt->glBlitTempBuffer(0,width,0,height);
 		
 		//Render click sensible area if needed
 		if(rt->glAcquireIdBuffer())
@@ -118,9 +117,9 @@ void Video::Render()
 				glVertex2i(width,height);
 				glVertex2i(0,height);
 			glEnd();
-			
+			rt->glReleaseIdBuffer();
 		}
-		glPopMatrix();
+		ma.unapply();
 	}
 }
 

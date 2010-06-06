@@ -4,16 +4,16 @@
     Copyright (C) 2009,2010  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
+    it under the terms of the GNU Lesser General Public License as published by
     the Free Software Foundation, either version 3 of the License, or
     (at your option) any later version.
 
     This program is distributed in the hope that it will be useful,
     but WITHOUT ANY WARRANTY; without even the implied warranty of
     MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
+    GNU Lesser General Public License for more details.
 
-    You should have received a copy of the GNU General Public License
+    You should have received a copy of the GNU Lesser General Public License
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
@@ -52,7 +52,7 @@ TLSDATA Manager* iManager=NULL;
 TLSDATA Manager* dManager=NULL;
 TLSDATA bool isVmThread=false;;
 
-DoABCTag::DoABCTag(RECORDHEADER h, std::istream& in):ControlTag(h,in)
+DoABCTag::DoABCTag(RECORDHEADER h, std::istream& in):ControlTag(h)
 {
 	int dest=in.tellg();
 	dest+=h.getLength();
@@ -89,7 +89,7 @@ void DoABCTag::execute(RootMovieClip*)
 	se->decRef();
 }
 
-SymbolClassTag::SymbolClassTag(RECORDHEADER h, istream& in):ControlTag(h,in)
+SymbolClassTag::SymbolClassTag(RECORDHEADER h, istream& in):ControlTag(h)
 {
 	LOG(LOG_TRACE,"SymbolClassTag");
 	in >> NumSymbols;
@@ -190,6 +190,7 @@ void ABCVm::registerClasses()
 	Global.setVariableByQName("Bitmap","flash.display",Class<Bitmap>::getClass());
 
 	Global.setVariableByQName("DropShadowFilter","flash.filters",Class<ASObject>::getClass("DropShadowFilter"));
+	Global.setVariableByQName("BitmapFilter","flash.filters",Class<ASObject>::getClass("BitmapFilter"));
 
 	Global.setVariableByQName("TextField","flash.text",Class<TextField>::getClass());
 	Global.setVariableByQName("TextFormat","flash.text",Class<ASObject>::getClass("TextFormat"));
@@ -418,6 +419,7 @@ multiname* ABCContext::s_getMultiname(call_context* th, ASObject* rt1, int n)
 				}
 				else if(rt1->getObjectType()==T_OBJECT 
 						|| rt1->getObjectType()==T_CLASS
+						|| rt1->getObjectType()==T_MOVIECLIP
 						|| rt1->getObjectType()==T_FUNCTION)
 				{
 					ret->name_o=rt1;
@@ -508,6 +510,7 @@ multiname* ABCContext::s_getMultiname(call_context* th, ASObject* rt1, int n)
 				}
 				else if(rt1->getObjectType()==T_OBJECT 
 						|| rt1->getObjectType()==T_CLASS
+						|| rt1->getObjectType()==T_MOVIECLIP
 						|| rt1->getObjectType()==T_FUNCTION)
 				{
 					ret->name_o=rt1;
@@ -700,7 +703,10 @@ multiname* ABCContext::getMultiname(unsigned int n, call_context* th)
 					ret->name_s=qname->local_name;
 					ret->name_type=multiname::NAME_STRING;
 				}
-				else if(n->getObjectType()==T_OBJECT)
+				else if(n->getObjectType()==T_OBJECT ||
+						n->getObjectType()==T_CLASS ||
+						n->getObjectType()==T_MOVIECLIP ||
+						n->getObjectType()==T_FUNCTION)
 				{
 					ret->name_o=n;
 					ret->name_type=multiname::NAME_OBJECT;
@@ -804,6 +810,7 @@ multiname* ABCContext::getMultiname(unsigned int n, call_context* th)
 				}
 				else if(n->getObjectType()==T_OBJECT 
 						|| n->getObjectType()==T_CLASS
+						|| n->getObjectType()==T_MOVIECLIP
 						|| n->getObjectType()==T_FUNCTION)
 				{
 					ret->name_o=n;
@@ -1152,7 +1159,8 @@ bool lightspark::Boolean_concrete(ASObject* obj)
 		LOG(LOG_CALLS,"Boolean to bool " << b->val);
 		return b->val;
 	}
-	else if(obj->getObjectType()==T_OBJECT)
+	else if(obj->getObjectType()==T_OBJECT ||
+			obj->getObjectType()==T_MOVIECLIP)
 	{
 		LOG(LOG_CALLS,"Object to bool");
 		return true;

@@ -4,16 +4,16 @@
     Copyright (C) 2009,2010  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
+    it under the terms of the GNU Lesser General Public License as published by
     the Free Software Foundation, either version 3 of the License, or
     (at your option) any later version.
 
     This program is distributed in the hope that it will be useful,
     but WITHOUT ANY WARRANTY; without even the implied warranty of
     MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
+    GNU Lesser General Public License for more details.
 
-    You should have received a copy of the GNU General Public License
+    You should have received a copy of the GNU Lesser General Public License
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
@@ -70,10 +70,11 @@ void Array::buildTraits(ASObject* o)
 	o->setGetterByQName("length","",Class<IFunction>::getFunction(_getLength));
 	o->ASObject::setVariableByQName("pop","",Class<IFunction>::getFunction(_pop));
 	o->ASObject::setVariableByQName("shift",AS3,Class<IFunction>::getFunction(shift));
-	o->ASObject::setVariableByQName("unshift","",Class<IFunction>::getFunction(unshift));
+	o->ASObject::setVariableByQName("unshift",AS3,Class<IFunction>::getFunction(unshift));
 	o->ASObject::setVariableByQName("join",AS3,Class<IFunction>::getFunction(join));
 	o->ASObject::setVariableByQName("push",AS3,Class<IFunction>::getFunction(_push));
 	o->ASObject::setVariableByQName("sort",AS3,Class<IFunction>::getFunction(_sort));
+//	o->ASObject::setVariableByQName("sortOn",AS3,Class<IFunction>::getFunction(sortOn));
 	o->ASObject::setVariableByQName("concat",AS3,Class<IFunction>::getFunction(_concat));
 	o->ASObject::setVariableByQName("indexOf",AS3,Class<IFunction>::getFunction(indexOf));
 	o->ASObject::setVariableByQName("filter",AS3,Class<IFunction>::getFunction(filter));
@@ -242,17 +243,25 @@ ASFUNCTIONBODY(Array,_sort)
 	return obj;
 }
 
+ASFUNCTIONBODY(Array,sortOn)
+{
+	Array* th=static_cast<Array*>(obj);
+	__asm__("int $3");
+/*	if(th->data.size()>1)
+		throw UnsupportedException("Array::sort not completely implemented");
+	LOG(LOG_NOT_IMPLEMENTED,"Array::sort not really implemented");*/
+	return obj;
+}
+
 ASFUNCTIONBODY(Array,unshift)
 {
 	Array* th=static_cast<Array*>(obj);
-	if(argslen!=1)
+	for(int i=0;i<argslen;i++)
 	{
-		LOG(LOG_ERROR,"Multiple unshift");
-		throw UnsupportedException("Array::unshift not completely implemented");
+		th->data.insert(th->data.begin(),data_slot(args[i],DATA_OBJECT));
+		args[i]->incRef();
 	}
-	th->data.insert(th->data.begin(),data_slot(args[0]));
-	args[0]->incRef();
-	return abstract_i(th->size());
+	return abstract_i(th->size());;
 }
 
 ASFUNCTIONBODY(Array,_push)
@@ -1124,8 +1133,12 @@ ASFUNCTIONBODY(IFunction,apply)
 	int len=array->size();
 	ASObject** new_args=new ASObject*[len];
 	for(int i=0;i<len;i++)
+	{
 		new_args[i]=array->at(i);
+		new_args[i]->incRef();
+	}
 
+	args[0]->incRef();
 	ASObject* ret=th->call(args[0],new_args,len,0);
 	delete[] new_args;
 	return ret;
@@ -1178,6 +1191,7 @@ ASObject* SyntheticFunction::call(ASObject* obj, ASObject* const* args, int numA
 
 	//Fixup missing parameters
 	unsigned int missing_params=args_len-i;
+	assert(missing_params<=mi->option_count);
 	assert_and_throw(missing_params<=mi->option_count);
 	int starting_options=mi->option_count-missing_params;
 

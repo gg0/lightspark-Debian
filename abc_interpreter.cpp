@@ -4,16 +4,16 @@
     Copyright (C) 2009,2010  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
+    it under the terms of the GNU Lesser General Public License as published by
     the Free Software Foundation, either version 3 of the License, or
     (at your option) any later version.
 
     This program is distributed in the hope that it will be useful,
     but WITHOUT ANY WARRANTY; without even the implied warranty of
     MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
+    GNU Lesser General Public License for more details.
 
-    You should have received a copy of the GNU General Public License
+    You should have received a copy of the GNU Lesser General Public License
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
@@ -603,6 +603,7 @@ ASObject* ABCVm::executeFunction(SyntheticFunction* function, call_context* cont
 				break;
 			}
 			case 0x46:
+			case 0x4c: //callproplex seems to be exactly like callproperty
 			{
 				//callproperty
 				u30 t,t2;
@@ -1234,7 +1235,7 @@ ASObject* ABCVm::executeFunction(SyntheticFunction* function, call_context* cont
 			}
 			default:
 				LOG(LOG_ERROR,"Not intepreted instruction @" << code.tellg());
-				LOG(LOG_ERROR,"dump " << hex << (unsigned int)opcode);
+				LOG(LOG_ERROR,"dump " << hex << (unsigned int)opcode << dec);
 				throw ParseException("Not implemented instruction in interpreter");
 		}
 	}

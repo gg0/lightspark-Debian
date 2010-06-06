@@ -4,16 +4,16 @@
     Copyright (C) 2009,2010  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
+    it under the terms of the GNU Lesser General Public License as published by
     the Free Software Foundation, either version 3 of the License, or
     (at your option) any later version.
 
     This program is distributed in the hope that it will be useful,
     but WITHOUT ANY WARRANTY; without even the implied warranty of
     MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
+    GNU Lesser General Public License for more details.
 
-    You should have received a copy of the GNU General Public License
+    You should have received a copy of the GNU Lesser General Public License
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
@@ -89,7 +89,7 @@ SWF_HEADER::SWF_HEADER(istream& in):valid(false)
 }
 
 RootMovieClip::RootMovieClip(LoaderInfo* li, bool isSys):initialized(false),parsingIsFailed(false),frameRate(0),mutexFrames("mutexFrame"),
-	toBind(false)
+	toBind(false),mutexChildrenClips("mutexChildrenClips")
 {
 	root=this;
 	sem_init(&mutex,0,1);
@@ -127,6 +127,20 @@ void RootMovieClip::bindToName(const tiny_string& n)
 	assert_and_throw(toBind==false);
 	toBind=true;
 	bindName=n;
+}
+
+void RootMovieClip::registerChildClip(MovieClip* clip)
+{
+	Locker l(mutexChildrenClips);
+	clip->incRef();
+	childrenClips.insert(clip);
+}
+
+void RootMovieClip::unregisterChildClip(MovieClip* clip)
+{
+	Locker l(mutexChildrenClips);
+	childrenClips.erase(clip);
+	clip->decRef();
 }
 
 SystemState::SystemState():RootMovieClip(NULL,true),renderRate(0),error(false),shutdown(false),showProfilingData(false),
@@ -479,6 +493,10 @@ void ParseThread::execute()
 					root->addToFrame(static_cast<ControlTag*>(tag));
 					empty=false;
 					break;
+				case FRAMELABEL_TAG:
+					root->labelCurrentFrame(static_cast<FrameLabelTag*>(tag)->Name);
+					empty=false;
+					break;
 				case TAG:
 					//Not yet implemented tag, ignore it
 					break;
@@ -489,7 +507,7 @@ void ParseThread::execute()
 	}
 	catch(LightsparkException& e)
 	{
-		LOG(LOG_ERROR,"Exception in ParseThread " << e.what());
+		LOG(LOG_ERROR,"Exception in ParseThread " << e.cause);
 		root->parsingFailed();
 		sys->setError(e.cause);
 	}
@@ -688,6 +706,14 @@ void* InputThread::sdl_worker(InputThread* th)
 					sys->renderThread->selectedDebug=th->listeners[index];
 				break;
 			}
+			case SDL_QUIT:
+			{
+				th->m_sys->setShutdownFlag();
+				if(th->m_sys->currentVm)
+					LOG(LOG_CALLS,"We still miss " << sys->currentVm->getEventQueueSize() << " events");
+				pthread_exit(0);
+				break;
+			}
 		}
 	}
 	return NULL;
@@ -748,8 +774,10 @@ void InputThread::broadcastEvent(const tiny_string& t)
 	Locker locker(mutexListeners);
 	assert(e->getRefCount()==1);
 	for(unsigned int i=0;i<listeners.size();i++)
-		sys->currentVm->addEvent(listeners[i],e);
-	//while(e->getRefCount()>1){sleep(1);}
+	{
+		if(listeners[i]->getObjectType()==T_MOVIECLIP)
+			sys->currentVm->addEvent(listeners[i],e);
+	}
 	e->check();
 	e->decRef();
 }
@@ -782,7 +810,7 @@ void InputThread::disableDrag()
 }
 
 RenderThread::RenderThread(SystemState* s,ENGINE e,void* params):m_sys(s),terminated(false),inputNeeded(false),
-	interactive_buffer(NULL),fbAcquired(false),frameCount(0),secsCount(0),dataTex(false),mainTex(false),tempTex(false),
+	interactive_buffer(NULL),tempBufferAcquired(false),frameCount(0),secsCount(0),dataTex(false),mainTex(false),tempTex(false),
 	inputTex(false),hasNPOTTextures(false),selectedDebug(NULL),currentId(0),materialOverride(false)
 {
 	LOG(LOG_NO_INFO,"RenderThread this=" << this);
@@ -815,15 +843,6 @@ RenderThread::~RenderThread()
 	LOG(LOG_NO_INFO,"~RenderThread this=" << this);
 }
 
-void RenderThread::glClearIdBuffer()
-{
-	glDrawBuffer(GL_COLOR_ATTACHMENT2);
-	
-	glDisable(GL_BLEND);
-	glClearColor(0,0,0,1);
-	glClear(GL_COLOR_BUFFER_BIT);
-}
-
 void RenderThread::requestInput()
 {
 	inputNeeded=true;
@@ -833,6 +852,7 @@ void RenderThread::requestInput()
 
 bool RenderThread::glAcquireIdBuffer()
 {
+	//TODO: PERF: on the id buffer stuff are drawn more than once
 	if(currentId!=0)
 	{
 		glDrawBuffer(GL_COLOR_ATTACHMENT2);
@@ -844,10 +864,16 @@ bool RenderThread::glAcquireIdBuffer()
 	return false;
 }
 
-void RenderThread::glAcquireFramebuffer(number_t xmin, number_t xmax, number_t ymin, number_t ymax)
+void RenderThread::glReleaseIdBuffer()
 {
-	assert(fbAcquired==false);
-	fbAcquired=true;
+	glDrawBuffer(GL_COLOR_ATTACHMENT0);
+	materialOverride=false;
+}
+
+void RenderThread::glAcquireTempBuffer(number_t xmin, number_t xmax, number_t ymin, number_t ymax)
+{
+	assert(tempBufferAcquired==false);
+	tempBufferAcquired=true;
 
 	glDrawBuffer(GL_COLOR_ATTACHMENT1);
 	materialOverride=false;
@@ -862,10 +888,10 @@ void RenderThread::glAcquireFramebuffer(number_t xmin, number_t xmax, number_t y
 	glEnd();
 }
 
-void RenderThread::glBlitFramebuffer(number_t xmin, number_t xmax, number_t ymin, number_t ymax)
+void RenderThread::glBlitTempBuffer(number_t xmin, number_t xmax, number_t ymin, number_t ymax)
 {
-	assert(fbAcquired==true);
-	fbAcquired=false;
+	assert(tempBufferAcquired==true);
+	tempBufferAcquired=false;
 
 	//Use the blittler program to blit only the used buffer
 	glUseProgram(blitter_program);
@@ -1674,7 +1700,7 @@ void* RenderThread::sdl_worker(RenderThread* th)
 	}
 	catch(LightsparkException& e)
 	{
-		LOG(LOG_ERROR,"Exception in RenderThread " << e.what());
+		LOG(LOG_ERROR,"Exception in RenderThread " << e.cause);
 		sys->setError(e.cause);
 	}
 	th->commonGLDeinit();
@@ -1764,6 +1790,12 @@ void RootMovieClip::addToFrame(DisplayListTag* t)
 	sem_post(&mutex);
 }
 
+void RootMovieClip::labelCurrentFrame(const STRING& name)
+{
+	Locker l(mutexFrames);
+	frames.back().Label=(const char*)name;
+}
+
 void RootMovieClip::addToFrame(ControlTag* t)
 {
 	cur_frame->controls.push_back(t);
@@ -1832,7 +1864,22 @@ DictionaryTag* RootMovieClip::dictionaryLookup(int id)
 
 void RootMovieClip::tick()
 {
-	//Should go to the next frame
+	advanceFrame();
+	//Get a copy of the current childs
+	vector<MovieClip*> curChildren;
+	{
+		Locker l(mutexChildrenClips);
+		curChildren.reserve(childrenClips.size());
+		curChildren.insert(curChildren.end(),childrenClips.begin(),childrenClips.end());
+		for(uint32_t i=0;i<curChildren.size();i++)
+			curChildren[i]->incRef();
+	}
+	//Advance all the children, and release the reference
+	for(uint32_t i=0;i<curChildren.size();i++)
+	{
+		curChildren[i]->advanceFrame();
+		curChildren[i]->decRef();
+	}
 }
 
 /*ASObject* RootMovieClip::getVariableByQName(const tiny_string& name, const tiny_string& ns, ASObject*& owner)

@@ -4,16 +4,16 @@
     Copyright (C) 2009,2010  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
+    it under the terms of the GNU Lesser General Public License as published by
     the Free Software Foundation, either version 3 of the License, or
     (at your option) any later version.
 
     This program is distributed in the hope that it will be useful,
     but WITHOUT ANY WARRANTY; without even the implied warranty of
     MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
+    GNU Lesser General Public License for more details.
 
-    You should have received a copy of the GNU General Public License
+    You should have received a copy of the GNU Lesser General Public License
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
@@ -152,6 +152,9 @@ Tag* TagFactory::readTag()
 		case 69:
 			ret=new FileAttributesTag(h,f);
 			break;
+		case 70:
+			ret=new PlaceObject3Tag(h,f);
+			break;
 		case 73:
 			ret=new DefineFontAlignZonesTag(h,f);
 			break;
@@ -208,15 +211,15 @@ Tag* TagFactory::readTag()
 	return ret;
 }
 
-RemoveObject2Tag::RemoveObject2Tag(RECORDHEADER h, std::istream& in):DisplayListTag(h,in)
+RemoveObject2Tag::RemoveObject2Tag(RECORDHEADER h, std::istream& in):DisplayListTag(h)
 {
 	in >> Depth;
 	LOG(LOG_TRACE,"RemoveObject2 Depth: " << Depth);
 }
 
-void RemoveObject2Tag::execute(MovieClip* parent, list <pair<PlaceInfo, IDisplayListElem*> >& ls)
+void RemoveObject2Tag::execute(MovieClip* parent, list <pair<PlaceInfo, DisplayObject*> >& ls)
 {
-	list <pair<PlaceInfo, IDisplayListElem*> >::iterator it=ls.begin();
+	list <pair<PlaceInfo, DisplayObject*> >::iterator it=ls.begin();
 
 	for(;it!=ls.end();it++)
 	{
@@ -229,12 +232,12 @@ void RemoveObject2Tag::execute(MovieClip* parent, list <pair<PlaceInfo, IDisplay
 	}
 }
 
-SetBackgroundColorTag::SetBackgroundColorTag(RECORDHEADER h, std::istream& in):ControlTag(h,in)
+SetBackgroundColorTag::SetBackgroundColorTag(RECORDHEADER h, std::istream& in):ControlTag(h)
 {
 	in >> BackgroundColor;
 }
 
-DefineEditTextTag::DefineEditTextTag(RECORDHEADER h, std::istream& in):DictionaryTag(h,in)
+DefineEditTextTag::DefineEditTextTag(RECORDHEADER h, std::istream& in):DictionaryTag(h)
 {
 	//setVariableByName("text",SWFObject(new Integer(0)));
 	in >> CharacterID >> Bounds;
@@ -308,7 +311,7 @@ ASObject* DefineEditTextTag::instance() const
 	return ret;
 }
 
-DefineSpriteTag::DefineSpriteTag(RECORDHEADER h, std::istream& in):DictionaryTag(h,in)
+DefineSpriteTag::DefineSpriteTag(RECORDHEADER h, std::istream& in):DictionaryTag(h)
 {
 	in >> SpriteID >> FrameCount;
 	totalFrames=FrameCount;
@@ -341,6 +344,10 @@ DefineSpriteTag::DefineSpriteTag(RECORDHEADER h, std::istream& in):DictionaryTag
 			}
 			case CONTROL_TAG:
 				throw ParseException("Control tag inside a sprite. Should not happen.");
+			case FRAMELABEL_TAG:
+				frames.back().Label=(const char*)static_cast<FrameLabelTag*>(tag)->Name;
+				empty=false;
+				break;
 			case TAG:
 				LOG(LOG_NOT_IMPLEMENTED,"Unclassified tag inside Sprite?");
 				break;
@@ -410,7 +417,7 @@ void lightspark::ignore(istream& i, int count)
 	delete[] buf;
 }
 
-DefineFontTag::DefineFontTag(RECORDHEADER h, std::istream& in):FontTag(h,in)
+DefineFontTag::DefineFontTag(RECORDHEADER h, std::istream& in):FontTag(h)
 {
 	LOG(LOG_TRACE,"DefineFont");
 	in >> FontID;
@@ -435,7 +442,7 @@ DefineFontTag::DefineFontTag(RECORDHEADER h, std::istream& in):FontTag(h,in)
 	}
 }
 
-DefineFont2Tag::DefineFont2Tag(RECORDHEADER h, std::istream& in):FontTag(h,in)
+DefineFont2Tag::DefineFont2Tag(RECORDHEADER h, std::istream& in):FontTag(h)
 {
 	LOG(LOG_TRACE,"DefineFont2");
 	in >> FontID;
@@ -524,7 +531,7 @@ DefineFont2Tag::DefineFont2Tag(RECORDHEADER h, std::istream& in):FontTag(h,in)
 	ignore(in,KerningCount*4);
 }
 
-DefineFont3Tag::DefineFont3Tag(RECORDHEADER h, std::istream& in):FontTag(h,in)
+DefineFont3Tag::DefineFont3Tag(RECORDHEADER h, std::istream& in):FontTag(h)
 {
 	LOG(LOG_TRACE,"DefineFont3");
 	in >> FontID;
@@ -600,7 +607,7 @@ DefineFont3Tag::DefineFont3Tag(RECORDHEADER h, std::istream& in):FontTag(h,in)
 	ignore(in,KerningCount*4);
 }
 
-DefineBitsLosslessTag::DefineBitsLosslessTag(RECORDHEADER h, istream& in):DictionaryTag(h,in)
+DefineBitsLosslessTag::DefineBitsLosslessTag(RECORDHEADER h, istream& in):DictionaryTag(h)
 {
 	int dest=in.tellg();
 	dest+=h.getLength();
@@ -613,7 +620,7 @@ DefineBitsLosslessTag::DefineBitsLosslessTag(RECORDHEADER h, istream& in):Dictio
 	ignore(in,dest-in.tellg());
 }
 
-DefineBitsLossless2Tag::DefineBitsLossless2Tag(RECORDHEADER h, istream& in):DictionaryTag(h,in)
+DefineBitsLossless2Tag::DefineBitsLossless2Tag(RECORDHEADER h, istream& in):DictionaryTag(h)
 {
 	int dest=in.tellg();
 	dest+=h.getLength();
@@ -626,7 +633,7 @@ DefineBitsLossless2Tag::DefineBitsLossless2Tag(RECORDHEADER h, istream& in):Dict
 	ignore(in,dest-in.tellg());
 }
 
-DefineTextTag::DefineTextTag(RECORDHEADER h, istream& in):DictionaryTag(h,in)
+DefineTextTag::DefineTextTag(RECORDHEADER h, istream& in):DictionaryTag(h)
 {
 	in >> CharacterId >> TextBounds >> TextMatrix >> GlyphBits >> AdvanceBits;
 	LOG(LOG_TRACE,"DefineText ID " << CharacterId);
@@ -644,6 +651,10 @@ DefineTextTag::DefineTextTag(RECORDHEADER h, istream& in):DictionaryTag(h,in)
 void DefineTextTag::Render()
 {
 	LOG(LOG_TRACE,"DefineText Render");
+	if(alpha==0)
+		return;
+	if(!visible)
+		return;
 	if(cached.size()==0)
 	{
 		FontTag* font=NULL;
@@ -677,24 +688,20 @@ void DefineTextTag::Render()
 		return;
 	std::vector < GLYPHENTRY >::iterator it2;
 	int x=0,y=0;
-	float matrix[16];
-	float textMatrix[16];
-	getMatrix().get4DMatrix(matrix);
-	TextMatrix.get4DMatrix(textMatrix);
 
 	//Build a fake FILLSTYLEs
 	FILLSTYLE f;
 	f.FillStyleType=0x00;
 	f.Color=it->TextColor;
-	glPushMatrix();
-	glMultMatrixf(matrix);
-	glMultMatrixf(textMatrix);
+	MatrixApplier ma(getMatrix());
+	ma.concat(TextMatrix);
 	//Shapes are defined in twips, so scale then down
 	glScalef(0.05,0.05,1);
-	
-	rt->glAcquireFramebuffer(TextBounds.Xmin,TextBounds.Xmax,
-				 TextBounds.Ymin,TextBounds.Ymax);
-	glPushMatrix();
+
+	if(!isSimple())
+		rt->glAcquireTempBuffer(TextBounds.Xmin,TextBounds.Xmax, TextBounds.Ymin,TextBounds.Ymax);
+
+	MatrixApplier ma2;
 	//The next 1/20 scale is needed by DefineFont3. Should be conditional
 	glScalef(0.05,0.05,1);
 	float scale_cur=1;
@@ -730,10 +737,10 @@ void DefineTextTag::Render()
 			count++;
 		}
 	}
-	glPopMatrix();
+	ma2.unapply();
 
-	rt->glBlitFramebuffer(TextBounds.Xmin,TextBounds.Xmax,
-				 TextBounds.Ymin,TextBounds.Ymax);
+	if(!isSimple())
+		rt->glBlitTempBuffer(TextBounds.Xmin,TextBounds.Xmax,TextBounds.Ymin,TextBounds.Ymax);
 	
 	if(rt->glAcquireIdBuffer())
 	{
@@ -773,8 +780,9 @@ void DefineTextTag::Render()
 				count++;
 			}
 		}
+		rt->glReleaseIdBuffer();
 	}
-	glPopMatrix();
+	ma.unapply();
 }
 
 Vector2 DefineTextTag::debugRender(FTFont* font, bool deep)
@@ -793,21 +801,21 @@ Vector2 DefineTextTag::debugRender(FTFont* font, bool deep)
 	return Vector2(100,100);
 }
 
-DefineShapeTag::DefineShapeTag(RECORDHEADER h, std::istream& in):DictionaryTag(h,in)
+DefineShapeTag::DefineShapeTag(RECORDHEADER h, std::istream& in):DictionaryTag(h)
 {
 	LOG(LOG_TRACE,"DefineShapeTag");
 	Shapes.version=1;
 	in >> ShapeId >> ShapeBounds >> Shapes;
 }
 
-DefineShape2Tag::DefineShape2Tag(RECORDHEADER h, std::istream& in):DictionaryTag(h,in)
+DefineShape2Tag::DefineShape2Tag(RECORDHEADER h, std::istream& in):DictionaryTag(h)
 {
 	LOG(LOG_TRACE,"DefineShape2Tag");
 	Shapes.version=2;
 	in >> ShapeId >> ShapeBounds >> Shapes;
 }
 
-DefineShape3Tag::DefineShape3Tag(RECORDHEADER h, std::istream& in):DictionaryTag(h,in)
+DefineShape3Tag::DefineShape3Tag(RECORDHEADER h, std::istream& in):DictionaryTag(h)
 {
 	LOG(LOG_TRACE,"DefineShape3Tag");
 	Shapes.version=3;
@@ -815,7 +823,7 @@ DefineShape3Tag::DefineShape3Tag(RECORDHEADER h, std::istream& in):DictionaryTag
 	texture=0;
 }
 
-DefineShape4Tag::DefineShape4Tag(RECORDHEADER h, std::istream& in):DictionaryTag(h,in)
+DefineShape4Tag::DefineShape4Tag(RECORDHEADER h, std::istream& in):DictionaryTag(h)
 {
 	LOG(LOG_TRACE,"DefineShape4Tag");
 	Shapes.version=4;
@@ -828,7 +836,7 @@ DefineShape4Tag::DefineShape4Tag(RECORDHEADER h, std::istream& in):DictionaryTag
 	in >> Shapes;
 }
 
-DefineMorphShapeTag::DefineMorphShapeTag(RECORDHEADER h, std::istream& in):DictionaryTag(h,in)
+DefineMorphShapeTag::DefineMorphShapeTag(RECORDHEADER h, std::istream& in):DictionaryTag(h)
 {
 	int dest=in.tellg();
 	dest+=h.getLength();
@@ -853,6 +861,10 @@ ASObject* DefineMorphShapeTag::instance() const
 
 void DefineMorphShapeTag::Render()
 {
+	if(alpha==0)
+		return;
+	if(!visible)
+		return;
 	//TODO: implement morph shape support
 /*	std::vector < GeomShape > shapes;
 	SHAPERECORD* cur=&(EndEdges.ShapeRecords);
@@ -879,6 +891,7 @@ void DefineMorphShapeTag::Render()
 		std::vector < GeomShape >::iterator it=shapes.begin();
 		for(;it!=shapes.end();it++)
 			it->Render();
+		rt->glReleaseIdBuffer();
 	}
 	glPopMatrix();*/
 }
@@ -886,6 +899,10 @@ void DefineMorphShapeTag::Render()
 void DefineShapeTag::Render()
 {
 	LOG(LOG_TRACE,"DefineShape Render");
+	if(alpha==0)
+		return;
+	if(!visible)
+		return;
 
 	if(cached.size()==0)
 	{
@@ -895,29 +912,27 @@ void DefineShapeTag::Render()
 			cached[i].BuildFromEdges(&Shapes.FillStyles.FillStyles);
 	}
 
-	float matrix[16];
-	getMatrix().get4DMatrix(matrix);
-	glPushMatrix();
-	glMultMatrixf(matrix);
+	MatrixApplier ma(getMatrix());
 	glScalef(0.05,0.05,1);
 
-	rt->glAcquireFramebuffer(ShapeBounds.Xmin,ShapeBounds.Xmax,
-				 ShapeBounds.Ymin,ShapeBounds.Ymax);
+	if(!isSimple())
+		rt->glAcquireTempBuffer(ShapeBounds.Xmin,ShapeBounds.Xmax,ShapeBounds.Ymin,ShapeBounds.Ymax);
 
 	std::vector < GeomShape >::iterator it=cached.begin();
 	for(;it!=cached.end();it++)
 		it->Render();
 
-	rt->glBlitFramebuffer(ShapeBounds.Xmin,ShapeBounds.Xmax,
-				 ShapeBounds.Ymin,ShapeBounds.Ymax);
+	if(!isSimple())
+		rt->glBlitTempBuffer(ShapeBounds.Xmin,ShapeBounds.Xmax,ShapeBounds.Ymin,ShapeBounds.Ymax);
 
 	if(rt->glAcquireIdBuffer())
 	{
 		std::vector < GeomShape >::iterator it=cached.begin();
 		for(;it!=cached.end();it++)
 			it->Render();
+		rt->glReleaseIdBuffer();
 	}
-	glPopMatrix();
+	ma.unapply();
 }
 
 Vector2 DefineShapeTag::debugRender(FTFont* font, bool deep)
@@ -939,6 +954,10 @@ Vector2 DefineShapeTag::debugRender(FTFont* font, bool deep)
 void DefineShape2Tag::Render()
 {
 	LOG(LOG_TRACE,"DefineShape2 Render");
+	if(alpha==0)
+		return;
+	if(!visible)
+		return;
 
 	if(cached.size()==0)
 	{
@@ -948,14 +967,11 @@ void DefineShape2Tag::Render()
 			cached[i].BuildFromEdges(&Shapes.FillStyles.FillStyles);
 	}
 
-	float matrix[16];
-	getMatrix().get4DMatrix(matrix);
-	glPushMatrix();
-	glMultMatrixf(matrix);
+	MatrixApplier ma(getMatrix());
 	glScalef(0.05,0.05,1);
 
-	rt->glAcquireFramebuffer(ShapeBounds.Xmin,ShapeBounds.Xmax,
-				 ShapeBounds.Ymin,ShapeBounds.Ymax);
+	if(!isSimple())
+		rt->glAcquireTempBuffer(ShapeBounds.Xmin,ShapeBounds.Xmax,ShapeBounds.Ymin,ShapeBounds.Ymax);
 
 	std::vector < GeomShape >::iterator it=cached.begin();
 	for(;it!=cached.end();it++)
@@ -964,16 +980,17 @@ void DefineShape2Tag::Render()
 		it->Render();
 	}
 
-	rt->glBlitFramebuffer(ShapeBounds.Xmin,ShapeBounds.Xmax,
-				 ShapeBounds.Ymin,ShapeBounds.Ymax);
+	if(!isSimple())
+		rt->glBlitTempBuffer(ShapeBounds.Xmin,ShapeBounds.Xmax,ShapeBounds.Ymin,ShapeBounds.Ymax);
 	
 	if(rt->glAcquireIdBuffer())
 	{
 		std::vector < GeomShape >::iterator it=cached.begin();
 		for(;it!=cached.end();it++)
 			it->Render();
+		rt->glReleaseIdBuffer();
 	}
-	glPopMatrix();
+	ma.unapply();
 }
 
 Vector2 DefineShape2Tag::debugRender(FTFont* font, bool deep)
@@ -995,6 +1012,10 @@ Vector2 DefineShape2Tag::debugRender(FTFont* font, bool deep)
 void DefineShape4Tag::Render()
 {
 	LOG(LOG_TRACE,"DefineShape4 Render");
+	if(alpha==0)
+		return;
+	if(!visible)
+		return;
 
 	if(cached.size()==0)
 	{
@@ -1004,34 +1025,36 @@ void DefineShape4Tag::Render()
 			cached[i].BuildFromEdges(&Shapes.FillStyles.FillStyles);
 	}
 
-	float matrix[16];
-	getMatrix().get4DMatrix(matrix);
-	glPushMatrix();
-	glMultMatrixf(matrix);
+	MatrixApplier ma(getMatrix());
 	glScalef(0.05,0.05,1);
 
-	rt->glAcquireFramebuffer(ShapeBounds.Xmin,ShapeBounds.Xmax,
-				 ShapeBounds.Ymin,ShapeBounds.Ymax);
+	if(!isSimple())
+		rt->glAcquireTempBuffer(ShapeBounds.Xmin,ShapeBounds.Xmax,ShapeBounds.Ymin,ShapeBounds.Ymax);
 	
 	std::vector < GeomShape >::iterator it=cached.begin();
 	for(;it!=cached.end();it++)
 		it->Render();
 
-	rt->glBlitFramebuffer(ShapeBounds.Xmin,ShapeBounds.Xmax,
-				 ShapeBounds.Ymin,ShapeBounds.Ymax);
+	if(!isSimple())
+		rt->glBlitTempBuffer(ShapeBounds.Xmin,ShapeBounds.Xmax,ShapeBounds.Ymin,ShapeBounds.Ymax);
 	
 	if(rt->glAcquireIdBuffer())
 	{
 		std::vector < GeomShape >::iterator it=cached.begin();
 		for(;it!=cached.end();it++)
 			it->Render();
+		rt->glReleaseIdBuffer();
 	}
-	glPopMatrix();
+	ma.unapply();
 }
 
 void DefineShape3Tag::Render()
 {
 	LOG(LOG_TRACE,"DefineShape3 Render "<< ShapeId);
+	if(alpha==0)
+		return;
+	if(!visible)
+		return;
 	if(cached.size()==0)
 	{
 		FromShaperecordListToShapeVector(Shapes.ShapeRecords,cached);
@@ -1040,14 +1063,11 @@ void DefineShape3Tag::Render()
 			cached[i].BuildFromEdges(&Shapes.FillStyles.FillStyles);
 	}
 
-	float matrix[16];
-	getMatrix().get4DMatrix(matrix);
-	glPushMatrix();
-	glMultMatrixf(matrix);
+	MatrixApplier ma(getMatrix());
 	glScalef(0.05,0.05,1);
 
-	rt->glAcquireFramebuffer(ShapeBounds.Xmin,ShapeBounds.Xmax,
-				 ShapeBounds.Ymin,ShapeBounds.Ymax);
+	if(!isSimple())
+		rt->glAcquireTempBuffer(ShapeBounds.Xmin,ShapeBounds.Xmax,ShapeBounds.Ymin,ShapeBounds.Ymax);
 
 
 	std::vector < GeomShape >::iterator it=cached.begin();
@@ -1057,17 +1077,18 @@ void DefineShape3Tag::Render()
 		it->Render();
 	}
 
-	rt->glBlitFramebuffer(ShapeBounds.Xmin,ShapeBounds.Xmax,
-				 ShapeBounds.Ymin,ShapeBounds.Ymax);
+	if(!isSimple())
+		rt->glBlitTempBuffer(ShapeBounds.Xmin,ShapeBounds.Xmax,ShapeBounds.Ymin,ShapeBounds.Ymax);
 	
 	if(rt->glAcquireIdBuffer())
 	{
 		std::vector < GeomShape >::iterator it=cached.begin();
 		for(;it!=cached.end();it++)
 			it->Render();
+		rt->glReleaseIdBuffer();
 	}
 
-	glPopMatrix();
+	ma.unapply();
 }
 
 Vector2 DefineShape3Tag::debugRender(FTFont* font, bool deep)
@@ -1255,27 +1276,27 @@ void DefineFontTag::genGlyphShape(vector<GeomShape>& s,int glyph)
 	//Should check fill state
 }
 
-ShowFrameTag::ShowFrameTag(RECORDHEADER h, std::istream& in):Tag(h,in)
+ShowFrameTag::ShowFrameTag(RECORDHEADER h, std::istream& in):Tag(h)
 {
 	LOG(LOG_TRACE,"ShowFrame");
 }
 
-bool PlaceObject2Tag::list_orderer::operator ()(const pair<PlaceInfo, IDisplayListElem*>& a, int d)
+bool PlaceObject2Tag::list_orderer::operator ()(const pair<PlaceInfo, DisplayObject*>& a, int d)
 {
 	return a.second->Depth<d;
 }
 
-bool PlaceObject2Tag::list_orderer::operator ()(int d, const pair<PlaceInfo, IDisplayListElem*>& a)
+bool PlaceObject2Tag::list_orderer::operator ()(int d, const pair<PlaceInfo, DisplayObject*>& a)
 {
 	return d<a.second->Depth;
 }
 
-bool PlaceObject2Tag::list_orderer::operator ()(const std::pair<PlaceInfo, IDisplayListElem*>& a, const std::pair<PlaceInfo, IDisplayListElem*>& b)
+bool PlaceObject2Tag::list_orderer::operator ()(const std::pair<PlaceInfo, DisplayObject*>& a, const std::pair<PlaceInfo, DisplayObject*>& b)
 {
 	return a.second->Depth < b.second->Depth;
 }
 
-void PlaceObject2Tag::execute(MovieClip* parent, list < pair< PlaceInfo, IDisplayListElem*> >& ls)
+void PlaceObject2Tag::execute(MovieClip* parent, list < pair< PlaceInfo, DisplayObject*> >& ls)
 {
 	//TODO: support clipping
 	if(ClipDepth!=0)
@@ -1283,7 +1304,7 @@ void PlaceObject2Tag::execute(MovieClip* parent, list < pair< PlaceInfo, IDispla
 
 	PlaceInfo infos;
 	//Find if this id is already on the list
-	list < pair<PlaceInfo, IDisplayListElem*> >::iterator it=ls.begin();
+	list < pair<PlaceInfo, DisplayObject*> >::iterator it=ls.begin();
 	for(;it!=ls.end();it++)
 	{
 		if(it->second->Depth==Depth)
@@ -1298,7 +1319,7 @@ void PlaceObject2Tag::execute(MovieClip* parent, list < pair< PlaceInfo, IDispla
 	if(PlaceFlagHasMatrix)
 		infos.Matrix=Matrix;
 
-	IDisplayListElem* toAdd=NULL;
+	DisplayObject* toAdd=NULL;
 	if(PlaceFlagHasCharacter)
 	{
 		//As the transformation matrix can change every frame
@@ -1310,9 +1331,9 @@ void PlaceObject2Tag::execute(MovieClip* parent, list < pair< PlaceInfo, IDispla
 		if(parentDict)
 			localRoot=parentDict->loadedFrom;
 		else
-			localRoot=parent->root;
+			localRoot=parent->getRoot();
 		DictionaryTag* dict=localRoot->dictionaryLookup(CharacterId);
-		toAdd=dynamic_cast<IDisplayListElem*>(dict->instance());
+		toAdd=dynamic_cast<DisplayObject*>(dict->instance());
 		assert_and_throw(toAdd);
 
 		//Object should be constructed even if not binded
@@ -1342,12 +1363,12 @@ void PlaceObject2Tag::execute(MovieClip* parent, list < pair< PlaceInfo, IDispla
 		if(PlaceFlagHasClipDepth)
 			toAdd->ClipDepth=ClipDepth;
 
-		toAdd->root=parent->root;
+		toAdd->setRoot(parent->getRoot());
 		toAdd->Depth=Depth;
 		if(!PlaceFlagMove)
 		{
-			list<pair<PlaceInfo, IDisplayListElem*> >::iterator it=
-				lower_bound< list<pair<PlaceInfo, IDisplayListElem*> >::iterator, int, list_orderer>
+			list<pair<PlaceInfo, DisplayObject*> >::iterator it=
+				lower_bound< list<pair<PlaceInfo, DisplayObject*> >::iterator, int, list_orderer>
 				(ls.begin(),ls.end(),Depth,list_orderer());
 			//As we are inserting the object in the list we need to incref it
 			toAdd->incRef();
@@ -1391,7 +1412,7 @@ void PlaceObject2Tag::execute(MovieClip* parent, list < pair< PlaceInfo, IDispla
 			{
 				it->second->decRef();
 				ls.erase(it);
-				list<pair<PlaceInfo, IDisplayListElem*> >::iterator it=lower_bound(ls.begin(),ls.end(),Depth,list_orderer());
+				list<pair<PlaceInfo, DisplayObject*> >::iterator it=lower_bound(ls.begin(),ls.end(),Depth,list_orderer());
 				toAdd->incRef();
 				ls.insert(it,make_pair(infos,toAdd));
 			}
@@ -1404,7 +1425,7 @@ void PlaceObject2Tag::execute(MovieClip* parent, list < pair< PlaceInfo, IDispla
 		toAdd->decRef();
 }
 
-PlaceObject2Tag::PlaceObject2Tag(RECORDHEADER h, std::istream& in):DisplayListTag(h,in)
+PlaceObject2Tag::PlaceObject2Tag(RECORDHEADER h, std::istream& in):DisplayListTag(h)
 {
 	LOG(LOG_TRACE,"PlaceObject2");
 
@@ -1442,12 +1463,198 @@ PlaceObject2Tag::PlaceObject2Tag(RECORDHEADER h, std::istream& in):DisplayListTa
 	assert_and_throw(!(PlaceFlagHasCharacter && CharacterId==0))
 }
 
+void PlaceObject3Tag::execute(MovieClip* parent, list < pair< PlaceInfo, DisplayObject*> >& ls)
+{
+	//TODO: support clipping, blending, filters, caching
+	if(ClipDepth!=0)
+		return;
+
+	PlaceInfo infos;
+	//Find if this id is already on the list
+	list < pair<PlaceInfo, DisplayObject*> >::iterator it=ls.begin();
+	for(;it!=ls.end();it++)
+	{
+		if(it->second->Depth==Depth)
+		{
+			infos=it->first;
+			if(!PlaceFlagMove)
+				throw ParseException("Depth already used already on displaylist");
+			break;
+		}
+	}
+
+	if(PlaceFlagHasMatrix)
+		infos.Matrix=Matrix;
+
+	DisplayObject* toAdd=NULL;
+	if(PlaceFlagHasCharacter)
+	{
+		//As the transformation matrix can change every frame
+		//it is saved in a side data structure
+		//and assigned to the internal struture every frame
+		LOG(LOG_TRACE,"Placing ID " << CharacterId);
+		RootMovieClip* localRoot=NULL;
+		DictionaryTag* parentDict=dynamic_cast<DictionaryTag*>(parent);
+		if(parentDict)
+			localRoot=parentDict->loadedFrom;
+		else
+			localRoot=parent->getRoot();
+		DictionaryTag* dict=localRoot->dictionaryLookup(CharacterId);
+		toAdd=dynamic_cast<DisplayObject*>(dict->instance());
+		assert_and_throw(toAdd);
+
+		//Object should be constructed even if not binded
+		if(toAdd->getPrototype() && sys->currentVm)
+		{
+			//Object expect to have the matrix set when created
+			if(PlaceFlagHasMatrix)
+				toAdd->setMatrix(Matrix);
+			//We now ask the VM to construct this object
+			ConstructObjectEvent* e=new ConstructObjectEvent(toAdd,toAdd->getPrototype());
+			bool added=sys->currentVm->addEvent(NULL,e);
+			if(!added)
+			{
+				e->decRef();
+				throw RunTimeException("Could not add event");
+			}
+			e->wait();
+			e->decRef();
+		}
+
+		if(PlaceFlagHasColorTransform)
+			toAdd->ColorTransform=ColorTransform;
+
+		if(PlaceFlagHasRatio)
+			toAdd->Ratio=Ratio;
+
+		if(PlaceFlagHasClipDepth)
+			toAdd->ClipDepth=ClipDepth;
+
+		toAdd->setRoot(parent->getRoot());
+		toAdd->Depth=Depth;
+		if(!PlaceFlagMove)
+		{
+			list<pair<PlaceInfo, DisplayObject*> >::iterator it=
+				lower_bound< list<pair<PlaceInfo, DisplayObject*> >::iterator, int, list_orderer>
+				(ls.begin(),ls.end(),Depth,list_orderer());
+			//As we are inserting the object in the list we need to incref it
+			toAdd->incRef();
+			ls.insert(it,make_pair(infos,toAdd));
+		}
+	}
+
+	if(PlaceFlagHasName)
+	{
+		//Set a variable on the parent to link this object
+		LOG(LOG_NO_INFO,"Registering ID " << CharacterId << " with name " << Name);
+		if(!PlaceFlagMove)
+		{
+			assert_and_throw(toAdd);
+			toAdd->incRef();
+			parent->setVariableByQName((const char*)Name,"",toAdd);
+		}
+		else
+			LOG(LOG_ERROR, "Moving of registered objects not really supported");
+	}
+
+	//Move the object if relevant
+	if(PlaceFlagMove)
+	{
+		if(it!=ls.end())
+		{
+			if(!PlaceFlagHasCharacter)
+			{
+				//if(it2->PlaceFlagHasClipAction)
+				if(PlaceFlagHasColorTransform)
+					it->second->ColorTransform=ColorTransform;
+
+				if(PlaceFlagHasRatio)
+					it->second->Ratio=Ratio;
+
+				if(PlaceFlagHasClipDepth)
+					it->second->ClipDepth=ClipDepth;
+				it->first=infos;
+			}
+			else
+			{
+				it->second->decRef();
+				ls.erase(it);
+				list<pair<PlaceInfo, DisplayObject*> >::iterator it=lower_bound(ls.begin(),ls.end(),Depth,list_orderer());
+				toAdd->incRef();
+				ls.insert(it,make_pair(infos,toAdd));
+			}
+		}
+		else
+			LOG(LOG_ERROR,"no char to move at depth " << Depth << " name " << Name);
+	}
+
+	if(toAdd)
+		toAdd->decRef();
+}
+
+PlaceObject3Tag::PlaceObject3Tag(RECORDHEADER h, std::istream& in):PlaceObject2Tag(h)
+{
+	LOG(LOG_TRACE,"PlaceObject3");
+
+	BitStream bs(in);
+	PlaceFlagHasClipAction=UB(1,bs);
+	PlaceFlagHasClipDepth=UB(1,bs);
+	PlaceFlagHasName=UB(1,bs);
+	PlaceFlagHasRatio=UB(1,bs);
+	PlaceFlagHasColorTransform=UB(1,bs);
+	PlaceFlagHasMatrix=UB(1,bs);
+	PlaceFlagHasCharacter=UB(1,bs);
+	PlaceFlagMove=UB(1,bs);
+	UB(3,bs); //Reserved
+	PlaceFlagHasImage=UB(1,bs);
+	PlaceFlagHasClassName=UB(1,bs);
+	PlaceFlagHasCacheAsBitmap=UB(1,bs);
+	PlaceFlagHasBlendMode=UB(1,bs);
+	PlaceFlagHasFilterList=UB(1,bs);
+
+	in >> Depth;
+	if(PlaceFlagHasClassName || (PlaceFlagHasImage && PlaceFlagHasCharacter))
+		throw ParseException("ClassName in PlaceObject3 not yet supported");
+
+	if(PlaceFlagHasCharacter)
+		in >> CharacterId;
+
+	if(PlaceFlagHasMatrix)
+		in >> Matrix;
+
+	if(PlaceFlagHasColorTransform)
+		in >> ColorTransform;
+
+	if(PlaceFlagHasRatio)
+		in >> Ratio;
+
+	if(PlaceFlagHasName)
+		in >> Name;
+
+	if(PlaceFlagHasClipDepth)
+		in >> ClipDepth;
+
+	if(PlaceFlagHasFilterList)
+		in >> SurfaceFilterList;
+
+	if(PlaceFlagHasBlendMode)
+		in >> BlendMode;
+
+	if(PlaceFlagHasCacheAsBitmap)
+		in >> BitmapCache;
+
+	if(PlaceFlagHasClipAction)
+		in >> ClipActions;
+
+	assert_and_throw(!(PlaceFlagHasCharacter && CharacterId==0))
+}
+
 void SetBackgroundColorTag::execute(RootMovieClip* root)
 {
 	root->setBackground(BackgroundColor);
 }
 
-FrameLabelTag::FrameLabelTag(RECORDHEADER h, std::istream& in):DisplayListTag(h,in)
+FrameLabelTag::FrameLabelTag(RECORDHEADER h, std::istream& in):Tag(h)
 {
 	in >> Name;
 	if(pt->version>=6)
@@ -1458,13 +1665,7 @@ FrameLabelTag::FrameLabelTag(RECORDHEADER h, std::istream& in):DisplayListTag(h,
 	}
 }
 
-void FrameLabelTag::execute(MovieClip* parent, list < pair< PlaceInfo, IDisplayListElem*> >& ls)
-{
-	LOG(LOG_NOT_IMPLEMENTED,"TODO: FrameLabel exec");
-	//sys.currentClip->frames[sys.currentClip->state.FP].setLabel(Name);
-}
-
-DefineButton2Tag::DefineButton2Tag(RECORDHEADER h, std::istream& in):DictionaryTag(h,in),IdleToOverUp(false)
+DefineButton2Tag::DefineButton2Tag(RECORDHEADER h, std::istream& in):DictionaryTag(h),IdleToOverUp(false)
 {
 	state=BUTTON_UP;
 	in >> ButtonId;
@@ -1508,6 +1709,10 @@ void DefineButton2Tag::handleEvent(Event* e)
 void DefineButton2Tag::Render()
 {
 	LOG(LOG_NOT_IMPLEMENTED,"DefineButton2Tag::Render");
+	if(alpha==0)
+		return;
+	if(!visible)
+		return;
 	/*	for(unsigned int i=0;i<Characters.size();i++)
 	{
 		if(Characters[i].ButtonStateUp && state==BUTTON_UP)
@@ -1559,7 +1764,7 @@ Vector2 DefineButton2Tag::debugRender(FTFont* font, bool deep)
 	return Vector2(100,100);
 }
 
-DefineVideoStreamTag::DefineVideoStreamTag(RECORDHEADER h, std::istream& in):DictionaryTag(h,in)
+DefineVideoStreamTag::DefineVideoStreamTag(RECORDHEADER h, std::istream& in):DictionaryTag(h)
 {
 	LOG(LOG_NO_INFO,"DefineVideoStreamTag");
 	in >> CharacterID >> NumFrames >> Width >> Height;
@@ -1573,6 +1778,10 @@ DefineVideoStreamTag::DefineVideoStreamTag(RECORDHEADER h, std::istream& in):Dic
 void DefineVideoStreamTag::Render()
 {
 	LOG(LOG_NO_INFO,"DefineVideoStreamTag Render");
+/*	if(alpha==0)
+		return;
+	if(!visible)
+		return;*/
 	glColor4f(1,0,0,0);
 	glBegin(GL_QUADS);
 		glVertex2i(0,0);
@@ -1582,7 +1791,7 @@ void DefineVideoStreamTag::Render()
 	glEnd();
 }
 
-DefineBinaryDataTag::DefineBinaryDataTag(RECORDHEADER h,std::istream& s):DictionaryTag(h,s)
+DefineBinaryDataTag::DefineBinaryDataTag(RECORDHEADER h,std::istream& s):DictionaryTag(h)
 {
 	LOG(LOG_TRACE,"DefineBinaryDataTag");
 	int size=h.getLength();
@@ -1593,7 +1802,7 @@ DefineBinaryDataTag::DefineBinaryDataTag(RECORDHEADER h,std::istream& s):Diction
 	s.read((char*)bytes,size);
 }
 
-FileAttributesTag::FileAttributesTag(RECORDHEADER h, std::istream& in):Tag(h,in)
+FileAttributesTag::FileAttributesTag(RECORDHEADER h, std::istream& in):Tag(h)
 {
 	LOG(LOG_TRACE,"FileAttributesTag Tag");
 	BitStream bs(in);
@@ -1614,7 +1823,7 @@ FileAttributesTag::FileAttributesTag(RECORDHEADER h, std::istream& in):Tag(h,in)
 	}
 }
 
-DefineSoundTag::DefineSoundTag(RECORDHEADER h, std::istream& in):DictionaryTag(h,in)
+DefineSoundTag::DefineSoundTag(RECORDHEADER h, std::istream& in):DictionaryTag(h)
 {
 	LOG(LOG_TRACE,"DefineSound Tag");
 	in >> SoundId;

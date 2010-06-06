@@ -4,16 +4,16 @@
     Copyright (C) 2009,2010  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
+    it under the terms of the GNU Lesser General Public License as published by
     the Free Software Foundation, either version 3 of the License, or
     (at your option) any later version.
 
     This program is distributed in the hope that it will be useful,
     but WITHOUT ANY WARRANTY; without even the implied warranty of
     MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
+    GNU Lesser General Public License for more details.
 
-    You should have received a copy of the GNU General Public License
+    You should have received a copy of the GNU Lesser General Public License
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
@@ -34,7 +34,7 @@ long lightspark::timeDiff(timespec& s, timespec& d);
 
 void lightspark::ignore(istream& i, int count);
 
-ExportAssetsTag::ExportAssetsTag(RECORDHEADER h, std::istream& in):Tag(h,in)
+ExportAssetsTag::ExportAssetsTag(RECORDHEADER h, std::istream& in):Tag(h)
 {
 	LOG(LOG_NO_INFO,"ExportAssetsTag Tag");
 	in >> Count;
@@ -51,7 +51,7 @@ ExportAssetsTag::ExportAssetsTag(RECORDHEADER h, std::istream& in):Tag(h,in)
 	}
 }
 
-DoActionTag::DoActionTag(RECORDHEADER h, std::istream& in):DisplayListTag(h,in)
+DoActionTag::DoActionTag(RECORDHEADER h, std::istream& in):DisplayListTag(h)
 {
 	LOG(LOG_CALLS,"DoActionTag");
 	int dest=in.tellg();
@@ -74,7 +74,7 @@ DoActionTag::DoActionTag(RECORDHEADER h, std::istream& in):DisplayListTag(h,in)
 	}
 }
 
-void DoActionTag::execute(MovieClip* parent, std::list < std::pair<PlaceInfo, IDisplayListElem*> >& ls)
+void DoActionTag::execute(MovieClip* parent, std::list < std::pair<PlaceInfo, DisplayObject*> >& ls)
 {
 	Depth=0x20000;
 	ls.push_back(make_pair(PlaceInfo(),this));
@@ -121,7 +121,7 @@ void DoActionTag::Render()
 #endif*/
 }
 
-DoInitActionTag::DoInitActionTag(RECORDHEADER h, std::istream& in):DisplayListTag(h,in)
+DoInitActionTag::DoInitActionTag(RECORDHEADER h, std::istream& in):DisplayListTag(h)
 {
 	LOG(LOG_CALLS,"DoInitActionTag");
 	int dest=in.tellg();
@@ -144,7 +144,7 @@ DoInitActionTag::DoInitActionTag(RECORDHEADER h, std::istream& in):DisplayListTa
 	}
 }
 
-void DoInitActionTag::execute(MovieClip* parent, std::list < std::pair<PlaceInfo, IDisplayListElem*> >& ls)
+void DoInitActionTag::execute(MovieClip* parent, std::list < std::pair<PlaceInfo, DisplayObject*> >& ls)
 {
 	Depth=0x10000;
 	ls.push_back(make_pair(PlaceInfo(),this));

@@ -4,16 +4,16 @@
     Copyright (C) 2009,2010  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
+    it under the terms of the GNU Lesser General Public License as published by
     the Free Software Foundation, either version 3 of the License, or
     (at your option) any later version.
 
     This program is distributed in the hope that it will be useful,
     but WITHOUT ANY WARRANTY; without even the implied warranty of
     MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
+    GNU Lesser General Public License for more details.
 
-    You should have received a copy of the GNU General Public License
+    You should have received a copy of the GNU Lesser General Public License
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
@@ -32,7 +32,7 @@ extern TLSDATA SystemState* sys;
 
 Frame::~Frame()
 {
-	list <pair<PlaceInfo, IDisplayListElem*> >::iterator i=displayList.begin();
+	list <pair<PlaceInfo, DisplayObject*> >::iterator i=displayList.begin();
 
 	if(sys && !sys->finalizingDestruction)
 	{
@@ -53,7 +53,7 @@ void Frame::runScript()
 
 void Frame::Render()
 {
-	list <pair<PlaceInfo, IDisplayListElem*> >::iterator i=displayList.begin();
+	list <pair<PlaceInfo, DisplayObject*> >::iterator i=displayList.begin();
 
 	//Render objects of this frame;
 	for(;i!=displayList.end();i++)
@@ -66,21 +66,16 @@ void Frame::Render()
 	}
 }
 
-void dumpDisplayList(list<IDisplayListElem*>& l)
+void dumpDisplayList(list<DisplayObject*>& l)
 {
-	list<IDisplayListElem*>::iterator it=l.begin();
+	list<DisplayObject*>::iterator it=l.begin();
 	for(;it!=l.end();it++)
 	{
 		cout << *it << endl;
 	}
 }
 
-void Frame::setLabel(STRING l)
-{
-	Label=l;
-}
-
-void Frame::init(MovieClip* parent, list <pair<PlaceInfo, IDisplayListElem*> >& d)
+void Frame::init(MovieClip* parent, list <pair<PlaceInfo, DisplayObject*> >& d)
 {
 	if(!initialized)
 	{
@@ -88,9 +83,9 @@ void Frame::init(MovieClip* parent, list <pair<PlaceInfo, IDisplayListElem*> >& 
 		//Only the root movie clip can have control tags
 		if(!controls.empty())
 		{
-			assert_and_throw(parent->root==parent);
+			assert_and_throw(parent->getRoot()==parent);
 			for(unsigned int i=0;i<controls.size();i++)
-				controls[i]->execute(parent->root);
+				controls[i]->execute(parent->getRoot());
 			controls.clear();
 
 			if(sys->currentVm)
@@ -116,18 +111,18 @@ void Frame::init(MovieClip* parent, list <pair<PlaceInfo, IDisplayListElem*> >& 
 		blueprint.clear();
 		displayList=d;
 		//Acquire a new reference to every child
-		list <pair<PlaceInfo, IDisplayListElem*> >::const_iterator dit=displayList.begin();
+		list <pair<PlaceInfo, DisplayObject*> >::const_iterator dit=displayList.begin();
 		for(;dit!=displayList.end();dit++)
 			dit->second->incRef();
 		initialized=true;
 
 		//Root movie clips are initialized now, after the first frame is really ready 
-		if(parent->root==parent)
-			parent->root->initialize();
+		if(parent->getRoot()==parent)
+			parent->getRoot()->initialize();
 		//Now the bindings are effective also for our parent (the root)
 		
 		//As part of initialization set the transformation matrix for the child objects
-		list <pair<PlaceInfo, IDisplayListElem*> >::iterator i=displayList.begin();
+		list <pair<PlaceInfo, DisplayObject*> >::iterator i=displayList.begin();
 
 		for(;i!=displayList.end();i++)
 			i->second->setMatrix(i->first.Matrix);

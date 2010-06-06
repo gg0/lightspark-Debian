@@ -4,16 +4,16 @@
     Copyright (C) 2009,2010  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
+    it under the terms of the GNU Lesser General Public License as published by
     the Free Software Foundation, either version 3 of the License, or
     (at your option) any later version.
 
     This program is distributed in the hope that it will be useful,
     but WITHOUT ANY WARRANTY; without even the implied warranty of
     MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
+    GNU Lesser General Public License for more details.
 
-    You should have received a copy of the GNU General Public License
+    You should have received a copy of the GNU Lesser General Public License
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
@@ -330,7 +330,7 @@ void ABCVm::callProperty(call_context* th, int n, int m)
 		//If o is already a function call it
 		if(o.obj->getObjectType()==T_FUNCTION)
 		{
-			IFunction* f=static_cast<IFunction*>(o.obj);
+			IFunction* f=static_cast<IFunction*>(o.obj)->getOverride();
 			//Methods has to be runned with their own class this
 			//The owner has to be increffed
 			obj->incRef();
@@ -718,6 +718,7 @@ ASObject* ABCVm::typeOf(ASObject* obj)
 		case T_OBJECT:
 		case T_NULL:
 		case T_ARRAY:
+		case T_MOVIECLIP:
 			ret="object";
 			break;
 		case T_BOOLEAN:
@@ -1820,7 +1821,7 @@ bool ABCVm::ifStrictEq(ASObject* obj2, ASObject* obj1)
 {
 	LOG(LOG_CALLS,"ifStrictEq");
 	//If we are dealing with objects, check the prototype
-	if(obj1->getObjectType()==T_OBJECT && obj2->getObjectType()==T_OBJECT)
+	if(obj1->prototype && obj2->prototype)
 	{
 		if(obj1->prototype!=obj2->prototype)
 			return false;

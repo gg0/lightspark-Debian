@@ -4,16 +4,16 @@
     Copyright (C) 2009,2010  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
+    it under the terms of the GNU Lesser General Public License as published by
     the Free Software Foundation, either version 3 of the License, or
     (at your option) any later version.
 
     This program is distributed in the hope that it will be useful,
     but WITHOUT ANY WARRANTY; without even the implied warranty of
     MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
+    GNU Lesser General Public License for more details.
 
-    You should have received a copy of the GNU General Public License
+    You should have received a copy of the GNU Lesser General Public License
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
@@ -232,15 +232,14 @@ void Loader::Render()
 	if(!loaded)
 		return;
 
-	glPushMatrix();
-	float matrix[16];
-	getMatrix().get4DMatrix(matrix);
-	glPushMatrix();
-	glMultMatrixf(matrix);
+	if(alpha==0.0)
+		return;
+	if(!visible)
+		return;
 
+	MatrixApplier ma(getMatrix());
 	local_root->Render();
-
-	glPopMatrix();
+	ma.unapply();
 }
 
 bool Loader::getBounds(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const
@@ -288,7 +287,7 @@ bool Sprite::boundsRect(number_t& xmin, number_t& xmax, number_t& ymin, number_t
 
 	bool ret=false;
 	//TODO: Check bounds calculation
-	list<IDisplayListElem*>::const_iterator it=dynamicDisplayList.begin();
+	list<DisplayObject*>::const_iterator it=dynamicDisplayList.begin();
 	for(;it!=dynamicDisplayList.end();it++)
 	{
 		number_t txmin,txmax,tymin,tymax;
@@ -356,37 +355,39 @@ void Sprite::Render()
 	if(!notEmpty)
 		return;
 
+	if(alpha==0.0)
+		return;
+	if(!visible)
+		return;
 	InteractiveObject::RenderProloue();
 
-	float matrix[16];
-	getMatrix().get4DMatrix(matrix);
-	glPushMatrix();
-	glMultMatrixf(matrix);
-
-	rt->glAcquireFramebuffer(t1,t2,t3,t4);
+	MatrixApplier ma(getMatrix());
 
 	//Draw the dynamically added graphics, if any
 	if(graphics)
+	{
+		//Should clean only the bounds of the graphics
+		if(!isSimple())
+			rt->glAcquireTempBuffer(t1,t2,t3,t4);
 		graphics->Render();
+		if(!isSimple())
+			rt->glBlitTempBuffer(t1,t2,t3,t4);
+	}
 	
-	rt->glBlitFramebuffer(t1,t2,t3,t4);
-	
-	if(rt->glAcquireIdBuffer() && graphics)
+	if(graphics && rt->glAcquireIdBuffer())
+	{
 		graphics->Render();
-	
-	glPopMatrix();
-
-	glPushMatrix();
-	glMultMatrixf(matrix);
+		rt->glReleaseIdBuffer();
+	}
 
 	sem_wait(&sem_displayList);
 	//Now draw also the display list
-	list<IDisplayListElem*>::iterator it=dynamicDisplayList.begin();
+	list<DisplayObject*>::iterator it=dynamicDisplayList.begin();
 	for(;it!=dynamicDisplayList.end();it++)
 		(*it)->Render();
 	sem_post(&sem_displayList);
 
-	glPopMatrix();
+	ma.unapply();
 	
 	InteractiveObject::RenderEpilogue();
 }
@@ -423,11 +424,13 @@ void MovieClip::buildTraits(ASObject* o)
 	o->setGetterByQName("totalFrames","",Class<IFunction>::getFunction(_getTotalFrames));
 	o->setGetterByQName("framesLoaded","",Class<IFunction>::getFunction(_getFramesLoaded));
 	o->setVariableByQName("stop","",Class<IFunction>::getFunction(stop));
+	o->setVariableByQName("gotoAndStop","",Class<IFunction>::getFunction(gotoAndStop));
 	o->setVariableByQName("nextFrame","",Class<IFunction>::getFunction(nextFrame));
 }
 
 MovieClip::MovieClip():framesLoaded(1),totalFrames(1),cur_frame(NULL)
 {
+	type=T_MOVIECLIP;
 	//It's ok to initialize here framesLoaded=1, as it is valid and empty
 	//RooMovieClip() will reset it, as stuff loaded dynamically needs frames to be committed
 	frames.push_back(Frame());
@@ -437,6 +440,16 @@ MovieClip::MovieClip():framesLoaded(1),totalFrames(1),cur_frame(NULL)
 void MovieClip::addToFrame(DisplayListTag* t)
 {
 	cur_frame->blueprint.push_back(t);
+}
+
+uint32_t MovieClip::getFrameIdByLabel(const tiny_string& l) const
+{
+	for(uint32_t i=0;i<framesLoaded;i++)
+	{
+		if(frames[i].Label==l)
+			return i;
+	}
+	return 0xffffffff;
 }
 
 ASFUNCTIONBODY(MovieClip,addFrameScript)
@@ -476,8 +489,8 @@ ASFUNCTIONBODY(MovieClip,createEmptyMovieClip)
 	LOG(CALLS,"Called createEmptyMovieClip: " << args->args[0]->toString() << " " << args->args[1]->toString());
 	MovieClip* ret=new MovieClip();
 
-	IDisplayListElem* t=new ASObjectWrapper(ret,args->args[1]->toInt());
-	list<IDisplayListElem*>::iterator it=lower_bound(th->dynamicDisplayList.begin(),th->dynamicDisplayList.end(),t->getDepth(),list_orderer);
+	DisplayObject* t=new ASObjectWrapper(ret,args->args[1]->toInt());
+	list<DisplayObject*>::iterator it=lower_bound(th->dynamicDisplayList.begin(),th->dynamicDisplayList.end(),t->getDepth(),list_orderer);
 	th->dynamicDisplayList.insert(it,t);
 
 	th->setVariableByName(args->args[0]->toString(),ret);
@@ -493,6 +506,27 @@ ASFUNCTIONBODY(MovieClip,swapDepths)
 ASFUNCTIONBODY(MovieClip,stop)
 {
 	MovieClip* th=static_cast<MovieClip*>(obj);
+	th->state.stop_FP=true;
+	return NULL;
+}
+
+ASFUNCTIONBODY(MovieClip,gotoAndStop)
+{
+	MovieClip* th=static_cast<MovieClip*>(obj);
+	assert_and_throw(argslen==1);
+	if(args[0]->getObjectType()==T_STRING)
+	{
+		uint32_t dest=th->getFrameIdByLabel(args[0]->toString());
+		if(dest==0xffffffff)
+			throw RunTimeException("MovieClip::gotoAndStop frame does not exists");
+		th->state.next_FP=dest;
+	}
+	else
+		th->state.next_FP=args[0]->toInt();
+
+	//TODO: check, should wrap around?
+	th->state.next_FP%=th->state.max_FP;
+	th->state.explicit_FP=true;
 	th->state.stop_FP=true;
 	return NULL;
 }
@@ -538,17 +572,30 @@ ASFUNCTIONBODY(MovieClip,_constructor)
 
 void MovieClip::advanceFrame()
 {
-	if(!state.stop_FP || state.explicit_FP /*&& (class_name=="MovieClip")*/)
+	if(!state.stop_FP || state.explicit_FP)
 	{
 		//Before assigning the next_FP we initialize the frame
 		assert_and_throw(state.next_FP<frames.size());
-		frames[state.next_FP].init(this,displayList);
+		//Should initialize all the frames from the current to the next
+		for(uint32_t i=(state.FP+1);i<=state.next_FP;i++)
+			frames[i].init(this,displayList);
 		state.FP=state.next_FP;
 		if(!state.stop_FP && framesLoaded>0)
 			state.next_FP=imin(state.FP+1,framesLoaded-1);
 		state.explicit_FP=false;
 	}
 
+}
+
+void MovieClip::setRoot(RootMovieClip* r)
+{
+	if(r==root)
+		return;
+	if(root)
+		root->unregisterChildClip(this);
+	DisplayObjectContainer::setRoot(r);
+	if(root)
+		root->registerChildClip(this);
 }
 
 void MovieClip::bootstrap()
@@ -564,36 +611,36 @@ void MovieClip::Render()
 {
 	LOG(LOG_TRACE,"Render MovieClip");
 
+	if(alpha==0.0)
+		return;
+	if(!visible)
+		return;
 	InteractiveObject::RenderProloue();
 
 	assert_and_throw(graphics==NULL);
 
-	float matrix[16];
-	getMatrix().get4DMatrix(matrix);
-	glPushMatrix();
-	glMultMatrixf(matrix);
+	MatrixApplier ma(getMatrix());
+	//Save current frame, this may change during rendering
+	uint32_t curFP=state.FP;
 
 	if(framesLoaded)
 	{
-		assert_and_throw(state.FP<framesLoaded);
+		assert_and_throw(curFP<framesLoaded);
 
-		if((sys->currentVm && getPrototype()->isSubClass(Class<MovieClip>::getClass())) ||
-			sys->currentVm==NULL)
-			advanceFrame();
 		if(!state.stop_FP)
-			frames[state.FP].runScript();
+			frames[curFP].runScript();
 
-		frames[state.FP].Render();
+		frames[curFP].Render();
 	}
 
 	//Render objects added at runtime
 	sem_wait(&sem_displayList);
-	list<IDisplayListElem*>::iterator j=dynamicDisplayList.begin();
+	list<DisplayObject*>::iterator j=dynamicDisplayList.begin();
 	for(;j!=dynamicDisplayList.end();j++)
 		(*j)->Render();
 	sem_post(&sem_displayList);
 
-	glPopMatrix();
+	ma.unapply();
 	InteractiveObject::RenderEpilogue();
 
 	LOG(LOG_TRACE,"End Render MovieClip");
@@ -616,13 +663,14 @@ Vector2 MovieClip::debugRender(FTFont* font, bool deep)
 	}
 	else
 	{
-		glPushMatrix();
+		MatrixApplier ma;
 		if(framesLoaded)
 		{
 			assert_and_throw(state.FP<framesLoaded);
-			list<pair<PlaceInfo, IDisplayListElem*> >::const_iterator it=frames[state.FP].displayList.begin();
+			int curFP=state.FP;
+			list<pair<PlaceInfo, DisplayObject*> >::const_iterator it=frames[curFP].displayList.begin();
 	
-			for(;it!=frames[state.FP].displayList.end();it++)
+			for(;it!=frames[curFP].displayList.end();it++)
 			{
 				Vector2 off=it->second->debugRender(font, false);
 				glTranslatef(off.x,0,0);
@@ -636,13 +684,13 @@ Vector2 MovieClip::debugRender(FTFont* font, bool deep)
 		}
 
 		sem_wait(&sem_displayList);
-		/*list<IDisplayListElem*>::iterator j=dynamicDisplayList.begin();
+		/*list<DisplayObject*>::iterator j=dynamicDisplayList.begin();
 		for(;j!=dynamicDisplayList.end();j++)
 			(*j)->Render();*/
 		assert_and_throw(dynamicDisplayList.empty());
 		sem_post(&sem_displayList);
 
-		glPopMatrix();
+		ma.unapply();
 	}
 	
 	return ret;
@@ -654,7 +702,7 @@ bool MovieClip::getBounds(number_t& xmin, number_t& xmax, number_t& ymin, number
 	//Iterate over the displaylist of the current frame
 	sem_wait(&sem_displayList);
 	
-	list<IDisplayListElem*>::const_iterator dynit=dynamicDisplayList.begin();
+	list<DisplayObject*>::const_iterator dynit=dynamicDisplayList.begin();
 	for(;dynit!=dynamicDisplayList.end();dynit++)
 	{
 		number_t t1,t2,t3,t4;
@@ -685,11 +733,12 @@ bool MovieClip::getBounds(number_t& xmin, number_t& xmax, number_t& ymin, number
 	
 	if(framesLoaded==0) //We end here
 		return valid;
-	
-	std::list<std::pair<PlaceInfo, IDisplayListElem*> >::const_iterator it=frames[state.FP].displayList.begin();
+
+	uint32_t curFP=state.FP;
+	std::list<std::pair<PlaceInfo, DisplayObject*> >::const_iterator it=frames[curFP].displayList.begin();
 	
 	//Update bounds for all the elements
-	for(;it!=frames[state.FP].displayList.end();it++)
+	for(;it!=frames[curFP].displayList.end();it++)
 	{
 		number_t t1,t2,t3,t4;
 		if(it->second->getBounds(t1,t2,t3,t4))
@@ -725,7 +774,8 @@ bool MovieClip::getBounds(number_t& xmin, number_t& xmax, number_t& ymin, number
 	return false;
 }
 
-DisplayObject::DisplayObject():loaderInfo(NULL)
+DisplayObject::DisplayObject():useMatrix(true),tx(0),ty(0),rotation(0),sx(1),sy(1),root(NULL),loaderInfo(NULL),
+	alpha(1.0),visible(true),parent(NULL)
 {
 }
 
@@ -758,7 +808,7 @@ void DisplayObject::buildTraits(ASObject* o)
 	o->setGetterByQName("height","",Class<IFunction>::getFunction(_getHeight));
 	o->setSetterByQName("height","",Class<IFunction>::getFunction(_setHeight));
 	o->setGetterByQName("visible","",Class<IFunction>::getFunction(_getVisible));
-	o->setSetterByQName("visible","",Class<IFunction>::getFunction(undefinedFunction));
+	o->setSetterByQName("visible","",Class<IFunction>::getFunction(_setVisible));
 	o->setGetterByQName("rotation","",Class<IFunction>::getFunction(_getRotation));
 	o->setSetterByQName("rotation","",Class<IFunction>::getFunction(_setRotation));
 	o->setGetterByQName("name","",Class<IFunction>::getFunction(_getName));
@@ -775,19 +825,19 @@ void DisplayObject::buildTraits(ASObject* o)
 	o->setGetterByQName("mask","",Class<IFunction>::getFunction(_getMask));
 	o->setSetterByQName("mask","",Class<IFunction>::getFunction(undefinedFunction));
 	o->setGetterByQName("alpha","",Class<IFunction>::getFunction(_getAlpha));
-	o->setSetterByQName("alpha","",Class<IFunction>::getFunction(undefinedFunction));
+	o->setSetterByQName("alpha","",Class<IFunction>::getFunction(_setAlpha));
 	o->setGetterByQName("cacheAsBitmap","",Class<IFunction>::getFunction(undefinedFunction));
 	o->setSetterByQName("cacheAsBitmap","",Class<IFunction>::getFunction(undefinedFunction));
 	o->setGetterByQName("opaqueBackground","",Class<IFunction>::getFunction(undefinedFunction));
 	o->setSetterByQName("opaqueBackground","",Class<IFunction>::getFunction(undefinedFunction));
 }
 
-void IDisplayListElem::setMatrix(const lightspark::MATRIX& m)
+void DisplayObject::setMatrix(const lightspark::MATRIX& m)
 {
 	Matrix=m;
 }
 
-MATRIX IDisplayListElem::getMatrix() const
+MATRIX DisplayObject::getMatrix() const
 {
 	MATRIX ret;
 	if(useMatrix)
@@ -804,7 +854,7 @@ MATRIX IDisplayListElem::getMatrix() const
 	return ret;
 }
 
-void IDisplayListElem::valFromMatrix()
+void DisplayObject::valFromMatrix()
 {
 	assert(useMatrix);
 	tx=Matrix.TranslateX;
@@ -813,10 +863,37 @@ void IDisplayListElem::valFromMatrix()
 	sy=Matrix.ScaleY;
 }
 
+bool DisplayObject::isSimple() const
+{
+	//TODO: Check filters
+	return alpha==1.0;
+}
+
+void DisplayObject::setRoot(RootMovieClip* r)
+{
+	if(root!=r)
+	{
+		assert_and_throw(root==NULL);
+		root=r;
+	}
+}
+
+ASFUNCTIONBODY(DisplayObject,_setAlpha)
+{
+	DisplayObject* th=static_cast<DisplayObject*>(obj);
+	assert_and_throw(argslen==1);
+	number_t val=args[0]->toNumber();
+	//Clip val
+	val=dmax(0,val);
+	val=dmin(val,1);
+	th->alpha=val;
+	return NULL;
+}
+
 ASFUNCTIONBODY(DisplayObject,_getAlpha)
 {
-	//DisplayObject* th=static_cast<DisplayObject*>(obj->implementation);
-	return abstract_d(1);
+	DisplayObject* th=static_cast<DisplayObject*>(obj);
+	return abstract_d(th->alpha);
 }
 
 ASFUNCTIONBODY(DisplayObject,_getMask)
@@ -1049,10 +1126,18 @@ ASFUNCTIONBODY(DisplayObject,_getRotation)
 	return abstract_d(th->rotation);
 }
 
+ASFUNCTIONBODY(DisplayObject,_setVisible)
+{
+	DisplayObject* th=static_cast<DisplayObject*>(obj);
+	assert_and_throw(argslen==1);
+	th->visible=Boolean_concrete(args[0]);
+	return NULL;
+}
+
 ASFUNCTIONBODY(DisplayObject,_getVisible)
 {
-	//DisplayObject* th=static_cast<DisplayObject*>(obj->implementation);
-	return abstract_b(true);
+	DisplayObject* th=static_cast<DisplayObject*>(obj);
+	return abstract_b(th->visible);
 }
 
 int DisplayObject::computeHeight()
@@ -1160,7 +1245,7 @@ DisplayObjectContainer::~DisplayObjectContainer()
 	//Release every child
 	if(!sys->finalizingDestruction)
 	{
-		list<IDisplayListElem*>::iterator it=dynamicDisplayList.begin();
+		list<DisplayObject*>::iterator it=dynamicDisplayList.begin();
 		for(;it!=dynamicDisplayList.end();it++)
 			(*it)->decRef();
 	}
@@ -1215,7 +1300,7 @@ void InteractiveObject::RenderEpilogue()
 void DisplayObjectContainer::dumpDisplayList()
 {
 	cout << "Size: " << dynamicDisplayList.size() << endl;
-	list<IDisplayListElem*>::const_iterator it=dynamicDisplayList.begin();
+	list<DisplayObject*>::const_iterator it=dynamicDisplayList.begin();
 	for(;it!=dynamicDisplayList.end();it++)
 	{
 		if(*it)
@@ -1231,7 +1316,7 @@ void DisplayObjectContainer::setRoot(RootMovieClip* r)
 	if(r!=root)
 	{
 		DisplayObject::setRoot(r);
-		list<IDisplayListElem*>::const_iterator it=dynamicDisplayList.begin();
+		list<DisplayObject*>::const_iterator it=dynamicDisplayList.begin();
 		for(;it!=dynamicDisplayList.end();it++)
 			(*it)->setRoot(r);
 	}
@@ -1273,7 +1358,7 @@ void DisplayObjectContainer::_addChildAt(DisplayObject* child, unsigned int inde
 	else
 	{
 		assert_and_throw(index<=dynamicDisplayList.size());
-		list<IDisplayListElem*>::iterator it=dynamicDisplayList.begin();
+		list<DisplayObject*>::iterator it=dynamicDisplayList.begin();
 		for(unsigned int i=0;i<index;i++)
 			it++;
 		dynamicDisplayList.insert(it,child);
@@ -1283,15 +1368,15 @@ void DisplayObjectContainer::_addChildAt(DisplayObject* child, unsigned int inde
 	sem_post(&sem_displayList);
 }
 
-void DisplayObjectContainer::_removeChild(IDisplayListElem* child)
+void DisplayObjectContainer::_removeChild(DisplayObject* child)
 {
 	if(child->parent==NULL)
 		return; //Should throw an ArgumentError
 	assert_and_throw(child->parent==this);
-	assert_and_throw(child->root==root);
+	assert_and_throw(child->getRoot()==root);
 
 	sem_wait(&sem_displayList);
-	list<IDisplayListElem*>::iterator it=find(dynamicDisplayList.begin(),dynamicDisplayList.end(),child);
+	list<DisplayObject*>::iterator it=find(dynamicDisplayList.begin(),dynamicDisplayList.end(),child);
 	assert_and_throw(it!=dynamicDisplayList.end());
 	dynamicDisplayList.erase(it);
 	//We can release the reference to the child
@@ -1305,7 +1390,7 @@ bool DisplayObjectContainer::_contains(DisplayObject* d)
 	if(d==this)
 		return true;
 
-	list<IDisplayListElem*>::const_iterator it=dynamicDisplayList.begin();
+	list<DisplayObject*>::const_iterator it=dynamicDisplayList.begin();
 	for(;it!=dynamicDisplayList.end();it++)
 	{
 		if(*it==d)
@@ -1396,7 +1481,7 @@ ASFUNCTIONBODY(DisplayObjectContainer,getChildAt)
 	assert_and_throw(argslen==1);
 	unsigned int index=args[0]->toInt();
 	assert_and_throw(index<th->dynamicDisplayList.size());
-	list<IDisplayListElem*>::iterator it=th->dynamicDisplayList.begin();
+	list<DisplayObject*>::iterator it=th->dynamicDisplayList.begin();
 	for(unsigned int i=0;i<index;i++)
 		it++;
 
@@ -1415,7 +1500,7 @@ ASFUNCTIONBODY(DisplayObjectContainer,getChildIndex)
 	//Cast to object
 	DisplayObject* d=static_cast<DisplayObject*>(args[0]);
 
-	list<IDisplayListElem*>::const_iterator it=th->dynamicDisplayList.begin();
+	list<DisplayObject*>::const_iterator it=th->dynamicDisplayList.begin();
 	int ret=0;
 	do
 	{
@@ -1463,27 +1548,34 @@ void Shape::Render()
 	if(graphics==NULL)
 		return;
 
+	if(alpha==0.0)
+		return;
+	if(!visible)
+		return;
+
 	number_t t1,t2,t3,t4;
 	bool ret=graphics->getBounds(t1,t2,t3,t4);
 
 	if(!ret)
 		return;
 
-	float matrix[16];
-	getMatrix().get4DMatrix(matrix);
-	glPushMatrix();
-	glMultMatrixf(matrix);
+	MatrixApplier ma(getMatrix());
 
-	rt->glAcquireFramebuffer(t1,t2,t3,t4);
+	if(!isSimple())
+		rt->glAcquireTempBuffer(t1,t2,t3,t4);
 
 	graphics->Render();
 
-	rt->glBlitFramebuffer(t1,t2,t3,t4);
+	if(!isSimple())
+		rt->glBlitTempBuffer(t1,t2,t3,t4);
 	
 	if(rt->glAcquireIdBuffer())
+	{
 		graphics->Render();
-	
-	glPopMatrix();
+		rt->glReleaseIdBuffer();
+	}
+
+	ma.unapply();
 }
 
 ASFUNCTIONBODY(Shape,_constructor)
@@ -1578,33 +1670,48 @@ void Graphics::buildTraits(ASObject* o)
 
 bool Graphics::getBounds(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const
 {
-	Locker locker(geometryMutex);
+	Locker locker2(geometryMutex);
+	//If the geometry has been modified we have to generate it again
+	if(!validGeometry)
+	{
+		validGeometry=true;
+		Locker locker(builderMutex);
+		geometry.clear();
+		builder.outputShapes(geometry);
+		for(unsigned int i=0;i<geometry.size();i++)
+			geometry[i].BuildFromEdges(&styles);
+	}
 	if(geometry.size()==0)
 		return false;
 
-	/*//Initialize values to the first available
-	assert_and_throw(geometry[0].outline.size()>0);
-	xmin=xmax=geometry[0].outline[0].x;
-	ymin=ymax=geometry[0].outline[0].y;
-
+	//Initialize values to the first available
+	bool initialized=false;
 	for(unsigned int i=0;i<geometry.size();i++)
 	{
-		for(unsigned int j=0;j<geometry[i].outline.size();j++)
+		for(unsigned int j=0;j<geometry[i].outlines.size();j++)
 		{
-			const Vector2& v=geometry[i].outline[j];
-			if(v.x<xmin)
-				xmin=v.x;
-			else if(v.x>xmax)
-				xmax=v.x;
-
-			if(v.y<ymin)
-				ymin=v.y;
-			else if(v.y>ymax)
-				ymax=v.y;
+			for(unsigned int k=0;k<geometry[i].outlines[j].size();k++)
+			{
+				const Vector2& v=geometry[i].outlines[j][k];
+				if(initialized)
+				{
+					xmin=imin(v.x,xmin);
+					xmax=imax(v.x,xmax);
+					ymin=imin(v.y,ymin);
+					ymax=imax(v.y,ymax);
+				}
+				else
+				{
+					xmin=v.x;
+					xmax=v.x;
+					ymin=v.y;
+					ymax=v.y;
+					initialized=true;
+				}
+			}
 		}
-	}*/
-	//return true;
-	return false;
+	}
+	return initialized;
 }
 
 ASFUNCTIONBODY(Graphics,_constructor)
@@ -1616,10 +1723,10 @@ ASFUNCTIONBODY(Graphics,clear)
 {
 	Graphics* th=static_cast<Graphics*>(obj);
 	{
-		Locker locker(th->geometryMutex);
-		th->geometry.clear();
+		Locker locker(th->builderMutex);
+		th->builder.clear();
+		th->validGeometry=false;
 	}
-	th->tmpShape=GeomShape();
 	th->styles.clear();
 	return NULL;
 }
@@ -1628,9 +1735,6 @@ ASFUNCTIONBODY(Graphics,moveTo)
 {
 	Graphics* th=static_cast<Graphics*>(obj);
 	assert_and_throw(argslen==2);
-
-	//As we are moving, first of all flush the shape
-	th->flushShape(true);
 
 	th->curX=args[0]->toInt();
 	th->curY=args[1]->toInt();
@@ -1645,30 +1749,15 @@ ASFUNCTIONBODY(Graphics,lineTo)
 	int x=args[0]->toInt();
 	int y=args[1]->toInt();
 
-	/*//If this is the first line, add also the starting point
-	if(th->tmpShape.outline.size()==0)
-		th->tmpShape.outline.push_back(Vector2(th->curX,th->curY));
-
-	th->tmpShape.outline.push_back(Vector2(x,y));*/
-
-	return NULL;
-}
-
-void Graphics::flushShape(bool keepStyle)
-{
-	/*if(!tmpShape.outline.empty())
 	{
-		if(tmpShape.color)
-			tmpShape.BuildFromEdges(&styles);
+		Locker locker(th->builderMutex);
+		th->builder.extendOutlineForColor(th->styles.size(),Vector2(th->curX,th->curY),Vector2(x,y));
+		th->validGeometry=false;
+	}
 
-		sem_wait(&geometry_mutex);
-		int oldcolor=tmpShape.color;
-		geometry.push_back(tmpShape);
-		sem_post(&geometry_mutex);
-		tmpShape=GeomShape();
-		if(keepStyle)
-			tmpShape.color=oldcolor;
-	}*/
+	th->curX=x;
+	th->curY=y;
+	return NULL;
 }
 
 ASFUNCTIONBODY(Graphics,drawCircle)
@@ -1680,17 +1769,20 @@ ASFUNCTIONBODY(Graphics,drawCircle)
 	double y=args[1]->toNumber();
 	double radius=args[2]->toNumber();
 
-	th->flushShape(true);
+	//Well, right now let's build a square anyway
+	const Vector2 a(x-radius,y-radius);
+	const Vector2 b(x+radius,y-radius);
+	const Vector2 c(x+radius,y+radius);
+	const Vector2 d(x-radius,y+radius);
 
-	/*//Well, right now let's build a square anyway
-	th->tmpShape.outline.push_back(Vector2(x-radius,y-radius));
-	th->tmpShape.outline.push_back(Vector2(x+radius,y-radius));
-	th->tmpShape.outline.push_back(Vector2(x+radius,y+radius));
-	th->tmpShape.outline.push_back(Vector2(x-radius,y+radius));
-	th->tmpShape.outline.push_back(Vector2(x-radius,y-radius));*/
-
-	th->flushShape(true);
-
+	{
+		Locker locker(th->builderMutex);
+		th->builder.extendOutlineForColor(th->styles.size(),a,b);
+		th->builder.extendOutlineForColor(th->styles.size(),b,c);
+		th->builder.extendOutlineForColor(th->styles.size(),c,d);
+		th->builder.extendOutlineForColor(th->styles.size(),d,a);
+		th->validGeometry=false;
+	}
 	return NULL;
 }
 
@@ -1704,34 +1796,19 @@ ASFUNCTIONBODY(Graphics,drawRect)
 	int width=args[2]->toInt();
 	int height=args[3]->toInt();
 
-	th->flushShape(true);
+	const Vector2 a(x,y);
+	const Vector2 b(x+width,y);
+	const Vector2 c(x+width,y+height);
+	const Vector2 d(x,y+height);
 
-	/*if(width==0 && height==0)
 	{
-		th->tmpShape.outline.push_back(Vector2(x,y));
+		Locker locker(th->builderMutex);
+		th->builder.extendOutlineForColor(th->styles.size(),a,b);
+		th->builder.extendOutlineForColor(th->styles.size(),b,c);
+		th->builder.extendOutlineForColor(th->styles.size(),c,d);
+		th->builder.extendOutlineForColor(th->styles.size(),d,a);
+		th->validGeometry=false;
 	}
-	else if(width==0)
-	{
-		th->tmpShape.outline.push_back(Vector2(x,y));
-		th->tmpShape.outline.push_back(Vector2(x,y+height));
-	}
-	else if(height==0)
-	{
-		th->tmpShape.outline.push_back(Vector2(x,y));
-		th->tmpShape.outline.push_back(Vector2(x+width,y));
-	}
-	else
-	{
-		//Build a shape and add it to the geometry vector
-		th->tmpShape.outline.push_back(Vector2(x,y));
-		th->tmpShape.outline.push_back(Vector2(x+width,y));
-		th->tmpShape.outline.push_back(Vector2(x+width,y+height));
-		th->tmpShape.outline.push_back(Vector2(x,y+height));
-		th->tmpShape.outline.push_back(Vector2(x,y));
-	}*/
-
-	th->flushShape(true);
-
 	return NULL;
 }
 
@@ -1750,7 +1827,6 @@ ASFUNCTIONBODY(Graphics,beginGradientFill)
 		color=ar->at(0)->toUInt();
 	}
 	th->styles.back().Color=RGBA(color&0xff,(color>>8)&0xff,(color>>16)&0xff,alpha);
-	th->tmpShape.color = th->styles.size(); //Colors are 1-indexed
 	return NULL;
 }
 
@@ -1766,27 +1842,30 @@ ASFUNCTIONBODY(Graphics,beginFill)
 	if(argslen>=2)
 		alpha=(uint8_t(args[1]->toNumber()*0xff));
 	th->styles.back().Color=RGBA((color>>16)&0xff,(color>>8)&0xff,color&0xff,alpha);
-	th->tmpShape.color = th->styles.size(); //Colors are 1-indexed
 	return NULL;
 }
 
 ASFUNCTIONBODY(Graphics,endFill)
 {
 	Graphics* th=static_cast<Graphics*>(obj);
-	assert_and_throw(th->tmpShape.color);
-	/*if(!th->tmpShape.outline.empty())
-	{
-		if(th->tmpShape.outline.front()!=th->tmpShape.outline.back())
-			th->tmpShape.outline.push_back(th->tmpShape.outline.front());
-	}*/
-	th->flushShape(false);
+	//TODO: close the path if open
 	return NULL;
 }
 
 void Graphics::Render()
 {
-	//Should probably flush the shape
-	Locker locker(geometryMutex);
+	Locker locker2(geometryMutex);
+	//If the geometry has been modified we have to generate it again
+	if(!validGeometry)
+	{
+		validGeometry=true;
+		Locker locker(builderMutex);
+		cout << "Generating geometry" << endl;
+		geometry.clear();
+		builder.outputShapes(geometry);
+		for(unsigned int i=0;i<geometry.size();i++)
+			geometry[i].BuildFromEdges(&styles);
+	}
 
 	for(unsigned int i=0;i<geometry.size();i++)
 		geometry[i].Render();

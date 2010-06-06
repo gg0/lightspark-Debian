@@ -4,16 +4,16 @@
     Copyright (C) 2009,2010  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
+    it under the terms of the GNU Lesser General Public License as published by
     the Free Software Foundation, either version 3 of the License, or
     (at your option) any later version.
 
     This program is distributed in the hope that it will be useful,
     but WITHOUT ANY WARRANTY; without even the implied warranty of
     MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
+    GNU Lesser General Public License for more details.
 
-    You should have received a copy of the GNU General Public License
+    You should have received a copy of the GNU Lesser General Public License
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
@@ -47,7 +47,7 @@ namespace lightspark
 	friend class Class<className>; 
 
 enum SWFOBJECT_TYPE { T_OBJECT=0, T_INTEGER=1, T_NUMBER=2, T_FUNCTION=3, T_UNDEFINED=4, T_NULL=5, T_STRING=6, 
-	T_DEFINABLE=7, T_BOOLEAN=8, T_ARRAY=9, T_CLASS=10, T_QNAME=11, T_NAMESPACE=12, T_UINTEGER=13, T_PROXY=14};
+	T_DEFINABLE=7, T_BOOLEAN=8, T_ARRAY=9, T_CLASS=10, T_QNAME=11, T_NAMESPACE=12, T_UINTEGER=13, T_PROXY=14, T_MOVIECLIP=15};
 
 enum STACK_TYPE{STACK_NONE=0,STACK_OBJECT,STACK_INT,STACK_UINT,STACK_NUMBER,STACK_BOOLEAN};
 
@@ -291,13 +291,13 @@ public:
 		}
 		return true;
 	}
-	STRING operator+(const STRING& s)
+	/*STRING operator+(const STRING& s)
 	{
 		STRING ret(*this);
 		for(unsigned int i=0;i<s.String.size();i++)
 			ret.String.push_back(s.String[i]);
 		return ret;
-	}
+	}*/
 	bool isNull() const
 	{
 		return !String.size();
@@ -438,12 +438,12 @@ public:
 //Atomic operations: placeholders until C++0x is supported in GCC
 inline void atomic_increment(int* operand)
 {
-	__asm__ __volatile__ ("lock incl (%0)" : : "r" (operand));
+	__asm__ ("lock incl %0" : "+m" (*operand):);
 }
 
 inline void atomic_decrement(int* operand)
 {
-	__asm__ __volatile__ ("lock decl (%0)" : : "r" (operand));
+	__asm__ ("lock decl %0" : "+m" (*operand):);
 }
 
 class ASObject
@@ -917,8 +917,8 @@ public:
 	int TranslateY;
 public:
 	MATRIX():ScaleX(1),ScaleY(1),RotateSkew0(0),RotateSkew1(0),TranslateX(0),TranslateY(0){}
-	void get4DMatrix(float matrix[16]);
-	void getTranslation(int& x, int& y);
+	void get4DMatrix(float matrix[16]) const;
+	void getTranslation(int& x, int& y) const;
 	void multiply2D(number_t xin, number_t yin, number_t& xout, number_t& yout) const;
 };
 

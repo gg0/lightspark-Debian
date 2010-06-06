@@ -4,16 +4,16 @@
     Copyright (C) 2009,2010  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
+    it under the terms of the GNU Lesser General Public License as published by
     the Free Software Foundation, either version 3 of the License, or
     (at your option) any later version.
 
     This program is distributed in the hope that it will be useful,
     but WITHOUT ANY WARRANTY; without even the implied warranty of
     MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
+    GNU Lesser General Public License for more details.
 
-    You should have received a copy of the GNU General Public License
+    You should have received a copy of the GNU Lesser General Public License
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
@@ -58,7 +58,17 @@ tiny_string ASObject::toString(bool debugMsg)
 			return ret->toString();
 		}
 	}
-	return "[object Object]";
+
+	if(getPrototype())
+	{
+		tiny_string ret;
+		ret+="[object ";
+		ret+=getPrototype()->class_name;
+		ret+="]";
+		return ret;
+	}
+	else
+		return "[object Object]";
 }
 
 bool ASObject::isLess(ASObject* r)
@@ -112,7 +122,7 @@ bool ASObject::nextValue(unsigned int index, ASObject*& out)
 
 void ASObject::buildTraits(ASObject* o)
 {
-	if(o->getActualPrototype()->class_name!="IInterface")
+	if(o->getActualPrototype()->class_name!="ASObject")
 		LOG(LOG_NOT_IMPLEMENTED,"Add buildTraits for class " << o->getActualPrototype()->class_name);
 }
 
@@ -788,8 +798,8 @@ void variables_map::dumpVariables()
 {
 	var_iterator it=Variables.begin();
 	for(;it!=Variables.end();it++)
-		cerr << it->first.level << ": [" << it->second.first << "] "<< it->first.name << " " << 
-			it->second.second.var << ' ' << it->second.second.setter << ' ' << it->second.second.getter << endl;
+		LOG(LOG_NO_INFO,it->first.level << ": [" << it->second.first << "] "<< it->first.name << " " << 
+			it->second.second.var << ' ' << it->second.second.setter << ' ' << it->second.second.getter);
 }
 
 lightspark::RECT::RECT()
@@ -825,7 +835,7 @@ std::ostream& operator<<(std::ostream& s, const RGB& r)
 	return s;
 }
 
-void MATRIX::get4DMatrix(float matrix[16])
+void MATRIX::get4DMatrix(float matrix[16]) const
 {
 	memset(matrix,0,sizeof(float)*16);
 	matrix[0]=ScaleX;
@@ -847,7 +857,7 @@ void MATRIX::multiply2D(number_t xin, number_t yin, number_t& xout, number_t& yo
 	yout=xin*RotateSkew0 + yin*ScaleY + TranslateY;
 }
 
-void MATRIX::getTranslation(int& x, int& y)
+void MATRIX::getTranslation(int& x, int& y) const
 {
 	x=TranslateX;
 	y=TranslateY;
@@ -1295,7 +1305,7 @@ void FILLSTYLE::setFragmentProgram() const
 	}
 	else
 	{
-		LOG(LOG_NOT_IMPLEMENTED,"Style not implmented");
+		LOG(LOG_NOT_IMPLEMENTED,"Style not implemented");
 		FILLSTYLE::fixedColor(0.5,0.5,0);
 	}
 }

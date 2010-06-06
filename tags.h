@@ -4,16 +4,16 @@
     Copyright (C) 2009,2010  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
+    it under the terms of the GNU Lesser General Public License as published by
     the Free Software Foundation, either version 3 of the License, or
     (at your option) any later version.
 
     This program is distributed in the hope that it will be useful,
     but WITHOUT ANY WARRANTY; without even the implied warranty of
     MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
+    GNU Lesser General Public License for more details.
 
-    You should have received a copy of the GNU General Public License
+    You should have received a copy of the GNU Lesser General Public License
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
@@ -37,7 +37,7 @@
 namespace lightspark
 {
 
-enum TAGTYPE {TAG=0,DISPLAY_LIST_TAG,SHOW_TAG,CONTROL_TAG,DICT_TAG,END_TAG};
+enum TAGTYPE {TAG=0,DISPLAY_LIST_TAG,SHOW_TAG,CONTROL_TAG,DICT_TAG,FRAMELABEL_TAG,END_TAG};
 
 void ignore(std::istream& i, int count);
 void FromShaperecordListToShapeVector(const std::vector<SHAPERECORD>& shapeRecords, std::vector<GeomShape>& shapes);
@@ -51,7 +51,7 @@ protected:
 		ignore(in,Header.getLength());
 	}
 public:
-	Tag(RECORDHEADER h, std::istream& s):Header(h)
+	Tag(RECORDHEADER h):Header(h)
 	{
 	}
 	virtual TAGTYPE getType() const{ return TAG; }
@@ -61,16 +61,16 @@ public:
 class EndTag:public Tag
 {
 public:
-	EndTag(RECORDHEADER h, std::istream& s):Tag(h,s){}
+	EndTag(RECORDHEADER h, std::istream& s):Tag(h){}
 	virtual TAGTYPE getType() const{ return END_TAG; }
 };
 
 class DisplayListTag: public Tag
 {
 public:
-	DisplayListTag(RECORDHEADER h, std::istream& s):Tag(h,s){}
+	DisplayListTag(RECORDHEADER h):Tag(h){}
 	virtual TAGTYPE getType() const{ return DISPLAY_LIST_TAG; }
-	virtual void execute(MovieClip* parent, std::list < std::pair<PlaceInfo, IDisplayListElem*> >& list)=0;
+	virtual void execute(MovieClip* parent, std::list < std::pair<PlaceInfo, DisplayObject*> >& list)=0;
 };
 
 class DictionaryTag: public Tag
@@ -80,7 +80,7 @@ protected:
 public:
 	Class_base* bindedTo;
 	RootMovieClip* loadedFrom;
-	DictionaryTag(RECORDHEADER h,std::istream& s):Tag(h,s),bindedTo(NULL),loadedFrom(NULL){ }
+	DictionaryTag(RECORDHEADER h):Tag(h),bindedTo(NULL),loadedFrom(NULL){ }
 	virtual TAGTYPE getType()const{ return DICT_TAG; }
 	virtual int getId()=0;
 	virtual ASObject* instance() const { return NULL; };
@@ -90,7 +90,7 @@ public:
 class ControlTag: public Tag
 {
 public:
-	ControlTag(RECORDHEADER h, std::istream& s):Tag(h,s){}
+	ControlTag(RECORDHEADER h):Tag(h){}
 	virtual TAGTYPE getType()const{ return CONTROL_TAG; }
 	virtual void execute(RootMovieClip* root)=0;
 };
@@ -314,20 +314,18 @@ private:
 
 public:
 	RemoveObject2Tag(RECORDHEADER h, std::istream& in);
-	void execute(MovieClip* parent, std::list < std::pair<PlaceInfo, IDisplayListElem*> >& list);
+	void execute(MovieClip* parent, std::list < std::pair<PlaceInfo, DisplayObject*> >& list);
 };
 
 class PlaceObject2Tag: public DisplayListTag
 {
-private:
-	//static bool list_orderer(const std::pair<PlaceInfo, IDisplayListElem*>& a, int d);
-	//static bool list_orderer(int d, const std::pair<PlaceInfo, IDisplayListElem*>& a);
+protected:
 	class list_orderer
 	{
 	public:
-		bool operator()(const std::pair<PlaceInfo, IDisplayListElem*>& a, int d);
-		bool operator()(int d, const std::pair<PlaceInfo, IDisplayListElem*>& a);
-		bool operator()(const std::pair<PlaceInfo, IDisplayListElem*>& a, const std::pair<PlaceInfo, IDisplayListElem*>& b);
+		bool operator()(const std::pair<PlaceInfo, DisplayObject*>& a, int d);
+		bool operator()(int d, const std::pair<PlaceInfo, DisplayObject*>& a);
+		bool operator()(const std::pair<PlaceInfo, DisplayObject*>& a, const std::pair<PlaceInfo, DisplayObject*>& b);
 	};
 
 	bool PlaceFlagHasClipAction;
@@ -345,25 +343,38 @@ private:
 	UI16 Ratio;
 	UI16 ClipDepth;
 	CLIPACTIONS ClipActions;
+	PlaceObject2Tag(RECORDHEADER h):DisplayListTag(h){}
 
 public:
 	STRING Name;
 	PlaceObject2Tag(RECORDHEADER h, std::istream& in);
-	void execute(MovieClip* parent, std::list < std::pair<PlaceInfo, IDisplayListElem*> >& list);
-/*	void setWrapped(ASObject* w)
-	{
-		wrapped=w;
-	}*/
-
+	void execute(MovieClip* parent, std::list < std::pair<PlaceInfo, DisplayObject*> >& list);
 };
 
-class FrameLabelTag: public DisplayListTag
+class PlaceObject3Tag: public PlaceObject2Tag
 {
 private:
-	STRING Name;
+	bool PlaceFlagHasImage;
+	bool PlaceFlagHasClassName;
+	bool PlaceFlagHasCacheAsBitmap;
+	bool PlaceFlagHasBlendMode;
+	bool PlaceFlagHasFilterList;
+	STRING ClassName;
+	FILTERLIST SurfaceFilterList;
+	UI8 BlendMode;
+	UI8 BitmapCache;
+
 public:
+	PlaceObject3Tag(RECORDHEADER h, std::istream& in);
+	void execute(MovieClip* parent, std::list < std::pair<PlaceInfo, DisplayObject*> >& list);
+};
+
+class FrameLabelTag: public Tag
+{
+public:
+	STRING Name;
 	FrameLabelTag(RECORDHEADER h, std::istream& in);
-	void execute(MovieClip* parent, std::list < std::pair<PlaceInfo, IDisplayListElem*> >& list);
+	virtual TAGTYPE getType()const{ return FRAMELABEL_TAG; }
 };
 
 class SetBackgroundColorTag: public ControlTag
@@ -437,7 +448,7 @@ class FontTag: public DictionaryTag
 protected:
 	UI16 FontID;
 public:
-	FontTag(RECORDHEADER h,std::istream& s):DictionaryTag(h,s){}
+	FontTag(RECORDHEADER h):DictionaryTag(h){}
 	virtual void genGlyphShape(std::vector<GeomShape>& s, int glyph)=0;
 };
 

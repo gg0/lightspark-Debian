@@ -4,16 +4,16 @@
     Copyright (C) 2009,2010  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
+    it under the terms of the GNU Lesser General Public License as published by
     the Free Software Foundation, either version 3 of the License, or
     (at your option) any later version.
 
     This program is distributed in the hope that it will be useful,
     but WITHOUT ANY WARRANTY; without even the implied warranty of
     MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
+    GNU Lesser General Public License for more details.
 
-    You should have received a copy of the GNU General Public License
+    You should have received a copy of the GNU Lesser General Public License
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
@@ -241,6 +241,7 @@ ASFUNCTIONBODY(NetConnection,connect)
 	//When the URI is undefined the connect is successful (tested on Adobe player)
 	Event* status=Class<NetStatusEvent>::getInstanceS("status", "NetConnection.Connect.Success");
 	getVm()->addEvent(th, status);
+	status->decRef();
 	return NULL;
 }
 
@@ -386,6 +387,12 @@ void NetStream::execute()
 							//sys->setRenderRate(frameRate);
 
 							tag.releaseBuffer();
+							Event* status=Class<NetStatusEvent>::getInstanceS("status", "NetStream.Play.Start");
+							getVm()->addEvent(this, status);
+							status->decRef();
+							status=Class<NetStatusEvent>::getInstanceS("status", "NetStream.Buffer.Full");
+							getVm()->addEvent(this, status);
+							status->decRef();
 						}
 						else
 							decoder->decodeData(tag.packetData,tag.packetLen);
@@ -432,10 +439,6 @@ void NetStream::execute()
 	delete decoder;
 	decoder=NULL;
 	sem_post(&mutex);
-/*	Event* status=Class<NetStatusEvent>::getInstanceS(true, "status", "NetStream.Play.Start");
-	getVm()->addEvent(this, status);
-	status=Class<NetStatusEvent>::getInstanceS(true, "status", "NetStream.Buffer.Full");
-	getVm()->addEvent(this, status);*/
 }
 
 void NetStream::threadAbort()

@@ -4,16 +4,16 @@
     Copyright (C) 2009,2010  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
+    it under the terms of the GNU Lesser General Public License as published by
     the Free Software Foundation, either version 3 of the License, or
     (at your option) any later version.
 
     This program is distributed in the hope that it will be useful,
     but WITHOUT ANY WARRANTY; without even the implied warranty of
     MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
+    GNU Lesser General Public License for more details.
 
-    You should have received a copy of the GNU General Public License
+    You should have received a copy of the GNU Lesser General Public License
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
@@ -21,7 +21,9 @@
 #define _GRAPHICS_H
 
 #include <GL/glew.h>
+#include <vector>
 #include "compat.h"
+#include "swftypes.h"
 
 namespace lightspark
 {
@@ -53,6 +55,21 @@ public:
 	void resize(uint32_t width, uint32_t height);
 	uint32_t getAllocWidth() const { return allocWidth;}
 	uint32_t getAllocHeight() const { return allocHeight;}
+};
+
+class MatrixApplier
+{
+private:
+	struct packedMatrix
+	{
+		float data[4][4];
+	};
+	std::vector<packedMatrix> savedStack;
+public:
+	MatrixApplier();
+	MatrixApplier(const MATRIX& m);
+	void concat(const MATRIX& m);
+	void unapply();
 };
 
 };

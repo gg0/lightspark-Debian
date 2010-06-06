@@ -4,16 +4,16 @@
     Copyright (C) 2009,2010  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
+    it under the terms of the GNU Lesser General Public License as published by
     the Free Software Foundation, either version 3 of the License, or
     (at your option) any later version.
 
     This program is distributed in the hope that it will be useful,
     but WITHOUT ANY WARRANTY; without even the implied warranty of
     MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
+    GNU Lesser General Public License for more details.
 
-    You should have received a copy of the GNU General Public License
+    You should have received a copy of the GNU Lesser General Public License
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
@@ -102,6 +102,8 @@ private:
 	bool toBind;
 	tiny_string bindName;
 	void tick();
+	Mutex mutexChildrenClips;
+	std::set<MovieClip*> childrenClips;
 public:
 	RootMovieClip(LoaderInfo* li, bool isSys=false);
 	~RootMovieClip();
@@ -118,6 +120,7 @@ public:
 	DictionaryTag* dictionaryLookup(int id);
 	void addToFrame(DisplayListTag* t);
 	void addToFrame(ControlTag* t);
+	void labelCurrentFrame(const STRING& name);
 	void commitFrame(bool another);
 	void revertFrame();
 	void Render();
@@ -131,6 +134,8 @@ public:
 	void setVariableByQName(const tiny_string& name, const tiny_string& ns, ASObject* o);
 	void setVariableByMultiname(multiname& name, ASObject* o);
 	void setVariableByString(const std::string& s, ASObject* o);*/
+	void registerChildClip(MovieClip* clip);
+	void unregisterChildClip(MovieClip* clip);
 };
 
 class ThreadProfile
@@ -322,7 +327,7 @@ private:
 #endif
 	bool loadShaderPrograms();
 	uint32_t* interactive_buffer;
-	bool fbAcquired;
+	bool tempBufferAcquired;
 	void tick();
 	int frameCount;
 	int secsCount;
@@ -335,12 +340,12 @@ public:
 	void draw();
 	float getIdAt(int x, int y);
 	//The calling context MUST call this function with the transformation matrix ready
-	void glAcquireFramebuffer(number_t xmin, number_t xmax, number_t ymin, number_t ymax);
-	void glBlitFramebuffer(number_t xmin, number_t xmax, number_t ymin, number_t ymax);
+	void glAcquireTempBuffer(number_t xmin, number_t xmax, number_t ymin, number_t ymax);
+	void glBlitTempBuffer(number_t xmin, number_t xmax, number_t ymin, number_t ymax);
 
 	void requestInput();
-	void glClearIdBuffer();
 	bool glAcquireIdBuffer();
+	void glReleaseIdBuffer();
 	void pushId()
 	{
 		idStack.push_back(currentId);

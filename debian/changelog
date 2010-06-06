@@ -1,4 +1,4 @@
-lightspark (0.4.0-1~exp0) experimental; urgency=low
+lightspark (0.4.1-1~exp0) experimental; urgency=low
 
   * Initial upload to Debian (Closes: #582120)
     - Re-use upstream's PPA packaging. Thanks to Alessandro Pignotti !
@@ -18,11 +18,11 @@ lightspark (0.4.0-1~exp0) experimental; urgency=low
 
  -- Didier Raboud <didier@raboud.com>  Mon, 31 May 2010 16:07:22 +0200
 
-lightspark (0.4.0-0ubuntu1) lucid; urgency=low
+lightspark (0.4.1-0ubuntu1) lucid; urgency=low
 
-  * New stable release
+  * New release
 
- -- Alessandro Pignotti <a.pignotti@sssup.it>  Sun, 30 May 2010 04:39:03 +0200
+ -- Alessandro Pignotti <a.pignotti@sssup.it>  Sat, 05 Jun 2010 03:13:43 +0200
 
 lightspark (0.4.0~rc3-0ubuntu1) lucid; urgency=low
 

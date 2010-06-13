@@ -245,7 +245,7 @@ ASFUNCTIONBODY(Array,_sort)
 
 ASFUNCTIONBODY(Array,sortOn)
 {
-	Array* th=static_cast<Array*>(obj);
+//	Array* th=static_cast<Array*>(obj);
 	__asm__("int $3");
 /*	if(th->data.size()>1)
 		throw UnsupportedException("Array::sort not completely implemented");
@@ -256,7 +256,7 @@ ASFUNCTIONBODY(Array,sortOn)
 ASFUNCTIONBODY(Array,unshift)
 {
 	Array* th=static_cast<Array*>(obj);
-	for(int i=0;i<argslen;i++)
+	for(uint32_t i=0;i<argslen;i++)
 	{
 		th->data.insert(th->data.begin(),data_slot(args[i],DATA_OBJECT));
 		args[i]->incRef();
@@ -1149,7 +1149,7 @@ SyntheticFunction::SyntheticFunction(method_info* m):hit_count(0),mi(m),val(NULL
 //	class_index=-2;
 }
 
-ASObject* SyntheticFunction::call(ASObject* obj, ASObject* const* args, int numArgs, int level)
+ASObject* SyntheticFunction::call(ASObject* obj, ASObject* const* args, uint32_t numArgs, int level)
 {
 	const int hit_threshold=10;
 	if(mi->body==NULL)
@@ -1166,16 +1166,16 @@ ASObject* SyntheticFunction::call(ASObject* obj, ASObject* const* args, int numA
 		assert_and_throw(val);
 	}
 
-	assert_and_throw(mi->needsArgs()==false);
-
 	//Prepare arguments
-	int args_len=mi->numArgs();
+	uint32_t args_len=mi->numArgs();
 	int passedToLocals=imin(numArgs,args_len);
-	int passedToRest=(numArgs > args_len)?(numArgs-mi->numArgs()):0;
+	uint32_t passedToRest=(numArgs > args_len)?(numArgs-mi->numArgs()):0;
 	int realLevel=(bound)?closure_level:level;
+	if(realLevel==-1) //If realLevel is not set, keep the object level
+		realLevel=obj->getLevel();
 
 	call_context* cc=new call_context(mi,realLevel,args,passedToLocals);
-	int i=passedToLocals;
+	uint32_t i=passedToLocals;
 	cc->scope_stack=func_scope;
 	for(unsigned int i=0;i<func_scope.size();i++)
 		func_scope[i]->incRef();
@@ -1200,20 +1200,37 @@ ASObject* SyntheticFunction::call(ASObject* obj, ASObject* const* args, int numA
 		cc->locals[i+1]=mi->getOptional(j);
 		i++;
 	}
-	
-	assert_and_throw(i==mi->numArgs());
 
+	assert_and_throw(i==args_len);
+
+	assert_and_throw(mi->needsArgs()==false || mi->needsRest()==false);
 	if(mi->needsRest()) //TODO
 	{
 		Array* rest=Class<Array>::getInstanceS();
 		rest->resize(passedToRest);
-		for(int j=0;j<passedToRest;j++)
+		for(uint32_t j=0;j<passedToRest;j++)
 			rest->set(j,args[passedToLocals+j]);
 
 		cc->locals[i+1]=rest;
 	}
-	//Parameters are ready
+	else if(mi->needsArgs())
+	{
+		Array* argumentsArray=Class<Array>::getInstanceS();
+		argumentsArray->resize(args_len+passedToRest);
+		for(uint32_t j=0;j<args_len;j++)
+		{
+			cc->locals[j+1]->incRef();
+			argumentsArray->set(j,cc->locals[j+1]);
+		}
+		for(uint32_t j=0;j<passedToRest;j++)
+			argumentsArray->set(j+args_len,args[passedToLocals+j]);
+		//Add ourself as the callee property
+		incRef();
+		argumentsArray->setVariableByQName("callee","",this);
 
+		cc->locals[i+1]=argumentsArray;
+	}
+	//Parameters are ready
 
 	//As we are changing execution context (e.g. 'this' and level), reset the level of the current
 	//object and add the new 'this' and level to the stack
@@ -1247,7 +1264,7 @@ ASObject* SyntheticFunction::call(ASObject* obj, ASObject* const* args, int numA
 	return ret;
 }
 
-ASObject* Function::call(ASObject* obj, ASObject* const* args,int num_args, int level)
+ASObject* Function::call(ASObject* obj, ASObject* const* args, uint32_t num_args, int level)
 {
 	ASObject* ret;
 	if(bound && closure_this)
@@ -1259,7 +1276,7 @@ ASObject* Function::call(ASObject* obj, ASObject* const* args,int num_args, int 
 	}
 	ret=val(obj,args,num_args);
 
-	for(int i=0;i<num_args;i++)
+	for(uint32_t i=0;i<num_args;i++)
 		args[i]->decRef();
 	obj->decRef();
 	return ret;

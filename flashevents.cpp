@@ -51,7 +51,7 @@ void IEventDispatcher::linkTraits(ASObject* o)
 	lookupAndLink(o,"dispatchEvent","flash.events:IEventDispatcher");
 }
 
-Event::Event(const tiny_string& t, ASObject* _t):type(t),target(_t)
+Event::Event(const tiny_string& t, bool b):type(t),target(NULL),currentTarget(NULL),bubbles(b)
 {
 }
 
@@ -77,6 +77,7 @@ void Event::sinit(Class_base* c)
 	c->setVariableByQName("DEACTIVATE","",Class<ASString>::getInstanceS("deactivate"));
 	c->setVariableByQName("CHANGE","",Class<ASString>::getInstanceS("change"));
 	c->setVariableByQName("RESIZE","",Class<ASString>::getInstanceS("resize"));
+	c->setVariableByQName("MOUSE_LEAVE","",Class<ASString>::getInstanceS("mouseLeave"));
 	c->setVariableByQName("TAB_CHILDREN_CHANGE","",Class<ASString>::getInstanceS("tabChildrenChange"));
 	c->setVariableByQName("TAB_ENABLED_CHANGE","",Class<ASString>::getInstanceS("tabEnabledChange"));
 	c->setVariableByQName("TAB_INDEX_CHANGE","",Class<ASString>::getInstanceS("tabIndexChange"));
@@ -212,7 +213,7 @@ void IOErrorEvent::sinit(Class_base* c)
 	c->setVariableByQName("IO_ERROR","",Class<ASString>::getInstanceS("ioError"));
 }
 
-EventDispatcher::EventDispatcher()
+EventDispatcher::EventDispatcher():handlersMutex("handlersMutex")
 {
 }
 
@@ -245,21 +246,34 @@ ASFUNCTIONBODY(EventDispatcher,addEventListener)
 	if(args[0]->getObjectType()!=T_STRING || args[1]->getObjectType()!=T_FUNCTION)
 		throw RunTimeException("Type mismatch in EventDispatcher::addEventListener");
 
+	bool useCapture=false;
+	int priority=0;
+
+	if(argslen>=3)
+		useCapture=Boolean_concrete(args[2]);
+	if(argslen>=4)
+		priority=args[3]->toInt();
+
+	if(useCapture || priority!=0)
+		LOG(LOG_NOT_IMPLEMENTED,"Not implemented mode for addEventListener");
+
 	const tiny_string& eventName=args[0]->toString();
 	IFunction* f=static_cast<IFunction*>(args[1]);
 
-	std::map<tiny_string,std::list<listener> >::iterator it=th->handlers.insert(make_pair(eventName,list<listener>())).first;
-
-	if(find(it->second.begin(),it->second.end(),f)!=it->second.end())
 	{
-		LOG(LOG_CALLS,"Weird event reregistration");
-		return NULL;
+		Locker l(th->handlersMutex);
+		std::map<tiny_string,std::list<listener> >::iterator it=th->handlers.insert(make_pair(eventName,list<listener>())).first;
+
+		if(find(it->second.begin(),it->second.end(),f)!=it->second.end())
+		{
+			LOG(LOG_CALLS,"Weird event reregistration");
+			return NULL;
+		}
+
+		f->incRef();
+		it->second.push_back(listener(f));
 	}
 
-	f->incRef();
-	it->second.push_back(listener(f));
-
-	sys->events_name.push_back(eventName);
 	return NULL;
 }
 
@@ -278,20 +292,23 @@ ASFUNCTIONBODY(EventDispatcher,removeEventListener)
 	if(args[0]->getObjectType()!=T_STRING || args[1]->getObjectType()!=T_FUNCTION)
 		throw RunTimeException("Type mismatch in EventDispatcher::removeEventListener");
 
-	map<tiny_string, list<listener> >::iterator h=th->handlers.find(args[0]->toString());
-	if(h==th->handlers.end())
 	{
-		LOG(LOG_CALLS,"Event not found");
-		return NULL;
-	}
+		Locker l(th->handlersMutex);
+		map<tiny_string, list<listener> >::iterator h=th->handlers.find(args[0]->toString());
+		if(h==th->handlers.end())
+		{
+			LOG(LOG_CALLS,"Event not found");
+			return NULL;
+		}
 
-	IFunction* f=static_cast<IFunction*>(args[1]);
-	std::list<listener>::iterator it=find(h->second.begin(),h->second.end(),f);
-	if(it!=h->second.end())
-	{
-		//The listener owns the function
-		it->f->decRef();
-		h->second.erase(it);
+		IFunction* f=static_cast<IFunction*>(args[1]);
+		std::list<listener>::iterator it=find(h->second.begin(),h->second.end(),f);
+		if(it!=h->second.end())
+		{
+			//The listener owns the function
+			it->f->decRef();
+			h->second.erase(it);
+		}
 	}
 	return NULL;
 }
@@ -321,6 +338,7 @@ void EventDispatcher::handleEvent(Event* e)
 {
 	check();
 	e->check();
+	Locker l(handlersMutex);
 	map<tiny_string, list<listener> >::iterator h=handlers.find(e->type);
 	if(h==handlers.end())
 	{
@@ -332,6 +350,7 @@ void EventDispatcher::handleEvent(Event* e)
 
 	//Create a temporary copy of the listeners, as the list can be modified during the calls
 	vector<listener> tmpListener(h->second.begin(),h->second.end());
+	l.unlock();
 	//TODO: check, ok we should also bind the level
 	for(unsigned int i=0;i<tmpListener.size();i++)
 	{
@@ -355,6 +374,7 @@ void EventDispatcher::handleEvent(Event* e)
 
 bool EventDispatcher::hasEventListener(const tiny_string& eventName)
 {
+	Locker l(handlersMutex);
 	if(handlers.find(eventName)==handlers.end())
 		return false;
 	else

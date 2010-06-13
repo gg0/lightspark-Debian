@@ -143,7 +143,7 @@ public:
 	ActionDefineFunction(std::istream& in,ACTIONRECORDHEADER* h);
 	void Execute();
 	void print(){ LOG(LOG_TRACE,"ActionDefineFunction");}
-	ASObject* call(ASObject* obj, ASObject* const* args,int num_args, int level)
+	ASObject* call(ASObject* obj, ASObject* const* args, uint32_t num_args, int level)
 	{
 		abort();
 		return false;
@@ -181,7 +181,7 @@ public:
 	ActionDefineFunction2(std::istream& in,ACTIONRECORDHEADER* h);
 	void Execute();
 	void print(){ LOG(LOG_TRACE,"ActionDefineFunction2");}
-	ASObject* call(ASObject* obj, ASObject* const* args,int num_args, int level)
+	ASObject* call(ASObject* obj, ASObject* const* args, uint32_t num_args, int level)
 	{
 		abort();
 		return false;
@@ -260,6 +260,26 @@ public:
 	ActionConstantPool(std::istream& in);
 	void Execute();
 	void print(){ LOG(LOG_TRACE,"ActionConstantPool");}
+};
+
+class ActionSetTarget: public ActionTag
+{
+private:
+	STRING TargetName;
+public:
+	ActionSetTarget(std::istream& in);  
+	void Execute();
+	void print(){ LOG(LOG_TRACE,"ActionSetTarget");}
+}; 
+
+class ActionGoToLabel : public ActionTag
+{
+private:
+	STRING Label;
+public:
+	ActionGoToLabel(std::istream& in);
+	void Execute();
+	void print(){ LOG(LOG_TRACE,"ActionGoToLabel");}
 };
 
 class ActionStringAdd: public ActionTag
@@ -353,6 +373,13 @@ public:
 	void print(){ LOG(LOG_TRACE,"ActionPop");}
 };
 
+class ActionToInteger: public ActionTag
+{
+public:
+	void Execute();
+	void print(){ LOG(LOG_TRACE,"ActionToInteger");}
+};
+
 class ActionNot: public ActionTag
 {
 public:
@@ -379,6 +406,13 @@ class ActionCloneSprite: public ActionTag
 public:
 	void Execute();
 	void print(){ LOG(LOG_TRACE,"ActionCloneSprite");}
+};
+
+class ActionTrace: public ActionTag
+{
+public:
+	void Execute();
+	void print(){ LOG(LOG_TRACE,"ActionTrace");}
 };
 
 class ActionImplementsOp: public ActionTag
@@ -437,6 +471,13 @@ public:
 	void print(){ LOG(LOG_TRACE,"ActionTypeOf");}
 };
 
+class ActionEnumerate: public ActionTag
+{
+public:
+	void Execute();
+	void print(){ LOG(LOG_TRACE,"ActionEnumerate");}
+};
+
 class ActionGetTime: public ActionTag
 {
 public:
@@ -493,6 +534,27 @@ public:
 	void print(){ LOG(LOG_TRACE,"ActionBitAnd");}
 };
 
+class ActionBitOr: public ActionTag
+{
+public:
+	void Execute();
+	void print(){ LOG(LOG_TRACE,"ActionBitOr");}
+};
+
+class ActionBitXor: public ActionTag
+{
+public:
+	void Execute();
+	void print(){ LOG(LOG_TRACE,"ActionBitXor");}
+};
+
+class ActionBitLShift: public ActionTag
+{
+public:
+	void Execute();
+	void print(){ LOG(LOG_TRACE,"ActionBitLShift");}
+};
+
 class ActionBitRShift: public ActionTag
 {
 public:
@@ -512,6 +574,13 @@ class ActionGreater: public ActionTag
 public:
 	void Execute();
 	void print(){ LOG(LOG_TRACE,"ActionGreater");}
+};
+
+class ActionStringGreater: public ActionTag
+{
+public:
+	void Execute();
+	void print(){ LOG(LOG_TRACE,"ActionStringGreater");}
 };
 
 class ActionLess2: public ActionTag
@@ -554,6 +623,13 @@ class ActionSetVariable: public ActionTag
 public:
 	void Execute();
 	void print(){ LOG(LOG_TRACE,"ActionSetVariable");}
+};
+
+class ActionSetTarget2: public ActionTag
+{
+public:
+	void Execute();
+	void print(){ LOG(LOG_TRACE,"ActionSetTarget2");}
 };
 
 class ActionNotImplemented: public ActionTag

@@ -17,33 +17,46 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
-#include "flashxml.h"
-#include "swf.h"
+#ifndef SOUND_H
+#define SOUND_H
+
 #include "compat.h"
-#include "class.h"
+#include <pulse/pulseaudio.h>
+#include "decoder.h"
 
-using namespace std;
-using namespace lightspark;
-
-extern TLSDATA SystemState* sys;
-extern TLSDATA RenderThread* rt;
-
-REGISTER_CLASS_NAME(XMLDocument);
-
-void XMLDocument::sinit(Class_base* c)
+namespace lightspark
 {
-	c->setConstructor(Class<IFunction>::getFunction(_constructor));
-	c->super=Class<ASObject>::getClass();
-	c->max_level=c->super->max_level+1;
-}
 
-void XMLDocument::buildTraits(ASObject* o)
+class SoundManager
 {
-}
+private:
+	class SoundStream
+	{
+	public:
+		pa_stream* stream;
+		AudioDecoder* decoder;
+		SoundManager* manager;
+		volatile bool streamReady;
+		volatile bool streamDead;
+		SoundStream(SoundManager* m):stream(NULL),decoder(NULL),manager(m),streamReady(false),streamDead(false){}
+	};
+	pa_threaded_mainloop* mainLoop;
+	pa_context* context;
+	static void contextStatusCB(pa_context* context, SoundManager* th);
+	static void streamStatusCB(pa_stream* stream, SoundStream* th);
+	static void streamWriteCB(pa_stream* stream, size_t nbytes, SoundStream* th);
+	std::vector<SoundStream*> streams;
+	volatile bool contextReady;
+	bool stopped;
+public:
+	SoundManager();
+	uint32_t createStream(AudioDecoder* decoder);
+	void freeStream(uint32_t id);
+	void fillAndSinc(uint32_t id);
+	void stop();
+	~SoundManager();
+};
 
-ASFUNCTIONBODY(XMLDocument,_constructor)
-{
-//	XMLDocument* th=static_cast<XMLDocument*>(obj);
-	return NULL;
-}
+};
 
+#endif

@@ -211,10 +211,9 @@ ActionTag* ACTIONRECORDHEADER::createTag(std::istream& in)
 		case 0x07:
 			t=new ActionStop;
 			break;
-			return t;
 		case 0x0b:
 			t=new ActionSubtract;
-			return t;
+			break;
 		case 0x0c:
 			t=new ActionMultiply;
 			break;
@@ -233,11 +232,17 @@ ActionTag* ACTIONRECORDHEADER::createTag(std::istream& in)
 		case 0x17:
 			t=new ActionPop;
 			break;
+		case 0x18:
+			t=new ActionToInteger;
+			break;
 		case 0x1c:
 			t=new ActionGetVariable;
 			break;
 		case 0x1d:
 			t=new ActionSetVariable;
+			break;
+		case 0x20:
+			t=new ActionSetTarget2;
 			break;
 		case 0x21:
 			t=new ActionStringAdd;
@@ -250,6 +255,9 @@ ActionTag* ACTIONRECORDHEADER::createTag(std::istream& in)
 			break;
 		case 0x24:
 			t=new ActionCloneSprite;
+			break;
+		case 0x26:
+			t=new ActionTrace;
 			break;
 		case 0x2b:
 			t=new ActionCastOp;
@@ -289,6 +297,9 @@ ActionTag* ACTIONRECORDHEADER::createTag(std::istream& in)
 			break;
 		case 0x44:
 			t=new ActionTypeOf;
+			break;
+		case 0x46:
+			t=new ActionEnumerate;
 			break;
 		case 0x47:
 			t=new ActionAdd2;
@@ -335,6 +346,15 @@ ActionTag* ACTIONRECORDHEADER::createTag(std::istream& in)
 		case 0x60:
 			t=new ActionBitAnd;
 			break;
+		case 0x61:
+			t=new ActionBitOr;
+			break;
+		case 0x62:
+			t=new ActionBitXor;
+			break;
+		case 0x63:
+			t=new ActionBitLShift;
+			break;
 		case 0x64:
 			t=new ActionBitRShift;
 			break;
@@ -343,6 +363,9 @@ ActionTag* ACTIONRECORDHEADER::createTag(std::istream& in)
 			break;
 		case 0x67:
 			t=new ActionGreater;
+			break;
+		case 0x68:
+			t=new ActionStringGreater;
 			break;
 		case 0x69:
 			t=new ActionExtends;
@@ -358,6 +381,12 @@ ActionTag* ACTIONRECORDHEADER::createTag(std::istream& in)
 			break;
 		case 0x88:
 			t=new ActionConstantPool(in);
+			break;
+		case 0x8b:
+			t=new ActionSetTarget(in);
+			break;
+		case 0x8c:
+			t=new ActionGoToLabel(in);
 			break;
 //		case 0x8e:
 //			t=new ActionDefineFunction2(in,this);
@@ -381,7 +410,8 @@ ActionTag* ACTIONRECORDHEADER::createTag(std::istream& in)
 			t=new ActionIf(in);
 			break;
 		default:
-			LOG(LOG_NOT_IMPLEMENTED,"Unsupported ActionCode " << (int)ActionCode);
+			LOG(LOG_NOT_IMPLEMENTED,"Unsupported ActionCode " << (int)ActionCode << " with length " << (int)Length << " bytes");
+			ignore(in,Length);
 			t=NULL;
 			break;
 	}
@@ -654,6 +684,11 @@ void ActionTypeOf::Execute()
 	LOG(LOG_NOT_IMPLEMENTED,"Exec: ActionTypeOf");
 }
 
+void ActionEnumerate::Execute()
+{
+	LOG(LOG_NOT_IMPLEMENTED,"Exec: ActionEnumerate");
+}
+
 void ActionGetTime::Execute()
 {
 	LOG(LOG_NOT_IMPLEMENTED,"Exec: ActionGetTime");
@@ -672,6 +707,21 @@ void ActionImplementsOp::Execute()
 void ActionBitAnd::Execute()
 {
 	LOG(LOG_NOT_IMPLEMENTED,"Exec: ActionBitAnd");
+}
+
+void ActionBitOr::Execute()
+{
+	LOG(LOG_NOT_IMPLEMENTED,"Exec: ActionBitOr");
+}
+
+void ActionBitXor::Execute()
+{
+	LOG(LOG_NOT_IMPLEMENTED,"Exec: ActionBitXor");
+}
+
+void ActionBitLShift::Execute()
+{
+	LOG(LOG_NOT_IMPLEMENTED,"Exec: ActionBitLShift");
 }
 
 void ActionBitRShift::Execute()
@@ -725,6 +775,11 @@ void ActionGreater::Execute()
 	}*/
 }
 
+void ActionStringGreater::Execute()
+{
+	LOG(LOG_NOT_IMPLEMENTED,"Exec: ActionStringGreater");
+}
+
 void ActionAdd2::Execute()
 {
 	abort();
@@ -748,6 +803,11 @@ void ActionAdd2::Execute()
 void ActionCloneSprite::Execute()
 {
 	LOG(LOG_NOT_IMPLEMENTED,"Exec: ActionCloneSprite");
+}
+
+void ActionTrace::Execute()
+{
+	LOG(LOG_NOT_IMPLEMENTED,"Exec: ActionTrace");
 }
 
 void ActionDefineLocal::Execute()
@@ -800,6 +860,11 @@ void ActionPop::Execute()
 	abort();
 //	tiny_string popped=rt->vm.stack.pop()->toString();
 //	LOG(LOG_CALLS,"ActionPop: " << popped);
+}
+
+void ActionToInteger::Execute()
+{
+	LOG(LOG_NOT_IMPLEMENTED,"ActionToInteger");
 }
 
 void ActionCallMethod::Execute()
@@ -1048,6 +1113,11 @@ void ActionSetVariable::Execute()
 	rt->currentClip->setVariableByQName(varName,"",obj);*/
 }
 
+void ActionSetTarget2::Execute()
+{
+	abort();
+}
+
 void ActionGetVariable::Execute()
 {
 	abort();
@@ -1116,6 +1186,16 @@ ActionConstantPool::ActionConstantPool(std::istream& in)
 		in >> s;
 		ConstantPool.push_back(s);
 	}
+}
+
+ActionSetTarget::ActionSetTarget(std::istream& in)
+{
+	in >> TargetName;
+}
+
+ActionGoToLabel::ActionGoToLabel(std::istream& in)
+{
+	in >> Label;
 }
 
 ActionStoreRegister::ActionStoreRegister(std::istream& in)
@@ -1324,6 +1404,16 @@ void ActionConstantPool::Execute()
 {
 	LOG(LOG_CALLS,"ActionConstantPool");
 	//rt->vm.setConstantPool(ConstantPool);	
+}
+
+void ActionSetTarget::Execute()
+{
+	abort();
+}
+
+void ActionGoToLabel::Execute()
+{
+	LOG(LOG_CALLS,"ActionGoToLabel");
 }
 
 std::istream& lightspark::operator >>(std::istream& stream, BUTTONCONDACTION& v)

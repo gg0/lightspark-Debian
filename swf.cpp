@@ -42,6 +42,7 @@ extern "C" {
 }
 #ifndef WIN32
 #include <GL/glx.h>
+#include <fontconfig/fontconfig.h>
 #endif
 
 #ifdef COMPILE_PLUGIN
@@ -145,7 +146,7 @@ void RootMovieClip::unregisterChildClip(MovieClip* clip)
 
 SystemState::SystemState():RootMovieClip(NULL,true),renderRate(0),error(false),shutdown(false),showProfilingData(false),
 	showInteractiveMap(false),showDebug(false),xOffset(0),yOffset(0),currentVm(NULL),inputThread(NULL),
-	renderThread(NULL),finalizingDestruction(false),useInterpreter(true),useJit(false), downloadManager(NULL)
+	renderThread(NULL),finalizingDestruction(false),useInterpreter(true),useJit(false),downloadManager(NULL)
 {
 	//Do needed global initialization
 	curl_global_init(CURL_GLOBAL_ALL);
@@ -158,11 +159,15 @@ SystemState::SystemState():RootMovieClip(NULL,true),renderRate(0),error(false),s
 	//Get starting time
 	threadPool=new ThreadPool(this);
 	timerThread=new TimerThread(this);
+	soundManager=new SoundManager;
 	loaderInfo=Class<LoaderInfo>::getInstanceS();
 	stage=Class<Stage>::getInstanceS();
+	parent=stage;
 	startTime=compat_msectiming();
 	
 	setPrototype(Class<MovieClip>::getClass());
+
+	setOnStage(true);
 }
 
 void SystemState::setUrl(const tiny_string& url)
@@ -193,11 +198,13 @@ void SystemState::setParameters(ASObject* p)
 SystemState::~SystemState()
 {
 	assert(shutdown);
-	timerThread->stop();
+	timerThread->wait();
+	//soundManager->stop();
 	delete threadPool;
 	delete downloadManager;
 	delete currentVm;
 	delete timerThread;
+	delete soundManager;
 
 	//decRef all our object before destroying classes
 	Variables.destroyContents();
@@ -300,12 +307,19 @@ void SystemState::setRenderRate(float rate)
 
 void SystemState::tick()
 {
-	inputThread->broadcastEvent("enterFrame");
+	RootMovieClip::tick();
  	sem_wait(&mutex);
 	list<ThreadProfile>::iterator it=profilingData.begin();
 	for(;it!=profilingData.end();it++)
 		it->tick();
 	sem_post(&mutex);
+	//Enter frame should be sent to the stage too
+	if(stage->hasEventListener("enterFrame"))
+	{
+		Event* e=Class<Event>::getInstanceS("enterFrame");
+		getVm()->addEvent(stage,e);
+		e->decRef();
+	}
 }
 
 void SystemState::addJob(IThreadJob* j)
@@ -539,7 +553,7 @@ void RenderThread::wait()
 }
 
 InputThread::InputThread(SystemState* s,ENGINE e, void* param):m_sys(s),t(0),terminated(false),
-	mutexListeners("Input listeners"),mutexDragged("Input dragged"),curDragged(NULL)
+	mutexListeners("Input listeners"),mutexDragged("Input dragged"),curDragged(NULL),lastMouseDownTarget(NULL)
 {
 	LOG(LOG_NO_INFO,"Creating input thread");
 	if(e==SDL)
@@ -699,11 +713,31 @@ void* InputThread::sdl_worker(InputThread* th)
 				int index=lrint(th->listeners.size()*selected);
 				index--;
 
+				th->lastMouseDownTarget=th->listeners[index];
 				//Add event to the event queue
-				sys->currentVm->addEvent(th->listeners[index],Class<Event>::getInstanceS("mouseDown"));
+				sys->currentVm->addEvent(th->listeners[index],Class<Event>::getInstanceS("mouseDown",true));
 				//And select that object for debugging (if needed)
 				if(sys->showDebug)
 					sys->renderThread->selectedDebug=th->listeners[index];
+				break;
+			}
+			case SDL_MOUSEBUTTONUP:
+			{
+				Locker locker(th->mutexListeners);
+				sys->renderThread->requestInput();
+				float selected=sys->renderThread->getIdAt(event.button.x,event.button.y);
+
+				int index=lrint(th->listeners.size()*selected);
+				index--;
+
+				//Add event to the event queue
+				getVm()->addEvent(th->listeners[index],Class<Event>::getInstanceS("mouseUp",true));
+				//Also send the click event
+				if(th->lastMouseDownTarget==th->listeners[index])
+				{
+					getVm()->addEvent(th->listeners[index],Class<Event>::getInstanceS("click",true));
+					th->lastMouseDownTarget=NULL;
+				}
 				break;
 			}
 			case SDL_QUIT:
@@ -768,20 +802,6 @@ void InputThread::removeListener(InteractiveObject* ob)
 	}
 }
 
-void InputThread::broadcastEvent(const tiny_string& t)
-{
-	Event* e=Class<Event>::getInstanceS(t);
-	Locker locker(mutexListeners);
-	assert(e->getRefCount()==1);
-	for(unsigned int i=0;i<listeners.size();i++)
-	{
-		if(listeners[i]->getObjectType()==T_MOVIECLIP)
-			sys->currentVm->addEvent(listeners[i],e);
-	}
-	e->check();
-	e->decRef();
-}
-
 void InputThread::enableDrag(Sprite* s, const lightspark::RECT& limit)
 {
 	Locker locker(mutexDragged);
@@ -817,6 +837,33 @@ RenderThread::RenderThread(SystemState* s,ENGINE e,void* params):m_sys(s),termin
 	m_sys=s;
 	sem_init(&render,0,0);
 	sem_init(&inputDone,0,0);
+
+#ifdef WIN32
+	fontPath = "TimesNewRoman.ttf"
+#else
+	FcPattern *pat, *match;
+	FcResult result = FcResultMatch;
+	char *font = NULL;
+
+	pat = FcPatternCreate();
+	FcPatternAddString(pat, FC_FAMILY, (const FcChar8 *)"Serif");
+	FcConfigSubstitute(NULL, pat, FcMatchPattern);
+	FcDefaultSubstitute(pat);
+	match = FcFontMatch(NULL, pat, &result);
+	FcPatternDestroy(pat);
+
+	if (result != FcResultMatch)
+	{
+		LOG(LOG_ERROR,"Unable to find suitable Serif font");
+		throw RunTimeException("Unable to find Serif font");
+	}
+
+	FcPatternGetString(match, FC_FILE, 0, (FcChar8 **) &font);
+	fontPath = font;
+	FcPatternDestroy(match);
+	LOG(LOG_NO_INFO, "Font File is " << fontPath);
+#endif
+
 	if(e==SDL)
 		pthread_create(&t,NULL,(thread_worker)sdl_worker,this);
 #ifdef COMPILE_PLUGIN
@@ -933,7 +980,7 @@ void* RenderThread::gtkplug_worker(RenderThread* th)
 	GtkWidget* container=p->container;
 	gtk_widget_show(container);
 	gdk_gl_init(0, 0);
-	GdkGLConfig* glConfig=gdk_gl_config_new_by_mode((GdkGLConfigMode)(GDK_GL_MODE_RGBA|GDK_GL_MODE_DOUBLE|GDK_GL_MODE_DEPTH));
+	GdkGLConfig* glConfig=gdk_gl_config_new_by_mode((GdkGLConfigMode)(GDK_GL_MODE_RGBA|GDK_GL_MODE_DOUBLE));
 	assert_and_throw(glConfig);
 	
 	GtkWidget* drawing_area = gtk_drawing_area_new ();
@@ -949,9 +996,12 @@ void* RenderThread::gtkplug_worker(RenderThread* th)
 	th->commonGLInit(window_width, window_height);
 	ThreadProfile* profile=sys->allocateProfiler(RGB(200,0,0));
 	profile->setTag("Render");
-	FTTextureFont font("/usr/share/fonts/truetype/ttf-liberation/LiberationSerif-Regular.ttf");
+	FTTextureFont font(rt->fontPath.c_str());
 	if(font.Error())
+	{
+		LOG(LOG_ERROR,"Unable to find /usr/share/fonts/truetype/ttf-liberation/LiberationSerif-Regular.ttf");
 		throw RunTimeException("Unable to load font");
+	}
 	
 	font.FaceSize(20);
 
@@ -1117,13 +1167,13 @@ void* RenderThread::npapi_worker(RenderThread* th)
 		LOG(LOG_ERROR,"glX not present");
 		return NULL;
 	}
-	int attrib[10]={GLX_BUFFER_SIZE,24,GLX_DEPTH_SIZE,24,None};
+	int attrib[10]={GLX_BUFFER_SIZE,24,GLX_DOUBLEBUFFER,True,None};
 	GLXFBConfig* fb=glXChooseFBConfig(d, 0, attrib, &a);
 	if(!fb)
 	{
 		attrib[2]=None;
 		fb=glXChooseFBConfig(d, 0, attrib, &a);
-		LOG(LOG_ERROR,"Falling back to no depth buffer");
+		LOG(LOG_ERROR,"Falling back to no double buffering");
 	}
 	if(!fb)
 	{
@@ -1156,9 +1206,12 @@ void* RenderThread::npapi_worker(RenderThread* th)
 	
 	ThreadProfile* profile=sys->allocateProfiler(RGB(200,0,0));
 	profile->setTag("Render");
-	FTTextureFont font("/usr/share/fonts/truetype/ttf-liberation/LiberationSerif-Regular.ttf");
+	FTTextureFont font(rt->fontPath.c_str());
 	if(font.Error())
+	{
+		LOG(LOG_ERROR,"Unable to load serif font");
 		throw RunTimeException("Unable to load font");
+	}
 	
 	font.FaceSize(20);
 
@@ -1229,8 +1282,7 @@ void* RenderThread::npapi_worker(RenderThread* th)
 
 				RGB bg=sys->getBackground();
 				glClearColor(bg.Red/255.0F,bg.Green/255.0F,bg.Blue/255.0F,0);
-				glClearDepth(0xffff);
-				glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
+				glClear(GL_COLOR_BUFFER_BIT);
 				glLoadIdentity();
 				glScalef(scalex,scaley,1);
 				
@@ -1313,7 +1365,10 @@ bool RenderThread::loadShaderPrograms()
 	const char *fs = NULL;
 	fs = dataFileRead(DATADIR "/lightspark.frag");
 	if(fs==NULL)
+	{
+		LOG(LOG_ERROR,"Shader " DATADIR "/lightspark.frag not found");
 		throw RunTimeException("Fragment shader code not found");
+	}
 	assert(glShaderSource);
 	glShaderSource(f, 1, &fs,NULL);
 	free((void*)fs);
@@ -1347,7 +1402,10 @@ bool RenderThread::loadShaderPrograms()
 
 	fs = dataFileRead(DATADIR "/lightspark.vert");
 	if(fs==NULL)
+	{
+		LOG(LOG_ERROR,"Shader " DATADIR "/lightspark.vert not found");
 		throw RunTimeException("Vertex shader code not found");
+	}
 	glShaderSource(v, 1, &fs,NULL);
 	free((void*)fs);
 
@@ -1458,9 +1516,6 @@ void RenderThread::commonGLInit(int width, int height)
 	//Load shaders
 	loadShaderPrograms();
 
-	glDisable(GL_DEPTH_TEST);
-	glDepthFunc(GL_ALWAYS);
-
 	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 	glEnable(GL_BLEND);
 	
@@ -1532,7 +1587,6 @@ void* RenderThread::sdl_worker(RenderThread* th)
 	SDL_GL_SetAttribute( SDL_GL_RED_SIZE, 8 );
 	SDL_GL_SetAttribute( SDL_GL_GREEN_SIZE, 8 );
 	SDL_GL_SetAttribute( SDL_GL_BLUE_SIZE, 8 );
-	SDL_GL_SetAttribute( SDL_GL_DEPTH_SIZE, 24 );
 	SDL_GL_SetAttribute( SDL_GL_SWAP_CONTROL, 0 );
 	SDL_GL_SetAttribute( SDL_GL_ACCELERATED_VISUAL, 1); 
 	SDL_GL_SetAttribute( SDL_GL_DOUBLEBUFFER, 1 );
@@ -1542,7 +1596,7 @@ void* RenderThread::sdl_worker(RenderThread* th)
 
 	ThreadProfile* profile=sys->allocateProfiler(RGB(200,0,0));
 	profile->setTag("Render");
-	FTTextureFont font("/usr/share/fonts/truetype/ttf-liberation/LiberationSerif-Regular.ttf");
+	FTTextureFont font(rt->fontPath.c_str());
 	if(font.Error())
 		throw RunTimeException("Unable to load font");
 	
@@ -1761,9 +1815,6 @@ lightspark::RECT RootMovieClip::getFrameSize() const
 void RootMovieClip::setFrameRate(float f)
 {
 	frameRate=f;
-	//Now frame rate is valid, start the rendering
-
-	sys->addTick(1000/f,this);
 	sem_post(&sem_valid_rate);
 }
 
@@ -1819,6 +1870,13 @@ void RootMovieClip::commitFrame(bool another)
 	{
 		//Let's initialize the first frame of this movieclip
 		bootstrap();
+		//TODO Should dispatch INIT here
+		//Root movie clips are initialized now, after the first frame is really ready 
+		initialize();
+		//Now the bindings are effective
+
+		//When the first frame is committed the frame rate is known
+		sys->addTick(1000/frameRate,this);
 	}
 	sem_post(&new_frame);
 }
@@ -1864,21 +1922,36 @@ DictionaryTag* RootMovieClip::dictionaryLookup(int id)
 
 void RootMovieClip::tick()
 {
-	advanceFrame();
-	//Get a copy of the current childs
-	vector<MovieClip*> curChildren;
+	//Frame advancement may cause exceptions
+	try
 	{
-		Locker l(mutexChildrenClips);
-		curChildren.reserve(childrenClips.size());
-		curChildren.insert(curChildren.end(),childrenClips.begin(),childrenClips.end());
+		advanceFrame();
+		Event* e=Class<Event>::getInstanceS("enterFrame");
+		if(hasEventListener("enterFrame"))
+			getVm()->addEvent(this,e);
+		//Get a copy of the current childs
+		vector<MovieClip*> curChildren;
+		{
+			Locker l(mutexChildrenClips);
+			curChildren.reserve(childrenClips.size());
+			curChildren.insert(curChildren.end(),childrenClips.begin(),childrenClips.end());
+			for(uint32_t i=0;i<curChildren.size();i++)
+				curChildren[i]->incRef();
+		}
+		//Advance all the children, and release the reference
 		for(uint32_t i=0;i<curChildren.size();i++)
-			curChildren[i]->incRef();
+		{
+			curChildren[i]->advanceFrame();
+			if(curChildren[i]->hasEventListener("enterFrame"))
+				getVm()->addEvent(curChildren[i],e);
+			curChildren[i]->decRef();
+		}
+		e->decRef();
 	}
-	//Advance all the children, and release the reference
-	for(uint32_t i=0;i<curChildren.size();i++)
+	catch(LightsparkException& e)
 	{
-		curChildren[i]->advanceFrame();
-		curChildren[i]->decRef();
+		LOG(LOG_ERROR,"Exception in RootMovieClip::tick " << e.cause);
+		sys->setError(e.cause);
 	}
 }
 

@@ -26,6 +26,7 @@
 #include <list>
 #include <map>
 #include <semaphore.h>
+#include <string>
 #include <FTGL/ftgl.h>
 #include "swftypes.h"
 #include "frame.h"
@@ -33,6 +34,7 @@
 #include "flashdisplay.h"
 #include "timer.h"
 #include "graphics.h"
+#include "sound.h"
 
 #include <GL/glew.h>
 #ifndef WIN32
@@ -86,6 +88,7 @@ protected:
 	sem_t mutex;
 	bool initialized;
 	tiny_string origin;
+	void tick();
 private:
 	//Semaphore to wait for new frames to be available
 	sem_t new_frame;
@@ -101,7 +104,6 @@ private:
 	Mutex mutexFrames;
 	bool toBind;
 	tiny_string bindName;
-	void tick();
 	Mutex mutexChildrenClips;
 	std::set<MovieClip*> childrenClips;
 public:
@@ -203,6 +205,7 @@ public:
 	ABCVm* currentVm;
 	InputThread* inputThread;
 	RenderThread* renderThread;
+	SoundManager* soundManager;
 	//Application starting time in milliseconds
 	uint64_t startTime;
 
@@ -210,14 +213,6 @@ public:
 	std::map<tiny_string, Class_base*> classes;
 	bool finalizingDestruction;
 	std::vector<Tag*> tagsStorage;
-
-	//DEBUG
-	std::vector<tiny_string> events_name;
-	void dumpEvents()
-	{
-		for(unsigned int i=0;i<events_name.size();i++)
-			std::cout << events_name[i] << std::endl;
-	}
 
 	//Flags for command line options
 	bool useInterpreter;
@@ -285,6 +280,7 @@ private:
 	Mutex mutexDragged;
 
 	Sprite* curDragged;
+	InteractiveObject* lastMouseDownTarget;
 	RECT dragLimit;
 public:
 	InputThread(SystemState* s,ENGINE e, void* param=NULL);
@@ -292,7 +288,6 @@ public:
 	void wait();
 	void addListener(InteractiveObject* ob);
 	void removeListener(InteractiveObject* ob);
-	void broadcastEvent(const tiny_string& type);
 	void enableDrag(Sprite* s, const RECT& limit);
 	void disableDrag();
 };
@@ -314,6 +309,7 @@ private:
 	sem_t render;
 	sem_t inputDone;
 	bool inputNeeded;
+	std::string fontPath;
 
 #ifndef WIN32
 	Display* mDisplay;

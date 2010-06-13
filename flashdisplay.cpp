@@ -430,7 +430,6 @@ void MovieClip::buildTraits(ASObject* o)
 
 MovieClip::MovieClip():framesLoaded(1),totalFrames(1),cur_frame(NULL)
 {
-	type=T_MOVIECLIP;
 	//It's ok to initialize here framesLoaded=1, as it is valid and empty
 	//RooMovieClip() will reset it, as stuff loaded dynamically needs frames to be committed
 	frames.push_back(Frame());
@@ -572,10 +571,15 @@ ASFUNCTIONBODY(MovieClip,_constructor)
 
 void MovieClip::advanceFrame()
 {
-	if(!state.stop_FP || state.explicit_FP)
+	if((!state.stop_FP || state.explicit_FP) && totalFrames!=0 && getPrototype()->isSubClass(Class<MovieClip>::getClass()))
 	{
+		//If we have not yet loaded enough frames delay advancement
+		if(state.next_FP>=framesLoaded)
+		{
+			LOG(LOG_NOT_IMPLEMENTED,"Not enough frames loaded");
+			return;
+		}
 		//Before assigning the next_FP we initialize the frame
-		assert_and_throw(state.next_FP<frames.size());
 		//Should initialize all the frames from the current to the next
 		for(uint32_t i=(state.FP+1);i<=state.next_FP;i++)
 			frames[i].init(this,displayList);
@@ -774,7 +778,7 @@ bool MovieClip::getBounds(number_t& xmin, number_t& xmax, number_t& ymin, number
 	return false;
 }
 
-DisplayObject::DisplayObject():useMatrix(true),tx(0),ty(0),rotation(0),sx(1),sy(1),root(NULL),loaderInfo(NULL),
+DisplayObject::DisplayObject():useMatrix(true),tx(0),ty(0),rotation(0),sx(1),sy(1),onStage(false),root(NULL),loaderInfo(NULL),
 	alpha(1.0),visible(true),parent(NULL)
 {
 }
@@ -875,6 +879,29 @@ void DisplayObject::setRoot(RootMovieClip* r)
 	{
 		assert_and_throw(root==NULL);
 		root=r;
+	}
+}
+
+void DisplayObject::setOnStage(bool staged)
+{
+	if(staged!=onStage)
+	{
+		//Our stage condition changed, send event
+		onStage=staged;
+		if(getVm()==NULL)
+			return;
+		if(onStage==true && hasEventListener("addedToStage"))
+		{
+			Event* e=Class<Event>::getInstanceS("addedToStage");
+			getVm()->addEvent(this,e);
+			e->decRef();
+		}
+		else if(onStage==false && hasEventListener("removedFromStage"))
+		{
+			Event* e=Class<Event>::getInstanceS("removedFromStage");
+			getVm()->addEvent(this,e);
+			e->decRef();
+		}
 	}
 }
 
@@ -1322,6 +1349,18 @@ void DisplayObjectContainer::setRoot(RootMovieClip* r)
 	}
 }
 
+void DisplayObjectContainer::setOnStage(bool staged)
+{
+	if(staged!=onStage)
+	{
+		DisplayObject::setOnStage(staged);
+		//Notify childern
+		list<DisplayObject*>::const_iterator it=dynamicDisplayList.begin();
+		for(;it!=dynamicDisplayList.end();it++)
+			(*it)->setOnStage(staged);
+	}
+}
+
 ASFUNCTIONBODY(DisplayObjectContainer,_constructor)
 {
 	InteractiveObject::_constructor(obj,NULL,0);
@@ -1365,7 +1404,9 @@ void DisplayObjectContainer::_addChildAt(DisplayObject* child, unsigned int inde
 		//We acquire a reference to the child
 		child->incRef();
 	}
+
 	sem_post(&sem_displayList);
+	child->setOnStage(onStage);
 }
 
 void DisplayObjectContainer::_removeChild(DisplayObject* child)
@@ -1380,9 +1421,10 @@ void DisplayObjectContainer::_removeChild(DisplayObject* child)
 	assert_and_throw(it!=dynamicDisplayList.end());
 	dynamicDisplayList.erase(it);
 	//We can release the reference to the child
-	child->decRef();
 	sem_post(&sem_displayList);
 	child->parent=NULL;
+	child->setOnStage(false);
+	child->decRef();
 }
 
 bool DisplayObjectContainer::_contains(DisplayObject* d)
@@ -1434,7 +1476,7 @@ ASFUNCTIONBODY(DisplayObjectContainer,addChildAt)
 
 	//Notify the object
 	d->incRef();
-	sys->currentVm->addEvent(d,Class<Event>::getInstanceS("added",d));
+	sys->currentVm->addEvent(d,Class<Event>::getInstanceS("added"));
 
 	return d;
 }
@@ -1453,7 +1495,7 @@ ASFUNCTIONBODY(DisplayObjectContainer,addChild)
 
 	//Notify the object
 	d->incRef();
-	sys->currentVm->addEvent(d,Class<Event>::getInstanceS("added",d));
+	sys->currentVm->addEvent(d,Class<Event>::getInstanceS("added"));
 
 	return d;
 }
@@ -1847,7 +1889,7 @@ ASFUNCTIONBODY(Graphics,beginFill)
 
 ASFUNCTIONBODY(Graphics,endFill)
 {
-	Graphics* th=static_cast<Graphics*>(obj);
+//	Graphics* th=static_cast<Graphics*>(obj);
 	//TODO: close the path if open
 	return NULL;
 }

@@ -419,7 +419,6 @@ multiname* ABCContext::s_getMultiname(call_context* th, ASObject* rt1, int n)
 				}
 				else if(rt1->getObjectType()==T_OBJECT 
 						|| rt1->getObjectType()==T_CLASS
-						|| rt1->getObjectType()==T_MOVIECLIP
 						|| rt1->getObjectType()==T_FUNCTION)
 				{
 					ret->name_o=rt1;
@@ -510,7 +509,6 @@ multiname* ABCContext::s_getMultiname(call_context* th, ASObject* rt1, int n)
 				}
 				else if(rt1->getObjectType()==T_OBJECT 
 						|| rt1->getObjectType()==T_CLASS
-						|| rt1->getObjectType()==T_MOVIECLIP
 						|| rt1->getObjectType()==T_FUNCTION)
 				{
 					ret->name_o=rt1;
@@ -705,7 +703,6 @@ multiname* ABCContext::getMultiname(unsigned int n, call_context* th)
 				}
 				else if(n->getObjectType()==T_OBJECT ||
 						n->getObjectType()==T_CLASS ||
-						n->getObjectType()==T_MOVIECLIP ||
 						n->getObjectType()==T_FUNCTION)
 				{
 					ret->name_o=n;
@@ -810,7 +807,6 @@ multiname* ABCContext::getMultiname(unsigned int n, call_context* th)
 				}
 				else if(n->getObjectType()==T_OBJECT 
 						|| n->getObjectType()==T_CLASS
-						|| n->getObjectType()==T_MOVIECLIP
 						|| n->getObjectType()==T_FUNCTION)
 				{
 					ret->name_o=n;
@@ -985,7 +981,24 @@ void ABCVm::handleEvent(pair<EventDispatcher*,Event*> e)
 	e.second->check();
 	if(e.first)
 	{
-		e.first->handleEvent(e.second);
+		//TODO: implement capture phase
+		//Do target phase
+		Event* event=e.second;
+		assert_and_throw(event->target==NULL);
+		event->target=e.first;
+		event->currentTarget=e.first;
+		e.first->handleEvent(event);
+		//Do bubbling phase
+		if(event->bubbles && e.first->prototype->isSubClass(Class<DisplayObject>::getClass()))
+		{
+			DisplayObjectContainer* cur=static_cast<DisplayObject*>(e.first)->parent;
+			while(cur)
+			{
+				event->currentTarget=cur;
+				cur->handleEvent(event);
+				cur=cur->parent;
+			}
+		}
 		e.first->decRef();
 	}
 	else
@@ -1159,8 +1172,7 @@ bool lightspark::Boolean_concrete(ASObject* obj)
 		LOG(LOG_CALLS,"Boolean to bool " << b->val);
 		return b->val;
 	}
-	else if(obj->getObjectType()==T_OBJECT ||
-			obj->getObjectType()==T_MOVIECLIP)
+	else if(obj->getObjectType()==T_OBJECT)
 	{
 		LOG(LOG_CALLS,"Object to bool");
 		return true;

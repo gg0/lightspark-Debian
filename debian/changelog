@@ -1,4 +1,4 @@
-lightspark (0.4.1-1~exp0) experimental; urgency=low
+lightspark (0.4.1+git20100613+g9ff006a-1~exp0) experimental; urgency=low
 
   * Initial upload to Debian (Closes: #582120)
     - Re-use upstream's PPA packaging. Thanks to Alessandro Pignotti !

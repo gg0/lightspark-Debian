@@ -8,7 +8,9 @@ lightspark (0.4.1+git20100613+g9ff006a-1~exp0) experimental; urgency=low
     - Arch is any
     - Use llvm-2.7-dev in addition to llvm-dev (> 2.7)
     - Correct "we" typos
-  * Add a -dbg package.
+  * New packages: 
+    - -dbg package
+    - lib*{,-dev} packages
   * debian/copyright: Update.
   * debian/watch: Update using Launchpad.net
   * Move from cdbs to dh7 tiny style
@@ -16,7 +18,7 @@ lightspark (0.4.1+git20100613+g9ff006a-1~exp0) experimental; urgency=low
     - Remove empty README.Debian
   * Use 3.0 (quilt) source package format.
 
- -- Didier Raboud <didier@raboud.com>  Mon, 31 May 2010 16:07:22 +0200
+ -- Didier Raboud <didier@raboud.com>  Sun, 13 Jun 2010 19:46:43 +0200
 
 lightspark (0.4.1-0ubuntu1) lucid; urgency=low
 

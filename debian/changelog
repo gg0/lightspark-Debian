@@ -1,22 +1,26 @@
-lightspark (0.4.1+git20100613+g9ff006a-1~exp0) experimental; urgency=low
+lightspark (0.4.1+git20100613+g9ff006a-1~exp0) UNRELEASED; urgency=low
 
-  * Initial upload to Debian (Closes: #582120)
+  [ Didier Raboud ]
+  * Initial upload to Debian (Closes: #582120).
     - Re-use upstream's PPA packaging. Thanks to Alessandro Pignotti !
   * debian/control:
     - Set myself as Maintainer, put DMUA.
     - Adapt Vcs-* fields to Debian's collab-maint.
-    - Arch is any
-    - Use llvm-2.7-dev in addition to llvm-dev (> 2.7)
-    - Correct "we" typos
+    - Arch is any.
+    - Use llvm-2.7-dev in addition to llvm-dev (> 2.7).
+    - Correct "we" typos.
   * New packages: 
-    - -dbg package
-    - lib*{,-dev} packages
+    - -dbg package.
+    - lib*{,-dev} packages.
   * debian/copyright: Update.
-  * debian/watch: Update using Launchpad.net
-  * Move from cdbs to dh7 tiny style
+  * debian/watch: Update using Launchpad.net.
+  * Move from cdbs to dh7 tiny style.
   * Cleanup:
-    - Remove empty README.Debian
+    - Remove empty README.Debian.
   * Use 3.0 (quilt) source package format.
+
+  [ Luca Falavigna ]
+  * Add myself to Uploaders.
 
  -- Didier Raboud <didier@raboud.com>  Sun, 13 Jun 2010 19:46:43 +0200
 

@@ -49,6 +49,7 @@ void IEventDispatcher::linkTraits(ASObject* o)
 	lookupAndLink(o,"addEventListener","flash.events:IEventDispatcher");
 	lookupAndLink(o,"removeEventListener","flash.events:IEventDispatcher");
 	lookupAndLink(o,"dispatchEvent","flash.events:IEventDispatcher");
+	lookupAndLink(o,"hasEventListener","flash.events:IEventDispatcher");
 }
 
 Event::Event(const tiny_string& t, bool b):type(t),target(NULL),currentTarget(NULL),bubbles(b)
@@ -78,6 +79,7 @@ void Event::sinit(Class_base* c)
 	c->setVariableByQName("CHANGE","",Class<ASString>::getInstanceS("change"));
 	c->setVariableByQName("RESIZE","",Class<ASString>::getInstanceS("resize"));
 	c->setVariableByQName("MOUSE_LEAVE","",Class<ASString>::getInstanceS("mouseLeave"));
+	c->setVariableByQName("SELECT","",Class<ASString>::getInstanceS("select"));
 	c->setVariableByQName("TAB_CHILDREN_CHANGE","",Class<ASString>::getInstanceS("tabChildrenChange"));
 	c->setVariableByQName("TAB_ENABLED_CHANGE","",Class<ASString>::getInstanceS("tabEnabledChange"));
 	c->setVariableByQName("TAB_INDEX_CHANGE","",Class<ASString>::getInstanceS("tabIndexChange"));
@@ -221,6 +223,8 @@ void EventDispatcher::sinit(Class_base* c)
 {
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
 	c->addImplementedInterface(Class<IEventDispatcher>::getClass());
+	c->super=Class<ASObject>::getClass();
+	c->max_level=c->super->max_level+1;
 }
 
 void EventDispatcher::buildTraits(ASObject* o)

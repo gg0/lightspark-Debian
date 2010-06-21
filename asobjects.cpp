@@ -240,6 +240,7 @@ ASFUNCTIONBODY(Array,_sort)
 	if(th->data.size()>1)
 		throw UnsupportedException("Array::sort not completely implemented");
 	LOG(LOG_NOT_IMPLEMENTED,"Array::sort not really implemented");
+	obj->incRef();
 	return obj;
 }
 
@@ -250,6 +251,7 @@ ASFUNCTIONBODY(Array,sortOn)
 /*	if(th->data.size()>1)
 		throw UnsupportedException("Array::sort not completely implemented");
 	LOG(LOG_NOT_IMPLEMENTED,"Array::sort not really implemented");*/
+	obj->incRef();
 	return obj;
 }
 
@@ -733,7 +735,7 @@ tiny_string Array::toString_priv() const
 		if(i!=data.size()-1)
 			ret+=',';
 	}
-	return ret.c_str();
+	return ret;
 }
 
 bool Array::nextValue(unsigned int index, ASObject*& out)
@@ -765,7 +767,7 @@ tiny_string Boolean::toString(bool debugMsg)
 
 tiny_string ASString::toString_priv() const
 {
-	return data.c_str();
+	return data;
 }
 
 tiny_string ASString::toString(bool debugMsg)
@@ -897,6 +899,11 @@ bool Integer::isLess(ASObject* o)
 		else
 			return false;
 	}
+	else if(o->getObjectType()==T_BOOLEAN)
+	{
+		Boolean* i=static_cast<Boolean*>(o);
+		return val < i->toInt();
+	}
 	else
 		return ASObject::isLess(o);
 }
@@ -938,7 +945,7 @@ tiny_string Integer::toString(bool debugMsg)
 		v/=10;
 	}
 	while(v!=0);
-	return cur;
+	return tiny_string(cur,true); //Create a copy
 }
 
 tiny_string UInteger::toString(bool debugMsg)
@@ -955,7 +962,7 @@ tiny_string UInteger::toString(bool debugMsg)
 		v/=10;
 	}
 	while(v!=0);
-	return cur;
+	return tiny_string(cur,true); //Create a copy
 }
 
 bool UInteger::isLess(ASObject* o)
@@ -1007,7 +1014,7 @@ tiny_string Number::toString(bool debugMsg)
 {
 	char buf[20];
 	snprintf(buf,20,"%g",val);
-	return buf;
+	return tiny_string(buf,true);
 }
 
 Date::Date():year(-1),month(-1),date(-1),hour(-1),minute(-1),second(-1),millisecond(-1)
@@ -1393,7 +1400,7 @@ bool Null::isEqual(ASObject* r)
 		return false;
 }
 
-RegExp::RegExp():global(false),ignoreCase(false),lastIndex(0)
+RegExp::RegExp():global(false),ignoreCase(false),extended(false),lastIndex(0)
 {
 }
 
@@ -1426,9 +1433,11 @@ ASFUNCTIONBODY(RegExp,_constructor)
 				case 'i':
 					th->ignoreCase=true;
 					break;
+				case 'x':
+					th->extended=true;
+					break;
 				case 's':
 				case 'm':
-				case 'x':
 					throw UnsupportedException("RegExp not completely implemented");
 
 			}
@@ -1448,6 +1457,7 @@ ASFUNCTIONBODY(RegExp,exec)
 	RegExp* th=static_cast<RegExp*>(obj);
 	pcrecpp::RE_Options opt;
 	opt.set_caseless(th->ignoreCase);
+	opt.set_extended(th->extended);
 
 	pcrecpp::RE pcreRE(th->re,opt);
 	assert_and_throw(th->lastIndex==0);
@@ -1479,6 +1489,7 @@ ASFUNCTIONBODY(RegExp,test)
 	RegExp* th=static_cast<RegExp*>(obj);
 	pcrecpp::RE_Options opt;
 	opt.set_caseless(th->ignoreCase);
+	opt.set_extended(th->extended);
 
 	pcrecpp::RE pcreRE(th->re,opt);
 	assert_and_throw(th->lastIndex==0);
@@ -1581,6 +1592,7 @@ ASFUNCTIONBODY(ASString,replace)
 
 		pcrecpp::RE_Options opt;
 		opt.set_caseless(re->ignoreCase);
+		opt.set_extended(re->extended);
 		pcrecpp::RE pcreRE(re->re,opt);
 		if(re->global)
 			pcreRE.GlobalReplace(replaceWith,&ret->data);

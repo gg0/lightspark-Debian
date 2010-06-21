@@ -25,7 +25,7 @@
 #include <llvm/ExecutionEngine/ExecutionEngine.h>
 #include <llvm/Support/IRBuilder.h>
 #include <llvm/PassManagers.h> 
-#include <llvm/LLVMContext.h> 
+#include <llvm/LLVMContext.h>
 #include "tags.h"
 #include "frame.h"
 #include "logger.h"
@@ -113,7 +113,7 @@ private:
 	u30 size;
 	tiny_string val;
 public:
-	operator tiny_string() const{return val;}
+	operator const tiny_string&() const{return val;}
 };
 
 struct namespace_info
@@ -385,7 +385,7 @@ friend class ABCVm;
 friend class method_info;
 private:
 	method_info* get_method(unsigned int m);
-	tiny_string getString(unsigned int s) const;
+	const tiny_string& getString(unsigned int s) const;
 	//Qname getQname(unsigned int m, call_context* th=NULL) const;
 	static multiname* s_getMultiname(call_context*, ASObject*, int m);
 	static multiname* s_getMultiname_i(call_context*, uintptr_t i , int m);
@@ -412,7 +412,7 @@ public:
 	void getOptionalConstant(const option_detail& opt);
 	multiname* getMultiname(unsigned int m, call_context* th);
 	void buildInstanceTraits(ASObject* obj, int class_index);
-	ABCContext(std::istream& in);
+	ABCContext(std::istream& in) DLL_PUBLIC;
 	void exec();
 };
 
@@ -607,13 +607,13 @@ public:
 	llvm::ExecutionEngine* ex;
 	llvm::FunctionPassManager* FPM;
 	llvm::LLVMContext llvm_context;
-	ABCVm(SystemState* s);
-	~ABCVm();
+	ABCVm(SystemState* s) DLL_PUBLIC;
+	~ABCVm() DLL_PUBLIC;
 	static void Run(ABCVm* th);
 	static ASObject* executeFunction(SyntheticFunction* function, call_context* context);
-	bool addEvent(EventDispatcher*,Event*);
+	bool addEvent(EventDispatcher*,Event*) DLL_PUBLIC;
 	int getEventQueueSize();
-	void wait();
+	void wait() DLL_PUBLIC;
 
 	void pushObjAndLevel(ASObject* o, int l);
 	thisAndLevel popObjAndLevel();

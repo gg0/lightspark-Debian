@@ -1257,6 +1257,7 @@ void DisplayObjectContainer::buildTraits(ASObject* o)
 	o->setVariableByQName("getChildAt","",Class<IFunction>::getFunction(getChildAt));
 	o->setVariableByQName("addChild","",Class<IFunction>::getFunction(addChild));
 	o->setVariableByQName("removeChild","",Class<IFunction>::getFunction(removeChild));
+	o->setVariableByQName("removeChildAt","",Class<IFunction>::getFunction(removeChildAt));
 	o->setVariableByQName("addChildAt","",Class<IFunction>::getFunction(addChildAt));
 	o->setVariableByQName("contains","",Class<IFunction>::getFunction(contains));
 	o->setSetterByQName("mouseChildren","",Class<IFunction>::getFunction(undefinedFunction));
@@ -1512,8 +1513,36 @@ ASFUNCTIONBODY(DisplayObjectContainer,removeChild)
 
 	th->_removeChild(d);
 
-	//As we return the child we don't decRef it
+	//As we return the child we don't decRef it again
 	return d;
+}
+
+//Only from VM context
+ASFUNCTIONBODY(DisplayObjectContainer,removeChildAt)
+{
+	DisplayObjectContainer* th=static_cast<DisplayObjectContainer*>(obj);
+	assert_and_throw(argslen==1);
+	//Validate object type
+	int32_t index=args[0]->toInt();
+
+	sem_wait(&th->sem_displayList);
+	if(index>=int(th->dynamicDisplayList.size()) || index<0)
+	{
+		sem_post(&th->sem_displayList);
+		return NULL;
+	}
+	list<DisplayObject*>::iterator it=th->dynamicDisplayList.begin();
+	for(int32_t i=0;i<index;i++)
+		it++;
+	DisplayObject* child=*it;
+	th->dynamicDisplayList.erase(it);
+	//We can release the reference to the child
+	sem_post(&th->sem_displayList);
+	child->parent=NULL;
+	child->setOnStage(false);
+
+	//As we return the child we don't decRef it
+	return child;
 }
 
 //Only from VM context
@@ -1791,6 +1820,8 @@ ASFUNCTIONBODY(Graphics,lineTo)
 	int x=args[0]->toInt();
 	int y=args[1]->toInt();
 
+	//TODO: support line styles to avoid this
+	if(th->styles.size())
 	{
 		Locker locker(th->builderMutex);
 		th->builder.extendOutlineForColor(th->styles.size(),Vector2(th->curX,th->curY),Vector2(x,y));
@@ -1817,6 +1848,8 @@ ASFUNCTIONBODY(Graphics,drawCircle)
 	const Vector2 c(x+radius,y+radius);
 	const Vector2 d(x-radius,y+radius);
 
+	//TODO: support line styles to avoid this
+	if(th->styles.size())
 	{
 		Locker locker(th->builderMutex);
 		th->builder.extendOutlineForColor(th->styles.size(),a,b);
@@ -1843,6 +1876,8 @@ ASFUNCTIONBODY(Graphics,drawRect)
 	const Vector2 c(x+width,y+height);
 	const Vector2 d(x,y+height);
 
+	//TODO: support line styles to avoid this
+	if(th->styles.size())
 	{
 		Locker locker(th->builderMutex);
 		th->builder.extendOutlineForColor(th->styles.size(),a,b);

@@ -64,91 +64,116 @@ class tiny_string
 {
 friend std::ostream& operator<<(std::ostream& s, const tiny_string& r);
 private:
+	enum TYPE { READONLY=0, STATIC, DYNAMIC };
 	#define TS_SIZE 256
 	char _buf_static[TS_SIZE];
 	char* buf;
-	bool isStatic;
+	TYPE type;
 	//TODO: use static buffer again if reassigning to short string
-public:
-	tiny_string():buf(_buf_static),isStatic(true){buf[0]=0;}
-	tiny_string(const char* s):buf(_buf_static),isStatic(true)
+	void makePrivateCopy(const char* s)
 	{
+		resetToStatic();
 		if(strlen(s)>(TS_SIZE-1))
-		{
-			isStatic=false;
-			buf=new char[4096];
-		}
+			createBuffer();
 		assert_and_throw(strlen(s)<=4096);
 		strcpy(buf,s);
 	}
-	tiny_string(const tiny_string& r):buf(_buf_static),isStatic(true)
+	void createBuffer()
+	{
+		type=DYNAMIC;
+		buf=new char[4096];
+	}
+	void resetToStatic()
+	{
+		if(type==DYNAMIC)
+			delete[] buf;
+		buf=_buf_static;
+		type=STATIC;
+	}
+public:
+	tiny_string():buf(_buf_static),type(STATIC){buf[0]=0;}
+	tiny_string(const char* s,bool copy=false):buf(_buf_static),type(READONLY)
+	{
+		if(copy)
+			makePrivateCopy(s);
+		else
+			buf=(char*)s; //This is an unsafe conversion, we have to take care of the RO data
+	}
+	tiny_string(const tiny_string& r):buf(_buf_static),type(STATIC)
 	{
 		if(strlen(r.buf)>(TS_SIZE-1))
-		{
-			isStatic=false;
-			buf=new char[4096];
-		}
+			createBuffer();
 		assert_and_throw(strlen(r.buf)<=4096);
 		strcpy(buf,r.buf);
 	}
+	tiny_string(const std::string& r):buf(_buf_static),type(STATIC)
+	{
+		if(r.size()>(TS_SIZE-1))
+		{
+			createBuffer();
+			assert_and_throw(r.size()<=4096);
+		}
+		strcpy(buf,r.c_str());
+	}
 	~tiny_string()
 	{
-		if(isStatic==false)
-			delete[] buf;
+		resetToStatic();
 	}
-	explicit tiny_string(int i):buf(_buf_static),isStatic(true)
+	explicit tiny_string(int i):buf(_buf_static),type(STATIC)
 	{
 		sprintf(buf,"%i",i);
 	}
-	explicit tiny_string(number_t d):buf(_buf_static),isStatic(true)
+	explicit tiny_string(number_t d):buf(_buf_static),type(STATIC)
 	{
 		sprintf(buf,"%g",d);
 	}
 	tiny_string& operator=(const tiny_string& s)
 	{
+		resetToStatic();
 		if(s.len()>(TS_SIZE-1))
-		{
-			isStatic=false;
-			assert_and_throw(s.len()<=4096);
-			buf=new char[4096];
-		}
-		//Lenght is already checked
+			createBuffer();
+		//Lenght is already checked by the other tiny_string
 		strcpy(buf,s.buf);
 		return *this;
 	}
 	tiny_string& operator=(const std::string& s)
 	{
+		resetToStatic();
 		if(s.size()>(TS_SIZE-1))
 		{
-			isStatic=false;
+			createBuffer();
 			assert_and_throw(s.size()<=4096);
-			buf=new char[4096];
 		}
-		//Lenght is already checked
+		//Lenght is already checked by the assertion
 		strcpy(buf,s.c_str());
 		return *this;
 	}
 	tiny_string& operator=(const char* s)
 	{
-		if(strlen(s)>(TS_SIZE-1))
-		{
-			isStatic=false;
-			assert_and_throw(strlen(s)<=4096);
-			buf=new char[4096];
-		}
-		//Lenght is already checked
-		strcpy(buf,s);
+		resetToStatic();
+		type=READONLY;
+		buf=(char*)s; //This is an unsafe conversion, we have to take care of the RO data
 		return *this;
 	}
 	tiny_string& operator+=(const char* s)
 	{
 		assert_and_throw((strlen(buf)+strlen(s)+1)<TS_SIZE);
+		if(type==READONLY)
+		{
+			char* tmp=buf;
+			makePrivateCopy(tmp);
+		}
 		strcat(buf,s);
 		return *this;
 	}
 	tiny_string& operator+=(const tiny_string& r)
 	{
 		assert_and_throw((strlen(buf)+strlen(r.buf)+1)<TS_SIZE);
+		if(type==READONLY)
+		{
+			char* tmp=buf;
+			makePrivateCopy(tmp);
+		}
 		strcat(buf,r.buf);
 		return *this;
 	}
@@ -446,7 +471,7 @@ inline void atomic_decrement(int* operand)
 	__asm__ ("lock decl %0" : "+m" (*operand):);
 }
 
-class ASObject
+class DLL_PUBLIC ASObject
 {
 friend class Manager;
 friend class ABCVm;
@@ -467,6 +492,8 @@ private:
 	int cur_level;
 	virtual int _maxlevel();
 	Class_base* prototype;
+	obj_var* findGettable(const multiname& name, int& level) DLL_LOCAL;
+	obj_var* findSettable(const multiname& name, int& level) DLL_LOCAL;
 
 public:
 #ifndef NDEBUG
@@ -527,11 +554,7 @@ public:
 		if(o && o!=o2)
 			o->decRef();
 	}
-	virtual ASObject* getVariableByString(const std::string& name)
-	{
-		ASObject* ret=Variables.getVariableByString(name);
-		return ret;
-	}
+	virtual ASObject* getVariableByString(const std::string& name);
 	//The enableOverride parameter is set to false in setSuper, getSuper and callSuper
 	virtual objAndLevel getVariableByMultiname(const multiname& name, bool skip_impl=false, bool enableOverride=true );
 	virtual intptr_t getVariableByMultiname_i(const multiname& name);
@@ -539,7 +562,7 @@ public:
 	virtual void setVariableByMultiname_i(const multiname& name, intptr_t value);
 	virtual void setVariableByMultiname(const multiname& name, ASObject* o, bool enableOverride=true);
 	virtual void deleteVariableByMultiname(const multiname& name);
-	virtual void setVariableByQName(const tiny_string& name, const tiny_string& ns, ASObject* o, bool find_back=true, bool skip_impl=false);
+	virtual void setVariableByQName(const tiny_string& name, const tiny_string& ns, ASObject* o,bool find_back=true, bool skip_impl=false);
 	void setGetterByQName(const tiny_string& name, const tiny_string& ns, IFunction* o);
 	void setSetterByQName(const tiny_string& name, const tiny_string& ns, IFunction* o);
 	bool hasPropertyByMultiname(const multiname& name);
@@ -548,11 +571,11 @@ public:
 	{
 		return Variables.getSlot(n);
 	}
-	virtual void setSlot(unsigned int n,ASObject* o)
+	void setSlot(unsigned int n,ASObject* o)
 	{
 		Variables.setSlot(n,o);
 	}
-	virtual void initSlot(unsigned int n,const tiny_string& name, const tiny_string& ns);
+	void initSlot(unsigned int n,const tiny_string& name, const tiny_string& ns);
 	virtual unsigned int numVariables();
 	tiny_string getNameAt(int i)
 	{

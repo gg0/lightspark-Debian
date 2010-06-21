@@ -1,0 +1,13 @@
+Index: lightspark/CMakeLists.txt
+===================================================================
+--- lightspark.orig/CMakeLists.txt	2010-06-21 15:40:21.000000000 +0200
++++ lightspark/CMakeLists.txt	2010-06-21 15:40:37.000000000 +0200
+@@ -47,7 +47,7 @@
+ # Using relative folders, cmake happens by itself CMAKE_INSTALL_PREFIX
+ SET(BINDIR "bin")
+ SET(DATADIR "share")
+-SET(LIBDIR "lib${LIB_SUFFIX}")
++SET(LIBDIR "lib")
+ 
+ # Setting variables
+ SET(CMAKE_INSTALL_PREFIX "/usr" CACHE PATH "Install prefix")

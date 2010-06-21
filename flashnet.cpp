@@ -245,7 +245,7 @@ ASFUNCTIONBODY(NetConnection,connect)
 	return NULL;
 }
 
-NetStream::NetStream():frameRate(0),downloader(NULL),videoDecoder(NULL),audioDecoder(NULL),soundStreamId(0)
+NetStream::NetStream():frameRate(0),frameCount(0),downloader(NULL),videoDecoder(NULL),audioDecoder(NULL),soundStreamId(0)
 {
 	sem_init(&mutex,0,1);
 }
@@ -291,6 +291,7 @@ ASFUNCTIONBODY(NetStream,play)
 	assert_and_throw(argslen==1);
 	const tiny_string& arg0=args[0]->toString();
 	th->url = arg0;
+	assert_and_throw(th->downloader==NULL);
 	th->downloader=sys->downloadManager->download(th->url);
 	th->incRef();
 	sys->addJob(th);
@@ -300,8 +301,7 @@ ASFUNCTIONBODY(NetStream,play)
 ASFUNCTIONBODY(NetStream,close)
 {
 	NetStream* th=Class<NetStream>::cast(obj);
-	if(th->downloader)
-		th->downloader->stop();
+	//The downloader is stopped in threadAbort
 	th->threadAbort();
 	return NULL;
 }
@@ -323,14 +323,20 @@ NetStream::STREAM_TYPE NetStream::classifyStream(istream& s)
 //Tick is called from the timer thread, this happens only if a decoder is available
 void NetStream::tick()
 {
+	frameCount++;
 	//Discard the first frame, if available
 	//No mutex needed, ticking can happen only when decoder is valid
 	if(videoDecoder)
 		videoDecoder->discardFrame();
 	if(soundStreamId)
 	{
+		//The expected latency is frameRate
+		cout << "FrameCount " << frameCount << endl;
+		cout << "Expected index " << uint64_t(frameCount*44100/frameRate*4) << endl;
+#ifdef ENABLE_SOUND
 		assert(audioDecoder);
-		sys->soundManager->fillAndSinc(soundStreamId);
+		sys->soundManager->fillAndSinc(soundStreamId, uint64_t(frameCount*44100/frameRate*4));
+#endif
 	}
 }
 
@@ -371,6 +377,7 @@ void NetStream::execute()
 					{
 						AudioDataTag tag(s);
 						prevSize=tag.getTotalLen();
+#ifdef ENABLE_SOUND
 						if(audioDecoder)
 						{
 							assert_and_throw(audioCodec==tag.SoundFormat);
@@ -391,6 +398,7 @@ void NetStream::execute()
 							}
 							soundStreamId=sys->soundManager->createStream(audioDecoder);
 						}
+#endif
 						break;
 					}
 					case 9:
@@ -466,12 +474,14 @@ void NetStream::execute()
 	//This transition is critical, so the mutex is needed
 	//Before deleting stops ticking, removeJobs also spin waits for termination
 	sys->removeJob(this);
+	delete videoDecoder;
+	videoDecoder=NULL;
+#if ENABLE_SOUND
 	if(soundStreamId)
 		sys->soundManager->freeStream(soundStreamId);
-	delete videoDecoder;
 	delete audioDecoder;
-	videoDecoder=NULL;
 	audioDecoder=NULL;
+#endif
 	sem_post(&mutex);
 }
 

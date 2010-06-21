@@ -50,7 +50,7 @@ protected:
 	static void lookupAndLink(ASObject* o, const tiny_string& name, const tiny_string& interfaceNs);
 };
 
-class Class_base: public ASObject
+class DLL_PUBLIC Class_base: public ASObject
 {
 friend class ABCVm;
 friend class ABCContext;
@@ -79,7 +79,7 @@ public:
 	void handleConstruction(ASObject* target, ASObject* const* args, unsigned int argslen, bool buildAndLink);
 	void setConstructor(IFunction* c);
 	Class_base(const tiny_string& name):use_protected(false),constructor(NULL),referencedObjectsMutex("referencedObjects"),super(NULL),
-		context(NULL),class_name(name),class_index(-1),	max_level(0) {type=T_CLASS;}
+		context(NULL),class_name(name),class_index(-1),max_level(0) {type=T_CLASS;}
 	~Class_base();
 	virtual ASObject* getInstance(bool construct, ASObject* const* args, const unsigned int argslen)=0;
 	objAndLevel getVariableByMultiname(const multiname& name, bool skip_impl, bool enableOverride=true)
@@ -172,8 +172,6 @@ public:
 	tiny_string class_name;
 	objAndLevel getVariableByMultiname(const multiname& name, bool skip_impl=false, bool enableOverride=true)
 	{
-		if(name.name_s=="borderSkin")
-			std::cerr << "Looking for borderSkin on " << this << std::endl;
 		objAndLevel ret=Class_base::getVariableByMultiname(name,skip_impl, enableOverride);
 		if(ret.obj==NULL && asprototype)
 			ret=asprototype->getVariableByMultiname(name,skip_impl, enableOverride);
@@ -387,7 +385,7 @@ public:
 	virtual ~Undefined(){}
 };
 
-class ASString: public ASObject
+class DLL_PUBLIC ASString: public ASObject
 {
 CLASSBUILDABLE(ASString);
 private:
@@ -732,6 +730,7 @@ private:
 	std::string re;
 	bool global;
 	bool ignoreCase;
+	bool extended;
 	int lastIndex;
 	RegExp();
 public:

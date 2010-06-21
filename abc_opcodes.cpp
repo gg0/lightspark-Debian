@@ -1729,9 +1729,15 @@ bool ABCVm::isTypelate(ASObject* type, ASObject* obj)
 		if(c->class_name=="Class")
 		{
 			type->decRef();
-			return obj;
+			obj->decRef();
+			return true;
 		}
-		objc=static_cast<Class_base*>(obj);
+		else
+		{
+			type->decRef();
+			obj->decRef();
+			return false;
+		}
 	}
 	else
 	{
@@ -2117,6 +2123,10 @@ void ABCVm::newClass(call_context* th, int n)
 	//add Constructor the the class methods
 	ret->constructor=new SyntheticFunction(constructor);
 	ret->class_index=n;
+
+	//Set the constructor variable to the class itself (this is accessed by object using the protoype)
+	ret->incRef();
+	ret->setVariableByQName("constructor","",ret);
 
 	//Add protected namespace if needed
 	if((th->context->instances[n].flags)&0x08)

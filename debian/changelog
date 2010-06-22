@@ -1,4 +1,4 @@
-lightspark (0.4.1+git20100621+g1b93fa-1~exp0) UNRELEASED; urgency=low
+lightspark (0.4.1+git20100622+g071fc33-1~exp0) UNRELEASED; urgency=low
 
   [ Didier Raboud ]
   * Initial upload to Debian (Closes: #582120).
@@ -22,7 +22,7 @@ lightspark (0.4.1+git20100621+g1b93fa-1~exp0) UNRELEASED; urgency=low
   [ Luca Falavigna ]
   * Add myself to Uploaders.
 
- -- Didier Raboud <didier@raboud.com>  Mon, 21 Jun 2010 16:02:53 +0200
+ -- Didier Raboud <didier@raboud.com>  Tue, 22 Jun 2010 11:25:35 +0200
 
 lightspark (0.4.1-0ubuntu1) lucid; urgency=low
 

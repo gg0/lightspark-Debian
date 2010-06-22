@@ -219,6 +219,7 @@ liblightspark.so.0.5 liblightspark0.5 #MINVER#
  (c++)"lightspark::ClassName<lightspark::TextField>::name@Base" 0.4.1
  (c++)"lightspark::ClassName<lightspark::Transform>::name@Base" 0.4.1
  (c++)"lightspark::ClassName<lightspark::URLLoader>::name@Base" 0.4.1
+ (c++)"lightspark::operator<<(std::basic_ostream<char, std::char_traits<char> >&, lightspark::tiny_string const&)@Base" 0.4.1
  (c++)"sync_stream::provideBuffer(int)@Base" 0.4.1
  (c++)"sync_stream::write(char*, int)@Base" 0.4.1
  (c++)"sync_stream::destroy()@Base" 0.4.1

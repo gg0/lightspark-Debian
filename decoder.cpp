@@ -117,14 +117,22 @@ bool FFMpegVideoDecoder::discardFrame()
 bool FFMpegVideoDecoder::decodeData(uint8_t* data, uint32_t datalen)
 {
 	int frameOk=0;
+#if HAVE_AVCODEC_DECODE_VIDEO2
+	AVPacket pkt;
+	av_init_packet(&pkt);
+	pkt.data= data;
+	pkt.size= datalen;
+	avcodec_decode_video2(codecContext, frameIn, &frameOk, &pkt);
+#else
 	avcodec_decode_video(codecContext, frameIn, &frameOk, data, datalen);
+#endif
 	if(frameOk==0)
 		throw RunTimeException("Cannot decode frame");
 	assert(codecContext->pix_fmt==PIX_FMT_YUV420P);
 
 	const uint32_t height=codecContext->height;
 	const uint32_t width=codecContext->width;
-	if(status==INIT && codecContext->time_base.num!=0)
+	if(status==INIT && codecContext->time_base.num!=0 && height && width)
 	{
 		//time_base = 1/framerate
 		frameRate=codecContext->time_base.den;
@@ -162,6 +170,8 @@ void FFMpegVideoDecoder::copyFrameToBuffers(const AVFrame* frameIn)
 
 bool FFMpegVideoDecoder::copyFrameToTexture(TextureBuffer& tex)
 {
+	if(!isValid())
+		return false;
 	if(!initialized)
 	{
 		glGenBuffers(2,videoBuffers);
@@ -264,7 +274,15 @@ bool FFMpegAudioDecoder::decodeData(uint8_t* data, uint32_t datalen)
 {
 	FrameSamples& curTail=samplesBuffer.acquireLast();
 	int maxLen=AVCODEC_MAX_AUDIO_FRAME_SIZE;
+#if HAVE_AVCODEC_DECODE_AUDIO3
+	AVPacket pkt;
+	av_init_packet(&pkt);
+	pkt.data=data;
+	pkt.size=datalen;
+	uint32_t ret=avcodec_decode_audio3(codecContext, curTail.samples, &maxLen, &pkt);
+#else
 	uint32_t ret=avcodec_decode_audio2(codecContext, curTail.samples, &maxLen, data, datalen);
+#endif
 	assert_and_throw(ret==datalen);
 	curTail.len=maxLen;
 	assert(maxLen%2==0);

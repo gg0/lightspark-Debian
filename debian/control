@@ -4,10 +4,25 @@ Priority: optional
 Maintainer: Didier Raboud <didier@raboud.com>
 Uploaders: Luca Falavigna <dktrkranz@debian.org>
 DM-Upload-Allowed: yes
-Build-Depends: cmake, nasm, debhelper (>= 7.0.50),
-               llvm-2.7-dev (>= 2.7) | llvm-dev (>= 2.7), libsdl1.2-dev, libgl1-mesa-dev, libxext-dev, libcurl4-gnutls-dev,
-               libxml2-dev, zlib1g-dev, libnspr4-dev, libavcodec-dev, libpcre3-dev, libffi-dev, libftgl-dev, libglew1.5-dev,
-               xulrunner-dev, libgtkglext1-dev 
+Build-Depends: debhelper (>= 7.0.50),
+	cmake,
+	nasm,
+	llvm-2.7-dev (>= 2.7) | llvm-dev (>= 2.7),
+	libsdl1.2-dev,
+	libgl1-mesa-dev,
+	libxext-dev,
+	libcurl4-gnutls-dev,
+	libxml2-dev,
+	zlib1g-dev,
+	libnspr4-dev,
+	libavcodec-dev,
+	libpulse-dev,
+	libpcre3-dev,
+	libffi-dev,
+	libftgl-dev,
+	libglew1.5-dev,
+	xulrunner-dev,
+	libgtkglext1-dev 
 Standards-Version: 3.8.4
 Homepage: http://lightspark.sf.net
 Vcs-Git: git://git.debian.org/collab-maint/lightspark.git
@@ -16,6 +31,7 @@ Vcs-Browser: http://git.debian.org/?p=collab-maint/lightspark.git
 Package: lightspark
 Architecture: any
 Depends: ${shlibs:Depends}, ${misc:Depends}, ttf-liberation
+Recommends: pulseaudio
 Description: High-performance SWF player (experimental)
  Lightspark is a free Flash player for Linux which aims for high-performance
  by using modern technologies such as JIT compilation and OpenGL shaders.

@@ -9,6 +9,7 @@ lightspark (0.4.1+git20100623+065af65-1~exp0) experimental; urgency=low
     - Arch is any.
     - Use llvm-2.7-dev in addition to llvm-dev (> 2.7).
     - Correct "we" typos.
+    - Add pulseaudio recommends.
   * New packages: 
     - -dbg package.
     - lib*{,-dev} packages.
@@ -22,7 +23,7 @@ lightspark (0.4.1+git20100623+065af65-1~exp0) experimental; urgency=low
   [ Luca Falavigna ]
   * Add myself to Uploaders.
 
- -- Didier Raboud <didier@raboud.com>  Wed, 23 Jun 2010 16:19:57 +0200
+ -- Didier Raboud <didier@raboud.com>  Thu, 01 Jul 2010 00:13:25 +0200
 
 lightspark (0.4.1-0ubuntu1) lucid; urgency=low
 

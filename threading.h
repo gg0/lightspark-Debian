@@ -27,18 +27,18 @@
 namespace lightspark
 {
 
-class DLL_PUBLIC Mutex
+class Mutex
 {
 friend class Locker;
 private:
 	sem_t sem;
 	const char* name;
 	uint32_t foundBusy;
-	void lock();
-	void unlock();
 public:
 	Mutex(const char* name);
 	~Mutex();
+	void lock();
+	void unlock();
 };
 
 class IThreadJob
@@ -75,7 +75,7 @@ public:
 	bool try_wait();
 };
 
-class DLL_PUBLIC Locker
+class Locker
 {
 private:
 	Mutex& _m;
@@ -126,13 +126,18 @@ public:
 		assert(!empty);
 		return queue[bufferHead];
 	}
+	const T& front() const
+	{
+		assert(!empty);
+		return queue[bufferHead];
+	}
 	bool nonBlockingPopFront()
 	{
 		//We don't want to block if empty
 		if(!usedBuffers.try_wait())
 			return false;
 		//A frame is available
-		bufferHead=(bufferHead+1)%10;
+		bufferHead=(bufferHead+1)%size;
 		if(bufferHead==bufferTail)
 			empty=true;
 		freeBuffers.signal();
@@ -142,7 +147,7 @@ public:
 	{
 		freeBuffers.wait();
 		uint32_t ret=bufferTail;
-		bufferTail=(bufferTail+1)%10;
+		bufferTail=(bufferTail+1)%size;
 		return queue[ret];
 	}
 	void commitLast()
@@ -155,6 +160,13 @@ public:
 	{
 		for(uint32_t i=0;i<size;i++)
 			g.init(queue[i]);
+	}
+	uint32_t len() const
+	{
+		uint32_t tmp=(bufferTail+size-bufferHead)%size;
+		if(tmp==0 && !empty)
+			tmp=size;
+		return tmp;
 	}
 
 };

@@ -21,7 +21,6 @@
 #include "flashnet.h"
 #include "class.h"
 #include "flv.h"
-#include "fastpaths.h"
 
 using namespace std;
 using namespace lightspark;
@@ -245,7 +244,7 @@ ASFUNCTIONBODY(NetConnection,connect)
 	return NULL;
 }
 
-NetStream::NetStream():frameRate(0),frameCount(0),downloader(NULL),videoDecoder(NULL),audioDecoder(NULL),soundStreamId(0)
+NetStream::NetStream():frameRate(0),tickStarted(false),downloader(NULL),videoDecoder(NULL),audioDecoder(NULL),soundStreamId(0),streamTime(0)
 {
 	sem_init(&mutex,0,1);
 }
@@ -253,6 +252,8 @@ NetStream::NetStream():frameRate(0),frameCount(0),downloader(NULL),videoDecoder(
 NetStream::~NetStream()
 {
 	assert(!executing);
+	if(tickStarted)
+		sys->removeJob(this);
 	delete videoDecoder; 
 	delete audioDecoder; 
 	sem_destroy(&mutex);
@@ -293,6 +294,7 @@ ASFUNCTIONBODY(NetStream,play)
 	th->url = arg0;
 	assert_and_throw(th->downloader==NULL);
 	th->downloader=sys->downloadManager->download(th->url);
+	th->streamTime=0;
 	th->incRef();
 	sys->addJob(th);
 	return NULL;
@@ -323,21 +325,40 @@ NetStream::STREAM_TYPE NetStream::classifyStream(istream& s)
 //Tick is called from the timer thread, this happens only if a decoder is available
 void NetStream::tick()
 {
-	frameCount++;
-	//Discard the first frame, if available
-	//No mutex needed, ticking can happen only when decoder is valid
-	if(videoDecoder)
-		videoDecoder->discardFrame();
+	streamTime+=1000/frameRate;
+	//Advance video and audio to current time
+	//No mutex needed, ticking can happen only when stream is completely ready
+	videoDecoder->skipUntil(streamTime);
 	if(soundStreamId)
 	{
-		//The expected latency is frameRate
-		cout << "FrameCount " << frameCount << endl;
-		cout << "Expected index " << uint64_t(frameCount*44100/frameRate*4) << endl;
 #ifdef ENABLE_SOUND
 		assert(audioDecoder);
-		sys->soundManager->fillAndSinc(soundStreamId, uint64_t(frameCount*44100/frameRate*4));
+		sys->soundManager->fillAndSync(soundStreamId, streamTime);
 #endif
 	}
+}
+
+bool NetStream::isReady() const
+{
+	if(videoDecoder==NULL && audioDecoder==NULL)
+		return false;
+
+	bool ret=videoDecoder->isValid() && audioDecoder->isValid();
+	return ret;
+}
+
+bool NetStream::lockIfReady()
+{
+	sem_wait(&mutex);
+	bool ret=isReady();
+	if(!ret) //If the data is not valid so not release the lock to keep the condition
+		sem_post(&mutex);
+	return ret;
+}
+
+void NetStream::unlock()
+{
+	sem_post(&mutex);
 }
 
 void NetStream::execute()
@@ -348,8 +369,9 @@ void NetStream::execute()
 
 	ThreadProfile* profile=sys->allocateProfiler(RGB(0,0,200));
 	profile->setTag("NetStream");
-	bool tickStarted=false;
 	//We need to catch possible EOF and other error condition in the non reliable stream
+	uint32_t decodedTime=0;
+	uint32_t videoFrameCount=0;
 	try
 	{
 		Chronometer chronometer;
@@ -382,7 +404,11 @@ void NetStream::execute()
 						if(audioDecoder)
 						{
 							assert_and_throw(audioCodec==tag.SoundFormat);
-							audioDecoder->decodeData(tag.packetData,tag.packetLen);
+							uint32_t decodedBytes=audioDecoder->decodeData(tag.packetData,tag.packetLen,decodedTime);
+							if(soundStreamId==0 && audioDecoder->isValid())
+								soundStreamId=sys->soundManager->createStream(audioDecoder);
+							//Adjust timing
+							decodedTime+=decodedBytes/audioDecoder->getBytesPerMSec();
 						}
 						else
 						{
@@ -397,7 +423,8 @@ void NetStream::execute()
 								default:
 									throw RunTimeException("Unsupported SoundFormat");
 							}
-							soundStreamId=sys->soundManager->createStream(audioDecoder);
+							if(audioDecoder->isValid())
+								soundStreamId=sys->soundManager->createStream(audioDecoder);
 						}
 #endif
 						break;
@@ -406,16 +433,16 @@ void NetStream::execute()
 					{
 						VideoDataTag tag(s);
 						prevSize=tag.getTotalLen();
+						//Reset the current time, the video flow driver the stream
+						decodedTime=videoFrameCount*1000/frameRate;
+						videoFrameCount++;
 						assert_and_throw(tag.codecId==7);
 
 						if(tag.isHeader())
 						{
 							//The tag is the header, initialize decoding
 							assert_and_throw(videoDecoder==NULL); //The decoder can be set only once
-							//NOTE: there is not need to mutex the decoder, as an async transition from NULL to
-							//valid is not critical
 							videoDecoder=new FFMpegVideoDecoder(tag.packetData,tag.packetLen);
-							assert(videoDecoder);
 							tag.releaseBuffer();
 							Event* status=Class<NetStatusEvent>::getInstanceS("status", "NetStream.Play.Start");
 							getVm()->addEvent(this, status);
@@ -425,15 +452,7 @@ void NetStream::execute()
 							status->decRef();
 						}
 						else
-							videoDecoder->decodeData(tag.packetData,tag.packetLen);
-
-						if(!tickStarted && videoDecoder->isValid())
-						{
-							tickStarted=true;
-							assert(videoDecoder->frameRate);
-							frameRate=videoDecoder->frameRate;
-							sys->addTick(1000/frameRate,this);
-						}
+							videoDecoder->decodeData(tag.packetData,tag.packetLen, decodedTime);
 						break;
 					}
 					case 18:
@@ -443,16 +462,22 @@ void NetStream::execute()
 
 						//The frameRate of the container overrides the stream
 						if(tag.frameRate)
-						{
 							frameRate=tag.frameRate;
-							tickStarted=true;
-							sys->addTick(1000/frameRate,this);
-						}
 						break;
 					}
 					default:
 						LOG(LOG_ERROR,"Unexpected tag type " << (int)TagType << " in FLV");
 						threadAbort();
+				}
+				if(!tickStarted && isReady())
+				{
+					tickStarted=true;
+					if(frameRate==0)
+					{
+						assert(videoDecoder->frameRate);
+						frameRate=videoDecoder->frameRate;
+					}
+					sys->addTick(1000/frameRate,this);
 				}
 				profile->accountTime(chronometer.checkpoint());
 				if(aborting)
@@ -483,6 +508,7 @@ void NetStream::execute()
 	//This transition is critical, so the mutex is needed
 	//Before deleting stops ticking, removeJobs also spin waits for termination
 	sys->removeJob(this);
+	tickStarted=false;
 	delete videoDecoder;
 	videoDecoder=NULL;
 #if ENABLE_SOUND
@@ -522,39 +548,28 @@ ASFUNCTIONBODY(NetStream,getTime)
 	return abstract_d(0);
 }
 
-uint32_t NetStream::getVideoWidth()
+uint32_t NetStream::getVideoWidth() const
 {
-	sem_wait(&mutex);
-	uint32_t ret=0;
-	if(videoDecoder)
-		ret=videoDecoder->getWidth();
-	sem_post(&mutex);
-	return ret;
+	assert(isReady());
+	return videoDecoder->getWidth();
 }
 
-uint32_t NetStream::getVideoHeight()
+uint32_t NetStream::getVideoHeight() const
 {
-	sem_wait(&mutex);
-	uint32_t ret=0;
-	if(videoDecoder)
-		ret=videoDecoder->getHeight();
-	sem_post(&mutex);
-	return ret;
+	assert(isReady());
+	return videoDecoder->getHeight();
 }
 
 double NetStream::getFrameRate()
 {
+	assert(isReady());
 	return frameRate;
 }
 
 bool NetStream::copyFrameToTexture(TextureBuffer& tex)
 {
-	sem_wait(&mutex);
-	bool ret=false;
-	if(videoDecoder)
-		ret=videoDecoder->copyFrameToTexture(tex);
-	sem_post(&mutex);
-	return ret;
+	assert(isReady());
+	return videoDecoder->copyFrameToTexture(tex);
 }
 
 void URLVariables::sinit(Class_base* c)

@@ -144,9 +144,9 @@ void RootMovieClip::unregisterChildClip(MovieClip* clip)
 	clip->decRef();
 }
 
-SystemState::SystemState():RootMovieClip(NULL,true),renderRate(0),error(false),shutdown(false),showProfilingData(false),
-	showInteractiveMap(false),showDebug(false),xOffset(0),yOffset(0),currentVm(NULL),inputThread(NULL),
-	renderThread(NULL),finalizingDestruction(false),useInterpreter(true),useJit(false),downloadManager(NULL)
+SystemState::SystemState():RootMovieClip(NULL,true),renderRate(0),error(false),shutdown(false),renderThread(NULL),
+	showProfilingData(false),showInteractiveMap(false),showDebug(false),xOffset(0),yOffset(0),currentVm(NULL),
+	inputThread(NULL),finalizingDestruction(false),useInterpreter(true),useJit(false),downloadManager(NULL)
 {
 	//Do needed global initialization
 	curl_global_init(CURL_GLOBAL_ALL);
@@ -259,7 +259,7 @@ bool SystemState::shouldTerminate() const
 	return shutdown || error;
 }
 
-void SystemState::setError(string& c)
+void SystemState::setError(const string& c)
 {
 	//We record only the first error for easier fix and reporting
 	if(!error)
@@ -297,6 +297,23 @@ float SystemState::getRenderRate()
 	return renderRate;
 }
 
+void SystemState::startRenderTicks()
+{
+	assert(renderThread);
+	assert(renderRate);
+	removeJob(renderThread);
+	addTick(1000/renderRate,renderThread);
+}
+
+void SystemState::setRenderThread(RenderThread* t)
+{
+	assert(renderThread==NULL);
+	renderThread=t;
+	//If the render rate is known start the render ticks
+	if(renderRate)
+		startRenderTicks();
+}
+
 void SystemState::setRenderRate(float rate)
 {
 	if(renderRate>=rate)
@@ -304,9 +321,8 @@ void SystemState::setRenderRate(float rate)
 	
 	//The requested rate is higher, let's reschedule the job
 	renderRate=rate;
-	assert(renderThread);
-	removeJob(renderThread);
-	addTick(1000/rate,renderThread);
+	if(renderThread)
+		startRenderTicks();
 }
 
 void SystemState::tick()
@@ -556,6 +572,8 @@ void RenderThread::wait()
 	assert_and_throw(ret==0);
 }
 
+
+
 InputThread::InputThread(SystemState* s,ENGINE e, void* param):m_sys(s),t(0),terminated(false),
 	mutexListeners("Input listeners"),mutexDragged("Input dragged"),curDragged(NULL),lastMouseDownTarget(NULL)
 {
@@ -574,7 +592,7 @@ InputThread::InputThread(SystemState* s,ENGINE e, void* param):m_sys(s),t(0),ter
 		assert_and_throw(xtwidget);
 
 		//mXtwidget = xtwidget;
-		long event_mask = ExposureMask|PointerMotionMask|ButtonPressMask|KeyPressMask;
+		long event_mask = ExposureMask|PointerMotionMask|ButtonPressMask|ButtonReleaseMask|KeyPressMask;
 		XSelectInput(npapi_params->display, npapi_params->window, event_mask);
 		X11Intrinsic::XtAddEventHandler(xtwidget, event_mask, False, (X11Intrinsic::XtEventHandler)npapi_worker, this);
 	}
@@ -619,6 +637,8 @@ gboolean InputThread::gtkplug_worker(GtkWidget *widget, GdkEvent *event, InputTh
 
 void InputThread::npapi_worker(X11Intrinsic::Widget xt_w, InputThread* th, XEvent* xevent, X11Intrinsic::Boolean* b)
 {
+	//Set sys to this SystemState
+	sys=th->m_sys;
 	switch(xevent->type)
 	{
 		case KeyPress:
@@ -643,15 +663,61 @@ void InputThread::npapi_worker(X11Intrinsic::Widget xt_w, InputThread* th, XEven
 		}
 		case Expose:
 			//Signal the renderThread
-			th->m_sys->renderThread->draw();
+			th->m_sys->getRenderThread()->draw();
 			*b=False;
 			break;
+		case ButtonPress:
+		{
+			//cout << "Press" << endl;
+			Locker locker(th->mutexListeners);
+			th->m_sys->getRenderThread()->requestInput();
+			float selected=th->m_sys->getRenderThread()->getIdAt(xevent->xbutton.x,xevent->xbutton.y);
+			if(selected!=0)
+			{
+				int index=lrint(th->listeners.size()*selected);
+				index--;
+
+				th->lastMouseDownTarget=th->listeners[index];
+				//Add event to the event queue
+				th->m_sys->currentVm->addEvent(th->listeners[index],Class<MouseEvent>::getInstanceS("mouseDown",true));
+				//And select that object for debugging (if needed)
+				if(th->m_sys->showDebug)
+					th->m_sys->getRenderThread()->selectedDebug=th->listeners[index];
+			}
+			*b=False;
+			break;
+		}
+		case ButtonRelease:
+		{
+			//cout << "Release" << endl;
+			Locker locker(th->mutexListeners);
+			th->m_sys->getRenderThread()->requestInput();
+			float selected=th->m_sys->getRenderThread()->getIdAt(xevent->xbutton.x,xevent->xbutton.y);
+			if(selected!=0)
+			{
+				int index=lrint(th->listeners.size()*selected);
+				index--;
+
+				//Add event to the event queue
+				getVm()->addEvent(th->listeners[index],Class<MouseEvent>::getInstanceS("mouseUp",true));
+				//Also send the click event
+				if(th->lastMouseDownTarget==th->listeners[index])
+				{
+					getVm()->addEvent(th->listeners[index],Class<MouseEvent>::getInstanceS("click",true));
+					th->lastMouseDownTarget=NULL;
+				}
+			}
+			*b=False;
+			break;
+		}
 		default:
 			*b=True;
 #ifdef EXPENSIVE_DEBUG
 			cout << "TYPE " << dec << xevent->type << endl;
 #endif
 	}
+	//Reset sys to null
+	sys=NULL;
 }
 #endif
 
@@ -706,11 +772,11 @@ void* InputThread::sdl_worker(InputThread* th)
 			case SDL_MOUSEBUTTONDOWN:
 			{
 				Locker locker(th->mutexListeners);
-				sys->renderThread->requestInput();
-				float selected=sys->renderThread->getIdAt(event.button.x,event.button.y);
+				th->m_sys->getRenderThread()->requestInput();
+				float selected=th->m_sys->getRenderThread()->getIdAt(event.button.x,event.button.y);
 				if(selected==0)
 				{
-					sys->renderThread->selectedDebug=NULL;
+					th->m_sys->getRenderThread()->selectedDebug=NULL;
 					break;
 				}
 
@@ -719,27 +785,29 @@ void* InputThread::sdl_worker(InputThread* th)
 
 				th->lastMouseDownTarget=th->listeners[index];
 				//Add event to the event queue
-				sys->currentVm->addEvent(th->listeners[index],Class<Event>::getInstanceS("mouseDown",true));
+				th->m_sys->currentVm->addEvent(th->listeners[index],Class<MouseEvent>::getInstanceS("mouseDown",true));
 				//And select that object for debugging (if needed)
-				if(sys->showDebug)
-					sys->renderThread->selectedDebug=th->listeners[index];
+				if(th->m_sys->showDebug)
+					th->m_sys->getRenderThread()->selectedDebug=th->listeners[index];
 				break;
 			}
 			case SDL_MOUSEBUTTONUP:
 			{
 				Locker locker(th->mutexListeners);
-				sys->renderThread->requestInput();
-				float selected=sys->renderThread->getIdAt(event.button.x,event.button.y);
+				th->m_sys->getRenderThread()->requestInput();
+				float selected=th->m_sys->getRenderThread()->getIdAt(event.button.x,event.button.y);
+				if(selected==0)
+					break;
 
 				int index=lrint(th->listeners.size()*selected);
 				index--;
 
 				//Add event to the event queue
-				getVm()->addEvent(th->listeners[index],Class<Event>::getInstanceS("mouseUp",true));
+				getVm()->addEvent(th->listeners[index],Class<MouseEvent>::getInstanceS("mouseUp",true));
 				//Also send the click event
 				if(th->lastMouseDownTarget==th->listeners[index])
 				{
-					getVm()->addEvent(th->listeners[index],Class<Event>::getInstanceS("click",true));
+					getVm()->addEvent(th->listeners[index],Class<MouseEvent>::getInstanceS("click",true));
 					th->lastMouseDownTarget=NULL;
 				}
 				break;
@@ -833,9 +901,9 @@ void InputThread::disableDrag()
 	}
 }
 
-RenderThread::RenderThread(SystemState* s,ENGINE e,void* params):m_sys(s),terminated(false),inputNeeded(false),
-	interactive_buffer(NULL),tempBufferAcquired(false),frameCount(0),secsCount(0),dataTex(false),mainTex(false),tempTex(false),
-	inputTex(false),hasNPOTTextures(false),selectedDebug(NULL),currentId(0),materialOverride(false)
+RenderThread::RenderThread(SystemState* s,ENGINE e,void* params):m_sys(s),terminated(false),inputNeeded(false),inputDisabled(false),
+	interactive_buffer(NULL),tempBufferAcquired(false),frameCount(0),secsCount(0),mutexResources("GLResource Mutex"),dataTex(false),
+	mainTex(false),tempTex(false),inputTex(false),hasNPOTTextures(false),selectedDebug(NULL),currentId(0),materialOverride(false)
 {
 	LOG(LOG_NO_INFO,"RenderThread this=" << this);
 	m_sys=s;
@@ -894,6 +962,26 @@ RenderThread::~RenderThread()
 	LOG(LOG_NO_INFO,"~RenderThread this=" << this);
 }
 
+void RenderThread::addResource(GLResource* res)
+{
+	managedResources.insert(res);
+}
+
+void RenderThread::removeResource(GLResource* res)
+{
+	managedResources.erase(res);
+}
+
+void RenderThread::acquireResourceMutex()
+{
+	mutexResources.lock();
+}
+
+void RenderThread::releaseResourceMutex()
+{
+	mutexResources.unlock();
+}
+
 void RenderThread::requestInput()
 {
 	inputNeeded=true;
@@ -903,6 +991,8 @@ void RenderThread::requestInput()
 
 bool RenderThread::glAcquireIdBuffer()
 {
+	if(inputDisabled)
+		return false;
 	//TODO: PERF: on the id buffer stuff are drawn more than once
 	if(currentId!=0)
 	{
@@ -1003,7 +1093,7 @@ void* RenderThread::gtkplug_worker(RenderThread* th)
 	FTTextureFont font(rt->fontPath.c_str());
 	if(font.Error())
 	{
-		LOG(LOG_ERROR,"Unable to find /usr/share/fonts/truetype/ttf-liberation/LiberationSerif-Regular.ttf");
+		LOG(LOG_ERROR,"Unable to load serif font");
 		throw RunTimeException("Unable to load font");
 	}
 	
@@ -1019,7 +1109,7 @@ void* RenderThread::gtkplug_worker(RenderThread* th)
 		{
 			sem_wait(&th->render);
 			if(th->m_sys->isShuttingDown())
-				pthread_exit(0);
+				break;
 
 			chronometer.checkpoint();
 
@@ -1041,7 +1131,7 @@ void* RenderThread::gtkplug_worker(RenderThread* th)
 			while(sem_trywait(&th->render)==0)
 			{
 				if(th->m_sys->isShuttingDown())
-					pthread_exit(0);
+					break;
 				fakeRenderCount++;
 			}
 
@@ -1227,19 +1317,27 @@ void* RenderThread::npapi_worker(RenderThread* th)
 			sem_wait(&th->render);
 			Chronometer chronometer;
 			
+			if(th->inputNeeded)
+			{
+				th->inputTex.bind();
+				glGetTexImage(GL_TEXTURE_2D,0,GL_BGRA,GL_UNSIGNED_BYTE,th->interactive_buffer);
+				th->inputNeeded=false;
+				sem_post(&th->inputDone);
+			}
+
 			//Before starting rendering, cleanup all the request arrived in the meantime
 			int fakeRenderCount=0;
 			while(sem_trywait(&th->render)==0)
 			{
 				if(th->m_sys->isShuttingDown())
-					pthread_exit(0);
+					break;
 				fakeRenderCount++;
 			}
 			
 			if(fakeRenderCount)
 				LOG(LOG_NO_INFO,"Faking " << fakeRenderCount << " renderings");
 			if(th->m_sys->isShuttingDown())
-				pthread_exit(0);
+				break;
 
 			if(th->m_sys->isOnError())
 			{
@@ -1272,14 +1370,6 @@ void* RenderThread::npapi_worker(RenderThread* th)
 			else
 			{
 				glXSwapBuffers(d,p->window);
-
-				if(th->inputNeeded)
-				{
-					th->inputTex.bind();
-					glGetTexImage(GL_TEXTURE_2D,0,GL_BGRA,GL_UNSIGNED_BYTE,th->interactive_buffer);
-					th->inputNeeded=false;
-					sem_post(&th->inputDone);
-				}
 
 				glBindFramebuffer(GL_FRAMEBUFFER, rt->fboId);
 				glDrawBuffer(GL_COLOR_ATTACHMENT0);
@@ -1351,6 +1441,10 @@ void* RenderThread::npapi_worker(RenderThread* th)
 		sys->setError(e.cause);
 	}
 	glDisable(GL_TEXTURE_2D);
+	//Before destroying the context shutdown all the GLResources
+	set<GLResource*>::const_iterator it=th->managedResources.begin();
+	for(;it!=th->managedResources.end();it++)
+		(*it)->shutdown();
 	th->commonGLDeinit();
 	glXMakeContextCurrent(d,None,None,NULL);
 	glXDestroyContext(d,th->mContext);
@@ -1495,6 +1589,10 @@ void RenderThread::commonGLDeinit()
 {
 	glBindFramebuffer(GL_FRAMEBUFFER,0);
 	glDeleteFramebuffers(1,&rt->fboId);
+	dataTex.shutdown();
+	mainTex.shutdown();
+	tempTex.shutdown();
+	inputTex.shutdown();
 }
 
 void RenderThread::commonGLInit(int width, int height)
@@ -1513,7 +1611,6 @@ void RenderThread::commonGLInit(int width, int height)
 		LOG(LOG_ERROR,"Video card does not support OpenGL 2.0... Aborting");
 		::abort();
 	}
-
 	if(GLEW_ARB_texture_non_power_of_two)
 		hasNPOTTextures=true;
 
@@ -1562,8 +1659,19 @@ void RenderThread::commonGLInit(int width, int height)
 	glGenFramebuffers(1, &fboId);
 	glBindFramebuffer(GL_FRAMEBUFFER, fboId);
 	glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,GL_TEXTURE_2D, mainTex.getId(), 0);
-	glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1,GL_TEXTURE_2D, tempTex.getId(), 0);
-	glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT2,GL_TEXTURE_2D, inputTex.getId(), 0);
+	//Verify if we have more than an attachment available (1 is guaranteed)
+	GLint numberOfAttachments=0;
+	glGetIntegerv(GL_MAX_COLOR_ATTACHMENTS, &numberOfAttachments);
+	if(numberOfAttachments>=3)
+	{
+		glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1,GL_TEXTURE_2D, tempTex.getId(), 0);
+		glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT2,GL_TEXTURE_2D, inputTex.getId(), 0);
+	}
+	else
+	{
+		LOG(LOG_ERROR,"Non enough color attachments available, input disabled");
+		inputDisabled=true;
+	}
 	
 	// check FBO status
 	GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
@@ -1630,7 +1738,7 @@ void* RenderThread::sdl_worker(RenderThread* th)
 			while(sem_trywait(&th->render)==0)
 			{
 				if(th->m_sys->isShuttingDown())
-					pthread_exit(0);
+					break;
 				fakeRenderCount++;
 			}
 
@@ -1638,7 +1746,7 @@ void* RenderThread::sdl_worker(RenderThread* th)
 				LOG(LOG_NO_INFO,"Faking " << fakeRenderCount << " renderings");
 
 			if(th->m_sys->isShuttingDown())
-				pthread_exit(0);
+				break;
 			SDL_PumpEvents();
 
 			if(th->m_sys->isOnError())

@@ -60,17 +60,34 @@ void Video::buildTraits(ASObject* o)
 	o->setVariableByQName("attachNetStream","",Class<IFunction>::getFunction(attachNetStream));
 }
 
+Video::~Video()
+{
+	if(rt)
+	{
+		rt->acquireResourceMutex();
+		rt->removeResource(&videoTexture);
+	}
+	videoTexture.shutdown();
+	if(rt)
+	{
+		rt->releaseResourceMutex();
+		sem_destroy(&mutex);
+	}
+}
+
 void Video::Render()
 {
 	if(!initialized)
 	{
 		videoTexture.init(0,0,GL_LINEAR);
+		rt->addResource(&videoTexture);
 		initialized=true;
 	}
 
 	sem_wait(&mutex);
-	if(netStream)
+	if(netStream && netStream->lockIfReady())
 	{
+		//All operations here should be non blocking
 		//Get size
 		videoWidth=netStream->getVideoWidth();
 		videoHeight=netStream->getVideoHeight();
@@ -119,6 +136,7 @@ void Video::Render()
 			rt->glReleaseIdBuffer();
 		}
 		ma.unapply();
+		netStream->unlock();
 	}
 	sem_post(&mutex);
 }

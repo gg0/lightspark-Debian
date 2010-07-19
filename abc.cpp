@@ -48,8 +48,6 @@ using namespace std;
 using namespace lightspark;
 
 extern TLSDATA SystemState* sys;
-TLSDATA Manager* iManager=NULL;
-TLSDATA Manager* dManager=NULL;
 TLSDATA bool isVmThread=false;;
 
 DoABCTag::DoABCTag(RECORDHEADER h, std::istream& in):ControlTag(h)
@@ -1076,7 +1074,7 @@ bool ABCVm::addEvent(EventDispatcher* obj ,Event* ev)
 	{
 		assert(obj==NULL);
 		ev->incRef();
-		handleEvent(pair<EventDispatcher*,Event*>(NULL, ev));
+		handleEvent(make_pair<EventDispatcher*>(NULL, ev));
 		return true;
 	}
 
@@ -1317,10 +1315,10 @@ void ABCContext::exec()
 
 void ABCVm::Run(ABCVm* th)
 {
+	//Spin wait until the VM is aknowledged by the SystemState
 	sys=th->m_sys;
+	while(getVm()!=th);
 	isVmThread=true;
-	iManager=th->int_manager;
-	dManager=th->number_manager;
 	if(th->m_sys->useJit)
 	{
 		llvm::InitializeNativeTarget();

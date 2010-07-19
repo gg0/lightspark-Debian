@@ -41,8 +41,6 @@ REGISTER_CLASS_NAME(ASObject);
 extern TLSDATA SystemState* sys;
 extern TLSDATA RenderThread* rt;
 extern TLSDATA ParseThread* pt;
-extern TLSDATA Manager* iManager;
-extern TLSDATA Manager* dManager;
 
 tiny_string ASObject::toString(bool debugMsg)
 {
@@ -265,7 +263,9 @@ bool ASObject::hasPropertyByMultiname(const multiname& name)
 void ASObject::setGetterByQName(const tiny_string& name, const tiny_string& ns, IFunction* o)
 {
 	check();
+#ifndef NDEBUG
 	assert_and_throw(!initialized);
+#endif
 	//Getters are inserted with the current level of the prototype chain
 	int level=cur_level;
 	obj_var* obj=Variables.findObjVar(name,ns,level,true,false);
@@ -281,7 +281,9 @@ void ASObject::setGetterByQName(const tiny_string& name, const tiny_string& ns, 
 void ASObject::setSetterByQName(const tiny_string& name, const tiny_string& ns, IFunction* o)
 {
 	check();
+#ifndef NDEBUG
 	assert_and_throw(!initialized);
+#endif
 	//Setters are inserted with the current level of the prototype chain
 	int level=cur_level;
 	obj_var* obj=Variables.findObjVar(name,ns,level,true,false);
@@ -581,7 +583,9 @@ ASFUNCTIONBODY(ASObject,_setPrototype)
 void ASObject::initSlot(unsigned int n,const tiny_string& name, const tiny_string& ns)
 {
 	//Should be correct to use the level on the prototype chain
+#ifndef NDEBUG
 	assert_and_throw(!initialized);
+#endif
 	Variables.initSlot(n,cur_level,name,ns);
 }
 
@@ -2045,7 +2049,7 @@ std::istream& lightspark::operator>>(std::istream& s, CLIPACTIONS& v)
 
 ASObject* lightspark::abstract_d(number_t i)
 {
-	Number* ret=dManager->get<Number>();
+	Number* ret=getVm()->number_manager->get<Number>();
 	ret->val=i;
 	return ret;
 }
@@ -2057,7 +2061,7 @@ ASObject* lightspark::abstract_b(bool i)
 
 ASObject* lightspark::abstract_i(intptr_t i)
 {
-	Integer* ret=iManager->get<Integer>();
+	Integer* ret=getVm()->int_manager->get<Integer>();
 	ret->val=i;
 	return ret;
 }

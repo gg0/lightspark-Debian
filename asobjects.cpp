@@ -26,6 +26,7 @@
 #include <iomanip>
 #define _USE_MATH_DEFINES
 #include <cmath>
+#include <limits>
 
 #include "abc.h"
 #include "asobjects.h"
@@ -791,17 +792,6 @@ int32_t ASString::toInt()
 	return atoi(data.c_str());
 }
 
-ASFUNCTIONBODY(Undefined,call)
-{
-	LOG(LOG_CALLS,"Undefined function");
-	return NULL;
-}
-
-tiny_string Undefined::toString(bool debugMsg)
-{
-	return "null";
-}
-
 bool ASString::isEqual(ASObject* r)
 {
 	assert_and_throw(implEnable);
@@ -843,6 +833,22 @@ bool Boolean::isEqual(ASObject* r)
 	}
 }
 
+Undefined::Undefined()
+{
+	type=T_UNDEFINED;
+}
+
+ASFUNCTIONBODY(Undefined,call)
+{
+	LOG(LOG_CALLS,"Undefined function");
+	return NULL;
+}
+
+tiny_string Undefined::toString(bool debugMsg)
+{
+	return "undefined";
+}
+
 bool Undefined::isEqual(ASObject* r)
 {
 	if(r->getObjectType()==T_UNDEFINED)
@@ -853,9 +859,14 @@ bool Undefined::isEqual(ASObject* r)
 		return false;
 }
 
-Undefined::Undefined()
+int Undefined::toInt()
 {
-	type=T_UNDEFINED;
+	return 0;
+}
+
+double Undefined::toNumber()
+{
+	return numeric_limits<double>::quiet_NaN();
 }
 
 ASFUNCTIONBODY(Integer,_toString)
@@ -1641,6 +1652,12 @@ ASFUNCTIONBODY(ASString,concat)
 	return ret;
 }
 
+Class_base::Class_base(const tiny_string& name):use_protected(false),constructor(NULL),referencedObjectsMutex("referencedObjects"),super(NULL),
+	context(NULL),class_name(name),class_index(-1),max_level(0)
+{
+	type=T_CLASS;
+}
+
 Class_base::~Class_base()
 {
 	if(constructor)
@@ -1716,7 +1733,9 @@ void Class_base::handleConstruction(ASObject* target, ASObject* const* args, uns
 	}*/
 	if(buildAndLink)
 	{
+	#ifndef NDEBUG
 		assert_and_throw(!target->initialized);
+	#endif
 		//HACK: suppress implementation handling of variables just now
 		bool bak=target->implEnable;
 		target->implEnable=false;

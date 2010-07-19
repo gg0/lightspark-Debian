@@ -35,12 +35,12 @@ private:
 	class SoundStream
 	{
 	public:
+		enum STREAM_STATUS { STREAM_STARTING=0, STREAM_READY=1, STREAM_DEAD=2 };
 		pa_stream* stream;
 		AudioDecoder* decoder;
 		SoundManager* manager;
-		volatile bool streamReady;
-		volatile bool streamDead;
-		SoundStream(SoundManager* m):stream(NULL),decoder(NULL),manager(m),streamReady(false),streamDead(false){}
+		volatile STREAM_STATUS streamStatus;
+		SoundStream(SoundManager* m):stream(NULL),decoder(NULL),manager(m),streamStatus(STREAM_STARTING){}
 	};
 	pa_threaded_mainloop* mainLoop;
 	pa_context* context;
@@ -49,12 +49,13 @@ private:
 	static void streamWriteCB(pa_stream* stream, size_t nbytes, SoundStream* th);
 	std::vector<SoundStream*> streams;
 	volatile bool contextReady;
+	volatile bool noServer;
 	bool stopped;
 public:
 	SoundManager();
 	uint32_t createStream(AudioDecoder* decoder);
 	void freeStream(uint32_t id);
-	void fillAndSinc(uint32_t id, uint64_t seek);
+	void fillAndSync(uint32_t id, uint32_t streamTime);
 	void stop();
 	~SoundManager();
 };

@@ -24,8 +24,8 @@ CMAKE_MINIMUM_REQUIRED(VERSION 2.6)
 # Name & Version
 PROJECT(LIGHTSPARK)
 SET(MAJOR_VERSION "0")
-SET(MINOR_VERSION "5")
-SET(PATCH_VERSION "0")
+SET(MINOR_VERSION "4")
+SET(PATCH_VERSION "2")
 
 # Find out CPU architecture ...
 # we could also use IF(CMAKE_SIZEOF_VOID_P EQUAL 4) to determine if it's a 32 or a 64bit arch
@@ -50,16 +50,15 @@ SET(DATADIR "share")
 SET(LIBDIR "lib${LIB_SUFFIX}")
 
 # Setting variables
-SET(CMAKE_INSTALL_PREFIX "/usr" CACHE PATH "Install prefix")
+SET(CMAKE_INSTALL_PREFIX "/usr" CACHE PATH "Install prefix" FORCE)
 SET(COMPILE_LIGHTSPARK TRUE CACHE BOOL "Compile Lightspark?")
 SET(COMPILE_TIGHTSPARK TRUE CACHE BOOL "Compile Tightspark?")
 SET(COMPILE_PLUGIN FALSE CACHE BOOL "Compile the Firefox Plugin?")
 SET(ENABLE_SOUND TRUE CACHE BOOL "Enable sound?")
 SET(PLUGIN_DIRECTORY "${LIBDIR}/mozilla/plugins" CACHE STRING "Directory to install Firefox plugin to")
-# We could have more complete profile options like RelWithDebInfo MinSizeRel
 IF(NOT CMAKE_BUILD_TYPE)
-  SET(CMAKE_BUILD_TYPE Release CACHE STRING
-      "Choose the type of build, options are: None Debug Release Profile Debian"
+  SET(CMAKE_BUILD_TYPE RelWithDebInfo CACHE STRING
+      "Choose the type of build, options are: Debug Release RelWithDebInfo Profile Debian"
       FORCE)
 ENDIF(NOT CMAKE_BUILD_TYPE)
 
@@ -121,13 +120,20 @@ IF(COMPILE_PLUGIN)
 ENDIF(COMPILE_PLUGIN)
 
 # Compiler defaults flags for different profiles
-SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wnon-virtual-dtor -Woverloaded-virtual -pipe -fvisibility=hidden")
+SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wnon-virtual-dtor -Woverloaded-virtual -pipe -fvisibility=hidden -fvisibility-inlines-hidden -std=c++0x")
+
 SET(CMAKE_CXX_FLAGS_DEBUG "-g -O0 -DEXPENSIVE_DEBUG")
 SET(CMAKE_CXX_FLAGS_PROFILE "-g -pg -O2")
-SET(CMAKE_CXX_FLAGS_RELEASE "-O3")
-SET(CMAKE_CXX_FLAGS_DEBIAN "-O2")
+SET(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG")
+SET(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-g -O2 -DNDEBUG")
+SET(CMAKE_CXX_FLAGS_DEBIAN "-O2 -DNDEBUG")
 
 ADD_DEFINITIONS(-DDATADIR="${CMAKE_INSTALL_PREFIX}/share/lightspark")
+
+# Setting the output directories, so we can build all profiles without mixmatching
+SET(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}/${CMAKE_SYSTEM_PROCESSOR}/${CMAKE_BUILD_TYPE}/bin")
+SET(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}/${CMAKE_SYSTEM_PROCESSOR}/${CMAKE_BUILD_TYPE}/lib${LIB_SUFFIX}")
+#SET(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}/objs/${CMAKE_SYSTEM_PROCESSOR}/${CMAKE_BUILD_TYPE}/lib${LIB_SUFFIX}" CACHE PATH "Static libraries output directory")
 
 # liblightspark.so sources
 SET(LIBSPARK_SOURCES swf.cpp swftypes.cpp tags.cpp geometry.cpp actions.cpp frame.cpp input.cpp streams.cpp tags_stub.cpp logger.cpp vm.cpp asobjects.cpp abc.cpp abc_codesynt.cpp abc_opcodes.cpp flashdisplay.cpp flashevents.cpp textfile.cpp thread_pool.cpp flashgeom.cpp flashnet.cpp flashsystem.cpp flashutils.cpp compat.cpp abc_interpreter.cpp flashexternal.cpp flashtext.cpp flashmedia.cpp flv.cpp netutils.cpp timer.cpp decoder.cpp threading.cpp flashxml.cpp graphics.cpp sound.cpp)
@@ -174,7 +180,7 @@ IF(COMPILE_TIGHTSPARK)
 	ENDIF(UNIX)
 ENDIF(COMPILE_TIGHTSPARK)
 
-# Firefox plugin
+# Browser plugin
 IF(COMPILE_PLUGIN)
 	ADD_SUBDIRECTORY(plugin-dir)
 ENDIF(COMPILE_PLUGIN)

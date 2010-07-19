@@ -1,7 +1,7 @@
 /**************************************************************************
     Lighspark, a free flash player implementation
 
-    Copyright (C) 2009  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2009,2010  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -20,10 +20,11 @@
 #include "plugin.h"
 #include "logger.h"
 #define MIME_TYPES_HANDLED  "application/x-shockwave-flash"
-//#define MIME_TYPES_HANDLED  "application/x-lightspark"
+#define FAKE_MIME_TYPE  "application/x-lightspark"
 #define PLUGIN_NAME    "Shockwave Flash"
-#define MIME_TYPES_DESCRIPTION  MIME_TYPES_HANDLED":swf:"PLUGIN_NAME
-#define PLUGIN_DESCRIPTION "Shockwave Flash 10.0 r04_Lightspark"
+#define FAKE_PLUGIN_NAME    "Lightspark player"
+#define MIME_TYPES_DESCRIPTION  MIME_TYPES_HANDLED":swf:"PLUGIN_NAME//";"FAKE_MIME_TYPE":swf:"PLUGIN_NAME
+#define PLUGIN_DESCRIPTION "Shockwave Flash 10.0 r42"
 #include "class.h"
 #include <gtk/gtk.h>
 
@@ -35,19 +36,14 @@ TLSDATA DLL_PUBLIC lightspark::ParseThread* pt=NULL;
 
 NPDownloadManager::NPDownloadManager(NPP i):instance(i)
 {
-	sem_init(&mutex,0,1);
 }
 
 NPDownloadManager::~NPDownloadManager()
 {
-	if(!pendingLoads.empty())
-		abort();
-	sem_destroy(&mutex);
 }
 
 lightspark::Downloader* NPDownloadManager::download(const lightspark::tiny_string& u)
 {
-	sem_wait(&mutex);
 	//TODO: Url encode the string
 	std::string tmp2;
 	tmp2.reserve(u.len()*2);
@@ -65,8 +61,6 @@ lightspark::Downloader* NPDownloadManager::download(const lightspark::tiny_strin
 	lightspark::tiny_string url=tmp2.c_str();
 	//Register this download
 	NPDownloader* ret=new NPDownloader(instance, url);
-	pendingLoads.push_back(make_pair(url,ret));
-	sem_post(&mutex);
 	return ret;
 }
 
@@ -75,38 +69,7 @@ void NPDownloadManager::destroy(lightspark::Downloader* d)
 	//First of all, wait for termination
 	if(!sys->isShuttingDown())
 		d->wait();
-	sem_wait(&mutex);
-	list<pair<lightspark::tiny_string,NPDownloader*> >::iterator it=pendingLoads.begin();
-	for(;it!=pendingLoads.end();it++)
-	{
-		if(it->second==d)
-		{
-			pendingLoads.erase(it);
-			break;
-		}
-	}
-	sem_post(&mutex);
-
 	delete d;
-}
-
-NPDownloader* NPDownloadManager::getDownloaderForUrl(const char* u)
-{
-	sem_wait(&mutex);
-	list<pair<lightspark::tiny_string,NPDownloader*> >::iterator it=pendingLoads.begin();
-	NPDownloader* ret=NULL;
-	for(;it!=pendingLoads.end();it++)
-	{
-		cout << it->first << endl;
-		if(it->first==u)
-		{
-			ret=it->second;
-			pendingLoads.erase(it);
-			break;
-		}
-	}
-	sem_post(&mutex);
-	return ret;
 }
 
 NPDownloader::NPDownloader(NPP i, const lightspark::tiny_string& u):instance(i),url(u),started(false)
@@ -187,9 +150,9 @@ nsPluginInstanceBase * NS_NewPluginInstance(nsPluginCreateData * aCreateDataStru
 
 void NS_DestroyPluginInstance(nsPluginInstanceBase * aPlugin)
 {
-  if(aPlugin)
-    delete (nsPluginInstance *)aPlugin;
-  sys=NULL;
+	if(aPlugin)
+		delete (nsPluginInstance *)aPlugin;
+	sys=NULL;
 }
 
 ////////////////////////////////////////
@@ -271,6 +234,8 @@ nsPluginInstance::nsPluginInstance(NPP aInstance, int16_t argc, char** argn, cha
 	}
 	m_sys->downloadManager=new NPDownloadManager(mInstance);
 	m_sys->addJob(m_pt);
+	//The sys var should be NULL in this thread
+	sys=NULL;
 }
 
 int nsPluginInstance::hexToInt(char c)
@@ -404,9 +369,8 @@ NPError nsPluginInstance::SetWindow(NPWindow* aWindow)
 		}
 		m_it=new lightspark::InputThread(m_sys,lightspark::NPAPI,p2);
 
-		sys=NULL;
 		m_sys->inputThread=m_it;
-		m_sys->renderThread=m_rt;
+		m_sys->setRenderThread(m_rt);
 	}
 	//draw();
 	return TRUE;
@@ -415,10 +379,9 @@ NPError nsPluginInstance::SetWindow(NPWindow* aWindow)
 NPError nsPluginInstance::NewStream(NPMIMEType type, NPStream* stream, NPBool seekable, uint16_t* stype)
 {
 	//We have to cast the downloadanager to a NPDownloadManager
-	NPDownloadManager* manager=static_cast<NPDownloadManager*>(m_sys->downloadManager);
-	lightspark::Downloader* dl=manager->getDownloaderForUrl(stream->url);
+	lightspark::Downloader* dl=(lightspark::Downloader*)stream->notifyData;
 	LOG(LOG_NO_INFO,"Newstream for " << stream->url);
-	//cerr << stream->headers << endl;
+	//cout << stream->headers << endl;
 	if(dl)
 	{
 		cerr << "via NPDownloader" << endl;
@@ -467,15 +430,18 @@ NPError nsPluginInstance::DestroyStream(NPStream *stream, NPError reason)
 
 void nsPluginInstance::URLNotify(const char* url, NPReason reason, void* notifyData)
 {
-	cerr << "URLnotify" << notifyData << endl;
-	cerr << url << endl;
-	cerr << reason << endl;
-	cerr << notifyData << endl;
-/*	if(reason!=NPRES_USER_BREAK)
+	cout << "URLnotify " << url << endl;
+	switch(reason)
 	{
-		cerr << url << endl;
-		cerr << reason << endl;
-		cerr << notifyData << endl;
-		abort();
-	}*/
+		case NPRES_DONE:
+			cout << "Done" <<endl;
+			break;
+		case NPRES_USER_BREAK:
+			cout << "User Break" <<endl;
+			break;
+		case NPRES_NETWORK_ERR:
+			cout << "Network Error" <<endl;
+			break;
+	}
+	//TODO: should notify the Downloader if failing
 }

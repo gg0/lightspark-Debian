@@ -173,6 +173,8 @@ private:
 	float renderRate;
 	bool error;
 	bool shutdown;
+	RenderThread* renderThread;
+	void startRenderTicks();
 public:
 	void setUrl(const tiny_string& url) DLL_PUBLIC;
 
@@ -184,13 +186,15 @@ public:
 	int yOffset;
 	
 	std::string errorCause;
-	void setError(std::string& c);
+	void setError(const std::string& c);
 	bool shouldTerminate() const;
 	bool isShuttingDown() const DLL_PUBLIC;
 	bool isOnError() const;
 	void setShutdownFlag() DLL_PUBLIC;
 	void tick();
 	void wait() DLL_PUBLIC;
+	RenderThread* getRenderThread() const { return renderThread; }
+	void setRenderThread(RenderThread* r) DLL_PUBLIC;
 
 	//Be careful, SystemState constructor does some global initialization that must be done
 	//before any other thread gets started
@@ -204,7 +208,6 @@ public:
 	Stage* stage;
 	ABCVm* currentVm;
 	InputThread* inputThread;
-	RenderThread* renderThread;
 #ifdef ENABLE_SOUND
 	SoundManager* soundManager;
 #endif
@@ -311,15 +314,14 @@ private:
 	sem_t render;
 	sem_t inputDone;
 	bool inputNeeded;
+	bool inputDisabled;
 	std::string fontPath;
 
 #ifndef WIN32
 	Display* mDisplay;
 	GLXFBConfig mFBConfig;
 	GLXContext mContext;
-	GLXPbuffer mPbuffer;
 	Window mWindow;
-	GC mGC;
 
 	timespec ts,td;
 #endif
@@ -330,7 +332,8 @@ private:
 	int frameCount;
 	int secsCount;
 	std::vector<float> idStack;
-	
+	Mutex mutexResources;
+	std::set<GLResource*> managedResources;
 public:
 	RenderThread(SystemState* s,ENGINE e, void* param=NULL) DLL_PUBLIC;
 	~RenderThread() DLL_PUBLIC;
@@ -340,6 +343,26 @@ public:
 	//The calling context MUST call this function with the transformation matrix ready
 	void glAcquireTempBuffer(number_t xmin, number_t xmax, number_t ymin, number_t ymax);
 	void glBlitTempBuffer(number_t xmin, number_t xmax, number_t ymin, number_t ymax);
+	/**
+		Add a GLResource to the managed pool
+		@param res The GLResource to be manged
+		@pre running inside the renderthread OR the resourceMutex is acquired
+	*/
+	void addResource(GLResource* res);
+	/**
+		Remove a GLResource from the managed pool
+		@param res The GLResource to stop managing
+		@pre running inside the renderthread OR the resourceMutex is acquired
+	*/
+	void removeResource(GLResource* res);
+	/**
+		Acquire the resource mutex to do resource cleanup
+	*/
+	void acquireResourceMutex();
+	/**
+		Release the resource mutex
+	*/
+	void releaseResourceMutex();
 
 	void requestInput();
 	bool glAcquireIdBuffer();

@@ -45,14 +45,35 @@ bool VideoDecoder::setSize(uint32_t w, uint32_t h)
 		return false;
 }
 
-bool VideoDecoder::copyFrameToTexture(TextureBuffer& tex)
+bool VideoDecoder::resizeIfNeeded(TextureBuffer& tex)
 {
 	if(!resizeGLBuffers)
 		return false;
 
+	//Request a sane alignment
+	tex.setRequestedAlignment(16,1);
 	//Initialize texture to video size
 	tex.resize(frameWidth, frameHeight);
 	resizeGLBuffers=false;
+	return true;
+}
+
+bool FFMpegVideoDecoder::fillDataAndCheckValidity()
+{
+	if(codecContext->time_base.num!=0)
+	{
+		//time_base = 1/framerate
+		frameRate=codecContext->time_base.den;
+		frameRate/=codecContext->time_base.num;
+	}
+	else
+		return false;
+
+	if(codecContext->width!=0 && codecContext->height!=0)
+		setSize(codecContext->width, codecContext->height);
+	else
+		return false;
+
 	return true;
 }
 
@@ -73,13 +94,8 @@ FFMpegVideoDecoder::FFMpegVideoDecoder(uint8_t* initdata, uint32_t datalen):curB
 	if(avcodec_open(codecContext, codec)<0)
 		throw RunTimeException("Cannot open decoder");
 
-	if(codecContext->time_base.num!=0)
-	{
-		//time_base = 1/framerate
-		frameRate=codecContext->time_base.den;
-		frameRate/=codecContext->time_base.num;
+	if(fillDataAndCheckValidity())
 		status=VALID;
-	}
 	else
 		status=INIT;
 
@@ -107,6 +123,17 @@ void FFMpegVideoDecoder::setSize(uint32_t w, uint32_t h)
 	}
 }
 
+void FFMpegVideoDecoder::skipUntil(uint32_t time)
+{
+	while(1)
+	{
+		if(buffers.front().time>=time)
+			break;
+		if(discardFrame()==false)
+			break;
+	}
+}
+
 bool FFMpegVideoDecoder::discardFrame()
 {
 	Locker locker(mutex);
@@ -114,7 +141,7 @@ bool FFMpegVideoDecoder::discardFrame()
 	return buffers.nonBlockingPopFront();
 }
 
-bool FFMpegVideoDecoder::decodeData(uint8_t* data, uint32_t datalen)
+bool FFMpegVideoDecoder::decodeData(uint8_t* data, uint32_t datalen, uint32_t time)
 {
 	int frameOk=0;
 #if HAVE_AVCODEC_DECODE_VIDEO2
@@ -130,24 +157,16 @@ bool FFMpegVideoDecoder::decodeData(uint8_t* data, uint32_t datalen)
 		throw RunTimeException("Cannot decode frame");
 	assert(codecContext->pix_fmt==PIX_FMT_YUV420P);
 
-	const uint32_t height=codecContext->height;
-	const uint32_t width=codecContext->width;
-	if(status==INIT && codecContext->time_base.num!=0 && height && width)
-	{
-		//time_base = 1/framerate
-		frameRate=codecContext->time_base.den;
-		frameRate/=codecContext->time_base.num;
+	if(status==INIT && fillDataAndCheckValidity())
 		status=VALID;
-	}
 
 	assert(frameIn->pts==AV_NOPTS_VALUE || frameIn->pts==0);
 
-	setSize(width,height);
-	copyFrameToBuffers(frameIn);
+	copyFrameToBuffers(frameIn, time);
 	return true;
 }
 
-void FFMpegVideoDecoder::copyFrameToBuffers(const AVFrame* frameIn)
+void FFMpegVideoDecoder::copyFrameToBuffers(const AVFrame* frameIn, uint32_t time)
 {
 	YUVBuffer& curTail=buffers.acquireLast();
 	//Only one thread may access the tail
@@ -164,14 +183,14 @@ void FFMpegVideoDecoder::copyFrameToBuffers(const AVFrame* frameIn)
 		offset[1]+=frameWidth/2;
 		offset[2]+=frameWidth/2;
 	}
+	curTail.time=time;
 
 	buffers.commitLast();
 }
 
 bool FFMpegVideoDecoder::copyFrameToTexture(TextureBuffer& tex)
 {
-	if(!isValid())
-		return false;
+	assert(isValid());
 	if(!initialized)
 	{
 		glGenBuffers(2,videoBuffers);
@@ -179,19 +198,23 @@ bool FFMpegVideoDecoder::copyFrameToTexture(TextureBuffer& tex)
 	}
 
 	bool ret=false;
-	if(VideoDecoder::copyFrameToTexture(tex))
+	//Align width to 16 bytes (4 pixels), the alignment protocol is also respected when resizing texture
+	const uint32_t alignedWidth=(frameWidth+15)&0xfffffff0;
+	if(VideoDecoder::resizeIfNeeded(tex))
 	{
-		//Initialize both PBOs to video size
+		//Initialize both PBOs to video size, the width is aligned to 16
 		glBindBuffer(GL_PIXEL_UNPACK_BUFFER, videoBuffers[0]);
-		glBufferData(GL_PIXEL_UNPACK_BUFFER, frameWidth*frameHeight*4, 0, GL_STREAM_DRAW);
+		glBufferData(GL_PIXEL_UNPACK_BUFFER, alignedWidth*frameHeight*4, 0, GL_STREAM_DRAW);
 		glBindBuffer(GL_PIXEL_UNPACK_BUFFER, videoBuffers[1]);
-		glBufferData(GL_PIXEL_UNPACK_BUFFER, frameWidth*frameHeight*4, 0, GL_STREAM_DRAW);
+		glBufferData(GL_PIXEL_UNPACK_BUFFER, alignedWidth*frameHeight*4, 0, GL_STREAM_DRAW);
 	}
 	else
 	{
 		glBindBuffer(GL_PIXEL_UNPACK_BUFFER, videoBuffers[curBuffer]);
 		//Copy content of the pbo to the texture, 0 is the offset in the pbo
-		tex.setBGRAData(0, frameWidth, frameHeight);
+		tex.setBGRAData(0, alignedWidth, frameHeight);
+		//Now texture width has become alignedWidth, reset it to the right value
+		tex.resize(frameWidth,frameHeight);
 		glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
 		ret=true;
 	}
@@ -206,14 +229,12 @@ bool FFMpegVideoDecoder::copyFrameToTexture(TextureBuffer& tex)
 		uint8_t* buf=(uint8_t*)glMapBuffer(GL_PIXEL_UNPACK_BUFFER,GL_WRITE_ONLY);
 
 		//At least a frame is available
-		int offset=0;
-		for(uint32_t y=0;y<frameHeight;y++)
-		{
-			YUVBuffer& cur=buffers.front();
-			fastYUV420ChannelsToBuffer(cur.ch[0]+(y*frameWidth),cur.ch[1]+((y>>1)*(frameWidth>>1)),
-					cur.ch[2]+((y>>1)*(frameWidth>>1)),buf+offset,frameWidth);
-			offset+=frameWidth*4;
-		}
+		YUVBuffer& cur=buffers.front();
+		//If the width is compatible with full aligned accesses use the aligned version of the packer
+		if(frameWidth%32==0)
+			fastYUV420ChannelsToYUV0Buffer_SSE2Aligned(cur.ch[0],cur.ch[1],cur.ch[2],buf,frameWidth,frameHeight);
+		else
+			fastYUV420ChannelsToYUV0Buffer_SSE2Unaligned(cur.ch[0],cur.ch[1],cur.ch[2],buf,frameWidth,frameHeight);
 
 		glUnmapBuffer(GL_PIXEL_UNPACK_BUFFER);
 		glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
@@ -234,10 +255,91 @@ void FFMpegVideoDecoder::YUVBufferGenerator::init(YUVBuffer& buf) const
 #ifdef WIN32
 	//FIXME!!
 #else
-	posix_memalign((void**)&buf.ch[0], 16, bufferSize);
-	posix_memalign((void**)&buf.ch[1], 16, bufferSize/4);
-	posix_memalign((void**)&buf.ch[2], 16, bufferSize/4);
+	int ret=posix_memalign((void**)&buf.ch[0], 16, bufferSize);
+	assert(ret==0);
+	ret=posix_memalign((void**)&buf.ch[1], 16, bufferSize/4);
+	assert(ret==0);
+	ret=posix_memalign((void**)&buf.ch[2], 16, bufferSize/4);
+	assert(ret==0);
 #endif
+}
+
+void* AudioDecoder::operator new(size_t s)
+{
+	void* retAddr=NULL;
+	int ret=posix_memalign(&retAddr, 16, s);
+	assert(ret==0);
+	assert(retAddr);
+	return retAddr;
+}
+void AudioDecoder::operator delete(void* addr)
+{
+	free(addr);
+}
+
+bool AudioDecoder::discardFrame()
+{
+	//We don't want ot block if no frame is available
+	return samplesBuffer.nonBlockingPopFront();
+}
+
+uint32_t AudioDecoder::copyFrame(int16_t* dest, uint32_t len)
+{
+	assert(dest);
+	if(samplesBuffer.isEmpty())
+		return 0;
+	//Check if we have to just return the size
+	uint32_t frameSize=min(samplesBuffer.front().len,len);
+	memcpy(dest,samplesBuffer.front().current,frameSize);
+	samplesBuffer.front().len-=frameSize;
+	if(samplesBuffer.front().len==0)
+		samplesBuffer.nonBlockingPopFront();
+	else
+	{
+		samplesBuffer.front().current+=frameSize/2;
+		samplesBuffer.front().time+=frameSize/getBytesPerMSec();
+	}
+	return frameSize;
+}
+
+uint32_t AudioDecoder::getFrontTime() const
+{
+	assert(!samplesBuffer.isEmpty());
+	return samplesBuffer.front().time;
+}
+
+void AudioDecoder::skipUntil(uint32_t time, uint32_t usecs)
+{
+	assert(isValid());
+//	while(1) //Should loop, but currently only usec adjustements are requested
+	{
+		if(samplesBuffer.isEmpty())
+			return;
+		FrameSamples& cur=samplesBuffer.front();
+		assert(time==cur.time);
+		if(usecs==0) //Nothing to skip
+			return;
+		//Check how many bytes are needed to fill the gap
+		uint32_t bytesToDiscard=(time-cur.time)*getBytesPerMSec()+usecs*getBytesPerMSec()/1000;
+		bytesToDiscard&=0xfffffffe;
+
+		if(cur.len<=bytesToDiscard) //The whole frame is droppable
+			discardFrame();
+		else
+		{
+			assert((bytesToDiscard%2)==0);
+			cur.len-=bytesToDiscard;
+			cur.current+=(bytesToDiscard/2);
+			cur.time=time;
+			return;
+		}
+	}
+}
+
+void AudioDecoder::skipAll()
+{
+	while(!samplesBuffer.isEmpty())
+		discardFrame();
 }
 
 FFMpegAudioDecoder::FFMpegAudioDecoder(FLV_AUDIO_CODEC audioCodec, uint8_t* initdata, uint32_t datalen)
@@ -265,12 +367,34 @@ FFMpegAudioDecoder::FFMpegAudioDecoder(FLV_AUDIO_CODEC audioCodec, uint8_t* init
 	if(avcodec_open(codecContext, codec)<0)
 		throw RunTimeException("Cannot open decoder");
 
-	//assert_and_throw(codecContext->channels==2);
-	cout << codecContext->sample_rate << endl;
-	//assert_and_throw(codecContext->sample_rate==44000);
+	if(fillDataAndCheckValidity())
+		status=VALID;
+	else
+		status=INIT;
 }
 
-bool FFMpegAudioDecoder::decodeData(uint8_t* data, uint32_t datalen)
+bool FFMpegAudioDecoder::fillDataAndCheckValidity()
+{
+	if(codecContext->sample_rate!=0)
+	{
+		LOG(LOG_NO_INFO,"Audio sample rate " << codecContext->sample_rate);
+		sampleRate=codecContext->sample_rate;
+	}
+	else
+		return false;
+
+	if(codecContext->channels!=0)
+	{
+		LOG(LOG_NO_INFO, "Audio channels " << codecContext->channels);
+		channelCount=codecContext->channels;
+	}
+	else
+		return false;
+
+	return true;
+}
+
+uint32_t FFMpegAudioDecoder::decodeData(uint8_t* data, uint32_t datalen, uint32_t time)
 {
 	FrameSamples& curTail=samplesBuffer.acquireLast();
 	int maxLen=AVCODEC_MAX_AUDIO_FRAME_SIZE;
@@ -284,32 +408,15 @@ bool FFMpegAudioDecoder::decodeData(uint8_t* data, uint32_t datalen)
 	uint32_t ret=avcodec_decode_audio2(codecContext, curTail.samples, &maxLen, data, datalen);
 #endif
 	assert_and_throw(ret==datalen);
+
+	if(status==INIT && fillDataAndCheckValidity())
+		status=VALID;
+
 	curTail.len=maxLen;
 	assert(maxLen%2==0);
 	curTail.current=curTail.samples;
+	curTail.time=time;
 	samplesBuffer.commitLast();
-	return true;
-}
-
-uint32_t FFMpegAudioDecoder::copyFrame(int16_t* dest, uint32_t len)
-{
-	assert(dest);
-	if(samplesBuffer.isEmpty())
-		return 0;
-	//Check if we have to just return the size
-	uint32_t frameSize=min(samplesBuffer.front().len,len);
-	memcpy(dest,samplesBuffer.front().current,frameSize);
-	samplesBuffer.front().len-=frameSize;
-	if(samplesBuffer.front().len==0)
-		samplesBuffer.nonBlockingPopFront();
-	else
-		samplesBuffer.front().current+=frameSize/2;
-	return frameSize;
-}
-
-bool AudioDecoder::discardFrame()
-{
-	//We don't want ot block if no frame is available
-	return samplesBuffer.nonBlockingPopFront();
+	return maxLen;
 }
 

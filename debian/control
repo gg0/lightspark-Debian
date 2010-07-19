@@ -31,7 +31,6 @@ Vcs-Browser: http://git.debian.org/?p=collab-maint/lightspark.git
 Package: lightspark
 Architecture: any
 Depends: ${shlibs:Depends}, ${misc:Depends}, ttf-liberation
-Recommends: pulseaudio
 Description: High-performance SWF player (experimental)
  Lightspark is a free Flash player for Linux which aims for high-performance
  by using modern technologies such as JIT compilation and OpenGL shaders.
@@ -67,11 +66,12 @@ Description: High-performance SWF player - Mozilla Plugin (experimental)
  .
  This package contains the mozilla plugin.
 
-Package: liblightspark0.5
+Package: liblightspark0.4
 Architecture: any
 Section: libs
 Priority: extra
 Depends: ${shlibs:Depends}, ${misc:Depends}, 
+Recommends: pulseaudio
 Description: High-performance SWF player (experimental) - Shared library
  Lightspark is a free Flash player for Linux which aims for high-performance
  by using modern technologies such as JIT compilation and OpenGL shaders.
@@ -93,7 +93,7 @@ Package: liblightspark-dev
 Architecture: any
 Section: libdevel
 Priority: extra
-Depends: ${shlibs:Depends}, ${misc:Depends}, liblightspark0.5 (= ${binary:Version})
+Depends: ${shlibs:Depends}, ${misc:Depends}, liblightspark0.4 (= ${binary:Version})
 Description: High-performance SWF player (experimental) - Developement files
  Lightspark is a free Flash player for Linux which aims for high-performance
  by using modern technologies such as JIT compilation and OpenGL shaders.
@@ -118,7 +118,7 @@ Priority: extra
 Depends: ${shlibs:Depends}, ${misc:Depends}, 
  lightspark (= ${binary:Version}),
  mozilla-plugin-lightspark (= ${binary:Version}),
- liblightspark0.5 (= ${binary:Version})
+ liblightspark0.4 (= ${binary:Version})
 Description: High-performance SWF player (experimental) - Debug symbols
  Lightspark is a free Flash player for Linux which aims for high-performance
  by using modern technologies such as JIT compilation and OpenGL shaders.

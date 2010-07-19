@@ -1,4 +1,4 @@
-liblightspark.so.0.5 liblightspark0.5 #MINVER#
+liblightspark.so.0.4 liblightspark0.4 #MINVER#
  (c++)"lightspark::ABCContext::ABCContext(std::basic_istream<char, std::char_traits<char> >&)@Base" 0.4.1
  (c++)"lightspark::ABCContext::ABCContext(std::basic_istream<char, std::char_traits<char> >&)@Base" 0.4.1
  (c++)"lightspark::Class_base::abandonObject(lightspark::ASObject*)@Base" 0.4.1

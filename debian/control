@@ -66,6 +66,7 @@ Description: High-performance SWF player - Mozilla Plugin (experimental)
  This package contains the mozilla plugin.
 
 Package: lightspark-common
+Section: misc
 Architecture: all
 Depends: ${shlibs:Depends}, ${misc:Depends}, ttf-liberation
 Recommends: liblightspark0.4
@@ -136,8 +137,8 @@ Architecture: any
 Section: debug
 Priority: extra
 Depends: ${shlibs:Depends}, ${misc:Depends}, 
- lightspark (= ${binary:Version}),
- mozilla-plugin-lightspark (= ${binary:Version}),
+ lightspark (= ${binary:Version}) |
+ mozilla-plugin-lightspark (= ${binary:Version}) |
  liblightspark0.4 (= ${binary:Version})
 Description: High-performance SWF player (experimental) - Debug symbols
  Lightspark is a free Flash player for Linux which aims for high-performance

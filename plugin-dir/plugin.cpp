@@ -27,6 +27,7 @@
 #define PLUGIN_DESCRIPTION "Shockwave Flash 10.0 r42"
 #include "class.h"
 #include <gtk/gtk.h>
+#include <gdk/gdkx.h>
 
 using namespace std;
 
@@ -122,9 +123,9 @@ NPError NS_PluginGetValue(NPPVariable aVariable, void *aValue)
 		case NPPVpluginDescriptionString:
 			*((char **)aValue) = (char*)PLUGIN_DESCRIPTION;
 			break;
-/*		case NPPVpluginNeedsXEmbed:
+		case NPPVpluginNeedsXEmbed:
 			*((bool *)aValue) = true;
-			break;*/
+			break;
 		default:
 			err = NPERR_INVALID_PARAM;
 			break;
@@ -160,7 +161,7 @@ void NS_DestroyPluginInstance(nsPluginInstanceBase * aPlugin)
 // nsPluginInstance class implementation
 //
 nsPluginInstance::nsPluginInstance(NPP aInstance, int16_t argc, char** argn, char** argv) : nsPluginInstanceBase(),
-	mInstance(aInstance),mInitialized(FALSE),mWindow(0),swf_stream(&swf_buf),m_it(NULL),m_rt(NULL)
+	mInstance(aInstance),mInitialized(FALSE),mContainer(NULL),mWindow(0),swf_stream(&swf_buf),m_it(NULL),m_rt(NULL)
 {
 	m_sys=new lightspark::SystemState;
 	m_pt=new lightspark::ParseThread(m_sys,swf_stream);
@@ -267,6 +268,8 @@ nsPluginInstance::~nsPluginInstance()
 	delete m_pt;
 	delete m_rt;
 	delete m_it;
+//	if(mContainer)
+//		gtk_widget_destroy(mContainer);
 }
 
 void nsPluginInstance::draw()
@@ -347,10 +350,13 @@ NPError nsPluginInstance::SetWindow(NPWindow* aWindow)
 
 		p->display=mDisplay;
 		p->visual=XVisualIDFromVisual(mVisual);
-		p->window=mWindow;
+		mContainer=gtk_plug_new((GdkNativeWindow)mWindow);
+		p->container=mContainer;
+		gtk_widget_show(p->container);
+		p->window=GDK_WINDOW_XWINDOW(mContainer->window);
 		p->width=mWidth;
 		p->height=mHeight;
-		//p->container=gtk_plug_new((GdkNativeWindow)p->window);
+		cout << "X Window " << hex << p->window << dec << endl;
 		lightspark::NPAPI_params* p2=new lightspark::NPAPI_params(*p);
 		if(m_rt!=NULL)
 		{
@@ -360,14 +366,14 @@ NPError nsPluginInstance::SetWindow(NPWindow* aWindow)
 		if(p->width==0 || p->height==0)
 			abort();
 
-		m_rt=new lightspark::RenderThread(m_sys,lightspark::NPAPI,p);
+		m_rt=new lightspark::RenderThread(m_sys,lightspark::GTKPLUG,p);
 
 		if(m_it!=NULL)
 		{
 			cout << "destroy old input" << endl;
 			abort();
 		}
-		m_it=new lightspark::InputThread(m_sys,lightspark::NPAPI,p2);
+		m_it=new lightspark::InputThread(m_sys,lightspark::GTKPLUG,p2);
 
 		m_sys->inputThread=m_it;
 		m_sys->setRenderThread(m_rt);

@@ -1,0 +1,17 @@
+Description: Fix hyphen-used-as-minus error in the manpage.
+Author: Didier Raboud <didier@raboud.com>
+Origin: author
+Last-Update: 2010-07-20
+Index: lightspark/docs/man/lightspark.1
+===================================================================
+--- lightspark.orig/docs/man/lightspark.1	2010-07-20 17:31:04.000000000 +0200
++++ lightspark/docs/man/lightspark.1	2010-07-20 17:32:21.000000000 +0200
+@@ -19,7 +19,7 @@
+ lightspark \- a free Flash player
+ .SH SYNOPSIS
+ .B lightspark 
+-[--url|-u http://loader.url/file.swf] [--disable-interpreter|-ni] [--enable-jit|-j] [--log-level|-l 0-4] [--parameters-file|-p params-file] file.swf
++[\-\-url|\-u http://loader.url/file.swf] [\-\-disable-interpreter|\-ni] [\-\-enable\-jit|\-j] [\-\-log\-level|\-l 0-4] [\-\-parameters\-file|\-p params-file] file.swf
+ .SH DESCRIPTION
+ .B Lightspark
+ is a free, modern Flash Player implementation, this documents the options accepted by the standalone version of the program.

@@ -1,4 +1,4 @@
-lightspark (0.4.2~rc3-1~exp0) experimental; urgency=low
+lightspark (0.4.2-1) experimental; urgency=low
 
   [ Didier Raboud ]
   * Initial upload to Debian (Closes: #582120).
@@ -20,11 +20,12 @@ lightspark (0.4.2~rc3-1~exp0) experimental; urgency=low
   * Cleanup:
     - Remove empty README.Debian.
   * Use 3.0 (quilt) source package format.
+  * Patch manpage to correct hyphen-used-as-minus error.
 
   [ Luca Falavigna ]
   * Add myself to Uploaders.
 
- -- Didier Raboud <didier@raboud.com>  Mon, 19 Jul 2010 13:28:31 +0200
+ -- Didier Raboud <didier@raboud.com>  Tue, 20 Jul 2010 18:33:13 +0200
 
 lightspark (0.4.1-0ubuntu1) lucid; urgency=low
 

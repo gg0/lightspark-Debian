@@ -1,4 +1,4 @@
-lightspark (0.4.2-1) experimental; urgency=low
+lightspark (0.4.2-1) UNRELEASED; urgency=low
 
   [ Didier Raboud ]
   * Initial upload to Debian (Closes: #582120).
@@ -24,10 +24,12 @@ lightspark (0.4.2-1) experimental; urgency=low
   [ Luca Falavigna ]
   * debian/control:
     - Add myself to Uploaders.
+    - Rename mozilla-plugin-lightspark to browser-plugin-lightspark to
+      match naming scheme by Mozilla team.
   * debian/copyright:
     - Add missing license information.
 
- -- Didier Raboud <didier@raboud.com>  Wed, 21 Jul 2010 15:43:11 +0200
+ -- Luca Falavigna <dktrkranz@debian.org>  Wed, 21 Jul 2010 17:37:29 +0200
 
 lightspark (0.4.1-0ubuntu1) lucid; urgency=low
 

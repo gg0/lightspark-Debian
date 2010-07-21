@@ -1,0 +1,18 @@
+Description: Put the private library in a private place
+Author: Didier Raboud <didier@raboud.com>
+Origin: vendor
+Forwarded: yes (IRC)
+Last-Update: 2010-07-21
+Index: lightspark/CMakeLists.txt
+===================================================================
+--- lightspark.orig/CMakeLists.txt	2010-07-21 15:22:22.000000000 +0200
++++ lightspark/CMakeLists.txt	2010-07-21 15:22:56.000000000 +0200
+@@ -154,7 +154,7 @@
+ SET_TARGET_PROPERTIES(spark PROPERTIES SOVERSION "${MAJOR_VERSION}.${MINOR_VERSION}")
+ 
+ IF(UNIX)
+-	INSTALL(TARGETS spark LIBRARY DESTINATION ${LIBDIR})
++	INSTALL(TARGETS spark LIBRARY DESTINATION ${LIBDIR}/lightspark)
+ ENDIF(UNIX)
+ 
+ # lightspark executable target

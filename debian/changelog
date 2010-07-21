@@ -23,7 +23,10 @@ lightspark (0.4.2-1) experimental; urgency=low
   * Patch manpage to correct hyphen-used-as-minus error.
 
   [ Luca Falavigna ]
-  * Add myself to Uploaders.
+  * debian/control:
+    - Add myself to Uploaders.
+  * debian/copyright:
+    - Add missing license information.
 
  -- Didier Raboud <didier@raboud.com>  Tue, 20 Jul 2010 18:33:13 +0200
 

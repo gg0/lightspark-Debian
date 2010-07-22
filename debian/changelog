@@ -1,4 +1,4 @@
-lightspark (0.4.2-1) UNRELEASED; urgency=low
+lightspark (0.4.2-1) experimental; urgency=low
 
   [ Didier Raboud ]
   * Initial upload to Debian (Closes: #582120).

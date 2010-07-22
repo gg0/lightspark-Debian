@@ -4,7 +4,9 @@
 	dh --parallel $@
 
 override_dh_auto_configure:
-	dh_auto_configure -- -DCOMPILE_PLUGIN=1 -DCMAKE_BUILD_TYPE=Debian
+	dh_auto_configure -- \
+	    -DCOMPILE_PLUGIN=1 \
+	    -DCMAKE_BUILD_TYPE=Debian
 
 override_dh_strip:
 	dh_strip --dbg-package=lightspark-dbg
@@ -19,3 +21,6 @@ override_dh_shlibdeps:
 	    -- -Ldebian/common.shlibs
 
 	dh_shlibdeps --remaining-packages
+
+override_dh_makeshlibs:
+	dh_makeshlibs -X/usr/lib/lightspark

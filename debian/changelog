@@ -13,6 +13,7 @@ lightspark (0.4.2-1) UNRELEASED; urgency=low
   * New packages: 
     - -dbg package.
     - -common package with the private library and data.
+  * Add lintian overrides for the use of rpath for the private library.
   * debian/copyright: Update.
   * debian/watch: Update using Launchpad.net.
   * Move from cdbs to dh7 tiny style.
@@ -29,7 +30,7 @@ lightspark (0.4.2-1) UNRELEASED; urgency=low
   * debian/copyright:
     - Add missing license information.
 
- -- Luca Falavigna <dktrkranz@debian.org>  Wed, 21 Jul 2010 17:37:29 +0200
+ -- Didier Raboud <didier@raboud.com>  Thu, 22 Jul 2010 10:43:03 +0200
 
 lightspark (0.4.1-0ubuntu1) lucid; urgency=low
 

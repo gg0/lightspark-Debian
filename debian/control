@@ -69,7 +69,6 @@ Description: High-performance SWF player - Mozilla Plugin (experimental)
  This package contains the mozilla plugin.
 
 Package: lightspark-common
-Section: video
 Architecture: any
 Depends: ${shlibs:Depends}, ${misc:Depends}, ttf-liberation
 Description: High-performance SWF player - common data
@@ -90,9 +89,9 @@ Description: High-performance SWF player - common data
  This package contains the common library and data.
 
 Package: lightspark-dbg
-Architecture: any
 Section: debug
 Priority: extra
+Architecture: any
 Depends: ${shlibs:Depends}, ${misc:Depends}, 
  lightspark (= ${binary:Version}) |
  browser-plugin-lightspark (= ${binary:Version}) |

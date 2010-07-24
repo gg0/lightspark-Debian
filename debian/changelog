@@ -1,8 +1,12 @@
 lightspark (0.4.2.1-1) UNRELEASED; urgency=low
 
   * New upstream bugfix release.
+  * debian/patches/avoidManpageErrors.patch
+    - Removed, adopted upstream.
+  *  debian/patches/privateLibrary.patch
+    - Removed, adopted upstream.
 
- -- Luca Falavigna <dktrkranz@debian.org>  Sat, 24 Jul 2010 09:11:18 +0200
+ -- Luca Falavigna <dktrkranz@debian.org>  Sat, 24 Jul 2010 09:12:12 +0200
 
 lightspark (0.4.2-1) experimental; urgency=low
 

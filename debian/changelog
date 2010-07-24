@@ -5,8 +5,10 @@ lightspark (0.4.2.1-1) UNRELEASED; urgency=low
     - Removed, adopted upstream.
   *  debian/patches/privateLibrary.patch
     - Removed, adopted upstream.
+  * debian/control:
+    - Limit architectures to any-i386 and any-amd64.
 
- -- Luca Falavigna <dktrkranz@debian.org>  Sat, 24 Jul 2010 09:12:12 +0200
+ -- Luca Falavigna <dktrkranz@debian.org>  Sat, 24 Jul 2010 09:17:07 +0200
 
 lightspark (0.4.2-1) experimental; urgency=low
 

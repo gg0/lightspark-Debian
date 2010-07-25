@@ -1,6 +1,8 @@
 lightspark (0.4.2.1-1) UNRELEASED; urgency=low
 
   * New upstream bugfix release.
+
+  [ Luca Falavigna ]
   * debian/patches/avoidManpageErrors.patch
     - Removed, adopted upstream.
   *  debian/patches/privateLibrary.patch
@@ -8,7 +10,11 @@ lightspark (0.4.2.1-1) UNRELEASED; urgency=low
   * debian/control:
     - Limit architectures to any-i386 and any-amd64.
 
- -- Luca Falavigna <dktrkranz@debian.org>  Sat, 24 Jul 2010 09:17:07 +0200
+  [ Didier Raboud ]
+  * debian/control:
+    - Add pulseaudio recommends to lightspark-common, for real.
+
+ -- Didier Raboud <didier@raboud.com>  Sun, 25 Jul 2010 16:02:09 +0200
 
 lightspark (0.4.2-1) experimental; urgency=low
 

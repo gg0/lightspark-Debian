@@ -8,13 +8,13 @@ lightspark (0.4.2.1-1) UNRELEASED; urgency=low
   *  debian/patches/privateLibrary.patch
     - Removed, adopted upstream.
   * debian/control:
-    - Limit architectures to any-i386 and any-amd64.
+    - Limit architectures to i386 amd64 kfreebsd-any (Closes: #590267).
 
   [ Didier Raboud ]
   * debian/control:
     - Add pulseaudio recommends to lightspark-common, for real.
 
- -- Didier Raboud <didier@raboud.com>  Sun, 25 Jul 2010 16:02:09 +0200
+ -- Luca Falavigna <dktrkranz@debian.org>  Mon, 26 Jul 2010 09:08:30 +0200
 
 lightspark (0.4.2-1) experimental; urgency=low
 

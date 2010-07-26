@@ -9,12 +9,13 @@ lightspark (0.4.2.1-1) UNRELEASED; urgency=low
     - Removed, adopted upstream.
   * debian/control:
     - Limit architectures to i386 amd64 kfreebsd-any (Closes: #590267).
+    - Bump Standards-Version to 3.9.1, no changes required.
 
   [ Didier Raboud ]
   * debian/control:
     - Add pulseaudio recommends to lightspark-common, for real.
 
- -- Luca Falavigna <dktrkranz@debian.org>  Mon, 26 Jul 2010 09:08:30 +0200
+ -- Luca Falavigna <dktrkranz@debian.org>  Mon, 26 Jul 2010 09:09:44 +0200
 
 lightspark (0.4.2-1) experimental; urgency=low
 

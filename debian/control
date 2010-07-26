@@ -25,7 +25,7 @@ Build-Depends: debhelper (>= 7.0.50),
 	xulrunner-dev,
 	libsdl-dev,
 	libffi-dev
-Standards-Version: 3.9.0.0
+Standards-Version: 3.9.1
 Homepage: http://lightspark.sf.net
 Vcs-Git: git://git.debian.org/collab-maint/lightspark.git
 Vcs-Browser: http://git.debian.org/?p=collab-maint/lightspark.git

@@ -1,4 +1,4 @@
-lightspark (0.4.2.1-1) UNRELEASED; urgency=low
+lightspark (0.4.2.1-1) experimental; urgency=low
 
   * New upstream bugfix release.
 
@@ -15,7 +15,7 @@ lightspark (0.4.2.1-1) UNRELEASED; urgency=low
   * debian/control:
     - Add pulseaudio recommends to lightspark-common, for real.
 
- -- Luca Falavigna <dktrkranz@debian.org>  Mon, 26 Jul 2010 09:09:44 +0200
+ -- Luca Falavigna <dktrkranz@debian.org>  Mon, 26 Jul 2010 20:08:45 +0200
 
 lightspark (0.4.2-1) experimental; urgency=low
 

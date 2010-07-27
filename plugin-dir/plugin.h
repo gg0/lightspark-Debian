@@ -30,12 +30,12 @@
 #include <GL/glx.h>
 
 class NPDownloader;
+typedef void(*helper_t)(void*);
 
 class NPDownloadManager: public lightspark::DownloadManager
 {
 private:
 	NPP instance;
-	//sem_t mutex;
 public:
 	NPDownloadManager(NPP i);
 	~NPDownloadManager();
@@ -71,13 +71,15 @@ public:
 	int32_t Write(NPStream *stream, int32_t offset, int32_t len, void *buffer);
 	int32_t WriteReady(NPStream *stream);
 	void    URLNotify(const char* url, NPReason reason, void* notifyData);
+	void    StreamAsFile(NPStream* stream, const char* fname);
 
 	// locals
 	const char * getVersion();
 	void draw();
 
 private:
-	int hexToInt(char c);
+	static void AsyncHelper(void* th, helper_t func, void* privArg);
+	std::string getPageURL() const;
 
 	NPP mInstance;
 	NPBool mInitialized;
@@ -96,8 +98,6 @@ private:
 
 	lightspark::SystemState* m_sys;
 	lightspark::ParseThread* m_pt;
-	lightspark::InputThread* m_it;
-	lightspark::RenderThread* m_rt;
 };
 
 #endif // __PLUGIN_H__

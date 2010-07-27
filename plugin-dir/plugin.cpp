@@ -25,13 +25,10 @@
 #define FAKE_PLUGIN_NAME    "Lightspark player"
 #define MIME_TYPES_DESCRIPTION  MIME_TYPES_HANDLED":swf:"PLUGIN_NAME//";"FAKE_MIME_TYPE":swf:"PLUGIN_NAME
 #define PLUGIN_DESCRIPTION "Shockwave Flash 10.0 r42"
-#include "class.h"
-#include <gtk/gtk.h>
-#include <gdk/gdkx.h>
 
 using namespace std;
 
-TLSDATA DLL_PUBLIC lightspark::SystemState* sys;
+TLSDATA DLL_PUBLIC lightspark::SystemState* sys=NULL;
 TLSDATA DLL_PUBLIC lightspark::RenderThread* rt=NULL;
 TLSDATA DLL_PUBLIC lightspark::ParseThread* pt=NULL;
 
@@ -161,10 +158,12 @@ void NS_DestroyPluginInstance(nsPluginInstanceBase * aPlugin)
 // nsPluginInstance class implementation
 //
 nsPluginInstance::nsPluginInstance(NPP aInstance, int16_t argc, char** argn, char** argv) : nsPluginInstanceBase(),
-	mInstance(aInstance),mInitialized(FALSE),mContainer(NULL),mWindow(0),swf_stream(&swf_buf),m_it(NULL),m_rt(NULL)
+	mInstance(aInstance),mInitialized(FALSE),mContainer(NULL),mWindow(0),swf_stream(&swf_buf)
 {
-	m_sys=new lightspark::SystemState;
-	m_pt=new lightspark::ParseThread(m_sys,swf_stream);
+	m_pt=new lightspark::ParseThread(NULL,swf_stream);
+	m_sys=new lightspark::SystemState(m_pt);
+	//As this is the plugin, enable fallback on Gnash for older clips
+	m_sys->enableGnashFallback();
 	//Find flashvars argument
 	for(int i=0;i<argc;i++)
 	{
@@ -172,83 +171,14 @@ nsPluginInstance::nsPluginInstance(NPP aInstance, int16_t argc, char** argn, cha
 			continue;
 		if(strcasecmp(argn[i],"flashvars")==0)
 		{
-			lightspark::ASObject* params=lightspark::Class<lightspark::ASObject>::getInstanceS();
-			//Add arguments to SystemState
-			std::string vars(argv[i]);
-			uint32_t cur=0;
-			while(cur<vars.size())
-			{
-				int n1=vars.find('=',cur);
-				if(n1==-1) //Incomplete parameters string, ignore the last
-					break;
-
-				int n2=vars.find('&',n1+1);
-				if(n2==-1)
-					n2=vars.size();
-
-				std::string varName=vars.substr(cur,(n1-cur));
-
-				//The variable value has to be urldecoded
-				bool ok=true;
-				std::string varValue;
-				varValue.reserve(n2-n1); //The maximum lenght
-				for(int j=n1+1;j<n2;j++)
-				{
-					if(vars[j]!='%')
-						varValue.push_back(vars[j]);
-					else
-					{
-						if((n2-j)<3) //Not enough characters
-						{
-							ok=false;
-							break;
-						}
-
-						int t1=hexToInt(vars[j+1]);
-						int t2=hexToInt(vars[j+2]);
-						if(t1==-1 || t2==-1)
-						{
-							ok=false;
-							break;
-						}
-
-						int c=(t1*16)+t2;
-						varValue.push_back(c);
-						j+=2;
-					}
-				}
-
-				if(ok)
-				{
-					//cout << varName << ' ' << varValue << endl;
-					params->setVariableByQName(varName.c_str(),"",
-							lightspark::Class<lightspark::ASString>::getInstanceS(varValue));
-				}
-				cur=n2+1;
-			}
-			m_sys->setParameters(params);
+			m_sys->parseParametersFromFlashvars(argv[i]);
 		}
-		else if(strcasecmp(argn[i],"src")==0)
-		{
-			m_sys->setOrigin(argv[i]);
-		}
+		//The SWF file url should be getted from NewStream
 	}
 	m_sys->downloadManager=new NPDownloadManager(mInstance);
 	m_sys->addJob(m_pt);
 	//The sys var should be NULL in this thread
 	sys=NULL;
-}
-
-int nsPluginInstance::hexToInt(char c)
-{
-	if(c>='0' && c<='9')
-		return c-'0';
-	else if(c>='a' && c<='f')
-		return c-'a'+10;
-	else if(c>='A' && c<='F')
-		return c-'A'+10;
-	else
-		return -1;
 }
 
 nsPluginInstance::~nsPluginInstance()
@@ -260,16 +190,8 @@ nsPluginInstance::~nsPluginInstance()
 	m_pt->stop();
 	m_sys->setShutdownFlag();
 	m_sys->wait();
-	if(m_rt)
-		m_rt->wait();
-	if(m_it)
-		m_it->wait();
 	delete m_sys;
 	delete m_pt;
-	delete m_rt;
-	delete m_it;
-//	if(mContainer)
-//		gtk_widget_destroy(mContainer);
 }
 
 void nsPluginInstance::draw()
@@ -317,6 +239,12 @@ NPError nsPluginInstance::GetValue(NPPVariable aVariable, void *aValue)
 
 }
 
+void nsPluginInstance::AsyncHelper(void* th_void, helper_t func, void* privArg)
+{
+	nsPluginInstance* th=(nsPluginInstance*)th_void;
+	NPN_PluginThreadAsyncCall(th->mInstance, func, privArg);
+}
+
 NPError nsPluginInstance::SetWindow(NPWindow* aWindow)
 {
 	if(aWindow == NULL)
@@ -346,41 +274,82 @@ NPError nsPluginInstance::SetWindow(NPWindow* aWindow)
 		mDepth = ws_info->depth;
 		mColormap = ws_info->colormap;
 
-		lightspark::NPAPI_params* p=new lightspark::NPAPI_params;
+		lightspark::NPAPI_params p;
 
-		p->display=mDisplay;
-		p->visual=XVisualIDFromVisual(mVisual);
-		mContainer=gtk_plug_new((GdkNativeWindow)mWindow);
-		p->container=mContainer;
-		gtk_widget_show(p->container);
-		p->window=GDK_WINDOW_XWINDOW(mContainer->window);
-		p->width=mWidth;
-		p->height=mHeight;
-		cout << "X Window " << hex << p->window << dec << endl;
-		lightspark::NPAPI_params* p2=new lightspark::NPAPI_params(*p);
-		if(m_rt!=NULL)
+		p.visual=XVisualIDFromVisual(mVisual);
+		p.container=NULL;
+		p.display=mDisplay;
+		p.window=mWindow;
+		p.width=mWidth;
+		p.height=mHeight;
+		p.helper=AsyncHelper;
+		p.helperArg=this;
+		cout << "X Window " << hex << p.window << dec << endl;
+		if(m_sys->getRenderThread()!=NULL)
 		{
 			cout << "destroy old context" << endl;
 			abort();
 		}
-		if(p->width==0 || p->height==0)
-			abort();
-
-		m_rt=new lightspark::RenderThread(m_sys,lightspark::GTKPLUG,p);
-
-		if(m_it!=NULL)
+		if(m_sys->getInputThread()!=NULL)
 		{
 			cout << "destroy old input" << endl;
 			abort();
 		}
-		m_it=new lightspark::InputThread(m_sys,lightspark::GTKPLUG,p2);
-
-		m_sys->inputThread=m_it;
-		m_sys->setRenderThread(m_rt);
+		m_sys->setParamsAndEngine(lightspark::GTKPLUG,&p);
 	}
 	//draw();
 	return TRUE;
 }
+
+string nsPluginInstance::getPageURL() const
+{
+	//Copied from https://developer.mozilla.org/en/Getting_the_page_URL_in_NPAPI_plugin 
+	// Get the window object.
+	NPObject* sWindowObj;
+	NPN_GetValue(mInstance, NPNVWindowNPObject, &sWindowObj);
+	// Declare a local variant value.
+	NPVariant variantValue;
+	// Create a "location" identifier.
+	NPIdentifier identifier = NPN_GetStringIdentifier( "location" );
+	// Get the location property from the window object (which is another object).
+	bool b1 = NPN_GetProperty(mInstance, sWindowObj, identifier, &variantValue);
+	NPN_ReleaseObject(sWindowObj);
+	if(!b1)
+		return "";
+	if(!NPVARIANT_IS_OBJECT(variantValue))
+	{
+		NPN_ReleaseVariantValue(&variantValue);
+		return "";
+	}
+	// Get a pointer to the "location" object.
+	NPObject *locationObj = variantValue.value.objectValue;
+	// Create a "href" identifier.
+	identifier = NPN_GetStringIdentifier( "href" );
+	// Get the href property from the location object.
+	b1 = NPN_GetProperty(mInstance, locationObj, identifier, &variantValue);
+	NPN_ReleaseObject(locationObj);
+	if(!b1)
+		return "";
+	if(!NPVARIANT_IS_STRING(variantValue))
+	{
+		NPN_ReleaseVariantValue(&variantValue);
+		return "";
+	}
+	NPString url=NPVARIANT_TO_STRING(variantValue);
+	//TODO: really handle UTF8 url!!
+	for(unsigned int i=0;i<url.UTF8Length;i++)
+	{
+		if(url.UTF8Characters[i]&0x80)
+		{
+			LOG(LOG_ERROR,"Cannot handle UTF8 URLs");
+			return "";
+		}
+	}
+	string ret(url.UTF8Characters, url.UTF8Length);
+	NPN_ReleaseVariantValue(&variantValue);
+	return ret;
+}
+
 
 NPError nsPluginInstance::NewStream(NPMIMEType type, NPStream* stream, NPBool seekable, uint16_t* stype)
 {
@@ -392,11 +361,38 @@ NPError nsPluginInstance::NewStream(NPMIMEType type, NPStream* stream, NPBool se
 	{
 		cerr << "via NPDownloader" << endl;
 		dl->setLen(stream->end);
+		*stype=NP_NORMAL;
+	}
+	else
+	{
+		//This is the main file
+		m_sys->setOrigin(stream->url);
+		*stype=NP_ASFILE;
+		//Let's get the cookies now, they might be useful
+		uint32_t len = 0;
+		char *data = 0;
+		const string& url(getPageURL());
+		if(!url.empty())
+		{
+			//Skip the protocol slashes
+			int protocolEnd=url.find("//");
+			//Find the first slash after the protocol ones
+			int urlEnd=url.find("/",protocolEnd+2);
+			NPN_GetValueForURL(mInstance, NPNURLVCookie, url.substr(0,urlEnd+1).c_str(), &data, &len);
+			string packedCookies(data, len);
+			NPN_MemFree(data);
+			m_sys->setCookies(packedCookies.c_str());
+		}
 	}
 	//The downloader is set as the private data for this stream
 	stream->pdata=dl;
-	*stype=NP_NORMAL;
 	return NPERR_NO_ERROR; 
+}
+
+void nsPluginInstance::StreamAsFile(NPStream* stream, const char* fname)
+{
+	assert(stream->notifyData==NULL);
+	m_sys->setDownloadedPath(fname);
 }
 
 int32_t nsPluginInstance::WriteReady(NPStream *stream)

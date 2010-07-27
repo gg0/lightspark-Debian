@@ -20,6 +20,7 @@
 #include <string>
 #include <sstream>
 #include <pthread.h>
+#include <sys/wait.h>
 #include <algorithm>
 #include "compat.h"
 #include <SDL.h>
@@ -47,6 +48,7 @@ extern "C" {
 
 #ifdef COMPILE_PLUGIN
 #include <gdk/gdkkeysyms.h>
+#include <gdk/gdkx.h>
 #endif
 
 using namespace std;
@@ -143,19 +145,23 @@ void RootMovieClip::unregisterChildClip(MovieClip* clip)
 	clip->decRef();
 }
 
-SystemState::SystemState():RootMovieClip(NULL,true),renderRate(0),error(false),shutdown(false),renderThread(NULL),
-	showProfilingData(false),showInteractiveMap(false),showDebug(false),xOffset(0),yOffset(0),currentVm(NULL),
-	inputThread(NULL),finalizingDestruction(false),useInterpreter(true),useJit(false),downloadManager(NULL)
+SystemState::SystemState(ParseThread* p):RootMovieClip(NULL,true),parseThread(p),renderRate(0),error(false),shutdown(false),
+	renderThread(NULL),inputThread(NULL),engine(NONE),fileDumpAvailable(0),waitingForDump(false),vmVersion(VMNONE),childPid(0),
+	useGnashFallback(false),showProfilingData(false),showInteractiveMap(false),showDebug(false),xOffset(0),yOffset(0),currentVm(NULL),
+	finalizingDestruction(false),useInterpreter(true),useJit(false),downloadManager(NULL)
 {
 	//Do needed global initialization
 	curl_global_init(CURL_GLOBAL_ALL);
 	avcodec_register_all();
 
+	cookiesFileName[0]=0;
 	//Create the thread pool
 	sys=this;
 	sem_init(&terminated,0,0);
 
 	//Get starting time
+	if(parseThread) //ParseThread may be null in tightspark
+		parseThread->root=this;
 	threadPool=new ThreadPool(this);
 	timerThread=new TimerThread(this);
 #ifdef ENABLE_SOUND
@@ -171,14 +177,107 @@ SystemState::SystemState():RootMovieClip(NULL,true),renderRate(0),error(false),s
 	setOnStage(true);
 }
 
+void SystemState::setDownloadedPath(const tiny_string& p)
+{
+	dumpedSWFPath=p;
+	sem_wait(&mutex);
+	if(waitingForDump)
+		fileDumpAvailable.signal();
+	sem_post(&mutex);
+}
+
 void SystemState::setUrl(const tiny_string& url)
 {
 	loaderInfo->url=url;
 	loaderInfo->loaderURL=url;
 }
 
-void SystemState::parseParameters(istream& i)
+int SystemState::hexToInt(char c)
 {
+	if(c>='0' && c<='9')
+		return c-'0';
+	else if(c>='a' && c<='f')
+		return c-'a'+10;
+	else if(c>='A' && c<='F')
+		return c-'A'+10;
+	else
+		return -1;
+}
+
+void SystemState::setCookies(const char* c)
+{
+	rawCookies=c;
+}
+
+void SystemState::parseParametersFromFlashvars(const char* v)
+{
+	if(useGnashFallback) //Save a copy of the string
+		rawParameters=v;
+	ASObject* params=Class<ASObject>::getInstanceS();
+	//Add arguments to SystemState
+	string vars(v);
+	uint32_t cur=0;
+	while(cur<vars.size())
+	{
+		int n1=vars.find('=',cur);
+		if(n1==-1) //Incomplete parameters string, ignore the last
+			break;
+
+		int n2=vars.find('&',n1+1);
+		if(n2==-1)
+			n2=vars.size();
+
+		string varName=vars.substr(cur,(n1-cur));
+
+		//The variable value has to be urldecoded
+		bool ok=true;
+		string varValue;
+		varValue.reserve(n2-n1); //The maximum lenght
+		for(int j=n1+1;j<n2;j++)
+		{
+			if(vars[j]!='%')
+				varValue.push_back(vars[j]);
+			else
+			{
+				if((n2-j)<3) //Not enough characters
+				{
+					ok=false;
+					break;
+				}
+
+				int t1=hexToInt(vars[j+1]);
+				int t2=hexToInt(vars[j+2]);
+				if(t1==-1 || t2==-1)
+				{
+					ok=false;
+					break;
+				}
+
+				int c=(t1*16)+t2;
+				varValue.push_back(c);
+				j+=2;
+			}
+		}
+
+		if(ok)
+		{
+			//cout << varName << ' ' << varValue << endl;
+			params->setVariableByQName(varName.c_str(),"",
+					lightspark::Class<lightspark::ASString>::getInstanceS(varValue));
+		}
+		cur=n2+1;
+	}
+	setParameters(params);
+}
+
+void SystemState::parseParametersFromFile(const char* f)
+{
+	ifstream i(f);
+	if(!i)
+	{
+		LOG(LOG_ERROR,"Parameters file not found");
+		return;
+	}
 	ASObject* ret=Class<ASObject>::getInstanceS();
 	while(!i.eof())
 	{
@@ -189,6 +288,7 @@ void SystemState::parseParameters(istream& i)
 		ret->setVariableByQName(name,"",Class<ASString>::getInstanceS(value));
 	}
 	setParameters(ret);
+	i.close();
 }
 
 void SystemState::setParameters(ASObject* p)
@@ -196,18 +296,41 @@ void SystemState::setParameters(ASObject* p)
 	loaderInfo->setVariableByQName("parameters","",p);
 }
 
-SystemState::~SystemState()
+void SystemState::stopEngines()
 {
-	assert(shutdown);
-	timerThread->wait();
-	//soundManager->stop();
-	delete threadPool;
+	//Stops the thread that is parsing us
+	parseThread->stop();
+	parseThread->wait();
+	threadPool->stop();
+	if(timerThread)
+		timerThread->wait();
 	delete downloadManager;
+	downloadManager=NULL;
 	delete currentVm;
+	currentVm=NULL;
 	delete timerThread;
+	timerThread=NULL;
 #ifdef ENABLE_SOUND
 	delete soundManager;
+	soundManager=NULL;
 #endif
+}
+
+SystemState::~SystemState()
+{
+	//Kill our child process if any
+	if(childPid)
+	{
+		kill(childPid, SIGTERM);
+		waitpid(childPid, NULL, 0);
+	}
+	//Delete the temporary cookies file
+	if(cookiesFileName[0])
+		unlink(cookiesFileName);
+	assert(shutdown);
+	//The thread pool should be stopped before everything
+	delete threadPool;
+	stopEngines();
 
 	//decRef all our object before destroying classes
 	Variables.destroyContents();
@@ -240,6 +363,8 @@ SystemState::~SystemState()
 	for(unsigned int i=0;i<tagsStorage.size();i++)
 		delete tagsStorage[i];
 
+	delete renderThread;
+	delete inputThread;
 	sem_destroy(&terminated);
 }
 
@@ -289,6 +414,10 @@ void SystemState::setShutdownFlag()
 void SystemState::wait()
 {
 	sem_wait(&terminated);
+	if(renderThread)
+		renderThread->wait();
+	if(inputThread)
+		inputThread->wait();
 }
 
 float SystemState::getRenderRate()
@@ -304,24 +433,190 @@ void SystemState::startRenderTicks()
 	addTick(1000/renderRate,renderThread);
 }
 
-void SystemState::setRenderThread(RenderThread* t)
+void SystemState::EngineCreator::execute()
 {
-	assert(renderThread==NULL);
-	renderThread=t;
+	sys->createEngines();
+}
+
+void SystemState::EngineCreator::threadAbort()
+{
+	assert(sys->shutdown);
+	sys->fileDumpAvailable.signal();
+}
+
+#ifndef GNASH_PATH
+#error No GNASH_PATH defined
+#endif
+
+void SystemState::enableGnashFallback()
+{
+	//Check if the gnash standalone executable is available
+	ifstream f(GNASH_PATH);
+	if(f)
+		useGnashFallback=true;
+	f.close();
+}
+
+#ifdef COMPILE_PLUGIN
+
+void SystemState::delayedCreation(SystemState* th)
+{
+	NPAPI_params& p=th->npapiParams;
+	//Create a plug in the XEmbed window
+	p.container=gtk_plug_new((GdkNativeWindow)p.window);
+	//Realize the widget now, as we need the X window
+	gtk_widget_realize(p.container);
+	//Show it now
+	gtk_widget_show(p.container);
+	gtk_widget_map(p.container);
+	p.window=GDK_WINDOW_XWINDOW(p.container->window);
+	XSync(p.display, False);
+	sem_wait(&th->mutex);
+	th->renderThread=new RenderThread(th, th->engine, &th->npapiParams);
+	th->inputThread=new InputThread(th, th->engine, &th->npapiParams);
 	//If the render rate is known start the render ticks
-	if(renderRate)
-		startRenderTicks();
+	if(th->renderRate)
+		th->startRenderTicks();
+	sem_post(&th->mutex);
+}
+
+#endif
+
+void SystemState::createEngines()
+{
+	sem_wait(&mutex);
+	assert(renderThread==NULL && inputThread==NULL);
+	//Check if we should fall back on gnash
+	if(useGnashFallback && engine==GTKPLUG && vmVersion!=AVM2)
+	{
+		if(dumpedSWFPath.len()==0) //The path is not known yet
+		{
+			waitingForDump=true;
+			sem_post(&mutex);
+			fileDumpAvailable.wait();
+			if(shutdown)
+				return;
+			sem_wait(&mutex);
+		}
+		LOG(LOG_NO_INFO,"Invoking gnash!");
+		//Dump the cookies to a temporary file
+		strcpy(cookiesFileName,"/tmp/lightsparkcookiesXXXXXX");
+		int file=mkstemp(cookiesFileName);
+		if(file!=-1)
+		{
+			write(file,"Set-Cookie: ", 12);
+			write(file,rawCookies.c_str(),rawCookies.size());
+			close(file);
+			setenv("GNASH_COOKIES_IN", cookiesFileName, 1);
+		}
+		else
+			cookiesFileName[0]=0;
+		childPid=fork();
+		if(childPid==-1)
+		{
+			LOG(LOG_ERROR,"Child process creation failed, lightspark continues");
+			childPid=0;
+		}
+		else if(childPid==0) //Child process scope
+		{
+			//Allocate some buffers to store gnash arguments
+			char bufXid[32];
+			char bufWidth[32];
+			char bufHeight[32];
+			snprintf(bufXid,32,"%lu",npapiParams.window);
+			snprintf(bufWidth,32,"%u",npapiParams.width);
+			snprintf(bufHeight,32,"%u",npapiParams.height);
+			string params("FlashVars=");
+			params+=rawParameters;
+			char *const args[] =
+			{
+				strdup("gnash"), //argv[0]
+				strdup("-x"), //Xid
+				bufXid,
+				strdup("-j"), //Width
+				bufWidth,
+				strdup("-k"), //Height
+				bufHeight,
+				strdup("-u"), //SWF url
+				strdup(origin.raw_buf()),
+				strdup("-P"), //SWF parameters
+				strdup(params.c_str()),
+				strdup("-vv"),
+				strdup(dumpedSWFPath.raw_buf()), //SWF file
+				NULL
+			};
+			execve(GNASH_PATH, args, environ);
+			//If we are are execve failed, print an error and die
+			LOG(LOG_ERROR,"Execve failed, content will not be rendered");
+			exit(0);
+		}
+		else //Parent process scope
+		{
+			sem_post(&mutex);
+			//Engines should not be started, stop everything
+			stopEngines();
+			return;
+		}
+	}
+
+	if(engine==GTKPLUG) //The engines must be created int the context of the main thread
+	{
+		npapiParams.helper(npapiParams.helperArg, (helper_t)delayedCreation, this);
+	}
+	else //SDL engine
+	{
+		renderThread=new RenderThread(this, engine, NULL);
+		inputThread=new InputThread(this, engine, NULL);
+		//If the render rate is known start the render ticks
+		if(renderRate)
+			startRenderTicks();
+	}
+	sem_post(&mutex);
+}
+
+void SystemState::needsAVM2(bool n)
+{
+	sem_wait(&mutex);
+	assert(currentVm==NULL);
+	//Create the virtual machine if needed
+	if(n)
+	{
+		vmVersion=AVM2;
+		LOG(LOG_NO_INFO,"Creating VM");
+		currentVm=new ABCVm(this);
+	}
+	else
+		vmVersion=AVM1;
+	if(engine)
+		addJob(new EngineCreator);
+	sem_post(&mutex);
+}
+
+void SystemState::setParamsAndEngine(ENGINE e, NPAPI_params* p)
+{
+	sem_wait(&mutex);
+	if(p)
+		npapiParams=*p;
+	engine=e;
+	if(vmVersion)
+		addJob(new EngineCreator);
+	sem_post(&mutex);
 }
 
 void SystemState::setRenderRate(float rate)
 {
+	sem_wait(&mutex);
 	if(renderRate>=rate)
+	{
+		sem_post(&mutex);
 		return;
+	}
 	
 	//The requested rate is higher, let's reschedule the job
 	renderRate=rate;
 	if(renderThread)
 		startRenderTicks();
+	sem_post(&mutex);
 }
 
 void SystemState::tick()
@@ -465,7 +760,7 @@ void ThreadProfile::plot(uint32_t maxTime, FTFont* font)
 	}
 }
 
-ParseThread::ParseThread(RootMovieClip* r,istream& in):f(in)
+ParseThread::ParseThread(RootMovieClip* r,istream& in):f(in),isEnded(false),root(NULL),version(0),useAVM2(false)
 {
 	root=r;
 	sem_init(&ended,0,0);
@@ -487,7 +782,8 @@ void ParseThread::execute()
 		root->setFrameSize(h.getFrameSize());
 		root->setFrameCount(h.FrameCount);
 
-		TagFactory factory(f);
+		//Create a top level TagFactory
+		TagFactory factory(f, true);
 		bool done=false;
 		bool empty=true;
 		while(!done)
@@ -557,7 +853,11 @@ void ParseThread::threadAbort()
 
 void ParseThread::wait()
 {
-	sem_wait(&ended);
+	if(!isEnded)
+	{
+		sem_wait(&ended);
+		isEnded=true;
+	}
 }
 
 void RenderThread::wait()
@@ -570,8 +870,6 @@ void RenderThread::wait()
 	int ret=pthread_join(t,NULL);
 	assert_and_throw(ret==0);
 }
-
-
 
 InputThread::InputThread(SystemState* s,ENGINE e, void* param):m_sys(s),t(0),terminated(false),
 	mutexListeners("Input listeners"),mutexDragged("Input dragged"),curDragged(NULL),lastMouseDownTarget(NULL)
@@ -620,7 +918,7 @@ gboolean InputThread::gtkplug_worker(GtkWidget *widget, GdkEvent *event, InputTh
 	{
 		case GDK_KEY_PRESS:
 		{
-			cout << "key press" << endl;
+			//cout << "key press" << endl;
 			switch(event->key.keyval)
 			{
 				case GDK_i:
@@ -1081,6 +1379,7 @@ void* RenderThread::gtkplug_worker(RenderThread* th)
 		return NULL;
 	}
 	th->mFBConfig=fb[i];
+	cout << "Chosen config " << hex << fb[i] << dec << endl;
 	XFree(fb);
 
 	th->mContext = glXCreateNewContext(d,th->mFBConfig,GLX_RGBA_TYPE ,NULL,1);
@@ -1242,7 +1541,6 @@ void* RenderThread::gtkplug_worker(RenderThread* th)
 	glXMakeCurrent(d,None,NULL);
 	glXDestroyContext(d,th->mContext);
 	XCloseDisplay(d);
-	delete p;
 	return NULL;
 }
 #endif

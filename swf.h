@@ -56,6 +56,7 @@ class DictionaryTag;
 class ABCVm;
 class InputThread;
 class RenderThread;
+class ParseThread;
 class Tag;
 
 typedef void* (*thread_worker)(void*);
@@ -159,17 +160,82 @@ public:
 	void plot(uint32_t max, FTFont* font);
 };
 
+enum ENGINE { NONE=0, SDL, GTKPLUG};
+typedef void(*helper_t)(void*);
+#ifdef COMPILE_PLUGIN
+struct NPAPI_params
+{
+	Display* display;
+	GtkWidget* container;
+	VisualID visual;
+	Window window;
+	int width;
+	int height;
+	void (*helper)(void* th, helper_t func, void* privArg);
+	void* helperArg;
+};
+#else
+struct NPAPI_params
+{
+};
+#endif
+
 class SystemState: public RootMovieClip
 {
 private:
+	class EngineCreator: public IThreadJob
+	{
+	public:
+		EngineCreator()
+		{
+			destroyMe=true;
+		}
+		void execute();
+		void threadAbort();
+	};
+	friend class SystemState::EngineCreator;
 	ThreadPool* threadPool;
 	TimerThread* timerThread;
+	ParseThread* parseThread;
 	sem_t terminated;
 	float renderRate;
 	bool error;
 	bool shutdown;
 	RenderThread* renderThread;
+	InputThread* inputThread;
+	NPAPI_params npapiParams;
+	ENGINE engine;
 	void startRenderTicks();
+	/**
+		Create the rendering and input engines
+
+		@pre engine and useAVM2 are known
+	*/
+	void createEngines();
+	/**
+	  	Destroys all the engines used in lightspark: timer, thread pool, vm...
+	*/
+#ifdef COMPILE_PLUGIN
+	static void delayedCreation(SystemState* th);
+#endif
+	void stopEngines();
+	//Useful to wait for complete download of the SWF
+	Condition fileDumpAvailable;
+	tiny_string dumpedSWFPath;
+	bool waitingForDump;
+	//Data for handling Gnash fallback
+	enum VMVERSION { VMNONE=0, AVM1, AVM2 };
+	VMVERSION vmVersion;
+	pid_t childPid;
+	bool useGnashFallback;
+	void setParameters(ASObject* p);
+	/*
+	   	Used to keep a copy of the FlashVars, it's useful when gnash fallback is used
+	*/
+	std::string rawParameters;
+	std::string rawCookies;
+	static int hexToInt(char c);
+	char cookiesFileName[32]; // "/tmp/lightsparkcookiesXXXXXX"
 public:
 	void setUrl(const tiny_string& url) DLL_PUBLIC;
 
@@ -189,11 +255,15 @@ public:
 	void tick();
 	void wait() DLL_PUBLIC;
 	RenderThread* getRenderThread() const { return renderThread; }
-	void setRenderThread(RenderThread* r) DLL_PUBLIC;
+	InputThread* getInputThread() const { return inputThread; }
+	void setParamsAndEngine(ENGINE e, NPAPI_params* p) DLL_PUBLIC;
+	void setDownloadedPath(const tiny_string& p) DLL_PUBLIC;
+	void enableGnashFallback() DLL_PUBLIC;
+	void needsAVM2(bool n);
 
 	//Be careful, SystemState constructor does some global initialization that must be done
 	//before any other thread gets started
-	SystemState() DLL_PUBLIC;
+	SystemState(ParseThread* p) DLL_PUBLIC;
 	~SystemState();
 	
 	//Performance profiling
@@ -202,7 +272,6 @@ public:
 	
 	Stage* stage;
 	ABCVm* currentVm;
-	InputThread* inputThread;
 #ifdef ENABLE_SOUND
 	SoundManager* soundManager;
 #endif
@@ -218,8 +287,9 @@ public:
 	bool useInterpreter;
 	bool useJit;
 
-	void parseParameters(std::istream& i) DLL_PUBLIC;
-	void setParameters(ASObject* p) DLL_PUBLIC;
+	void parseParametersFromFile(const char* f) DLL_PUBLIC;
+	void parseParametersFromFlashvars(const char* vars) DLL_PUBLIC;
+	void setCookies(const char* c) DLL_PUBLIC;
 	void addJob(IThreadJob* j) DLL_PUBLIC;
 	void addTick(uint32_t tickTime, ITickJob* job);
 	void addWait(uint32_t waitTime, ITickJob* job);
@@ -235,32 +305,17 @@ class ParseThread: public IThreadJob
 private:
 	std::istream& f;
 	sem_t ended;
+	bool isEnded;
 	void execute();
 	void threadAbort();
 public:
 	RootMovieClip* root;
 	int version;
+	bool useAVM2;
 	ParseThread(RootMovieClip* r,std::istream& in) DLL_PUBLIC;
 	~ParseThread();
 	void wait() DLL_PUBLIC;
 };
-
-enum ENGINE { SDL=0, GTKPLUG};
-#ifdef COMPILE_PLUGIN
-struct NPAPI_params
-{
-	Display* display;
-	GtkWidget* container;
-	VisualID visual;
-	Window window;
-	int width;
-	int height;
-};
-#else
-struct NPAPI_params
-{
-};
-#endif
 
 class InputThread
 {
@@ -269,10 +324,11 @@ private:
 	pthread_t t;
 	bool terminated;
 	static void* sdl_worker(InputThread*);
-	#ifdef COMPILE_PLUGIN
+#ifdef COMPILE_PLUGIN
 	NPAPI_params* npapi_params;
 	static gboolean gtkplug_worker(GtkWidget *widget, GdkEvent *event, InputThread* th);
-	#endif
+	static void delayedCreation(InputThread* th);
+#endif
 
 	std::vector<InteractiveObject* > listeners;
 	Mutex mutexListeners;
@@ -282,9 +338,9 @@ private:
 	InteractiveObject* lastMouseDownTarget;
 	RECT dragLimit;
 public:
-	InputThread(SystemState* s,ENGINE e, void* param=NULL) DLL_PUBLIC;
-	~InputThread() DLL_PUBLIC;
-	void wait() DLL_PUBLIC;
+	InputThread(SystemState* s,ENGINE e, void* param=NULL);
+	~InputThread();
+	void wait();
 	void addListener(InteractiveObject* ob);
 	void removeListener(InteractiveObject* ob);
 	void enableDrag(Sprite* s, const RECT& limit);
@@ -298,10 +354,10 @@ private:
 	pthread_t t;
 	bool terminated;
 	static void* sdl_worker(RenderThread*);
-	#ifdef COMPILE_PLUGIN
+#ifdef COMPILE_PLUGIN
 	NPAPI_params* npapi_params;
 	static void* gtkplug_worker(RenderThread*);
-	#endif
+#endif
 	void commonGLInit(int width, int height);
 	void commonGLDeinit();
 	sem_t render;
@@ -328,9 +384,9 @@ private:
 	Mutex mutexResources;
 	std::set<GLResource*> managedResources;
 public:
-	RenderThread(SystemState* s,ENGINE e, void* param=NULL) DLL_PUBLIC;
-	~RenderThread() DLL_PUBLIC;
-	void wait() DLL_PUBLIC;
+	RenderThread(SystemState* s,ENGINE e, void* param=NULL);
+	~RenderThread();
+	void wait();
 	void draw();
 	float getIdAt(int x, int y);
 	//The calling context MUST call this function with the transformation matrix ready

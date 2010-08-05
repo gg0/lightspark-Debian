@@ -1,8 +1,11 @@
 lightspark (0.4.2.2-1) UNRELEASED; urgency=low
 
   * New upstream release.
+  * debian/control:
+    - Build-depend on gnash-common, and add it as recommended package
+      for browser-plugin-lightspark to enable fallback support.
 
- -- Luca Falavigna <dktrkranz@debian.org>  Tue, 27 Jul 2010 20:49:08 +0200
+ -- Luca Falavigna <dktrkranz@debian.org>  Thu, 05 Aug 2010 20:17:37 +0200
 
 lightspark (0.4.2.1-1) experimental; urgency=low
 

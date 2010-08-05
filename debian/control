@@ -24,7 +24,8 @@ Build-Depends: debhelper (>= 7.0.50),
 	libnspr4-dev,
 	xulrunner-dev,
 	libsdl-dev,
-	libffi-dev
+	libffi-dev,
+	gnash-common
 Standards-Version: 3.9.1
 Homepage: http://lightspark.sf.net
 Vcs-Git: git://git.debian.org/collab-maint/lightspark.git
@@ -51,6 +52,7 @@ Description: High-performance SWF player (experimental)
 Package: browser-plugin-lightspark
 Architecture: i386 amd64 kfreebsd-any
 Depends: ${shlibs:Depends}, ${misc:Depends}
+Recommends: gnash-common
 Description: High-performance SWF player - Mozilla Plugin (experimental)
  Lightspark is a free Flash player for Linux which aims for high-performance
  by using modern technologies such as JIT compilation and OpenGL shaders.

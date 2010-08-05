@@ -1,4 +1,4 @@
-lightspark (0.4.2.2-1) UNRELEASED; urgency=low
+lightspark (0.4.2.2-1) experimental; urgency=low
 
   * New upstream release.
   * debian/control:
@@ -6,7 +6,7 @@ lightspark (0.4.2.2-1) UNRELEASED; urgency=low
       for browser-plugin-lightspark to enable fallback support.
     - Build depend on xulrunner-dev (>= 1.9.2).
 
- -- Luca Falavigna <dktrkranz@debian.org>  Thu, 05 Aug 2010 21:05:06 +0200
+ -- Luca Falavigna <dktrkranz@debian.org>  Thu, 05 Aug 2010 21:05:43 +0200
 
 lightspark (0.4.2.1-1) experimental; urgency=low
 

@@ -4,8 +4,9 @@ lightspark (0.4.2.2-1) UNRELEASED; urgency=low
   * debian/control:
     - Build-depend on gnash-common, and add it as recommended package
       for browser-plugin-lightspark to enable fallback support.
+    - Build depend on xulrunner-dev (>= 1.9.2).
 
- -- Luca Falavigna <dktrkranz@debian.org>  Thu, 05 Aug 2010 20:17:37 +0200
+ -- Luca Falavigna <dktrkranz@debian.org>  Thu, 05 Aug 2010 21:05:06 +0200
 
 lightspark (0.4.2.1-1) experimental; urgency=low
 

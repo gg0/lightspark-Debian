@@ -20,15 +20,23 @@
 #ifndef _DECODER_H
 #define _DECODER_H
 
+#include "compat.h"
 #include <GL/glew.h>
 #include <inttypes.h>
 #include "threading.h"
 #include "graphics.h"
 #include "flv.h"
+#ifdef ENABLE_LIBAVCODEC
 extern "C"
 {
 #include <libavcodec/avcodec.h>
+#define MAX_AUDIO_FRAME_SIZE AVCODEC_MAX_AUDIO_FRAME_SIZE
 }
+#else
+// Correct size? 192000?
+// TODO: a real plugins system
+#define MAX_AUDIO_FRAME_SIZE 20
+#endif
 
 namespace lightspark
 {
@@ -68,6 +76,16 @@ public:
 	float frameRate;
 };
 
+class NullVideoDecoder: public VideoDecoder
+{
+public:
+	bool decodeData(uint8_t* data, uint32_t datalen, uint32_t time){return false;}
+	bool discardFrame(){return false;}
+	void skipUntil(uint32_t time){}
+	bool copyFrameToTexture(TextureBuffer& tex){return false;}
+};
+
+#ifdef ENABLE_LIBAVCODEC
 class FFMpegVideoDecoder: public VideoDecoder
 {
 private:
@@ -113,6 +131,7 @@ public:
 	void skipUntil(uint32_t time);
 	bool copyFrameToTexture(TextureBuffer& tex);
 };
+#endif
 
 class AudioDecoder
 {
@@ -120,16 +139,23 @@ protected:
 	class FrameSamples
 	{
 	public:
-		int16_t samples[AVCODEC_MAX_AUDIO_FRAME_SIZE/2] __attribute__ ((aligned (16)));
+#ifdef _MSC_VER
+		// WINTODO: a macro doesn't seem to work
+		__declspec(align(16))
+#endif
+			int16_t samples[MAX_AUDIO_FRAME_SIZE/2];
+#ifndef _MSC_VER
+		__attribute__ ((aligned (16)))
+#endif
 		int16_t* current;
 		uint32_t len;
 		uint32_t time;
-		FrameSamples():current(samples),len(AVCODEC_MAX_AUDIO_FRAME_SIZE),time(0){}
+		FrameSamples():current(samples),len(MAX_AUDIO_FRAME_SIZE),time(0){}
 	};
 	class FrameSamplesGenerator
 	{
 	public:
-		void init(FrameSamples& f) const {f.len=AVCODEC_MAX_AUDIO_FRAME_SIZE;}
+		void init(FrameSamples& f) const {f.len=MAX_AUDIO_FRAME_SIZE;}
 	};
 	BlockingCircularQueue<FrameSamples,30> samplesBuffer;
 	enum STATUS { PREINIT=0, INIT, VALID};
@@ -173,6 +199,18 @@ public:
 	uint32_t channelCount;
 };
 
+class NullAudioDecoder: public AudioDecoder
+{
+public:
+	NullAudioDecoder()
+	{
+		sampleRate=44100;
+		channelCount=2;
+	}
+	uint32_t decodeData(uint8_t* data, uint32_t datalen, uint32_t time){return 0;}
+};
+
+#ifdef ENABLE_LIBAVCODEC
 class FFMpegAudioDecoder: public AudioDecoder
 {
 private:
@@ -182,6 +220,7 @@ public:
 	FFMpegAudioDecoder(FLV_AUDIO_CODEC codec, uint8_t* initdata, uint32_t datalen);
 	uint32_t decodeData(uint8_t* data, uint32_t datalen, uint32_t time);
 };
+#endif
 
 };
 #endif

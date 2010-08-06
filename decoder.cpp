@@ -58,6 +58,7 @@ bool VideoDecoder::resizeIfNeeded(TextureBuffer& tex)
 	return true;
 }
 
+#ifdef ENABLE_LIBAVCODEC
 bool FFMpegVideoDecoder::fillDataAndCheckValidity()
 {
 	if(codecContext->time_base.num!=0)
@@ -264,18 +265,19 @@ void FFMpegVideoDecoder::YUVBufferGenerator::init(YUVBuffer& buf) const
 	assert(ret==0);
 #endif
 }
+#endif //ENABLE_LIBAVCODEC
 
 void* AudioDecoder::operator new(size_t s)
 {
 	void* retAddr=NULL;
-	int ret=posix_memalign(&retAddr, 16, s);
+	int ret=aligned_malloc(&retAddr, 16, s);
 	assert(ret==0);
 	assert(retAddr);
 	return retAddr;
 }
 void AudioDecoder::operator delete(void* addr)
 {
-	free(addr);
+	aligned_free(addr);
 }
 
 bool AudioDecoder::discardFrame()
@@ -343,6 +345,7 @@ void AudioDecoder::skipAll()
 		discardFrame();
 }
 
+#ifdef ENABLE_LIBAVCODEC
 FFMpegAudioDecoder::FFMpegAudioDecoder(FLV_AUDIO_CODEC audioCodec, uint8_t* initdata, uint32_t datalen)
 {
 	CodecID codecId;
@@ -420,4 +423,4 @@ uint32_t FFMpegAudioDecoder::decodeData(uint8_t* data, uint32_t datalen, uint32_
 	samplesBuffer.commitLast();
 	return maxLen;
 }
-
+#endif //ENABLE_LIBAVCODEC

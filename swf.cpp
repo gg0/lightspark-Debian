@@ -20,9 +20,7 @@
 #include <string>
 #include <sstream>
 #include <pthread.h>
-#include <sys/wait.h>
 #include <algorithm>
-#include "compat.h"
 #include <SDL.h>
 #include "abc.h"
 #include "flashdisplay.h"
@@ -37,10 +35,16 @@
 #include "netutils.h"
 
 #include <GL/glew.h>
+#ifdef ENABLE_CURL
 #include <curl/curl.h>
+
+#include "compat.h"
+#endif
+#ifdef ENABLE_LIBAVCODEC
 extern "C" {
 #include <libavcodec/avcodec.h>
 }
+#endif
 #ifndef WIN32
 #include <GL/glx.h>
 #include <fontconfig/fontconfig.h>
@@ -145,15 +149,29 @@ void RootMovieClip::unregisterChildClip(MovieClip* clip)
 	clip->decRef();
 }
 
+void SystemState::staticInit()
+{
+	//Do needed global initialization
+#ifdef ENABLE_CURL
+	curl_global_init(CURL_GLOBAL_ALL);
+#endif
+#ifdef ENABLE_LIBAVCODEC
+	avcodec_register_all();
+#endif
+}
+
+void SystemState::staticDeinit()
+{
+#ifdef ENABLE_CURL
+	curl_global_cleanup();
+#endif
+}
+
 SystemState::SystemState(ParseThread* p):RootMovieClip(NULL,true),parseThread(p),renderRate(0),error(false),shutdown(false),
 	renderThread(NULL),inputThread(NULL),engine(NONE),fileDumpAvailable(0),waitingForDump(false),vmVersion(VMNONE),childPid(0),
 	useGnashFallback(false),showProfilingData(false),showInteractiveMap(false),showDebug(false),xOffset(0),yOffset(0),currentVm(NULL),
 	finalizingDestruction(false),useInterpreter(true),useJit(false),downloadManager(NULL)
 {
-	//Do needed global initialization
-	curl_global_init(CURL_GLOBAL_ALL);
-	avcodec_register_all();
-
 	cookiesFileName[0]=0;
 	//Create the thread pool
 	sys=this;
@@ -299,15 +317,19 @@ void SystemState::setParameters(ASObject* p)
 void SystemState::stopEngines()
 {
 	//Stops the thread that is parsing us
-	parseThread->stop();
-	parseThread->wait();
-	threadPool->stop();
+	if(parseThread)
+	{
+		parseThread->stop();
+		parseThread->wait();
+	}
+	if(threadPool)
+		threadPool->stop();
 	if(timerThread)
 		timerThread->wait();
 	delete downloadManager;
 	downloadManager=NULL;
-	delete currentVm;
-	currentVm=NULL;
+	if(currentVm)
+		currentVm->shutdown();
 	delete timerThread;
 	timerThread=NULL;
 #ifdef ENABLE_SOUND
@@ -321,8 +343,7 @@ SystemState::~SystemState()
 	//Kill our child process if any
 	if(childPid)
 	{
-		kill(childPid, SIGTERM);
-		waitpid(childPid, NULL, 0);
+		kill_child(childPid);
 	}
 	//Delete the temporary cookies file
 	if(cookiesFileName[0])
@@ -330,6 +351,7 @@ SystemState::~SystemState()
 	assert(shutdown);
 	//The thread pool should be stopped before everything
 	delete threadPool;
+	threadPool=NULL;
 	stopEngines();
 
 	//decRef all our object before destroying classes
@@ -358,6 +380,8 @@ SystemState::~SystemState()
 		delete it->second;
 		//it->second->decRef()
 	}
+	//The Vm must be destroyed this late to clean all managed integers and numbers
+	delete currentVm;
 
 	//Also destroy all tags
 	for(unsigned int i=0;i<tagsStorage.size();i++)
@@ -403,9 +427,14 @@ void SystemState::setError(const string& c)
 void SystemState::setShutdownFlag()
 {
 	sem_wait(&mutex);
-	shutdown=true;
 	if(currentVm)
-		currentVm->addEvent(NULL,new ShutdownEvent());
+	{
+		ShutdownEvent* e=new ShutdownEvent;
+		currentVm->addEvent(NULL,e);
+		e->decRef();
+	}
+	//Set the flag after sending the event, otherwise it's ignored by the VM
+	shutdown=true;
 
 	sem_post(&terminated);
 	sem_post(&mutex);
@@ -418,6 +447,8 @@ void SystemState::wait()
 		renderThread->wait();
 	if(inputThread)
 		inputThread->wait();
+	if(currentVm)
+		currentVm->wait();
 }
 
 float SystemState::getRenderRate()
@@ -486,6 +517,7 @@ void SystemState::createEngines()
 {
 	sem_wait(&mutex);
 	assert(renderThread==NULL && inputThread==NULL);
+#ifdef COMPILE_PLUGIN
 	//Check if we should fall back on gnash
 	if(useGnashFallback && engine==GTKPLUG && vmVersion!=AVM2)
 	{
@@ -558,10 +590,18 @@ void SystemState::createEngines()
 			return;
 		}
 	}
+#else 
+	//COMPILE_PLUGIN not defined
+	throw new UnsupportedException("GNASH fallback not available when not built with COMPILE_PLUGIN");
+#endif
 
 	if(engine==GTKPLUG) //The engines must be created int the context of the main thread
 	{
+#ifdef COMPILE_PLUGIN
 		npapiParams.helper(npapiParams.helperArg, (helper_t)delayedCreation, this);
+#else
+		throw new UnsupportedException("Plugin engine not available when not built with COMPILE_PLUGIN");
+#endif
 	}
 	else //SDL engine
 	{
@@ -871,12 +911,15 @@ void RenderThread::wait()
 	assert_and_throw(ret==0);
 }
 
-InputThread::InputThread(SystemState* s,ENGINE e, void* param):m_sys(s),t(0),terminated(false),
+InputThread::InputThread(SystemState* s,ENGINE e, void* param):m_sys(s),terminated(false),threaded(false),
 	mutexListeners("Input listeners"),mutexDragged("Input dragged"),curDragged(NULL),lastMouseDownTarget(NULL)
 {
 	LOG(LOG_NO_INFO,"Creating input thread");
 	if(e==SDL)
+	{
+		threaded=true;
 		pthread_create(&t,NULL,(thread_worker)sdl_worker,this);
+	}
 #ifdef COMPILE_PLUGIN
 	else if(e==GTKPLUG)
 	{
@@ -902,7 +945,7 @@ void InputThread::wait()
 {
 	if(terminated)
 		return;
-	if(t)
+	if(threaded)
 		pthread_join(t,NULL);
 	terminated=true;
 }
@@ -1187,7 +1230,7 @@ RenderThread::RenderThread(SystemState* s,ENGINE e,void* params):m_sys(s),termin
 	sem_init(&inputDone,0,0);
 
 #ifdef WIN32
-	fontPath = "TimesNewRoman.ttf"
+	fontPath = "TimesNewRoman.ttf";
 #else
 	FcPattern *pat, *match;
 	FcResult result = FcResultMatch;
@@ -1221,7 +1264,7 @@ RenderThread::RenderThread(SystemState* s,ENGINE e,void* params):m_sys(s),termin
 		pthread_create(&t,NULL,(thread_worker)gtkplug_worker,this);
 	}
 #endif
-	clock_gettime(CLOCK_REALTIME,&ts);
+	time_s = compat_get_current_time_ms();
 }
 
 RenderThread::~RenderThread()
@@ -1967,19 +2010,17 @@ void* RenderThread::sdl_worker(RenderThread* th)
 void RenderThread::draw()
 {
 	sem_post(&render);
-#ifdef CLOCK_REALTIME
-	clock_gettime(CLOCK_REALTIME,&td);
-	uint32_t diff=timeDiff(ts,td);
+	time_d = compat_get_current_time_ms();
+	uint64_t diff=time_d-time_s;
 	if(diff>1000)
 	{
-		ts=td;
+		time_s=time_d;
 		LOG(LOG_NO_INFO,"FPS: " << dec << frameCount);
 		frameCount=0;
 		secsCount++;
 	}
 	else
 		frameCount++;
-#endif
 }
 
 void RenderThread::tick()
@@ -2215,16 +2256,4 @@ void RootMovieClip::setVariableByString(const string& s, ASObject* o)
 	target->setVariableByQName(sub.c_str(),"",o);
 }*/
 
-long lightspark::timeDiff(timespec& s, timespec& d)
-{
-	timespec temp;
-	if ((d.tv_nsec-s.tv_nsec)<0) {
-		temp.tv_sec = d.tv_sec-s.tv_sec-1;
-		temp.tv_nsec = 1000000000+d.tv_nsec-s.tv_nsec;
-	} else {
-		temp.tv_sec = d.tv_sec-s.tv_sec;
-		temp.tv_nsec = d.tv_nsec-s.tv_nsec;
-	}
-	return temp.tv_sec*1000+(temp.tv_nsec)/1000000;
-}
 

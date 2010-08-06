@@ -19,13 +19,13 @@
 
 #ifndef ASOBJECTS_H
 #define ASOBJECTS_H
+#include "compat.h"
 #include <vector>
 #include <list>
 #include <set>
 #include "swftypes.h"
 #include "frame.h"
 #include "input.h"
-#include "compat.h"
 #include "exceptions.h"
 #include "threading.h"
 
@@ -384,6 +384,7 @@ public:
 	int toInt();
 	double toNumber();
 	bool isEqual(ASObject* r);
+	bool isLess(ASObject* r);
 	virtual ~Undefined(){}
 };
 
@@ -396,6 +397,7 @@ private:
 	ASString(const std::string& s);
 	ASString(const tiny_string& s);
 	ASString(const char* s);
+	ASString(const char* s, uint32_t len);
 public:
 	std::string data;
 	static void sinit(Class_base* c);

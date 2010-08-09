@@ -61,13 +61,12 @@ bool VideoDecoder::resizeIfNeeded(TextureBuffer& tex)
 #ifdef ENABLE_LIBAVCODEC
 bool FFMpegVideoDecoder::fillDataAndCheckValidity()
 {
-	if(codecContext->time_base.num!=0)
+	if(frameRate==0 && codecContext->time_base.num!=0)
 	{
-		//time_base = 1/framerate
 		frameRate=codecContext->time_base.den;
 		frameRate/=codecContext->time_base.num;
 	}
-	else
+	else if(frameRate==0)
 		return false;
 
 	if(codecContext->width!=0 && codecContext->height!=0)
@@ -78,19 +77,36 @@ bool FFMpegVideoDecoder::fillDataAndCheckValidity()
 	return true;
 }
 
-FFMpegVideoDecoder::FFMpegVideoDecoder(uint8_t* initdata, uint32_t datalen):curBuffer(0),codecContext(NULL),
+FFMpegVideoDecoder::FFMpegVideoDecoder(LS_VIDEO_CODEC codecId, uint8_t* initdata, uint32_t datalen, float frameRateHint):curBuffer(0),codecContext(NULL),
 	mutex("VideoDecoder"),initialized(false)
 {
 	//The tag is the header, initialize decoding
-	//TODO: serialize access to avcodec_open
-	const enum CodecID codecId=CODEC_ID_H264;
-	AVCodec* codec=avcodec_find_decoder(codecId);
-	assert(codec);
-
 	codecContext=avcodec_alloc_context();
-	//If this tag is the header, fill the extradata for the codec
-	codecContext->extradata=initdata;
-	codecContext->extradata_size=datalen;
+	AVCodec* codec=NULL;
+	if(codecId==H264)
+	{
+		//TODO: serialize access to avcodec_open
+		const enum CodecID FFMPEGcodecId=CODEC_ID_H264;
+		codec=avcodec_find_decoder(FFMPEGcodecId);
+		assert(codec);
+
+		//If this tag is the header, fill the extradata for the codec
+		codecContext->extradata=initdata;
+		codecContext->extradata_size=datalen;
+
+		//Ignore the frameRateHint as the rate is gathered from the video data
+	}
+	else if(codecId==H263)
+	{
+		//TODO: serialize access to avcodec_open
+		const enum CodecID FFMPEGcodecId=CODEC_ID_FLV1;
+		codec=avcodec_find_decoder(FFMPEGcodecId);
+		assert(codec);
+
+		//Exploit the frame rate information
+		assert(frameRateHint!=0.0);
+		frameRate=frameRateHint;
+	}
 
 	if(avcodec_open(codecContext, codec)<0)
 		throw RunTimeException("Cannot open decoder");
@@ -140,7 +156,13 @@ bool FFMpegVideoDecoder::discardFrame()
 {
 	Locker locker(mutex);
 	//We don't want ot block if no frame is available
-	return buffers.nonBlockingPopFront();
+	bool ret=buffers.nonBlockingPopFront();
+	if(flushing && buffers.isEmpty()) //End of our work
+	{
+		status=FLUSHED;
+		flushed.signal();
+	}
+	return ret;
 }
 
 bool FFMpegVideoDecoder::decodeData(uint8_t* data, uint32_t datalen, uint32_t time)
@@ -283,7 +305,13 @@ void AudioDecoder::operator delete(void* addr)
 bool AudioDecoder::discardFrame()
 {
 	//We don't want ot block if no frame is available
-	return samplesBuffer.nonBlockingPopFront();
+	bool ret=samplesBuffer.nonBlockingPopFront();
+	if(flushing && samplesBuffer.isEmpty()) //End of our work
+	{
+		status=FLUSHED;
+		flushed.signal();
+	}
+	return ret;
 }
 
 uint32_t AudioDecoder::copyFrame(int16_t* dest, uint32_t len)
@@ -291,12 +319,18 @@ uint32_t AudioDecoder::copyFrame(int16_t* dest, uint32_t len)
 	assert(dest);
 	if(samplesBuffer.isEmpty())
 		return 0;
-	//Check if we have to just return the size
 	uint32_t frameSize=min(samplesBuffer.front().len,len);
 	memcpy(dest,samplesBuffer.front().current,frameSize);
 	samplesBuffer.front().len-=frameSize;
 	if(samplesBuffer.front().len==0)
+	{
 		samplesBuffer.nonBlockingPopFront();
+		if(flushing && samplesBuffer.isEmpty()) //End of our work
+		{
+			status=FLUSHED;
+			flushed.signal();
+		}
+	}
 	else
 	{
 		samplesBuffer.front().current+=frameSize/2;
@@ -346,13 +380,16 @@ void AudioDecoder::skipAll()
 }
 
 #ifdef ENABLE_LIBAVCODEC
-FFMpegAudioDecoder::FFMpegAudioDecoder(FLV_AUDIO_CODEC audioCodec, uint8_t* initdata, uint32_t datalen)
+FFMpegAudioDecoder::FFMpegAudioDecoder(LS_AUDIO_CODEC audioCodec, uint8_t* initdata, uint32_t datalen)
 {
 	CodecID codecId;
 	switch(audioCodec)
 	{
 		case AAC:
 			codecId=CODEC_ID_AAC;
+			break;
+		case MP3:
+			codecId=CODEC_ID_MP3;
 			break;
 		default:
 			::abort();

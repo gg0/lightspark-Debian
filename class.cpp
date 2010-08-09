@@ -17,48 +17,23 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
-#ifndef _FRAME_H
-#define _FRAME_H
+#include "class.h"
 
-#include "compat.h"
-#include <list>
-#include "swftypes.h"
+using namespace lightspark;
 
-namespace lightspark
+ASObject* Class<ASObject>::getVariableByMultiname(const multiname& name, bool skip_impl, bool enableOverride, ASObject* base)
 {
+	ASObject* ret=ASObject::getVariableByMultiname(name, skip_impl, enableOverride, base);
+	//No super here, ever
+	if(!ret)
+	{
+		if(name.name_s=="toString")
+		{
+			ASObject* ret=Class<IFunction>::getFunction(ASObject::_toString);
+			setVariableByQName("toString","",ret);
+			return ret;
+		}
+	}
+	return ret;
+}
 
-class RootMovieClip;
-class DisplayListTag;
-class ControlTag;
-class DisplayObject;
-class MovieClip;
-
-class PlaceInfo
-{
-public:
-	MATRIX Matrix;
-};
-
-class Frame
-{
-private:
-	IFunction* script;
-	bool initialized;
-public:
-	tiny_string Label;
-	std::list<DisplayListTag*> blueprint;
-	std::list<std::pair<PlaceInfo, DisplayObject*> > displayList;
-	//A temporary vector for control tags
-	std::vector < ControlTag* > controls;
-	Frame():script(NULL),initialized(false){}
-	~Frame();
-	void Render();
-	void inputRender();
-	void setScript(IFunction* s){script=s;}
-	void runScript();
-	void init(MovieClip* parent, std::list < std::pair<PlaceInfo, DisplayObject*> >& d);
-	bool isInitialized() const { return initialized; }
-};
-};
-
-#endif

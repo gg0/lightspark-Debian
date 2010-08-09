@@ -65,23 +65,23 @@ Array::Array()
 void Array::sinit(Class_base* c)
 {
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
+	c->setGetterByQName("length","",Class<IFunction>::getFunction(_getLength));
+	c->ASObject::setVariableByQName("pop","",Class<IFunction>::getFunction(_pop));
+	c->ASObject::setVariableByQName("pop",AS3,Class<IFunction>::getFunction(_pop));
+	c->ASObject::setVariableByQName("shift",AS3,Class<IFunction>::getFunction(shift));
+	c->ASObject::setVariableByQName("unshift",AS3,Class<IFunction>::getFunction(unshift));
+	c->ASObject::setVariableByQName("join",AS3,Class<IFunction>::getFunction(join));
+	c->ASObject::setVariableByQName("push",AS3,Class<IFunction>::getFunction(_push));
+	c->ASObject::setVariableByQName("sort",AS3,Class<IFunction>::getFunction(_sort));
+//	c->ASObject::setVariableByQName("sortOn",AS3,Class<IFunction>::getFunction(sortOn));
+	c->ASObject::setVariableByQName("concat",AS3,Class<IFunction>::getFunction(_concat));
+	c->ASObject::setVariableByQName("indexOf",AS3,Class<IFunction>::getFunction(indexOf));
+	c->ASObject::setVariableByQName("filter",AS3,Class<IFunction>::getFunction(filter));
+	c->ASObject::setVariableByQName("splice",AS3,Class<IFunction>::getFunction(splice));
 }
 
 void Array::buildTraits(ASObject* o)
 {
-	o->setGetterByQName("length","",Class<IFunction>::getFunction(_getLength));
-	o->ASObject::setVariableByQName("pop","",Class<IFunction>::getFunction(_pop));
-	o->ASObject::setVariableByQName("pop",AS3,Class<IFunction>::getFunction(_pop));
-	o->ASObject::setVariableByQName("shift",AS3,Class<IFunction>::getFunction(shift));
-	o->ASObject::setVariableByQName("unshift",AS3,Class<IFunction>::getFunction(unshift));
-	o->ASObject::setVariableByQName("join",AS3,Class<IFunction>::getFunction(join));
-	o->ASObject::setVariableByQName("push",AS3,Class<IFunction>::getFunction(_push));
-	o->ASObject::setVariableByQName("sort",AS3,Class<IFunction>::getFunction(_sort));
-//	o->ASObject::setVariableByQName("sortOn",AS3,Class<IFunction>::getFunction(sortOn));
-	o->ASObject::setVariableByQName("concat",AS3,Class<IFunction>::getFunction(_concat));
-	o->ASObject::setVariableByQName("indexOf",AS3,Class<IFunction>::getFunction(indexOf));
-	o->ASObject::setVariableByQName("filter",AS3,Class<IFunction>::getFunction(filter));
-	o->ASObject::setVariableByQName("splice",AS3,Class<IFunction>::getFunction(splice));
 }
 
 ASFUNCTIONBODY(Array,_constructor)
@@ -386,18 +386,18 @@ intptr_t Array::getVariableByMultiname_i(const multiname& name)
 	return ASObject::getVariableByMultiname_i(name);
 }
 
-objAndLevel Array::getVariableByMultiname(const multiname& name, bool skip_impl, bool enableOverride)
+ASObject* Array::getVariableByMultiname(const multiname& name, bool skip_impl, bool enableOverride, ASObject* base)
 {
 	if(skip_impl || !implEnable)
-		return ASObject::getVariableByMultiname(name,skip_impl,enableOverride);
+		return ASObject::getVariableByMultiname(name,skip_impl,enableOverride, base);
 		
 	assert_and_throw(name.ns.size()>0);
 	if(name.ns[0].name!="")
-		return ASObject::getVariableByMultiname(name,skip_impl,enableOverride);
+		return ASObject::getVariableByMultiname(name,skip_impl,enableOverride, base);
 
 	unsigned int index=0;
 	if(!isValidMultiname(name,index))
-		return ASObject::getVariableByMultiname(name,skip_impl,enableOverride);
+		return ASObject::getVariableByMultiname(name,skip_impl,enableOverride, base);
 
 	if(index<data.size())
 	{
@@ -417,10 +417,10 @@ objAndLevel Array::getVariableByMultiname(const multiname& name, bool skip_impl,
 				ret->fake_decRef();
 				break;
 		}
-		return objAndLevel(ret,0);
+		return ret;
 	}
 	else
-		return ASObject::getVariableByMultiname(name,skip_impl,enableOverride);
+		return ASObject::getVariableByMultiname(name,skip_impl,enableOverride, base);
 }
 
 void Array::setVariableByMultiname_i(const multiname& name, intptr_t value)
@@ -487,12 +487,12 @@ bool Array::isValidMultiname(const multiname& name, unsigned int& index)
 	return true;
 }
 
-void Array::setVariableByMultiname(const multiname& name, ASObject* o, bool enableOverride)
+void Array::setVariableByMultiname(const multiname& name, ASObject* o, bool enableOverride, ASObject* base)
 {
 	assert_and_throw(implEnable);
 	unsigned int index=0;
 	if(!isValidMultiname(name,index))
-		return ASObject::setVariableByMultiname(name,o,enableOverride);
+		return ASObject::setVariableByMultiname(name,o,enableOverride,base);
 
 	if(index>=data.capacity())
 	{
@@ -539,13 +539,13 @@ bool Array::isValidQName(const tiny_string& name, const tiny_string& ns, unsigne
 	return true;
 }
 
-void Array::setVariableByQName(const tiny_string& name, const tiny_string& ns, ASObject* o, bool find_back, bool skip_impl)
+void Array::setVariableByQName(const tiny_string& name, const tiny_string& ns, ASObject* o, bool skip_impl)
 {
 	assert_and_throw(implEnable);
 	unsigned int index=0;
 	if(!isValidQName(name,ns,index))
 	{
-		ASObject::setVariableByQName(name,ns,o,find_back,skip_impl);
+		ASObject::setVariableByQName(name,ns,o,skip_impl);
 		return;
 	}
 
@@ -575,11 +575,11 @@ void Array::setVariableByQName(const tiny_string& name, const tiny_string& ns, A
 	}
 }
 
-objAndLevel Array::getVariableByQName(const tiny_string& name, const tiny_string& ns, bool skip_impl)
+ASObject* Array::getVariableByQName(const tiny_string& name, const tiny_string& ns, bool skip_impl)
 {
 	assert_and_throw(implEnable);
 	throw UnsupportedException("Array::getVariableByQName not completely implemented");
-	return objAndLevel(NULL,0);
+	return NULL;
 /*	ASObject* ret;
 	bool number=true;
 	owner=NULL;
@@ -650,20 +650,20 @@ void ASString::sinit(Class_base* c)
 {
 	//c->setConstructor(Class<IFunction>::getFunction(_constructor));
 	c->setConstructor(NULL);
+	c->setVariableByQName("toString","",Class<IFunction>::getFunction(ASObject::_toString));
+	c->setVariableByQName("split",AS3,Class<IFunction>::getFunction(split));
+	c->setVariableByQName("substr",AS3,Class<IFunction>::getFunction(substr));
+	c->setVariableByQName("replace",AS3,Class<IFunction>::getFunction(replace));
+	c->setVariableByQName("concat",AS3,Class<IFunction>::getFunction(concat));
+	c->setVariableByQName("indexOf",AS3,Class<IFunction>::getFunction(indexOf));
+	c->setVariableByQName("charCodeAt",AS3,Class<IFunction>::getFunction(charCodeAt));
+	c->setVariableByQName("slice",AS3,Class<IFunction>::getFunction(slice));
+	c->setVariableByQName("toLowerCase",AS3,Class<IFunction>::getFunction(toLowerCase));
+	c->setGetterByQName("length","",Class<IFunction>::getFunction(_getLength));
 }
 
 void ASString::buildTraits(ASObject* o)
 {
-	o->setVariableByQName("toString","",Class<IFunction>::getFunction(ASObject::_toString));
-	o->setVariableByQName("split",AS3,Class<IFunction>::getFunction(split));
-	o->setVariableByQName("substr",AS3,Class<IFunction>::getFunction(substr));
-	o->setVariableByQName("replace",AS3,Class<IFunction>::getFunction(replace));
-	o->setVariableByQName("concat",AS3,Class<IFunction>::getFunction(concat));
-	o->setVariableByQName("indexOf",AS3,Class<IFunction>::getFunction(indexOf));
-	o->setVariableByQName("charCodeAt",AS3,Class<IFunction>::getFunction(charCodeAt));
-	o->setVariableByQName("slice",AS3,Class<IFunction>::getFunction(slice));
-	o->setVariableByQName("toLowerCase",AS3,Class<IFunction>::getFunction(toLowerCase));
-	o->setGetterByQName("length","",Class<IFunction>::getFunction(_getLength));
 }
 
 Array::~Array()
@@ -817,7 +817,7 @@ bool ASString::isEqual(ASObject* r)
 		return false;
 }
 
-bool ASString::isLess(ASObject* r)
+TRISTATE ASString::isLess(ASObject* r)
 {
 	assert_and_throw(implEnable);
 	//TODO: Implement ECMA-262 11.8.5 algorithm
@@ -826,10 +826,10 @@ bool ASString::isLess(ASObject* r)
 	{
 		number_t a=toNumber();
 		number_t b=r->toNumber();
-		return a<b;
+		return (a<b)?TTRUE:TFALSE;
 	}
 	throw UnsupportedException("String::isLess not completely implemented");
-	return true;
+	return TTRUE;
 }
 
 bool Boolean::isEqual(ASObject* r)
@@ -861,12 +861,11 @@ tiny_string Undefined::toString(bool debugMsg)
 	return "undefined";
 }
 
-bool Undefined::isLess(ASObject* r)
+TRISTATE Undefined::isLess(ASObject* r)
 {
 	//ECMA-262 complaiant
 	//As undefined became NaN when converted to number the operation is undefined
-	//And undefined must return false
-	return false;
+	return TUNDEFINED;
 }
 
 bool Undefined::isEqual(ASObject* r)
@@ -905,17 +904,17 @@ ASFUNCTIONBODY(Integer,_toString)
 	return Class<ASString>::getInstanceS(buf);
 }
 
-bool Integer::isLess(ASObject* o)
+TRISTATE Integer::isLess(ASObject* o)
 {
 	if(o->getObjectType()==T_INTEGER)
 	{
 		Integer* i=static_cast<Integer*>(o);
-		return val < i->toInt();
+		return (val < i->toInt())?TTRUE:TFALSE;
 	}
 	else if(o->getObjectType()==T_NUMBER)
 	{
 		Number* i=static_cast<Number*>(o);
-		return val < i->toNumber();
+		return (val < i->toNumber())?TTRUE:TFALSE;
 	}
 	else if(o->getObjectType()==T_STRING)
 	{
@@ -925,15 +924,15 @@ bool Integer::isLess(ASObject* o)
 		if(isdigit(s->data[0]))
 		{
 			int val2=atoi(s->data.c_str());
-			return val < val2;
+			return (val < val2)?TTRUE:TFALSE;
 		}
 		else
-			return false;
+			return TFALSE;
 	}
 	else if(o->getObjectType()==T_BOOLEAN)
 	{
 		Boolean* i=static_cast<Boolean*>(o);
-		return val < i->toInt();
+		return (val < i->toInt())?TTRUE:TFALSE;
 	}
 	else
 		return ASObject::isLess(o);
@@ -979,6 +978,12 @@ tiny_string Integer::toString(bool debugMsg)
 	return tiny_string(cur,true); //Create a copy
 }
 
+void Integer::sinit(Class_base* c)
+{
+	c->super=Class<ASObject>::getClass();
+	c->max_level=c->super->max_level+1;
+}
+
 tiny_string UInteger::toString(bool debugMsg)
 {
 	char buf[20];
@@ -996,16 +1001,16 @@ tiny_string UInteger::toString(bool debugMsg)
 	return tiny_string(cur,true); //Create a copy
 }
 
-bool UInteger::isLess(ASObject* o)
+TRISTATE UInteger::isLess(ASObject* o)
 {
 	if(o->getObjectType()==T_INTEGER)
 	{
 		uint32_t val1=val;
 		int32_t val2=o->toInt();
 		if(val2<0)
-			return false;
+			return TFALSE;
 		else
-			return val1<(uint32_t)val2;
+			return (val1<(uint32_t)val2)?TTRUE:TFALSE;
 	}
 	else
 		throw UnsupportedException("UInteger::isLess is not completely implemented");
@@ -1023,22 +1028,22 @@ bool Number::isEqual(ASObject* o)
 	}
 }
 
-bool Number::isLess(ASObject* o)
+TRISTATE Number::isLess(ASObject* o)
 {
 	if(o->getObjectType()==T_INTEGER)
 	{
 		const Integer* i=static_cast<const Integer*>(o);
-		return val<i->val;
+		return (val<i->val)?TTRUE:TFALSE;
 	}
 	else if(o->getObjectType()==T_NUMBER)
 	{
 		const Number* i=static_cast<const Number*>(o);
-		return val<i->val;
+		return (val<i->val)?TTRUE:TFALSE;
 	}
 	else if(o->getObjectType()==T_UNDEFINED)
 	{
-		//Undefined is NaN, so the result is undefined and so false
-		return false;
+		//Undefined is NaN, so the result is undefined
+		return TUNDEFINED;
 	}
 	else
 	{
@@ -1053,6 +1058,12 @@ tiny_string Number::toString(bool debugMsg)
 	return tiny_string(buf,true);
 }
 
+void Number::sinit(Class_base* c)
+{
+	c->super=Class<ASObject>::getClass();
+	c->max_level=c->super->max_level+1;
+}
+
 Date::Date():year(-1),month(-1),date(-1),hour(-1),minute(-1),second(-1),millisecond(-1)
 {
 }
@@ -1060,18 +1071,18 @@ Date::Date():year(-1),month(-1),date(-1),hour(-1),minute(-1),second(-1),millisec
 void Date::sinit(Class_base* c)
 {
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
+	c->setVariableByQName("getTimezoneOffset","",Class<IFunction>::getFunction(getTimezoneOffset));
+	c->setVariableByQName("valueOf","",Class<IFunction>::getFunction(valueOf));
+	c->setVariableByQName("getTime",AS3,Class<IFunction>::getFunction(getTime));
+	c->setVariableByQName("getFullYear","",Class<IFunction>::getFunction(getFullYear));
+	c->setVariableByQName("getHours",AS3,Class<IFunction>::getFunction(getHours));
+	c->setVariableByQName("getMinutes",AS3,Class<IFunction>::getFunction(getMinutes));
+	c->setVariableByQName("getSeconds",AS3,Class<IFunction>::getFunction(getMinutes));
+	//o->setVariableByQName("toString",AS3,Class<IFunction>::getFunction(ASObject::_toString));
 }
 
 void Date::buildTraits(ASObject* o)
 {
-	o->setVariableByQName("getTimezoneOffset","",Class<IFunction>::getFunction(getTimezoneOffset));
-	o->setVariableByQName("valueOf","",Class<IFunction>::getFunction(valueOf));
-	o->setVariableByQName("getTime",AS3,Class<IFunction>::getFunction(getTime));
-	o->setVariableByQName("getFullYear","",Class<IFunction>::getFunction(getFullYear));
-	o->setVariableByQName("getHours",AS3,Class<IFunction>::getFunction(getHours));
-	o->setVariableByQName("getMinutes",AS3,Class<IFunction>::getFunction(getMinutes));
-	o->setVariableByQName("getSeconds",AS3,Class<IFunction>::getFunction(getMinutes));
-	//o->setVariableByQName("toString",AS3,Class<IFunction>::getFunction(ASObject::_toString));
 }
 
 ASFUNCTIONBODY(Date,_constructor)
@@ -1182,7 +1193,7 @@ ASFUNCTIONBODY(IFunction,apply)
 	}
 
 	args[0]->incRef();
-	ASObject* ret=th->call(args[0],new_args,len,0);
+	ASObject* ret=th->call(args[0],new_args,len);
 	delete[] new_args;
 	return ret;
 }
@@ -1192,7 +1203,7 @@ SyntheticFunction::SyntheticFunction(method_info* m):hit_count(0),mi(m),val(NULL
 //	class_index=-2;
 }
 
-ASObject* SyntheticFunction::call(ASObject* obj, ASObject* const* args, uint32_t numArgs, int level)
+ASObject* SyntheticFunction::call(ASObject* obj, ASObject* const* args, uint32_t numArgs)
 {
 	const int hit_threshold=10;
 	if(mi->body==NULL)
@@ -1213,9 +1224,8 @@ ASObject* SyntheticFunction::call(ASObject* obj, ASObject* const* args, uint32_t
 	uint32_t args_len=mi->numArgs();
 	int passedToLocals=imin(numArgs,args_len);
 	uint32_t passedToRest=(numArgs > args_len)?(numArgs-mi->numArgs()):0;
-	int realLevel=(bound)?closure_level:level;
-	if(realLevel==-1) //If realLevel is not set, keep the object level
-		realLevel=obj->getLevel();
+	//We use the stored level or the object's level
+	int realLevel=(closure_level!=-1)?closure_level:obj->getLevel();
 
 	call_context* cc=new call_context(mi,realLevel,args,passedToLocals);
 	uint32_t i=passedToLocals;
@@ -1307,7 +1317,7 @@ ASObject* SyntheticFunction::call(ASObject* obj, ASObject* const* args, uint32_t
 	return ret;
 }
 
-ASObject* Function::call(ASObject* obj, ASObject* const* args, uint32_t num_args, int level)
+ASObject* Function::call(ASObject* obj, ASObject* const* args, uint32_t num_args)
 {
 	ASObject* ret;
 	if(bound && closure_this)
@@ -1443,13 +1453,13 @@ RegExp::RegExp():global(false),ignoreCase(false),extended(false),lastIndex(0)
 void RegExp::sinit(Class_base* c)
 {
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
+	c->setVariableByQName("exec",AS3,Class<IFunction>::getFunction(exec));
+	c->setVariableByQName("test",AS3,Class<IFunction>::getFunction(test));
+	c->setGetterByQName("global","",Class<IFunction>::getFunction(_getGlobal));
 }
 
 void RegExp::buildTraits(ASObject* o)
 {
-	o->setVariableByQName("exec",AS3,Class<IFunction>::getFunction(exec));
-	o->setVariableByQName("test",AS3,Class<IFunction>::getFunction(test));
-	o->setGetterByQName("global","",Class<IFunction>::getFunction(_getGlobal));
 }
 
 ASFUNCTIONBODY(RegExp,_constructor)
@@ -1724,14 +1734,18 @@ ASFUNCTIONBODY(ASError,_getMessage)
 	return Class<ASString>::getInstanceS(th->message);
 }
 
+void ASError::sinit(Class_base* c)
+{
+	c->setVariableByQName("getStackTrace",AS3,Class<IFunction>::getFunction(getStackTrace));
+	c->setGetterByQName("errorID",AS3,Class<IFunction>::getFunction(_getErrorID));
+	c->setGetterByQName("message",AS3,Class<IFunction>::getFunction(_getMessage));
+	c->setSetterByQName("message",AS3,Class<IFunction>::getFunction(_setMessage));
+	c->setGetterByQName("name",AS3,Class<IFunction>::getFunction(_getName));
+	c->setSetterByQName("name",AS3,Class<IFunction>::getFunction(_setName));
+}
+
 void ASError::buildTraits(ASObject* o)
 {
-	o->setVariableByQName("getStackTrace",AS3,Class<IFunction>::getFunction(getStackTrace));
-	o->setGetterByQName("errorID",AS3,Class<IFunction>::getFunction(_getErrorID));
-	o->setGetterByQName("message",AS3,Class<IFunction>::getFunction(_getMessage));
-	o->setSetterByQName("message",AS3,Class<IFunction>::getFunction(_setMessage));
-	o->setGetterByQName("name",AS3,Class<IFunction>::getFunction(_getName));
-	o->setSetterByQName("name",AS3,Class<IFunction>::getFunction(_setName));
 }
 
 Class_base::Class_base(const tiny_string& name):use_protected(false),constructor(NULL),referencedObjectsMutex("referencedObjects"),super(NULL),
@@ -1785,14 +1799,6 @@ void Class_base::recursiveBuild(ASObject* target)
 	LOG(LOG_TRACE,"Building traits for " << class_name);
 	target->setLevel(max_level);
 	buildInstanceTraits(target);
-
-	//Link the interfaces for this level
-	const vector<Class_base*>& interfaces=getInterfaces();
-	for(unsigned int i=0;i<interfaces.size();i++)
-	{
-		LOG(LOG_CALLS,"Linking with interface " << interfaces[i]->class_name);
-		interfaces[i]->linkInterface(target);
-	}
 }
 
 void Class_base::setConstructor(IFunction* c)
@@ -1836,7 +1842,7 @@ void Class_base::handleConstruction(ASObject* target, ASObject* const* args, uns
 	{
 		LOG(LOG_CALLS,"Calling Instance init " << class_name);
 		target->incRef();
-		ASObject* ret=constructor->call(target,args,argslen,max_level);
+		ASObject* ret=constructor->call(target,args,argslen);
 		assert_and_throw(ret==NULL);
 	}
 }
@@ -1947,7 +1953,7 @@ const std::vector<Class_base*>& Class_base::getInterfaces() const
 		//Recursively get interfaces implemented by this interface
 		for(unsigned int i=0;i<interfaces.size();i++)
 		{
-			ASObject* interface_obj=getGlobal()->getVariableByMultiname(interfaces[i]).obj;
+			ASObject* interface_obj=getGlobal()->getVariableByMultiname(interfaces[i]);
 			assert_and_throw(interface_obj && interface_obj->getObjectType()==T_CLASS);
 			Class_base* inter=static_cast<Class_base*>(interface_obj);
 
@@ -1961,7 +1967,7 @@ const std::vector<Class_base*>& Class_base::getInterfaces() const
 	return interfaces_added;
 }
 
-void Class_base::linkInterface(ASObject* obj) const
+void Class_base::linkInterface(Class_base* c) const
 {
 	if(class_index==-1)
 	{
@@ -1970,7 +1976,7 @@ void Class_base::linkInterface(ASObject* obj) const
 	}
 	//Recursively link interfaces implemented by this interface
 	for(unsigned int i=0;i<getInterfaces().size();i++)
-		getInterfaces()[i]->linkInterface(obj);
+		getInterfaces()[i]->linkInterface(c);
 
 	assert_and_throw(context);
 
@@ -1978,13 +1984,13 @@ void Class_base::linkInterface(ASObject* obj) const
 	for(unsigned int j=0;j<context->instances[class_index].trait_count;j++)
 	{
 		traits_info* t=&context->instances[class_index].traits[j];
-		context->linkTrait(obj,t);
+		context->linkTrait(c,t);
 	}
 
 	if(constructor)
 	{
 		LOG(LOG_CALLS,"Calling interface init for " << class_name);
-		ASObject* ret=constructor->call(obj,NULL,0,max_level);
+		ASObject* ret=constructor->call(c,NULL,0);
 		assert_and_throw(ret==NULL);
 	}
 }
@@ -2074,7 +2080,7 @@ ASFUNCTIONBODY(Namespace,_constructor)
 
 void InterfaceClass::lookupAndLink(ASObject* o, const tiny_string& name, const tiny_string& interfaceNs)
 {
-	ASObject* ret=o->getVariableByQName(name,"").obj;
+	ASObject* ret=o->getVariableByQName(name,"");
 	assert_and_throw(ret);
 	ret->incRef();
 	o->setVariableByQName(name,interfaceNs,ret);
@@ -2085,6 +2091,8 @@ void UInteger::sinit(Class_base* c)
 	//TODO: add in the JIT support for unsigned number
 	//Right now we pretend to be signed, to make comparisons work
 	c->setVariableByQName("MAX_VALUE","",new UInteger(0x7fffffff));
+	c->super=Class<ASObject>::getClass();
+	c->max_level=c->super->max_level+1;
 }
 
 bool UInteger::isEqual(ASObject* o)

@@ -42,12 +42,12 @@ URLRequest::URLRequest()
 void URLRequest::sinit(Class_base* c)
 {
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
+	c->setSetterByQName("url","",Class<IFunction>::getFunction(_setUrl));
+	c->setGetterByQName("url","",Class<IFunction>::getFunction(_getUrl));
 }
 
 void URLRequest::buildTraits(ASObject* o)
 {
-	o->setSetterByQName("url","",Class<IFunction>::getFunction(_setUrl));
-	o->setGetterByQName("url","",Class<IFunction>::getFunction(_getUrl));
 }
 
 ASFUNCTIONBODY(URLRequest,_constructor)
@@ -80,14 +80,14 @@ void URLLoader::sinit(Class_base* c)
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
 	c->super=Class<EventDispatcher>::getClass();
 	c->max_level=c->super->max_level+1;
+	c->setGetterByQName("dataFormat","",Class<IFunction>::getFunction(_getDataFormat));
+	c->setGetterByQName("data","",Class<IFunction>::getFunction(_getData));
+	c->setSetterByQName("dataFormat","",Class<IFunction>::getFunction(_setDataFormat));
+	c->setVariableByQName("load","",Class<IFunction>::getFunction(load));
 }
 
 void URLLoader::buildTraits(ASObject* o)
 {
-	o->setGetterByQName("dataFormat","",Class<IFunction>::getFunction(_getDataFormat));
-	o->setGetterByQName("data","",Class<IFunction>::getFunction(_getData));
-	o->setSetterByQName("dataFormat","",Class<IFunction>::getFunction(_setDataFormat));
-	o->setVariableByQName("load","",Class<IFunction>::getFunction(load));
 }
 
 ASFUNCTIONBODY(URLLoader,_constructor)
@@ -103,7 +103,7 @@ ASFUNCTIONBODY(URLLoader,load)
 	assert_and_throw(arg->getPrototype()==Class<URLRequest>::getClass());
 	URLRequest* urlRequest=static_cast<URLRequest*>(arg);
 	th->url=urlRequest->url;
-	ASObject* data=arg->getVariableByQName("data","").obj;
+	ASObject* data=arg->getVariableByQName("data","");
 	if(data)
 	{
 		if(data->getPrototype()==Class<URLVariables>::getClass())
@@ -220,11 +220,11 @@ void NetConnection::sinit(Class_base* c)
 	//c->constructor=Class<IFunction>::getFunction(_constructor);
 	c->super=Class<EventDispatcher>::getClass();
 	c->max_level=c->super->max_level+1;
+	c->setVariableByQName("connect","",Class<IFunction>::getFunction(connect));
 }
 
 void NetConnection::buildTraits(ASObject* o)
 {
-	o->setVariableByQName("connect","",Class<IFunction>::getFunction(connect));
 }
 
 ASFUNCTIONBODY(NetConnection,connect)
@@ -264,15 +264,15 @@ void NetStream::sinit(Class_base* c)
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
 	c->super=Class<EventDispatcher>::getClass();
 	c->max_level=c->super->max_level+1;
+	c->setVariableByQName("play","",Class<IFunction>::getFunction(play));
+	c->setVariableByQName("close","",Class<IFunction>::getFunction(close));
+	c->setGetterByQName("bytesLoaded","",Class<IFunction>::getFunction(getBytesLoaded));
+	c->setGetterByQName("bytesTotal","",Class<IFunction>::getFunction(getBytesTotal));
+	c->setGetterByQName("time","",Class<IFunction>::getFunction(getTime));
 }
 
 void NetStream::buildTraits(ASObject* o)
 {
-	o->setVariableByQName("play","",Class<IFunction>::getFunction(play));
-	o->setVariableByQName("close","",Class<IFunction>::getFunction(close));
-	o->setGetterByQName("bytesLoaded","",Class<IFunction>::getFunction(getBytesLoaded));
-	o->setGetterByQName("bytesTotal","",Class<IFunction>::getFunction(getBytesTotal));
-	o->setGetterByQName("time","",Class<IFunction>::getFunction(getTime));
 }
 
 ASFUNCTIONBODY(NetStream,_constructor)
@@ -325,18 +325,18 @@ NetStream::STREAM_TYPE NetStream::classifyStream(istream& s)
 //Tick is called from the timer thread, this happens only if a decoder is available
 void NetStream::tick()
 {
-	//Advance video and audio to current time
+	//Advance video and audio to current time, follow the audio stream time
 	//No mutex needed, ticking can happen only when stream is completely ready
-	//Video presentation has a latency of one frame, so use the previous frame time, before incrementing
-	videoDecoder->skipUntil(streamTime);
-	streamTime+=1000/frameRate;
-	if(soundStreamId)
-	{
 #ifdef ENABLE_SOUND
+	if(soundStreamId && sys->soundManager->isTimingAvailable())
+	{
 		assert(audioDecoder);
-		sys->soundManager->fillAndSync(soundStreamId, streamTime);
-#endif
+		streamTime=sys->soundManager->getPlayedTime(soundStreamId);
 	}
+	else
+#endif
+		streamTime+=1000/frameRate;
+	videoDecoder->skipUntil(streamTime);
 }
 
 bool NetStream::isReady() const
@@ -371,8 +371,10 @@ void NetStream::execute()
 	ThreadProfile* profile=sys->allocateProfiler(RGB(0,0,200));
 	profile->setTag("NetStream");
 	//We need to catch possible EOF and other error condition in the non reliable stream
+	uint32_t decodedAudioBytes=0;
+	//The decoded time is computed from the decodedAudioBytes to avoid drifts
 	uint32_t decodedTime=0;
-	uint32_t videoFrameCount=0;
+	bool waitForFlush=true;
 	try
 	{
 		Chronometer chronometer;
@@ -402,16 +404,7 @@ void NetStream::execute()
 						AudioDataTag tag(s);
 						prevSize=tag.getTotalLen();
 #ifdef ENABLE_SOUND
-						if(audioDecoder)
-						{
-							assert_and_throw(audioCodec==tag.SoundFormat);
-							uint32_t decodedBytes=audioDecoder->decodeData(tag.packetData,tag.packetLen,decodedTime);
-							if(soundStreamId==0 && audioDecoder->isValid())
-								soundStreamId=sys->soundManager->createStream(audioDecoder);
-							//Adjust timing
-							decodedTime+=decodedBytes/audioDecoder->getBytesPerMSec();
-						}
-						else
+						if(audioDecoder==NULL)
 						{
 							audioCodec=tag.SoundFormat;
 							switch(tag.SoundFormat)
@@ -424,12 +417,32 @@ void NetStream::execute()
 #else
 									audioDecoder=new NullAudioDecoder();
 #endif
+									tag.releaseBuffer();
+									break;
+								case MP3:
+#ifdef ENABLE_LIBAVCODEC
+									audioDecoder=new FFMpegAudioDecoder(tag.SoundFormat,NULL,0);
+#else
+									audioDecoder=new NullAudioDecoder();
+#endif
+									decodedAudioBytes+=audioDecoder->decodeData(tag.packetData,tag.packetLen,decodedTime);
+									//Adjust timing
+									decodedTime=decodedAudioBytes/audioDecoder->getBytesPerMSec();
 									break;
 								default:
 									throw RunTimeException("Unsupported SoundFormat");
 							}
 							if(audioDecoder->isValid())
 								soundStreamId=sys->soundManager->createStream(audioDecoder);
+						}
+						else
+						{
+							assert_and_throw(audioCodec==tag.SoundFormat);
+							decodedAudioBytes+=audioDecoder->decodeData(tag.packetData,tag.packetLen,decodedTime);
+							if(soundStreamId==0 && audioDecoder->isValid())
+								soundStreamId=sys->soundManager->createStream(audioDecoder);
+							//Adjust timing
+							decodedTime=decodedAudioBytes/audioDecoder->getBytesPerMSec();
 						}
 #endif
 						break;
@@ -438,21 +451,31 @@ void NetStream::execute()
 					{
 						VideoDataTag tag(s);
 						prevSize=tag.getTotalLen();
-						//Reset the current time, the video flow driver the stream
-						decodedTime=videoFrameCount*1000/frameRate;
-						videoFrameCount++;
-						assert_and_throw(tag.codecId==7);
+						//The audio time drives the stream
 
-						if(tag.isHeader())
+						if(videoDecoder==NULL)
 						{
-							//The tag is the header, initialize decoding
-							assert_and_throw(videoDecoder==NULL); //The decoder can be set only once
+							//If the isHeader flag is on then the decoder becomes the owner of the data
+							if(tag.isHeader())
+							{
+								//The tag is the header, initialize decoding
 #ifdef ENABLE_LIBAVCODEC
-							videoDecoder=new FFMpegVideoDecoder(tag.packetData,tag.packetLen);
+								videoDecoder=new FFMpegVideoDecoder(tag.codec,tag.packetData,tag.packetLen, frameRate);
 #else
-							videoDecoder=new NullVideoDecoder();
+								videoDecoder=new NullVideoDecoder();
 #endif
-							tag.releaseBuffer();
+								tag.releaseBuffer();
+							}
+							else if(videoDecoder==NULL)
+							{
+								//First packet but no special handling
+#ifdef ENABLE_LIBAVCODEC
+								videoDecoder=new FFMpegVideoDecoder(tag.codec,NULL,0,frameRate);
+#else
+								videoDecoder=new NullVideoDecoder();
+#endif
+								videoDecoder->decodeData(tag.packetData,tag.packetLen, decodedTime);
+							}
 							Event* status=Class<NetStatusEvent>::getInstanceS("status", "NetStream.Play.Start");
 							getVm()->addEvent(this, status);
 							status->decRef();
@@ -487,6 +510,9 @@ void NetStream::execute()
 						frameRate=videoDecoder->frameRate;
 					}
 					sys->addTick(1000/frameRate,this);
+					//Also ask for a render rate equal to the video one (capped at 24)
+					float localRenderRate=dmin(frameRate,24);
+					sys->setRenderRate(localRenderRate);
 				}
 				profile->accountTime(chronometer.checkpoint());
 				if(aborting)
@@ -502,13 +528,25 @@ void NetStream::execute()
 	{
 		cout << e.cause << endl;
 		threadAbort();
+		waitForFlush=false;
 	}
 	catch(JobTerminationException& e)
 	{
+		waitForFlush=false;
 	}
 	catch(exception& e)
 	{
 		LOG(LOG_ERROR, "Exception in reading: "<<e.what());
+	}
+
+	if(waitForFlush)
+	{
+		//Put the decoders in the flushing state and wait for the complete consumption of contents
+		audioDecoder->setFlushing();
+		videoDecoder->setFlushing();
+		
+		audioDecoder->waitFlushed();
+		videoDecoder->waitFlushed();
 	}
 
 	sem_wait(&mutex);

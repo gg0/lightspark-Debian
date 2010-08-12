@@ -65,6 +65,8 @@ bool FFMpegVideoDecoder::fillDataAndCheckValidity()
 	{
 		frameRate=codecContext->time_base.den;
 		frameRate/=codecContext->time_base.num;
+		if(videoCodec==H264) //H264 has half ticks (usually?)
+			frameRate/=2;
 	}
 	else if(frameRate==0)
 		return false;
@@ -77,12 +79,13 @@ bool FFMpegVideoDecoder::fillDataAndCheckValidity()
 	return true;
 }
 
-FFMpegVideoDecoder::FFMpegVideoDecoder(LS_VIDEO_CODEC codecId, uint8_t* initdata, uint32_t datalen, float frameRateHint):curBuffer(0),codecContext(NULL),
+FFMpegVideoDecoder::FFMpegVideoDecoder(LS_VIDEO_CODEC codecId, uint8_t* initdata, uint32_t datalen, double frameRateHint):curBuffer(0),codecContext(NULL),
 	mutex("VideoDecoder"),initialized(false)
 {
 	//The tag is the header, initialize decoding
 	codecContext=avcodec_alloc_context();
 	AVCodec* codec=NULL;
+	videoCodec=codecId;
 	if(codecId==H264)
 	{
 		//TODO: serialize access to avcodec_open
@@ -145,7 +148,7 @@ void FFMpegVideoDecoder::skipUntil(uint32_t time)
 	while(1)
 	{
 		if(buffers.isEmpty())
-			return;
+			break;
 		if(buffers.front().time>=time)
 			break;
 		discardFrame();
@@ -167,12 +170,14 @@ bool FFMpegVideoDecoder::discardFrame()
 
 bool FFMpegVideoDecoder::decodeData(uint8_t* data, uint32_t datalen, uint32_t time)
 {
+	if(datalen==0)
+		return false;
 	int frameOk=0;
 #if HAVE_AVCODEC_DECODE_VIDEO2
 	AVPacket pkt;
 	av_init_packet(&pkt);
-	pkt.data= data;
-	pkt.size= datalen;
+	pkt.data=data;
+	pkt.size=datalen;
 	avcodec_decode_video2(codecContext, frameIn, &frameOk, &pkt);
 #else
 	avcodec_decode_video(codecContext, frameIn, &frameOk, data, datalen);
@@ -322,6 +327,7 @@ uint32_t AudioDecoder::copyFrame(int16_t* dest, uint32_t len)
 	uint32_t frameSize=min(samplesBuffer.front().len,len);
 	memcpy(dest,samplesBuffer.front().current,frameSize);
 	samplesBuffer.front().len-=frameSize;
+	assert(!(samplesBuffer.front().len&0x80000000));
 	if(samplesBuffer.front().len==0)
 	{
 		samplesBuffer.nonBlockingPopFront();
@@ -366,6 +372,7 @@ void AudioDecoder::skipUntil(uint32_t time, uint32_t usecs)
 		{
 			assert((bytesToDiscard%2)==0);
 			cur.len-=bytesToDiscard;
+			assert(!(cur.len&0x80000000));
 			cur.current+=(bytesToDiscard/2);
 			cur.time=time;
 			return;
@@ -454,6 +461,7 @@ uint32_t FFMpegAudioDecoder::decodeData(uint8_t* data, uint32_t datalen, uint32_
 		status=VALID;
 
 	curTail.len=maxLen;
+	assert(!(curTail.len&0x80000000));
 	assert(maxLen%2==0);
 	curTail.current=curTail.samples;
 	curTail.time=time;

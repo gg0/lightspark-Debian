@@ -1,6 +1,6 @@
 lightspark (0.4.3-1) UNRELEASED; urgency=low
 
-  * New upstream release.
+  * New upstream release (Closes: #593367).
 
   [ Didier Raboud ]
   * debian/watch: Manage rc versions.

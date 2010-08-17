@@ -2,9 +2,14 @@ lightspark (0.4.3-1) UNRELEASED; urgency=low
 
   * New upstream release.
 
+  [ Didier Raboud ]
   * debian/watch: Manage rc versions.
 
- -- Didier Raboud <didier@raboud.com>  Thu, 12 Aug 2010 10:49:33 +0200
+  [ Luca Falavigna ]
+  * debian/patches/hurd.patch:
+    - Basic GNU/Hurd support.
+
+ -- Luca Falavigna <dktrkranz@debian.org>  Tue, 17 Aug 2010 12:49:44 +0000
 
 lightspark (0.4.2.2-1) experimental; urgency=low
 

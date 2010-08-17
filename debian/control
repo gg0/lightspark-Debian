@@ -32,7 +32,7 @@ Vcs-Git: git://git.debian.org/collab-maint/lightspark.git
 Vcs-Browser: http://git.debian.org/?p=collab-maint/lightspark.git
 
 Package: lightspark
-Architecture: i386 amd64 kfreebsd-any
+Architecture: any-i386 any-amd64
 Depends: ${shlibs:Depends}, ${misc:Depends}
 Description: High-performance SWF player (experimental)
  Lightspark is a free Flash player for Linux which aims for high-performance
@@ -50,7 +50,7 @@ Description: High-performance SWF player (experimental)
     released.
 
 Package: browser-plugin-lightspark
-Architecture: i386 amd64 kfreebsd-any
+Architecture: any-i386 any-amd64
 Depends: ${shlibs:Depends}, ${misc:Depends}
 Recommends: gnash-common
 Description: High-performance SWF player - Mozilla Plugin (experimental)
@@ -71,7 +71,7 @@ Description: High-performance SWF player - Mozilla Plugin (experimental)
  This package contains the mozilla plugin.
 
 Package: lightspark-common
-Architecture: i386 amd64 kfreebsd-any
+Architecture: any-i386 any-amd64
 Depends: ${shlibs:Depends}, ${misc:Depends}, ttf-liberation
 Recommends: pulseaudio
 Description: High-performance SWF player - common data
@@ -94,7 +94,7 @@ Description: High-performance SWF player - common data
 Package: lightspark-dbg
 Section: debug
 Priority: extra
-Architecture: i386 amd64 kfreebsd-any
+Architecture: any-i386 any-amd64
 Depends: ${shlibs:Depends}, ${misc:Depends}, 
  lightspark (= ${binary:Version}) |
  browser-plugin-lightspark (= ${binary:Version}) |

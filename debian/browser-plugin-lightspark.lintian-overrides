@@ -1,4 +1,0 @@
-# lightspark-common (built from same source) ships the private library in
-# /usr/lib/lightspark . It is meant for private use only by the standalone
-# binary and by the plugin.
-binary-or-shlib-defines-rpath ./usr/lib/mozilla/plugins/liblightsparkplugin.so /usr/lib/lightspark

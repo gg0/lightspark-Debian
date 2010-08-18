@@ -8,10 +8,12 @@ lightspark (0.4.3-1) UNRELEASED; urgency=low
   [ Luca Falavigna ]
   * debian/patches/hurd.patch:
     - Basic GNU/Hurd support.
+  * debian/browser-plugin-lightspark.*:
+    - Implement alternatives on flash-mozilla.so (Closes: #590565).
   * debian/control:
     - Limit architectures to any-i386 and any-amd64 (Closes: #591357).
 
- -- Luca Falavigna <dktrkranz@debian.org>  Tue, 17 Aug 2010 15:37:26 +0200
+ -- Luca Falavigna <dktrkranz@debian.org>  Wed, 18 Aug 2010 09:47:11 +0200
 
 lightspark (0.4.2.2-1) experimental; urgency=low
 

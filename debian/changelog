@@ -1,4 +1,4 @@
-lightspark (0.4.3-1) UNRELEASED; urgency=low
+lightspark (0.4.3-1) experimental; urgency=low
 
   * New upstream release (Closes: #593367).
 
@@ -13,7 +13,7 @@ lightspark (0.4.3-1) UNRELEASED; urgency=low
   * debian/control:
     - Limit architectures to any-i386 and any-amd64 (Closes: #591357).
 
- -- Luca Falavigna <dktrkranz@debian.org>  Wed, 18 Aug 2010 09:47:11 +0200
+ -- Luca Falavigna <dktrkranz@debian.org>  Wed, 18 Aug 2010 18:49:12 +0200
 
 lightspark (0.4.2.2-1) experimental; urgency=low
 

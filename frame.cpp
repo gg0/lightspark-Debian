@@ -17,13 +17,11 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
-#include "abc.h"
+#include "scripting/abc.h"
 #include "frame.h"
-#include "tags.h"
-#include <list>
+#include "parsing/tags.h"
 #include "swf.h"
 #include "compat.h"
-#include <GL/glew.h>
 
 using namespace std;
 using namespace lightspark;
@@ -43,12 +41,6 @@ Frame::~Frame()
 			i->second->decRef();
 		}
 	}
-}
-
-void Frame::runScript()
-{
-	if(script)
-		sys->currentVm->addEvent(NULL,new FunctionEvent(script));
 }
 
 void Frame::inputRender()

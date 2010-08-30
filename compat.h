@@ -23,6 +23,11 @@
 //Define cross platform helpers
 // TODO: This should be reworked to use CMake feature detection where possible
 
+// gettext support
+#include <locale.h>
+#include <libintl.h>
+#define _(STRING) gettext(STRING)
+
 #ifdef WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <winsock2.h>
@@ -77,7 +82,6 @@ long lrint(double f);
 
 
 #else //GCC
-
 #ifndef __STDC_LIMIT_MACROS
 #define __STDC_LIMIT_MACROS
 #endif

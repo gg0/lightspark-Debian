@@ -161,7 +161,7 @@ void* TimerThread::timer_worker(TimerThread* th)
 		int err=errno;
 		if(err!=ETIMEDOUT)
 		{
-			LOG(LOG_ERROR,"Unexpected failure of sem_timedwait.. Trying to go on. errno=" << err);
+			LOG(LOG_ERROR,_("Unexpected failure of sem_timedwait.. Trying to go on. errno=") << err);
 			continue;
 		}
 

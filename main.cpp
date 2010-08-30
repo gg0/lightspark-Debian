@@ -18,25 +18,24 @@
 **************************************************************************/
 
 #include "swf.h"
-#include "tags.h"
-#include "actions.h"
-#include "frame.h"
-#include "geometry.h"
 #include "logger.h"
-#include "streams.h"
-#include "netutils.h"
-#include <time.h>
+#include "parsing/streams.h"
+#include "backends/netutils.h"
 #ifndef WIN32
 #include <sys/resource.h>
+#include <unistd.h>
 #endif
 #include <iostream>
 #include <fstream>
-#include <list>
+#include "compat.h"
 
 #ifdef WIN32
 #include <windows.h>
 #endif
 #include <SDL.h>
+#ifdef WIN32
+#undef main
+#endif
 
 using namespace std;
 using namespace lightspark;
@@ -50,9 +49,14 @@ int main(int argc, char* argv[])
 	char* fileName=NULL;
 	char* url=NULL;
 	char* paramsFileName=NULL;
+	Security::SANDBOXTYPE sandboxType=Security::REMOTE;
 	bool useInterpreter=true;
 	bool useJit=false;
 	LOG_LEVEL log_level=LOG_NOT_IMPLEMENTED;
+
+	setlocale(LC_ALL, "");
+	bindtextdomain("lightspark", "/usr/share/locale");
+	textdomain("lightspark");
 
 	for(int i=1;i<argc;i++)
 	{
@@ -101,6 +105,32 @@ int main(int argc, char* argv[])
 			}
 			paramsFileName=argv[i];
 		}
+		else if(strcmp(argv[i],"-s")==0 || 
+			strcmp(argv[i],"--security-sandbox")==0)
+		{
+			i++;
+			if(i==argc)
+			{
+				fileName=NULL;
+				break;
+			}
+			if(strncmp(argv[i], "remote", 6) == 0)
+			{
+				sandboxType = Security::REMOTE;
+			}
+			else if(strncmp(argv[i], "local-with-filesystem", 21) == 0)
+			{
+				sandboxType = Security::LOCAL_WITH_FILE;
+			}
+			else if(strncmp(argv[i], "local-with-networking", 21) == 0)
+			{
+				sandboxType = Security::LOCAL_WITH_NETWORK;
+			}
+			else if(strncmp(argv[i], "local-trusted", 13) == 0)
+			{
+				sandboxType = Security::LOCAL_TRUSTED;
+			}
+		}
 		else
 		{
 			//No options flag, so set the swf file name
@@ -116,7 +146,9 @@ int main(int argc, char* argv[])
 
 	if(fileName==NULL)
 	{
-		cout << "Usage: " << argv[0] << " [--url|-u http://loader.url/file.swf] [--disable-interpreter|-ni] [--enable-jit|-j] [--log-level|-l 0-4] [--parameters-file|-p params-file] <file.swf>" << endl;
+		cout << "Usage: " << argv[0] << " [--url|-u http://loader.url/file.swf]" << 
+			" [--disable-interpreter|-ni] [--enable-jit|-j] [--log-level|-l 0-4]" << 
+			" [--parameters-file|-p params-file] [--security-sandbox|-s sandbox] <file.swf>" << endl;
 		exit(-1);
 	}
 
@@ -140,26 +172,54 @@ int main(int argc, char* argv[])
 	//NOTE: see SystemState declaration
 	sys=new SystemState(pt);
 
-	//Set a bit of SystemState using parameters
+	//This setting allows qualifying filename-only paths to fully qualified paths
+	//When the URL parameter is set, set the root URL to the given parameter
 	if(url)
-		sys->setUrl(url);
+	{
+		sys->setOrigin(url, fileName);
+	}
+#ifndef WIN32
+	//When running in a local sandbox, set the root URL to the current working dir
+	else if(sandboxType != Security::REMOTE)
+	{
+		char * cwd = get_current_dir_name();
+		tiny_string cwdStr = tiny_string("file://") + tiny_string(cwd, true);
+		free(cwd);
+		cwdStr += "/";
+		sys->setOrigin(cwdStr, fileName);
+	}
+#endif
+	else
+	{
+		sys->setOrigin(tiny_string("file://") + tiny_string(fileName));
+		LOG(LOG_NO_INFO, _("Warning: running with no origin URL set."));
+	}
 
 	//One of useInterpreter or useJit must be enabled
 	if(!(useInterpreter || useJit))
 	{
-		LOG(LOG_ERROR,"No execution model enabled");
+		LOG(LOG_ERROR,_("No execution model enabled"));
 		exit(-1);
 	}
 	sys->useInterpreter=useInterpreter;
 	sys->useJit=useJit;
 	if(paramsFileName)
 		sys->parseParametersFromFile(paramsFileName);
-
-	sys->setOrigin(fileName);
 	
 	SDL_Init ( SDL_INIT_VIDEO |SDL_INIT_EVENTTHREAD );
 	sys->setParamsAndEngine(SDL, NULL);
-	sys->downloadManager=new CurlDownloadManager();
+	sys->sandboxType = sandboxType;
+
+	sys->downloadManager=new StandaloneDownloadManager();
+	if(sandboxType == Security::REMOTE)
+		LOG(LOG_NO_INFO, _("Running in remote sandbox"));
+	else if(sandboxType == Security::LOCAL_WITH_NETWORK)
+		LOG(LOG_NO_INFO, _("Running in local-with-networking sandbox"));
+	else if(sandboxType == Security::LOCAL_WITH_FILE)
+		LOG(LOG_NO_INFO, _("Running in local-with-filesystem sandbox"));
+	else if(sandboxType == Security::LOCAL_TRUSTED)
+		LOG(LOG_NO_INFO, _("Running in local-trusted sandbox"));
+
 	//Start the parser
 	sys->addJob(pt);
 

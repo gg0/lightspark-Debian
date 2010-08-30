@@ -17,7 +17,7 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
-#include "abc.h"
+#include "scripting/abc.h"
 
 #include <fstream>
 #ifndef _WIN32
@@ -91,13 +91,13 @@ int main(int argc, char* argv[])
 	//One of useInterpreter or useJit must be enabled
 	if(!(useInterpreter || useJit))
 	{
-		LOG(LOG_ERROR,"No execution model enabled");
+		LOG(LOG_ERROR,_("No execution model enabled"));
 		exit(-1);
 	}
 	sys->useInterpreter=useInterpreter;
 	sys->useJit=useJit;
 
-	sys->setOrigin(fileNames[0]);
+	sys->setOrigin(tiny_string("file://") + tiny_string(fileNames[0]));
 
 #ifndef WIN32
 	struct rlimit rl;

@@ -21,12 +21,15 @@
 #define _THREADING_H
 
 #include "compat.h"
+#include <pthread.h>
 #include <semaphore.h>
 #include <stdlib.h>
 #include <assert.h>
 
 namespace lightspark
 {
+
+typedef void* (*thread_worker)(void*);
 
 class Mutex
 {

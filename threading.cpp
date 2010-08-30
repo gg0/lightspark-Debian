@@ -22,6 +22,7 @@
 #include "threading.h"
 #include "exceptions.h"
 #include "logger.h"
+#include "compat.h"
 
 using namespace lightspark;
 
@@ -47,7 +48,7 @@ void IThreadJob::run()
 	}
 	catch(JobTerminationException& ex)
 	{
-		LOG(LOG_NOT_IMPLEMENTED,"Job terminated");
+		LOG(LOG_NOT_IMPLEMENTED,_("Job terminated"));
 	}
 
 	sem_post(&terminated);
@@ -70,7 +71,7 @@ Mutex::Mutex(const char* n):name(n),foundBusy(0)
 Mutex::~Mutex()
 {
 	if(name)
-		LOG(LOG_TRACE,"Mutex " << name << " waited " << foundBusy << " times");
+		LOG(LOG_TRACE,_("Mutex ") << name << _(" waited ") << foundBusy << _(" times"));
 	sem_destroy(&sem);
 }
 

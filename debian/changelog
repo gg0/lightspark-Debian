@@ -1,4 +1,4 @@
-lightspark (0.4.4.1-1) UNRELEASED; urgency=low
+lightspark (0.4.4.1-1) experimental; urgency=low
 
   * New upstream bugfix release.
 
@@ -7,7 +7,7 @@ lightspark (0.4.4.1-1) UNRELEASED; urgency=low
     - Vcs-* Fields updated accordingly
     - Maintainer changed, moved myself to Uploaders.
 
- -- Didier Raboud <didier@raboud.com>  Thu, 02 Sep 2010 13:42:52 +0200
+ -- Didier Raboud <didier@raboud.com>  Thu, 02 Sep 2010 21:44:43 +0200
 
 lightspark (0.4.4-1) experimental; urgency=low
 

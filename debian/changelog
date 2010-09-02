@@ -1,4 +1,6 @@
-lightspark (0.4.4-2) UNRELEASED; urgency=low
+lightspark (0.4.4.1-1) UNRELEASED; urgency=low
+
+  * New upstream bugfix release.
 
   * Putting under Debian Flash Maintainers <pkg-flash-devel@l.a.d.o> umbrella:
     - git repository moved from collab-maint to pkg-flash

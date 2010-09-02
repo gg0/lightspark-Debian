@@ -1,8 +1,8 @@
 Source: lightspark
 Section: utils
 Priority: optional
-Maintainer: Didier Raboud <didier@raboud.com>
-Uploaders: Luca Falavigna <dktrkranz@debian.org>
+Maintainer: Debian Flash Maintainers <pkg-flash-devel@lists.debian.org>
+Uploaders: Didier Raboud <didier@raboud.com>, Luca Falavigna <dktrkranz@debian.org>
 DM-Upload-Allowed: yes
 Build-Depends: debhelper (>= 7.0.50),
 	cmake,
@@ -28,8 +28,8 @@ Build-Depends: debhelper (>= 7.0.50),
 	gnash-common
 Standards-Version: 3.9.1
 Homepage: http://lightspark.sf.net
-Vcs-Git: git://git.debian.org/collab-maint/lightspark.git
-Vcs-Browser: http://git.debian.org/?p=collab-maint/lightspark.git
+Vcs-Git: git://git.debian.org/pkg-flash/lightspark.git
+Vcs-Browser: http://git.debian.org/?p=pkg-flash/lightspark.git
 
 Package: lightspark
 Architecture: any-i386 any-amd64

@@ -109,17 +109,19 @@ ASFUNCTIONBODY(URLLoader,load)
 	URLRequest* urlRequest=static_cast<URLRequest*>(arg);
 	//Check for URLRequest.url != null
 	if(urlRequest->url.len() == 0)
-		throw UnsupportedException("TypeError");
+		throw Class<TypeError>::getInstanceS();
 
 	th->url=sys->getOrigin().goToURL(urlRequest->url);
 
-	//Network sandboxes can't access local files
+	//Network sandboxes can't access local files (this should be a SecurityErrorEvent)
 	if(th->url.getProtocol() == "file" &&
 			sys->sandboxType != Security::LOCAL_WITH_FILE && sys->sandboxType != Security::LOCAL_TRUSTED)
-		throw UnsupportedException("SecurityError: URLLoader::load: connect to local file");
+		throw Class<SecurityError>::getInstanceS("SecurityError: URLLoader::load: connect to local file");
 	//Local-with-filesystem sandbox can't access network
 	else if(th->url.getProtocol() != "file" && sys->sandboxType == Security::LOCAL_WITH_FILE)
-		throw UnsupportedException("SecurityError: URLLoader::load: connect to network");
+		throw Class<SecurityError>::getInstanceS("SecurityError: URLLoader::load: connect to network");
+
+	//TODO: support the right events (like SecurityErrorEvent)
 
 	//TODO: use domain policy files to check if domain access is allowed
 	//TODO: should we disallow accessing local files in a directory above the current one like we do with NetStream.play?
@@ -128,7 +130,7 @@ ASFUNCTIONBODY(URLLoader,load)
 	if(data)
 	{
 		if(data->getPrototype()==Class<URLVariables>::getClass())
-			throw RunTimeException("Type mismatch in URLLoader::load");
+			throw RunTimeException("Type mismatch in URLLoader::load parameter: URLVariables instead of URLRequest");
 		else
 		{
 			tiny_string newURL = th->url.getParsedURL();
@@ -141,36 +143,50 @@ ASFUNCTIONBODY(URLLoader,load)
 		}
 	}
 	assert_and_throw(th->dataFormat=="binary" || th->dataFormat=="text");
-	th->incRef();
-	sys->addJob(th);
+	
+	if(!th->url.isValid())
+	{
+		//Notify an error during loading
+		sys->currentVm->addEvent(th,Class<Event>::getInstanceS("ioError"));
+	}
+	else //The URL is valid so we can start the download and add ourself as a job
+	{
+		//Don't cache our downloaded files
+		th->downloader=sys->downloadManager->download(th->url, false);
+
+		th->incRef();
+		sys->addJob(th);
+	}
 	return NULL;
 }
 
 void URLLoader::execute()
 {
 	//TODO: support httpStatus, progress, securityError, open events
-	downloader=sys->downloadManager->download(url);
 
 	if(!downloader->hasFailed())
 	{
 		downloader->wait();
-		istream s(downloader);
-		char buf[downloader->getLen()];
-		s.read(buf,downloader->getLen());
-		//TODO: test binary data format
-		if(dataFormat=="binary")
+		if(!downloader->hasFailed())
 		{
-			ByteArray* byteArray=Class<ByteArray>::getInstanceS();
-			byteArray->acquireBuffer((uint8_t*) buf,downloader->getLen());
-			data=byteArray;
+			istream s(downloader);
+			char buf[downloader->getLen()];
+			s.read(buf,downloader->getLen());
+			//TODO: test binary data format
+			if(dataFormat=="binary")
+			{
+				ByteArray* byteArray=Class<ByteArray>::getInstanceS();
+				byteArray->acquireBuffer((uint8_t*) buf,downloader->getLen());
+				data=byteArray;
+			}
+			else if(dataFormat=="text")
+			{
+				data=Class<ASString>::getInstanceS((const char *)buf,
+									downloader->getLen());
+			}
+			//Send a complete event for this object
+			sys->currentVm->addEvent(this,Class<Event>::getInstanceS("complete"));
 		}
-		else if(dataFormat=="text")
-		{
-			data=Class<ASString>::getInstanceS((const char *)buf,
-								downloader->getLen());
-		}
-		//Send a complete event for this object
-		sys->currentVm->addEvent(this,Class<Event>::getInstanceS("complete"));
 	}
 	else
 	{
@@ -185,7 +201,7 @@ void URLLoader::threadAbort()
 {
 	executingAbort=true;
 	if(downloader)
-		downloader->Downloader::stop();
+		downloader->stop();
 	executingAbort=false;
 }
 
@@ -275,7 +291,7 @@ ASFUNCTIONBODY(NetConnection,connect)
 		//LOCAL_WITH_FILE may not use connect(), even if it tries to connect to a local file.
 		//I'm following the specification to the letter
 		if(sys->sandboxType == Security::LOCAL_WITH_FILE)
-			throw UnsupportedException("SecurityError: NetConnection::connect from LOCAL_WITH_FILE sandbox");
+			throw Class<SecurityError>::getInstanceS("NetConnection::connect from LOCAL_WITH_FILE sandbox");
 	}
 	//String argument means Flash Remoting/Flash Media Server
 	else
@@ -330,7 +346,7 @@ ASFUNCTIONBODY(NetConnection,_setObjectEncoding)
 	assert_and_throw(argslen == 1);
 	if(th->_connected)
 	{
-		throw UnsupportedException("ReferenceError: set NetConnection.objectEncoding after connect");
+		throw Class<ReferenceError>::getInstanceS("set NetConnection.objectEncoding after connect");
 	}
 	int32_t value = args[0]->toInt();
 	if(value == 0)
@@ -346,7 +362,7 @@ ASFUNCTIONBODY(NetConnection,_getProtocol)
 	if(th->_connected)
 		return Class<ASString>::getInstanceS(th->protocol);
 	else
-		throw UnsupportedException("ArgumentError: get NetConnection.protocol before connect");
+		throw Class<ArgumentError>::getInstanceS("get NetConnection.protocol before connect");
 }
 
 ASFUNCTIONBODY(NetConnection,_getURI)
@@ -416,7 +432,7 @@ ASFUNCTIONBODY(NetStream,_constructor)
 		else if(args[1]->getObjectType() == T_NULL)
 			th->peerID = CONNECT_TO_FMS;
 		else
-			throw UnsupportedException("ArgumentError: NetStream constructor: peerID");
+			throw Class<ArgumentError>::getInstanceS("NetStream constructor: peerID");
 	}
 
 	assert_and_throw(netConnection->uri.getURL()=="");
@@ -431,8 +447,7 @@ ASFUNCTIONBODY(NetStream,play)
 	if(th->closed)
 		th->closed = false;
 	else
-		//TODO: what should we do here: restart playing, just ignore or throw this exception? (timonvo)
-		throw RunTimeException("NetStream::play called without being closed first.");
+		return NULL;
 
 	//Reset the paused states
 	th->paused = false;
@@ -443,20 +458,30 @@ ASFUNCTIONBODY(NetStream,play)
 	th->url = sys->getOrigin().goToURL(arg0);
 
 	if(sys->sandboxType == Security::LOCAL_WITH_FILE && th->url.getProtocol() != "file")
-		throw UnsupportedException("SecurityError: NetStream::play: connect to network from local-with-filesystem sandbox");
+		throw Class<SecurityError>::getInstanceS("NetStream::play: connect to network from local-with-filesystem sandbox");
 	if(sys->sandboxType != Security::LOCAL_WITH_FILE && sys->sandboxType != Security::LOCAL_TRUSTED && 
 			th->url.getProtocol() == "file")
-		throw UnsupportedException("SecurityError: NetStream::play: connect to local file from network sandbox");
+		throw Class<SecurityError>::getInstanceS("NetStream::play: connect to local file from network sandbox");
 	if(th->url.getProtocol() == "file" && !th->url.isSubOf(sys->getOrigin()))
-		throw UnsupportedException("SecurityError: NetStream::play: not allowed to navigate up for local files");
+		throw Class<SecurityError>::getInstanceS("NetStream::play: not allowed to navigate up for local files");
 
 	//TODO: use domain policy files to check if domain access is allowed
 
 	assert_and_throw(th->downloader==NULL);
-	th->downloader=sys->downloadManager->download(th->url);
-	th->streamTime=0;
-	th->incRef();
-	sys->addJob(th);
+	
+	if(!th->url.isValid())
+	{
+		//Notify an error during loading
+		sys->currentVm->addEvent(th,Class<Event>::getInstanceS("ioError"));
+	}
+	else //The URL is valid so we can start the download and add ourself as a job
+	{
+		//Cache our downloaded files
+		th->downloader=sys->downloadManager->download(th->url, true);
+		th->streamTime=0;
+		th->incRef();
+		sys->addJob(th);
+	}
 	return NULL;
 }
 
@@ -490,7 +515,8 @@ ASFUNCTIONBODY(NetStream,close)
 	//TODO: set the time property to 0
 	
 	//Everything is stopped in threadAbort
-	th->threadAbort();
+	if(!th->closed)
+		th->threadAbort();
 	LOG(LOG_CALLS, _("NetStream::close called"));
 	return NULL;
 }
@@ -585,8 +611,8 @@ void NetStream::execute()
 {
 	if(downloader->hasFailed())
 	{
-		//TODO: find out what to do when a file specified as a play() argument isn't found.
-		throw RunTimeException("NetStream::execute(): file doesn't exist");
+		sys->currentVm->addEvent(this,Class<Event>::getInstanceS("ioError"));
+		return;
 	}
 
 	//The downloader hasn't failed yet at this point
@@ -775,16 +801,20 @@ void NetStream::execute()
 	catch(exception& e)
 	{
 		LOG(LOG_ERROR, _("Exception in reading: ")<<e.what());
+		LOG(LOG_ERROR, "Failbit: " << ((s.rdstate() & istream::failbit) != 0) << ", badbit: " << ((s.rdstate() & istream::badbit) != 0));
 	}
-
 	if(waitForFlush)
 	{
 		//Put the decoders in the flushing state and wait for the complete consumption of contents
-		audioDecoder->setFlushing();
-		videoDecoder->setFlushing();
+		if(audioDecoder)
+			audioDecoder->setFlushing();
+		if(videoDecoder)
+			videoDecoder->setFlushing();
 		
-		audioDecoder->waitFlushed();
-		videoDecoder->waitFlushed();
+		if(audioDecoder)
+			audioDecoder->waitFlushed();
+		if(videoDecoder)
+			videoDecoder->waitFlushed();
 	}
 
 	//Clean up everything for a possible re-run
@@ -795,12 +825,14 @@ void NetStream::execute()
 	//Before deleting stops ticking, removeJobs also spin waits for termination
 	sys->removeJob(this);
 	tickStarted=false;
-	delete videoDecoder;
+	if(videoDecoder)
+		delete videoDecoder;
 	videoDecoder=NULL;
 #if ENABLE_SOUND
 	if(soundStreamId)
 		sys->soundManager->freeStream(soundStreamId);
-	delete audioDecoder;
+	if(audioDecoder)
+		delete audioDecoder;
 	soundStreamId = 0;
 	audioDecoder=NULL;
 #endif

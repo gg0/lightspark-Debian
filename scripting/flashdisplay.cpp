@@ -456,6 +456,7 @@ MovieClip::MovieClip():totalFrames(1),framesLoaded(1),cur_frame(NULL)
 	//RooMovieClip() will reset it, as stuff loaded dynamically needs frames to be committed
 	frames.push_back(Frame());
 	cur_frame=&frames.back();
+	frameScripts.resize(totalFrames,NULL);
 }
 
 void MovieClip::setTotalFrames(uint32_t t)
@@ -941,11 +942,7 @@ bool DisplayObject::isSimple() const
 
 void DisplayObject::setRoot(RootMovieClip* r)
 {
-	if(root!=r)
-	{
-		assert_and_throw(root==NULL);
-		root=r;
-	}
+	root=r;
 }
 
 void DisplayObject::setOnStage(bool staged)
@@ -1155,8 +1152,16 @@ ASFUNCTIONBODY(DisplayObject,_getBlendMode)
 
 ASFUNCTIONBODY(DisplayObject,localToGlobal)
 {
-	//DisplayObject* th=static_cast<DisplayObject*>(obj);
-	return new Undefined;
+	DisplayObject* th=static_cast<DisplayObject*>(obj);
+	assert_and_throw(argslen == 1);
+
+	Point* pt=static_cast<Point*>(args[0]);
+
+	number_t tempx, tempy;
+
+	th->getMatrix().multiply2D(pt->getX(), pt->getY(), tempx, tempy);
+
+	return Class<Point>::getInstanceS(tempx, tempy);
 }
 
 ASFUNCTIONBODY(DisplayObject,_setRotation)
@@ -1493,6 +1498,8 @@ void DisplayObjectContainer::_removeChild(DisplayObject* child)
 		assert_and_throw(it!=dynamicDisplayList.end());
 		dynamicDisplayList.erase(it);
 	}
+	//Set the root of the movie to NULL
+	child->setRoot(NULL);
 	//We can release the reference to the child
 	child->parent=NULL;
 	child->setOnStage(false);

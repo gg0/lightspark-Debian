@@ -26,7 +26,7 @@
 #define PLUGIN_NAME    "Shockwave Flash"
 #define FAKE_PLUGIN_NAME    "Lightspark player"
 #define MIME_TYPES_DESCRIPTION  MIME_TYPES_HANDLED":swf:"PLUGIN_NAME";"FAKE_MIME_TYPE":swfls:"FAKE_PLUGIN_NAME
-#define PLUGIN_DESCRIPTION "Shockwave Flash 10.0 r44"
+#define PLUGIN_DESCRIPTION "Shockwave Flash 10.0 r441"
 
 using namespace std;
 
@@ -43,17 +43,18 @@ NPDownloadManager::~NPDownloadManager()
 {
 }
 
-lightspark::Downloader* NPDownloadManager::download(const lightspark::tiny_string& u)
+lightspark::Downloader* NPDownloadManager::download(const lightspark::tiny_string& u, bool cached)
 {
-	return download(sys->getOrigin().goToURL(u));
+	return download(sys->getOrigin().goToURL(u), cached);
 }
 
-lightspark::Downloader* NPDownloadManager::download(const lightspark::URLInfo& url)
+lightspark::Downloader* NPDownloadManager::download(const lightspark::URLInfo& url, bool cached)
 {
 	LOG(LOG_NO_INFO, "DownloadManager: PLUGIN: '" << url.getParsedURL() << "'");
 	//Register this download
-	NPDownloader* ret=new NPDownloader(instance, url.getParsedURL());
-	return ret;
+	NPDownloader* downloader=new NPDownloader(instance, url.getParsedURL());
+	downloader->setCached(cached);
+	return downloader;
 }
 
 void NPDownloadManager::destroy(lightspark::Downloader* d)

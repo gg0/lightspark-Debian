@@ -1,9 +1,10 @@
-lightspark (0.4.4.1-2) UNRELEASED; urgency=low
+lightspark (0.4.4.2-1) UNRELEASED; urgency=low
 
+  * New upstream release.
   * debian/control:
     - Recommend gnash for lightspark package (Closes: #597200).
 
- -- Luca Falavigna <dktrkranz@debian.org>  Wed, 22 Sep 2010 11:22:39 +0200
+ -- Luca Falavigna <dktrkranz@debian.org>  Wed, 22 Sep 2010 11:36:32 +0200
 
 lightspark (0.4.4.1-1) experimental; urgency=low
 

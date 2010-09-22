@@ -4,11 +4,12 @@ lightspark (0.4.4.2-1) UNRELEASED; urgency=low
   * debian/patches/hurd.patch:
     - Refresh due to new upstream release.
   * debian/control:
+    - Build-depend on libboost-{filesystem,system,regex}-dev.
     - Recommend gnash for lightspark package (Closes: #597200).
   * debian/copyright:
     - Update with latest copyright information.
 
- -- Luca Falavigna <dktrkranz@debian.org>  Wed, 22 Sep 2010 11:54:14 +0200
+ -- Luca Falavigna <dktrkranz@debian.org>  Wed, 22 Sep 2010 12:51:29 +0200
 
 lightspark (0.4.4.1-1) experimental; urgency=low
 

@@ -1,5 +1,9 @@
 This package was debianized by Didier Raboud on Thu, 18 May 2010 12:15:24 +0100.
 
+It was downloaded from:
+
+    http://lightspark.sf.net/
+
 Upstream Author:
 
     Alessandro Pignotti (a.pignotti@sssup.it)
@@ -8,6 +12,7 @@ Copyright:
 
     Copyright 2009,2010 Alessandro Pignotti (a.pignotti@sssup.it)
     Copyright 2010 Giacomo Spigler <g.spigler@sssup.it>
+    Copyright 2010 Alexandre Demers <papouta@hotmail.com>
 
 Licenses:
 
@@ -28,6 +33,18 @@ Licenses:
 
     On Debian systems, the complete text of the GNU Lesser General Public
     License version 3 can be found in `/usr/share/common-licenses/LGPL-3'.
+
+
+Files under conf/Find* are licensed under BSD:
+
+    Copyright 2007-2009 Kitware, Inc.
+
+    Distributed under the OSI-approved BSD License (the "License");
+    see accompanying file Copyright.txt for details.
+
+    This software is distributed WITHOUT ANY WARRANTY; without even the
+    implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+    See the License for more information.
 
 
 Files under scripts/ are licensed under GPLv3:
@@ -92,7 +109,6 @@ Additionally, lightspark includes files from Mozilla: plugin-dir/include/*
        On Debian systems, the complete text of the GNU Lesser General Public License
        can be found in `/usr/share/common-licenses/LGPL-2.1'.
  
-It was downloaded from http://lightspark.sf.net/.
 
 The Debian packaging is
 

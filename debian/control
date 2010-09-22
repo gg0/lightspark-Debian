@@ -34,6 +34,7 @@ Vcs-Browser: http://git.debian.org/?p=pkg-flash/lightspark.git
 Package: lightspark
 Architecture: any-i386 any-amd64
 Depends: ${shlibs:Depends}, ${misc:Depends}
+Recommends: gnash
 Description: High-performance SWF player (experimental)
  Lightspark is a free Flash player for Linux which aims for high-performance
  by using modern technologies such as JIT compilation and OpenGL shaders.

@@ -1,4 +1,4 @@
-lightspark (0.4.4.2-1) UNRELEASED; urgency=low
+lightspark (0.4.4.2-1) experimental; urgency=low
 
   * New upstream release.
   * debian/patches/hurd.patch:
@@ -9,7 +9,7 @@ lightspark (0.4.4.2-1) UNRELEASED; urgency=low
   * debian/copyright:
     - Update with latest copyright information.
 
- -- Luca Falavigna <dktrkranz@debian.org>  Wed, 22 Sep 2010 12:51:29 +0200
+ -- Luca Falavigna <dktrkranz@debian.org>  Wed, 22 Sep 2010 18:31:48 +0200
 
 lightspark (0.4.4.1-1) experimental; urgency=low
 

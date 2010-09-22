@@ -26,7 +26,7 @@
 #define PLUGIN_NAME    "Shockwave Flash"
 #define FAKE_PLUGIN_NAME    "Lightspark player"
 #define MIME_TYPES_DESCRIPTION  MIME_TYPES_HANDLED":swf:"PLUGIN_NAME";"FAKE_MIME_TYPE":swfls:"FAKE_PLUGIN_NAME
-#define PLUGIN_DESCRIPTION "Shockwave Flash 10.0 r441"
+#define PLUGIN_DESCRIPTION "Shockwave Flash 10.0 r442"
 
 using namespace std;
 
@@ -351,7 +351,6 @@ string nsPluginInstance::getPageURL() const
 	return ret;
 }
 
-
 NPError nsPluginInstance::NewStream(NPMIMEType type, NPStream* stream, NPBool seekable, uint16_t* stype)
 {
 	//We have to cast the downloadanager to a NPDownloadManager
@@ -425,19 +424,15 @@ int32_t nsPluginInstance::Write(NPStream *stream, int32_t offset, int32_t len, v
 NPError nsPluginInstance::DestroyStream(NPStream *stream, NPError reason)
 {
 	if(stream->pdata)
-	{
 		cerr << "Destroy " << stream->pdata << endl;
-		NPDownloader* dl=static_cast<NPDownloader*>(stream->pdata);
-		dl->terminate();
-	}
 	else
-		LOG(LOG_NO_INFO, _("DestroyStream on main stream?"));
+		LOG(LOG_NO_INFO, _("DestroyStream on main stream"));
 	return NPERR_NO_ERROR;
 }
 
 void nsPluginInstance::URLNotify(const char* url, NPReason reason, void* notifyData)
 {
-	lightspark::Downloader* dl=(lightspark::Downloader*)notifyData;
+	NPDownloader* dl=static_cast<NPDownloader*>(notifyData);
 	cout << "URLnotify " << url << endl;
 	//Notify our downloader of what happened
 	switch(reason)
@@ -445,14 +440,17 @@ void nsPluginInstance::URLNotify(const char* url, NPReason reason, void* notifyD
 		case NPRES_DONE:
 			cout << "Done" <<endl;
 			dl->setFinished();
+			dl->terminate();
 			break;
 		case NPRES_USER_BREAK:
 			cout << "User Break" <<endl;
 			dl->setFailed();
+			dl->terminate();
 			break;
 		case NPRES_NETWORK_ERR:
 			cout << "Network Error" <<endl;
 			dl->setFailed();
+			dl->terminate();
 			break;
 	}
 }

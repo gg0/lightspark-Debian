@@ -83,11 +83,13 @@ Downloader::~Downloader()
 	sem_destroy(&terminated);
 }
 
-Downloader::Downloader():allowBufferRealloc(false),cached(false),waiting(false),hasTerminated(false),failed(false),finished(false),buffer(NULL),len(0),tail(0),keepCache(false)
+Downloader::Downloader():allowBufferRealloc(false),cached(false),waiting(false),hasTerminated(false),failed(false),finished(false),buffer(NULL),len(0),
+	tail(0),cachePos(0),cacheSize(0),keepCache(false)
 {
 	sem_init(&available,0,0);
 	sem_init(&mutex,0,1);
 	sem_init(&terminated,0,0);
+	setg(NULL,NULL,NULL);
 }
 
 void Downloader::stop()
@@ -129,11 +131,12 @@ void Downloader::setFinished()
 
 void Downloader::setLen(uint32_t l)
 {
+	sem_wait(&mutex);
 	len=l;
 	if(cached && !cache.is_open())
 	{
 		//Create a temporary file(name)
-		char* cacheFileNameC = new char[30];
+		char cacheFileNameC[30];
 		strcpy(cacheFileNameC, "/tmp/lightsparkdownloadXXXXXX");
 		int fd = mkstemp(cacheFileNameC);
 		if(fd == -1)
@@ -143,7 +146,6 @@ void Downloader::setLen(uint32_t l)
 
 		//Save the temporary filename
 		cacheFileName = tiny_string(cacheFileNameC, true);
-		delete[] cacheFileNameC;
 		//Open the cache file
 		cache.open(cacheFileName.raw_buf(), std::fstream::in | std::fstream::out);
 		assert_and_throw(cache.is_open());
@@ -181,6 +183,7 @@ void Downloader::setLen(uint32_t l)
 			assert_and_throw(buffer==NULL);
 		}
 	}
+	sem_post(&mutex);
 }
 
 void Downloader::append(uint8_t* buf, uint32_t added)
@@ -235,11 +238,12 @@ void Downloader::append(uint8_t* buf, uint32_t added)
 Downloader::int_type Downloader::underflow()
 {
 	sem_wait(&mutex);
-	assert_and_throw(gptr()==egptr());
-
-	unsigned int startTail=tail;
-	//There is no data to read yet OR we have read all available data
-	if(startTail==0 || (!cached && startTail==((uint8_t*)egptr()-buffer)) || (cached && startTail == cachePos+(((uint8_t*)egptr())-buffer)))
+	assert(gptr()==egptr());
+	const unsigned int startOff=getOffset();
+	const unsigned int startTail=tail;
+	assert(startOff<=startTail);
+	//If we have read all available data
+	if(startTail==startOff)
 	{
 		//The download is failed, the end is reached or the download has finished
 		if(failed || (startTail==len && len!=0) || finished)
@@ -299,7 +303,7 @@ Downloader::int_type Downloader::underflow()
 		begin=(char*)buffer;
 		cur=gptr();
 		end=(char*)buffer+tail;
-		index=startTail;
+		index=startOff;
 	}
 
 	//If we've failed, don't bother any more
@@ -365,16 +369,22 @@ Downloader::pos_type Downloader::seekpos(pos_type pos, std::ios_base::openmode m
 	return pos;
 }
 
+Downloader::pos_type Downloader::getOffset() const
+{
+	pos_type ret = gptr()-eback();
+	if(cached)
+		ret+=cachePos;
+	return ret;
+}
+
 Downloader::pos_type Downloader::seekoff(off_type off, std::ios_base::seekdir dir, std::ios_base::openmode mode)
 {
 	assert_and_throw(mode==std::ios_base::in);
 	assert_and_throw(off==0);
 	assert_and_throw(buffer != NULL);
 
-	pos_type ret = gptr()-eback();
 	//Nothing special to do here, we only support offset==0 seeks
-	if(cached)
-		ret+=cachePos;
+	pos_type ret=getOffset();
 	return ret;
 }
 
@@ -443,7 +453,7 @@ size_t CurlDownloader::write_data(void *buffer, size_t size, size_t nmemb, void 
 {
 	CurlDownloader* th=static_cast<CurlDownloader*>(userp);
 	size_t added=size*nmemb;
-	if(th->getLen() == 0)
+	if(th->getLength() == 0)
 	{
 		//If the HTTP request doesn't contain a Content-Length header, allow growing the buffer
 		th->setAllowBufferRealloc(true);

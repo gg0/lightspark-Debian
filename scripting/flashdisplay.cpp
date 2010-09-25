@@ -153,6 +153,7 @@ ASFUNCTIONBODY(Loader,load)
 	URLRequest* r=static_cast<URLRequest*>(args[0]);
 	th->url=r->url;
 	th->source=URL;
+	//To be decreffed in jobFence
 	th->incRef();
 	sys->addJob(th);
 	return NULL;
@@ -171,10 +172,16 @@ ASFUNCTIONBODY(Loader,loadBytes)
 	{
 		th->loading=true;
 		th->source=BYTES;
+		//To be decreffed in jobFence
 		th->incRef();
 		sys->addJob(th);
 	}
 	return NULL;
+}
+
+void Loader::jobFence()
+{
+	decRef();
 }
 
 void Loader::sinit(Class_base* c)
@@ -292,7 +299,7 @@ bool Sprite::boundsRect(number_t& xmin, number_t& xmax, number_t& ymin, number_t
 
 		//TODO: Check bounds calculation
 		list<DisplayObject*>::const_iterator it=dynamicDisplayList.begin();
-		for(;it!=dynamicDisplayList.end();it++)
+		for(;it!=dynamicDisplayList.end();++it)
 		{
 			number_t txmin,txmax,tymin,tymax;
 			if((*it)->getBounds(txmin,txmax,tymin,tymax))
@@ -381,7 +388,7 @@ void Sprite::Render()
 		Locker l(mutexDisplayList);
 		//Now draw also the display list
 		list<DisplayObject*>::iterator it=dynamicDisplayList.begin();
-		for(;it!=dynamicDisplayList.end();it++)
+		for(;it!=dynamicDisplayList.end();++it)
 			(*it)->Render();
 	}
 	ma.unapply();
@@ -404,7 +411,7 @@ void Sprite::inputRender()
 		Locker l(mutexDisplayList);
 		//Now draw also the display list
 		list<DisplayObject*>::iterator it=dynamicDisplayList.begin();
-		for(;it!=dynamicDisplayList.end();it++)
+		for(;it!=dynamicDisplayList.end();++it)
 			(*it)->inputRender();
 	}
 
@@ -662,7 +669,7 @@ void MovieClip::Render()
 		//Render objects added at runtime
 		Locker l(mutexDisplayList);
 		list<DisplayObject*>::iterator j=dynamicDisplayList.begin();
-		for(;j!=dynamicDisplayList.end();j++)
+		for(;j!=dynamicDisplayList.end();++j)
 			(*j)->Render();
 	}
 
@@ -702,7 +709,7 @@ void MovieClip::inputRender()
 		//Render objects added at runtime
 		Locker l(mutexDisplayList);
 		list<DisplayObject*>::iterator j=dynamicDisplayList.begin();
-		for(;j!=dynamicDisplayList.end();j++)
+		for(;j!=dynamicDisplayList.end();++j)
 			(*j)->inputRender();
 	}
 
@@ -736,7 +743,7 @@ Vector2 MovieClip::debugRender(FTFont* font, bool deep)
 			int curFP=state.FP;
 			list<pair<PlaceInfo, DisplayObject*> >::const_iterator it=frames[curFP].displayList.begin();
 	
-			for(;it!=frames[curFP].displayList.end();it++)
+			for(;it!=frames[curFP].displayList.end();++it)
 			{
 				Vector2 off=it->second->debugRender(font, false);
 				glTranslatef(off.x,0,0);
@@ -752,7 +759,7 @@ Vector2 MovieClip::debugRender(FTFont* font, bool deep)
 		{
 			Locker l(mutexDisplayList);
 			/*list<DisplayObject*>::iterator j=dynamicDisplayList.begin();
-			for(;j!=dynamicDisplayList.end();j++)
+			for(;j!=dynamicDisplayList.end();++j)
 				(*j)->Render();*/
 			assert_and_throw(dynamicDisplayList.empty());
 		}
@@ -770,7 +777,7 @@ bool MovieClip::boundsRect(number_t& xmin, number_t& xmax, number_t& ymin, numbe
 		Locker l(mutexDisplayList);
 		
 		list<DisplayObject*>::const_iterator dynit=dynamicDisplayList.begin();
-		for(;dynit!=dynamicDisplayList.end();dynit++)
+		for(;dynit!=dynamicDisplayList.end();++dynit)
 		{
 			number_t t1,t2,t3,t4;
 			if((*dynit)->getBounds(t1,t2,t3,t4))
@@ -805,7 +812,7 @@ bool MovieClip::boundsRect(number_t& xmin, number_t& xmax, number_t& ymin, numbe
 	std::list<std::pair<PlaceInfo, DisplayObject*> >::const_iterator it=frames[curFP].displayList.begin();
 	
 	//Update bounds for all the elements
-	for(;it!=frames[curFP].displayList.end();it++)
+	for(;it!=frames[curFP].displayList.end();++it)
 	{
 		number_t t1,t2,t3,t4;
 		if(it->second->getBounds(t1,t2,t3,t4))
@@ -1348,7 +1355,7 @@ DisplayObjectContainer::~DisplayObjectContainer()
 	if(!sys->finalizingDestruction)
 	{
 		list<DisplayObject*>::iterator it=dynamicDisplayList.begin();
-		for(;it!=dynamicDisplayList.end();it++)
+		for(;it!=dynamicDisplayList.end();++it)
 			(*it)->decRef();
 	}
 }
@@ -1404,7 +1411,7 @@ void DisplayObjectContainer::dumpDisplayList()
 {
 	cout << "Size: " << dynamicDisplayList.size() << endl;
 	list<DisplayObject*>::const_iterator it=dynamicDisplayList.begin();
-	for(;it!=dynamicDisplayList.end();it++)
+	for(;it!=dynamicDisplayList.end();++it)
 	{
 		if(*it)
 			cout << (*it)->getPrototype()->class_name << endl;
@@ -1420,7 +1427,7 @@ void DisplayObjectContainer::setRoot(RootMovieClip* r)
 	{
 		DisplayObject::setRoot(r);
 		list<DisplayObject*>::const_iterator it=dynamicDisplayList.begin();
-		for(;it!=dynamicDisplayList.end();it++)
+		for(;it!=dynamicDisplayList.end();++it)
 			(*it)->setRoot(r);
 	}
 }
@@ -1432,7 +1439,7 @@ void DisplayObjectContainer::setOnStage(bool staged)
 		DisplayObject::setOnStage(staged);
 		//Notify childern
 		list<DisplayObject*>::const_iterator it=dynamicDisplayList.begin();
-		for(;it!=dynamicDisplayList.end();it++)
+		for(;it!=dynamicDisplayList.end();++it)
 			(*it)->setOnStage(staged);
 	}
 }
@@ -1476,7 +1483,7 @@ void DisplayObjectContainer::_addChildAt(DisplayObject* child, unsigned int inde
 			assert_and_throw(index<=dynamicDisplayList.size());
 			list<DisplayObject*>::iterator it=dynamicDisplayList.begin();
 			for(unsigned int i=0;i<index;i++)
-				it++;
+				++it;
 			dynamicDisplayList.insert(it,child);
 			//We acquire a reference to the child
 			child->incRef();
@@ -1512,7 +1519,7 @@ bool DisplayObjectContainer::_contains(DisplayObject* d)
 		return true;
 
 	list<DisplayObject*>::const_iterator it=dynamicDisplayList.begin();
-	for(;it!=dynamicDisplayList.end();it++)
+	for(;it!=dynamicDisplayList.end();++it)
 	{
 		if(*it==d)
 			return true;
@@ -1611,7 +1618,7 @@ ASFUNCTIONBODY(DisplayObjectContainer,removeChildAt)
 			return NULL;
 		list<DisplayObject*>::iterator it=th->dynamicDisplayList.begin();
 		for(int32_t i=0;i<index;i++)
-			it++;
+			++it;
 		child=*it;
 		th->dynamicDisplayList.erase(it);
 	}
@@ -1631,7 +1638,7 @@ ASFUNCTIONBODY(DisplayObjectContainer,getChildByName)
 	const tiny_string& wantedName=args[0]->toString();
 	list<DisplayObject*>::iterator it=th->dynamicDisplayList.begin();
 	ASObject* ret=NULL;
-	for(;it!=th->dynamicDisplayList.end();it++)
+	for(;it!=th->dynamicDisplayList.end();++it)
 	{
 		if((*it)->name==wantedName)
 		{
@@ -1655,7 +1662,7 @@ ASFUNCTIONBODY(DisplayObjectContainer,getChildAt)
 	assert_and_throw(index<th->dynamicDisplayList.size());
 	list<DisplayObject*>::iterator it=th->dynamicDisplayList.begin();
 	for(unsigned int i=0;i<index;i++)
-		it++;
+		++it;
 
 	(*it)->incRef();
 	return *it;
@@ -1680,7 +1687,7 @@ ASFUNCTIONBODY(DisplayObjectContainer,getChildIndex)
 			break;
 		
 		ret++;
-		it++;
+		++it;
 		assert_and_throw(it!=th->dynamicDisplayList.end());
 	}
 	while(1);

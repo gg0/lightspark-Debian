@@ -36,6 +36,7 @@ class URLRequest: public ASObject
 {
 friend class Loader;
 friend class URLLoader;
+friend ASObject* sendToURL(ASObject* obj,ASObject* const* args, const unsigned int argslen);
 private:
 	tiny_string url;
 public:
@@ -84,6 +85,7 @@ private:
 	volatile bool executingAbort;
 	void execute();
 	void threadAbort();
+	void jobFence();
 public:
 	URLLoader();
 	static void sinit(Class_base*);
@@ -138,14 +140,13 @@ private:
 	//IThreadJob interface for long jobs
 	void execute();
 	void threadAbort();
+	void jobFence();
 	//ITickJob interface to frame advance
 	void tick();
 	bool isReady() const;
 
 	//Indicates whether the NetStream is paused
 	bool paused;
-//	//Indicates whether the SoundStream is paused yet
-//	bool audioPaused;
 	//Indicates whether the NetStream has been closed/threadAborted. This is reset at every play() call.
 	//We initialize this value to true, so we can check that play() hasn't been called without being closed first.
 	bool closed;
@@ -154,6 +155,8 @@ private:
 	CONNECTION_TYPE peerID;
 
 	ASObject* client;
+	bool checkPolicyFile;
+	bool rawAccessAllowed;
 public:
 	NetStream();
 	~NetStream();
@@ -170,7 +173,10 @@ public:
 	ASFUNCTION(_getBytesTotal);
 	ASFUNCTION(_getTime);
 	ASFUNCTION(_getCurrentFPS);
+	ASFUNCTION(_getClient);
 	ASFUNCTION(_setClient);
+	ASFUNCTION(_getCheckPolicyFile);
+	ASFUNCTION(_setCheckPolicyFile);
 
 	//Interface for video
 	/**
@@ -236,6 +242,8 @@ public:
 	*/
 	void unlock();
 };
+
+ASObject* sendToURL(ASObject* obj,ASObject* const* args, const unsigned int argslen);
 
 };
 

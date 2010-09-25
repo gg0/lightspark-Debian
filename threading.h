@@ -50,16 +50,19 @@ class IThreadJob
 friend class ThreadPool;
 friend class Condition;
 private:
-	sem_t terminated;
+	sem_t jobTerminated;
+	bool jobHasTerminated;
 protected:
 	bool destroyMe;
 	bool executing;
 	bool aborting;
 	virtual void execute()=0;
 	virtual void threadAbort()=0;
+	virtual void jobFence()=0;
 public:
 	IThreadJob();
 	virtual ~IThreadJob();
+	void waitForJobTermination();
 	void run();
 	void stop() DLL_PUBLIC;
 };

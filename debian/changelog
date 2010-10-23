@@ -1,12 +1,18 @@
 lightspark (0.4.4.3-1) UNRELEASED; urgency=low
 
+  [ Didier Raboud ]
   * New upstream release.
   * debian/control:
     - Build-depend on libxml++2.6-dev.
   * debian/lightspark-{,common}.install:
     - Install localization, icon, and .desktop files.
 
- -- Didier Raboud <didier@raboud.com>  Thu, 02 Sep 2010 21:44:43 +0200
+  [ Luca Falavigna ]
+  * debian/browser-plugin-lightspark.dirs:
+    - Make sure /usr/lib/mozilla/plugins is created before trying to
+      provide alternatives for flash-mozilla.so (Closes: #601019).
+
+ -- Luca Falavigna <dktrkranz@debian.org>  Sat, 23 Oct 2010 14:19:54 +0200
 
 lightspark (0.4.4.2-1) experimental; urgency=low
 

@@ -1,3 +1,9 @@
+lightspark (0.4.5.1-1) UNRELEASED; urgency=low
+
+  * New upstream release.
+
+ -- Luca Falavigna <dktrkranz@debian.org>  Fri, 17 Dec 2010 21:34:39 +0100
+
 lightspark (0.4.4.3-1) experimental; urgency=low
 
   [ Didier Raboud ]

@@ -24,6 +24,7 @@
 #include "parsing/flv.h"
 #include "scripting/flashsystem.h"
 #include "compat.h"
+#include "backends/rendering.h"
 
 using namespace std;
 using namespace lightspark;
@@ -209,10 +210,12 @@ void URLLoader::execute()
 				ByteArray* byteArray=Class<ByteArray>::getInstanceS();
 				byteArray->acquireBuffer(buf,downloader->getLength());
 				data=byteArray;
+				//The buffers must not be deleted, it's now handled bt the ByteArray instance
 			}
 			else if(dataFormat=="text")
 			{
 				data=Class<ASString>::getInstanceS((char*)buf,downloader->getLength());
+				delete[] buf;
 			}
 			//Send a complete event for this object
 			sys->currentVm->addEvent(this,Class<Event>::getInstanceS("complete"));
@@ -658,7 +661,7 @@ NetStream::STREAM_TYPE NetStream::classifyStream(istream& s)
 	if(strncmp(buf,"FLV",3)==0)
 		ret=FLV_STREAM;
 	else
-		threadAbort();
+		throw ParseException("File signature not recognized");
 
 	s.seekg(0);
 	return ret;
@@ -677,7 +680,6 @@ void NetStream::tick()
 		}
 		return;
 	}
-
 	//If sound is enabled, and the stream is not paused anymore, resume the sound stream.
 	//This will restart time.
 	else if(audioStream && audioStream->isValid() && audioStream->paused())
@@ -698,6 +700,9 @@ void NetStream::tick()
 		audioDecoder->skipAll();
 	}
 	videoDecoder->skipUntil(streamTime);
+	//The next line ensures that the downloader will not be destroyed before the upload jobs are fenced
+	videoDecoder->waitForFencing();
+	sys->getRenderThread()->addUploadJob(videoDecoder);
 }
 
 bool NetStream::isReady() const
@@ -755,7 +760,7 @@ void NetStream::execute()
 		{
 			FLV_HEADER h(s);
 			if(!h.isValid())
-				threadAbort();
+				throw ParseException("FLV is not valid");
 
 			unsigned int prevSize=0;
 			bool done=false;
@@ -764,9 +769,8 @@ void NetStream::execute()
 				//Check if threadAbort has been called, if so, stop this loop
 				if(closed)
 					done = true;
-				UI32 PreviousTagSize;
+				UI32_FLV PreviousTagSize;
 				s >> PreviousTagSize;
-				PreviousTagSize.bswap();
 				assert_and_throw(PreviousTagSize==prevSize);
 
 				//Check tag type and read it
@@ -808,7 +812,7 @@ void NetStream::execute()
 								default:
 									throw RunTimeException("Unsupported SoundFormat");
 							}
-							if(audioDecoder->isValid())
+							if(audioDecoder->isValid() && sys->audioManager->pluginLoaded())
 								audioStream=sys->audioManager->createStreamPlugin(audioDecoder);
 						}
 						else
@@ -816,7 +820,7 @@ void NetStream::execute()
 							assert_and_throw(audioCodec==tag.SoundFormat);
 							decodedAudioBytes+=
 								audioDecoder->decodeData(tag.packetData,tag.packetLen,decodedTime);
-							if(audioStream==0 && audioDecoder->isValid())
+							if(audioStream==0 && audioDecoder->isValid() && sys->audioManager->pluginLoaded())
 								audioStream=sys->audioManager->createStreamPlugin(audioDecoder);
 							//Adjust timing
 							decodedTime=decodedAudioBytes/audioDecoder->getBytesPerMSec();
@@ -986,26 +990,28 @@ void NetStream::execute()
 		if(videoDecoder)
 			videoDecoder->waitFlushed();
 	}
-
-	//Clean up everything for a possible re-run
-	sem_wait(&mutex);
-	sys->downloadManager->destroy(downloader);
-	downloader=NULL;
-	//This transition is critical, so the mutex is needed
 	//Before deleting stops ticking, removeJobs also spin waits for termination
 	sys->removeJob(this);
 	tickStarted=false;
-	if(videoDecoder)
-		delete videoDecoder;
+	sem_wait(&mutex);
+	//Change the state to invalid to avoid locking
+	AudioDecoder* a=audioDecoder;
+	VideoDecoder* v=videoDecoder;
 	videoDecoder=NULL;
+	audioDecoder=NULL;
+	//Clean up everything for a possible re-run
+	sys->downloadManager->destroy(downloader);
+	//This transition is critical, so the mutex is needed
+	downloader=NULL;
 	if(audioStream)
 		sys->audioManager->freeStreamPlugin(audioStream);
 	audioStream=NULL;
-	if(audioDecoder)
-		delete audioDecoder;
-	audioDecoder=NULL;
-
 	sem_post(&mutex);
+	if(v)
+		delete v;
+	if(a)
+		delete a;
+	
 }
 
 void NetStream::threadAbort()
@@ -1087,6 +1093,12 @@ double NetStream::getFrameRate()
 	return frameRate;
 }
 
+const TextureChunk& NetStream::getTexture() const
+{
+	assert(isReady());
+	return videoDecoder->getTexture();
+}
+
 uint32_t NetStream::getStreamTime()
 {
 	assert(isReady());
@@ -1105,12 +1117,6 @@ uint32_t NetStream::getTotalLength()
 	return downloader->getLength();
 }
 
-bool NetStream::copyFrameToTexture(TextureBuffer& tex)
-{
-	assert(isReady());
-	return videoDecoder->copyFrameToTexture(tex);
-}
-
 void URLVariables::sinit(Class_base* c)
 {
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
@@ -1125,10 +1131,10 @@ ASFUNCTIONBODY(URLVariables,_constructor)
 tiny_string URLVariables::toString(bool debugMsg)
 {
 	assert_and_throw(implEnable);
-	//URL encoding should already have been performed when the variables were passed
-	throw UnsupportedException("URLVariables::toString");
 	if(debugMsg)
 		return ASObject::toString(debugMsg);
+	//URL encoding should already have been performed when the variables were passed
+	throw UnsupportedException("URLVariables::toString");
 	int size=numVariables();
 	tiny_string ret;
 	for(int i=0;i<size;i++)

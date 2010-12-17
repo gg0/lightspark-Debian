@@ -30,7 +30,6 @@
 
 using namespace lightspark;
 using namespace std;
-extern TLSDATA SystemState* sys;
 
 /**
  * \brief SecurityManager constructor
@@ -1147,7 +1146,7 @@ bool PolicyAllowHTTPRequestHeadersFrom::allowsHTTPRequestHeaderFrom(const URLInf
 			break;
 		}
 		//Match suffix wildcards
-		else if(expression.substr(expression.length()-1, 1) == "*" &&
+		else if(expression[expression.length()-1] == '*' &&
 				header.substr(0, expression.length()-1) == expression.substr(0, expression.length()-1))
 		{
 			headerFound = true;

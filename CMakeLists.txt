@@ -25,7 +25,11 @@ CMAKE_MINIMUM_REQUIRED(VERSION 2.6)
 PROJECT(LIGHTSPARK)
 SET(MAJOR_VERSION "0")
 SET(MINOR_VERSION "4")
-SET(PATCH_VERSION "4")
+SET(PATCH_VERSION "5")
+SET(SUBPATCH_VERSION "1")
+
+ADD_DEFINITIONS(-DVERSION="${MAJOR_VERSION}.${MINOR_VERSION}.${PATCH_VERSION}.${SUBPATCH_VERSION}")
+ADD_DEFINITIONS(-DSHORTVERSION="${MINOR_VERSION}${PATCH_VERSION}${SUBPATCH_VERSION}")
 
 # GCC 4.4+ is required, GCC_VERSION macro taken from GCC manual
 INCLUDE(CheckCSourceCompiles)
@@ -84,13 +88,14 @@ ELSEIF(${CMAKE_SYSTEM_PROCESSOR} MATCHES "^x86_64$|^amd64$")
 ELSEIF(${CMAKE_SYSTEM_PROCESSOR} MATCHES "ppc")
 	SET(ppc 1)
 	SET(LIB_SUFFIX "" CACHE STRING "Choose the suffix of the lib folder (if any) : None ppc")
-	SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -maltivec")
+	SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -maltivec -D__STDC_CONSTANT_MACROS -fPIC")
 ELSE(${CMAKE_SYSTEM_PROCESSOR} MATCHES "^i[3-6]86$|^x86$")
 	MESSAGE(SEND_ERROR "Platform ${CMAKE_SYSTEM_PROCESSOR} not supported")
 ENDIF(${CMAKE_SYSTEM_PROCESSOR} MATCHES "^i[3-6]86$|^x86$")
 
 # Using relative folders, cmake happens by itself CMAKE_INSTALL_PREFIX
 IF(UNIX)
+	 SET(ETCDIR "/etc") #Using absolute folder
    SET(BINDIR "bin")
    SET(DATADIR "${CMAKE_INSTALL_PREFIX}/share")
    SET(LIBDIR "lib${LIB_SUFFIX}")
@@ -103,7 +108,6 @@ SET(CMAKE_INSTALL_PREFIX "/usr/local" CACHE PATH "Install prefix, default is /us
 SET(COMPILE_LIGHTSPARK TRUE CACHE BOOL "Compile Lightspark?")
 SET(COMPILE_TIGHTSPARK TRUE CACHE BOOL "Compile Tightspark?")
 SET(COMPILE_PLUGIN FALSE CACHE BOOL "Compile the browser plugin?")
-SET(AUDIO_BACKEND "pulse" CACHE STRING "Choose audio backend: none pulse alsa, default is pulse")
 SET(ENABLE_CURL TRUE CACHE BOOL "Enable CURL? (Required for Downloader functionality)")
 SET(ENABLE_LIBAVCODEC TRUE CACHE BOOL "Enable libavcodec and dependent functionality?")
 SET(PLUGIN_DIRECTORY "${LIBDIR}/mozilla/plugins" CACHE STRING "Directory to install Firefox plugin to")
@@ -145,7 +149,7 @@ ENDIF(Boost_FOUND)
 
 IF(UNIX)
   INCLUDE(FindPkgConfig REQUIRED)
-  pkg_check_modules(EXTRA_LIBS REQUIRED x11 fontconfig)
+  pkg_check_modules(EXTRA_LIBS REQUIRED x11 fontconfig cairo)
 ENDIF(UNIX)
 
 IF(WIN32)
@@ -161,7 +165,7 @@ IF(UNIX)
 ENDIF(UNIX)
 
 IF(ENABLE_LIBAVCODEC)
-	pkg_check_modules(FFMPEG libavcodec)
+	pkg_check_modules(FFMPEG libavcodec libavutil)
 	IF(NOT(FFMPEG_FOUND))
 		INCLUDE(FindFFMpeg REQUIRED)
 	ENDIF(NOT(FFMPEG_FOUND))
@@ -203,7 +207,7 @@ ENDIF(ENABLE_LIBAVCODEC)
 
 IF(CMAKE_COMPILER_IS_GNUCC)
   SET(CMAKE_EXE_LINKER_FLAGS "-Wl,--as-needed -Wl,--no-undefined ${CMAKE_EXE_LINKER_FLAGS}")
-  SET(CMAKE_SHARED_LINKER_FLAGS "-Wl,--as-needed ${CMAKE_SHARED_LINKER_FLAGS}")
+  SET(CMAKE_SHARED_LINKER_FLAGS "-Wl,--as-needed,-z,noexecstack ${CMAKE_SHARED_LINKER_FLAGS}")
 ENDIF(CMAKE_COMPILER_IS_GNUCC)
 
 LINK_DIRECTORIES(${LLVM_LIB_DIR})
@@ -227,7 +231,8 @@ ENDIF(ENABLE_DEBIAN_ALTERNATIVES)
 
 # Compiler defaults flags for different profiles
 IF(CMAKE_COMPILER_IS_GNUCC)
-  SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wnon-virtual-dtor -Woverloaded-virtual -pipe -fvisibility=hidden -fvisibility-inlines-hidden -std=c++0x")
+  SET(CMAKE_CXX_FLAGS
+	"${CMAKE_CXX_FLAGS} -Wall -Wnon-virtual-dtor -Woverloaded-virtual -pipe -fvisibility=hidden -fvisibility-inlines-hidden -std=c++0x -Wdisabled-optimization")
   SET(CMAKE_CXX_FLAGS_DEBUG "-g -O0 -DEXPENSIVE_DEBUG")
   SET(CMAKE_CXX_FLAGS_PROFILE "-g -pg -O2")
   SET(CMAKE_CXX_FLAGS_RELEASE "-O2 -DNDEBUG")
@@ -259,6 +264,7 @@ SET(LIBSPARK_SOURCES
   threading.cpp
   timer.cpp
   backends/audio.cpp
+  backends/config.cpp
   backends/decoder.cpp
   backends/geometry.cpp
   backends/graphics.cpp
@@ -268,6 +274,9 @@ SET(LIBSPARK_SOURCES
   backends/rendering.cpp
   backends/security.cpp
   backends/urlutils.cpp
+  parsing/amf3_generator.cpp
+  parsing/amf3_parser.cpp
+  parsing/config.cpp
   parsing/crossdomainpolicy.cpp
   parsing/flv.cpp
   parsing/streams.cpp
@@ -293,16 +302,18 @@ SET(LIBSPARK_SOURCES
   scripting/toplevel.cpp
   scripting/vm.cpp)
 IF(${i386})
+  SET(LIBSPARK_SOURCES ${LIBSPARK_SOURCES} platforms/fastpaths_x86.cpp)
   IF(CMAKE_COMPILER_IS_GNUCC)
-    SET(LIBSPARK_SOURCES ${LIBSPARK_SOURCES} platforms/fastpaths_32.asm)
+    SET(LIBSPARK_SOURCES ${LIBSPARK_SOURCES} platforms/fastpaths_i686.asm)
   ELSE (CMAKE_COMPILER_IS_GNUCC)
     SET(LIBSPARK_SOURCES ${LIBSPARK_SOURCES} platforms/fastpaths_32vc.cpp)
   ENDIF(CMAKE_COMPILER_IS_GNUCC)
 ELSEIF(${x86_64})
+  SET(LIBSPARK_SOURCES ${LIBSPARK_SOURCES} platforms/fastpaths_x86.cpp)
   #Why is there a particular faspaths_32vc but none for 64 bit?
-  SET(LIBSPARK_SOURCES ${LIBSPARK_SOURCES} platforms/fastpaths_64.asm)
-ELSEIF(${ppc})
-  SET(LIBSPARK_SOURCES ${LIBSPARK_SOURCES} platforms/fastpaths_ppc.cpp)
+  SET(LIBSPARK_SOURCES ${LIBSPARK_SOURCES} platforms/fastpaths_amd64.asm)
+ELSE()
+  SET(LIBSPARK_SOURCES ${LIBSPARK_SOURCES} platforms/slowpaths_generic.cpp)
 ENDIF(${i386})
 
 INCLUDE_DIRECTORIES(${PROJECT_SOURCE_DIR})
@@ -321,7 +332,7 @@ TARGET_LINK_LIBRARIES(spark ${EXTRA_LIBS_LIBRARIES} ${ZLIB_LIBRARIES}
 	${Boost_LIBRARIES} ${LLVM_LIBS_CORE} ${LLVM_LIBS_JIT} ${SDL_LIBRARY}
 	${OPTIONAL_LIBRARIES} ${GTK_LIBRARIES} ${FREETYPE_LIBRARIES}
 	${OPENGL_LIBRARIES} ${FTGL_LIBRARIES} ${GLEW_LIBRARIES} ${PCRECPP_LIBRARIES}
-	${Threads_LIBRARIES} ${XMLPP_LIBRARIES})
+	${Threads_LIBRARIES} ${XMLPP_LIBRARIES} ${CMAKE_DL_LIBS})
 SET_TARGET_PROPERTIES(spark PROPERTIES VERSION "${MAJOR_VERSION}.${MINOR_VERSION}.${PATCH_VERSION}")
 SET_TARGET_PROPERTIES(spark PROPERTIES SOVERSION "${MAJOR_VERSION}.${MINOR_VERSION}")
 
@@ -338,6 +349,7 @@ IF(COMPILE_LIGHTSPARK)
   IF(UNIX)
     INSTALL(FILES ${CMAKE_CURRENT_SOURCE_DIR}/lightspark.frag DESTINATION ${DATADIR}/lightspark)
     INSTALL(FILES ${CMAKE_CURRENT_SOURCE_DIR}/lightspark.vert DESTINATION ${DATADIR}/lightspark)
+    INSTALL(FILES ${CMAKE_CURRENT_SOURCE_DIR}/lightspark-blitter.vert DESTINATION ${DATADIR}/lightspark)
     INSTALL(FILES ${CMAKE_CURRENT_SOURCE_DIR}/docs/man/lightspark.1 DESTINATION share/man/man1)
     INSTALL(TARGETS lightspark RUNTIME DESTINATION ${BINDIR})
   ENDIF(UNIX)
@@ -363,16 +375,9 @@ ENDIF(COMPILE_PLUGIN)
 GETTEXT_CREATE_TRANSLATIONS(i18n/lightspark.pot ALL i18n/pl.po i18n/fr.po
         i18n/zh_CN.po)
 
-#Audio backend plugins
-IF(${AUDIO_BACKEND} MATCHES "pulse")
-  ADD_SUBDIRECTORY(backends/interfaces/audio/pulse)
-ENDIF(${AUDIO_BACKEND} MATCHES "pulse")
-IF(${AUDIO_BACKEND} MATCHES "alsa")
-  ADD_SUBDIRECTORY(backends/interfaces/audio/alsa)
-ENDIF(${AUDIO_BACKEND} MATCHES "alsa")
-IF(${AUDIO_BACKEND} MATCHES "openal")
-  ADD_SUBDIRECTORY(backends/interfaces/audio/openal)
-ENDIF(${AUDIO_BACKEND} MATCHES "openal")
+ADD_SUBDIRECTORY(backends/interfaces/audio/pulse)
+#ADD_SUBDIRECTORY(backends/interfaces/audio/alsa)
+#ADD_SUBDIRECTORY(backends/interfaces/audio/openal)
 
 #Install icons and desktop file
 if(UNIX)
@@ -387,4 +392,9 @@ if(UNIX)
           RENAME lightspark.svg
          )
   INSTALL(FILES media/lightspark.desktop DESTINATION ${DATADIR}/applications )
+endif(UNIX)
+
+if(UNIX)
+	INSTALL(FILES etc/xdg/lightspark.conf
+		      DESTINATION ${ETCDIR}/xdg/)
 endif(UNIX)

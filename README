@@ -6,6 +6,14 @@ for pulseaudio-libs.
 If the browser plugin is enabled (off by default), you will need the development
 package for xulrunner.
 Install also cmake and nasm.
+NOTE:
+Lightspark depends on an updated version of libxml++ (at least version 2.33.1).
+If an older version of libxml++ must be supported the following commits must be backported:
+dee3577c66333d3f1dd3db4ba43f50e6d6d3f974
+752ff3b4394d334ad6ba3e38189d5898fa15c8f0
+95243eee9837ab6843a20fa43a6a1ef41d1fcd62
+c8e34c3de03c2b41e825e392247efc1ea8698fbf
+
 To build the software please follow these steps.
 
 1) cd lightspark
@@ -30,7 +38,7 @@ Tools->Add-ons->Plugins window.
 Lightspark registers itself as the plugin for application/x-shockwave-flash and
 for application/x-lightspark, so it should be recognisable in the about:plugins
 page. Its description string is "Shockwave Flash 10.0 r<current version>". The
-current version is now "r443".
+current version is now "r451".
 
 Firefox is not able to deal very well with multiple plugins for the same MIME
 type. If you only see a black box where a flash app should be try to remove any

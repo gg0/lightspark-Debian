@@ -381,14 +381,17 @@ public:
 	ASFUNCTION(concat);
 	ASFUNCTION(fromCharCode);
 	ASFUNCTION(indexOf);
+	ASFUNCTION(lastIndexOf);
 	ASFUNCTION(match);
 	ASFUNCTION(replace);
 	ASFUNCTION(search);
 	ASFUNCTION(slice);
 	ASFUNCTION(split);
 	ASFUNCTION(substr);
+	ASFUNCTION(substring);
 	ASFUNCTION(toLowerCase);
 	ASFUNCTION(toUpperCase);
+	ASFUNCTION(_toString);
 	ASFUNCTION(_getLength);
 	bool isEqual(ASObject* r);
 	TRISTATE isLess(ASObject* r);
@@ -614,6 +617,7 @@ private:
 	Number(double v):val(v){type=T_NUMBER;}
 	Number(Manager* m):ASObject(m),val(0){type=T_NUMBER;}
 public:
+	ASFUNCTION(_toString);
 	tiny_string toString(bool debugMsg);
 	unsigned int toUInt()
 	{

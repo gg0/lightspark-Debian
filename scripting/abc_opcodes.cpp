@@ -141,8 +141,19 @@ ASObject* ABCVm::checkfilter(ASObject* o)
 
 ASObject* ABCVm::coerce_s(ASObject* o)
 {
-	LOG(LOG_NOT_IMPLEMENTED, _("coerce_s") );
-	return o;
+	LOG(LOG_CALLS, _("coerce_s") );
+	ASObject* ret=o;
+
+	if(o->getObjectType()!=T_STRING)
+	{
+		if(o->getObjectType()==T_UNDEFINED || o->getObjectType()==T_NULL)
+			ret=new Null;
+		else
+			ret=Class<ASString>::getInstanceS(o->toString(false));
+
+		o->decRef();
+	}
+	return ret;
 }
 
 void ABCVm::coerce(call_context* th, int n)
@@ -193,7 +204,7 @@ intptr_t ABCVm::pushShort(intptr_t n)
 
 void ABCVm::setSlot(ASObject* value, ASObject* obj, int n)
 {
-	LOG(LOG_CALLS,_("setSlot ") << dec << n);
+	LOG(LOG_CALLS,"setSlot " << n);
 	if(value==NULL)
 		value=new Undefined;
 	obj->setSlot(n,value);
@@ -202,8 +213,8 @@ void ABCVm::setSlot(ASObject* value, ASObject* obj, int n)
 
 ASObject* ABCVm::getSlot(ASObject* obj, int n)
 {
-	LOG(LOG_CALLS,_("getSlot ") << dec << n);
 	ASObject* ret=obj->getSlot(n);
+	LOG(LOG_CALLS,"getSlot " << n << " " << ret->toString(true));
 	ret->incRef();
 	obj->decRef();
 	return ret;
@@ -687,33 +698,38 @@ void ABCVm::construct(call_context* th, int m)
 
 void ABCVm::constructGenericType(call_context* th, int m)
 {
-	throw UnsupportedException("constructGenericType not implement");
+//	throw UnsupportedException("constructGenericType not implement");
 	LOG(LOG_CALLS, _("constructGenericType ") << m);
+	assert_and_throw(m==1);
 	ASObject** args=new ASObject*[m];
 	for(int i=0;i<m;i++)
 		args[m-i-1]=th->runtime_stack_pop();
 
 	ASObject* obj=th->runtime_stack_pop();
 
-	if(obj->getObjectType()==T_DEFINABLE)
+/*	if(obj->getObjectType()==T_DEFINABLE)
 	{
 		LOG(LOG_ERROR,_("Check"));
 		abort();
-	/*	LOG(LOG_CALLS,_("Deferred definition of property ") << name);
+		LOG(LOG_CALLS,_("Deferred definition of property ") << name);
 		Definable* d=static_cast<Definable*>(o);
 		d->define(obj);
 		o=obj->getVariableByMultiname(name,owner);
-		LOG(LOG_CALLS,_("End of deferred definition of property ") << name);*/
+		LOG(LOG_CALLS,_("End of deferred definition of property ") << name);
 	}
 
 	LOG(LOG_CALLS,_("Constructing"));
 	Class_base* o_class=static_cast<Class_base*>(obj);
 	assert_and_throw(o_class->getObjectType()==T_CLASS);
-	ASObject* ret=o_class->getInstance(true,args,m);
+	ASObject* ret=o_class->getInstance(true,args,m);*/
+	ASObject* ret=new Undefined;
 
 	obj->decRef();
 	LOG(LOG_CALLS,_("End of constructing"));
 	th->runtime_stack_push(ret);
+	//TODO: remove when implemented
+	for(int i=0;i<m;i++)
+		args[i]->decRef();
 	delete[] args;
 }
 
@@ -754,7 +770,7 @@ ASObject* ABCVm::typeOf(ASObject* obj)
 void ABCVm::callPropVoid(call_context* th, int n, int m)
 {
 	multiname* name=th->context->getMultiname(n,th); 
-	LOG(LOG_CALLS,_("callPropVoid ") << *name << ' ' << m);
+	LOG(LOG_CALLS,"callPropVoid " << *name << ' ' << m);
 
 	ASObject** args=new ASObject*[m];
 	for(int i=0;i<m;i++)
@@ -826,7 +842,7 @@ void ABCVm::callPropVoid(call_context* th, int n, int m)
 				if(ret)
 					ret->decRef();
 
-				obj->decRef();
+				//No need to decRef obj, as it has been passed to the function
 				LOG(LOG_CALLS,_("End of calling ") << *name);
 				delete[] proxyArgs;
 				return;
@@ -1750,7 +1766,7 @@ bool ABCVm::isTypelate(ASObject* type, ASObject* obj)
 	{
 		obj->decRef();
 		real_ret=(c==Class<Integer>::getClass() || c==Class<Number>::getClass() || c==Class<UInteger>::getClass());
-		LOG(LOG_CALLS,_("Numeric type is ") << ((real_ret)?"_(":")not _(") << ")subclass of " << c->class_name);
+		LOG(LOG_CALLS,_("Numeric type is ") << ((real_ret)?"":_("not ")) << _("subclass of ") << c->class_name);
 		type->decRef();
 		return real_ret;
 	}
@@ -1793,7 +1809,7 @@ bool ABCVm::isTypelate(ASObject* type, ASObject* obj)
 	}
 
 	real_ret=objc->isSubClass(c);
-	LOG(LOG_CALLS,_("Type ") << objc->class_name << _(" is ") << ((real_ret)?"_(":")not ") 
+	LOG(LOG_CALLS,_("Type ") << objc->class_name << _(" is ") << ((real_ret)?"":_("not ")) 
 			<< "subclass of " << c->class_name);
 	obj->decRef();
 	type->decRef();
@@ -2212,8 +2228,11 @@ void ABCVm::newClass(call_context* th, int n)
 			th->context->buildTrait(ret,&cur->traits[i],true);
 	}
 
+	SyntheticFunction* constructorFunc=Class<IFunction>::getSyntheticFunction(constructor);
+	//Also the constructor should have the script as the global object
+	constructorFunc->addToScope(th->scope_stack[0]);
 	//add Constructor the the class methods
-	ret->constructor=Class<IFunction>::getSyntheticFunction(constructor);
+	ret->constructor=constructorFunc;
 	ret->class_index=n;
 
 	//Set the constructor variable to the class itself (this is accessed by object using the protoype)

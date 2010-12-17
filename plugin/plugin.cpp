@@ -23,12 +23,13 @@
 #include <string>
 #include <algorithm>
 #include "backends/urlutils.h"
+
 #define MIME_TYPES_HANDLED  "application/x-shockwave-flash"
 #define FAKE_MIME_TYPE  "application/x-lightspark"
 #define PLUGIN_NAME    "Shockwave Flash"
 #define FAKE_PLUGIN_NAME    "Lightspark player"
 #define MIME_TYPES_DESCRIPTION  MIME_TYPES_HANDLED":swf:"PLUGIN_NAME";"FAKE_MIME_TYPE":swfls:"FAKE_PLUGIN_NAME
-#define PLUGIN_DESCRIPTION "Shockwave Flash 10.0 r443"
+#define PLUGIN_DESCRIPTION "Shockwave Flash 10.0 r"SHORTVERSION
 
 using namespace std;
 
@@ -53,6 +54,7 @@ NPDownloadManager::NPDownloadManager(NPP _instance):instance(_instance)
  */
 NPDownloadManager::~NPDownloadManager()
 {
+	cleanUp();
 }
 
 /**
@@ -64,9 +66,9 @@ NPDownloadManager::~NPDownloadManager()
  * \return A pointer to a newly created \c Downloader for the given URL.
  * \see DownloadManager::destroy()
  */
-lightspark::Downloader* NPDownloadManager::download(const lightspark::tiny_string& url, bool cached)
+lightspark::Downloader* NPDownloadManager::download(const lightspark::tiny_string& url, bool cached, lightspark::LoaderInfo* owner)
 {
-	return download(sys->getOrigin().goToURL(url), cached);
+	return download(sys->getOrigin().goToURL(url), cached, owner);
 }
 
 /**
@@ -78,14 +80,26 @@ lightspark::Downloader* NPDownloadManager::download(const lightspark::tiny_strin
  * \return A pointer to a newly created \c Downloader for the given URL.
  * \see DownloadManager::destroy()
  */
-lightspark::Downloader* NPDownloadManager::download(const lightspark::URLInfo& url, bool cached)
+lightspark::Downloader* NPDownloadManager::download(const lightspark::URLInfo& url, bool cached, lightspark::LoaderInfo* owner)
 {
 	LOG(LOG_NO_INFO, _("NET: PLUGIN: DownloadManager::download '") << url.getParsedURL() << 
 			"'" << (cached ? _(" - cached") : ""));
 	//Register this download
-	NPDownloader* downloader=new NPDownloader(url.getParsedURL(), cached, instance);
+	NPDownloader* downloader=new NPDownloader(url.getParsedURL(), cached, instance, owner);
+	addDownloader(downloader);
 	return downloader;
 }
+
+void NPDownloadManager::destroy(lightspark::Downloader* downloader)
+{
+	//If the downloader was still in the active-downloader list, delete it
+	if(removeDownloader(downloader))
+	{
+		downloader->waitForTermination();
+		delete downloader;
+	}
+}
+
 
 /**
  * \brief Constructor for the NPDownloader class
@@ -93,9 +107,10 @@ lightspark::Downloader* NPDownloadManager::download(const lightspark::URLInfo& u
  * \param[in] _url The URL for the Downloader.
  * \param[in] _cached Whether or not to cache this download.
  */
-NPDownloader::NPDownloader(const lightspark::tiny_string& _url, bool _cached, NPP _instance):
+NPDownloader::NPDownloader(const lightspark::tiny_string& _url, bool _cached, NPP _instance, lightspark::LoaderInfo* owner):
 	Downloader(_url, _cached),instance(_instance),started(false)
 {
+	setOwner(owner);
 	NPN_PluginThreadAsyncCall(instance, dlStartCallback, this);
 }
 
@@ -112,7 +127,7 @@ void NPDownloader::dlStartCallback(void* t)
 	th->started=true;
 	NPError e=NPN_GetURLNotify(th->instance, th->url.raw_buf(), NULL, th);
 	if(e!=NPERR_NO_ERROR)
-		abort();
+		th->setFailed(); //No need to crash, we can just mark the download failed
 }
 
 char* NPP_GetMIMEDescription(void)
@@ -132,6 +147,7 @@ NPError NS_PluginInitialize()
 
 void NS_PluginShutdown()
 {
+	LOG(LOG_NO_INFO,"Lightspark plugin shutdown");
 	lightspark::SystemState::staticDeinit();
 }
 
@@ -189,7 +205,7 @@ nsPluginInstance::nsPluginInstance(NPP aInstance, int16_t argc, char** argn, cha
 {
 	sys=NULL;
 	m_pt=new lightspark::ParseThread(NULL,swf_stream);
-	m_sys=new lightspark::SystemState(m_pt);
+	m_sys=new lightspark::SystemState(m_pt,0);
 	//As this is the plugin, enable fallback on Gnash for older clips
 	m_sys->enableGnashFallback();
 	//Files running in the plugin have REMOTE sandbox
@@ -215,8 +231,7 @@ nsPluginInstance::~nsPluginInstance()
 {
 	//Shutdown the system
 	sys=m_sys;
-	//cerr << "instance dying" << endl;
-	swf_buf.destroy();
+	swf_buf.stop();
 	m_pt->stop();
 	m_sys->setShutdownFlag();
 	m_sys->wait();
@@ -296,9 +311,11 @@ NPError nsPluginInstance::SetWindow(NPWindow* aWindow)
 		// The page with the plugin is being resized.
 		// Save any UI information because the next time
 		// around expect a SetWindow with a new window id.
+		LOG(LOG_ERROR,"Resize not supported");
 	}
 	else
 	{
+		assert(mWindow==0);
 		mWindow = (Window) aWindow->window;
 		NPSetWindowCallbackStruct *ws_info = (NPSetWindowCallbackStruct *)aWindow->ws_info;
 		mDisplay = ws_info->display;
@@ -316,17 +333,8 @@ NPError nsPluginInstance::SetWindow(NPWindow* aWindow)
 		p.height=mHeight;
 		p.helper=AsyncHelper;
 		p.helperArg=this;
-		cout << "X Window " << hex << p.window << dec << endl;
-		if(m_sys->getRenderThread()!=NULL)
-		{
-			cout << "destroy old context" << endl;
-			abort();
-		}
-		if(m_sys->getInputThread()!=NULL)
-		{
-			cout << "destroy old input" << endl;
-			abort();
-		}
+		p.stream=&swf_buf;
+		LOG(LOG_NO_INFO,"X Window " << hex << p.window << dec << " Width: " << p.width << " Height: " << p.height);
 		m_sys->setParamsAndEngine(lightspark::GTKPLUG,&p);
 	}
 	//draw();
@@ -386,7 +394,7 @@ NPError nsPluginInstance::NewStream(NPMIMEType type, NPStream* stream, NPBool se
 {
 	NPDownloader* dl=static_cast<NPDownloader*>(stream->notifyData);
 	LOG(LOG_NO_INFO,_("Newstream for ") << stream->url);
-
+	sys=m_sys;
 	if(dl)
 	{
 		cerr << "via NPDownloader" << endl;
@@ -428,6 +436,7 @@ NPError nsPluginInstance::NewStream(NPMIMEType type, NPStream* stream, NPBool se
 	}
 	//The downloader is set as the private data for this stream
 	stream->pdata=dl;
+	sys=NULL;
 	return NPERR_NO_ERROR; 
 }
 
@@ -464,7 +473,10 @@ NPError nsPluginInstance::DestroyStream(NPStream *stream, NPError reason)
 	if(stream->pdata)
 		cerr << "Destroy " << stream->pdata << endl;
 	else
+	{
+		swf_buf.eof();
 		LOG(LOG_NO_INFO, _("DestroyStream on main stream"));
+	}
 	return NPERR_NO_ERROR;
 }
 

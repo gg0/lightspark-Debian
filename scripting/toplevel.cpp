@@ -40,8 +40,6 @@
 using namespace std;
 using namespace lightspark;
 
-extern TLSDATA SystemState* sys;
-
 SET_NAMESPACE("");
 
 REGISTER_CLASS_NAME(Array);
@@ -240,9 +238,16 @@ ASFUNCTIONBODY(Array,lastIndexOf)
 	ASObject* arg0=args[0];
 
 	int unsigned i = th->data.size()-1;
-	if(argslen == 2)
+	int j;
+	if(argslen == 2 && args[1]->getObjectType() != T_UNDEFINED && !isnan(args[1]->toNumber()))
 	{
-		i = args[1]->toInt();
+		j = args[1]->toInt(); //Preserve sign
+		if(j < 0) //Negative offset, use it as offset from the end of the array
+			i = th->data.size()+j;
+		else //Positive offset, use it directly
+			i = j;
+		if(i > th->data.size()) //If the passed offset is bigger than the array, cap the offset
+			i = th->data.size()-1;
 	}
 
 	DATA_TYPE dtype = th->data[i].type;
@@ -792,14 +797,15 @@ void ASString::sinit(Class_base* c)
 	c->super=Class<ASObject>::getClass();
 	c->max_level=c->super->max_level+1;
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
-	c->setMethodByQName("toString","",Class<IFunction>::getFunction(ASObject::_toString),true);
 	c->setMethodByQName("split",AS3,Class<IFunction>::getFunction(split),true);
 	c->setMethodByQName("substr",AS3,Class<IFunction>::getFunction(substr),true);
+	c->setMethodByQName("substring",AS3,Class<IFunction>::getFunction(substring),true);
 	c->setMethodByQName("replace",AS3,Class<IFunction>::getFunction(replace),true);
 	c->setMethodByQName("concat",AS3,Class<IFunction>::getFunction(concat),true);
 	c->setMethodByQName("match",AS3,Class<IFunction>::getFunction(match),true);
 	c->setMethodByQName("search",AS3,Class<IFunction>::getFunction(search),true);
 	c->setMethodByQName("indexOf",AS3,Class<IFunction>::getFunction(indexOf),true);
+	c->setMethodByQName("lastIndexOf",AS3,Class<IFunction>::getFunction(lastIndexOf),true);
 	c->setMethodByQName("charCodeAt",AS3,Class<IFunction>::getFunction(charCodeAt),true);
 	c->setMethodByQName("charAt",AS3,Class<IFunction>::getFunction(charAt),true);
 	c->setMethodByQName("slice",AS3,Class<IFunction>::getFunction(slice),true);
@@ -807,6 +813,8 @@ void ASString::sinit(Class_base* c)
 	c->setMethodByQName("toUpperCase",AS3,Class<IFunction>::getFunction(toUpperCase),true);
 	c->setMethodByQName("fromCharCode",AS3,Class<IFunction>::getFunction(fromCharCode),true);
 	c->setGetterByQName("length","",Class<IFunction>::getFunction(_getLength),true);
+	//Fake method to override the default behavior
+	c->setMethodByQName("toString",AS3,Class<IFunction>::getFunction(ASString::_toString),true);
 }
 
 void ASString::buildTraits(ASObject* o)
@@ -934,6 +942,13 @@ ASFUNCTIONBODY(ASString,match)
 	return ret;
 }
 
+ASFUNCTIONBODY(ASString,_toString)
+{
+	ASString* th=static_cast<ASString*>(obj);
+	assert_and_throw(argslen==0);
+	return Class<ASString>::getInstanceS(th->ASString::toString(false));
+}
+
 ASFUNCTIONBODY(ASString,split)
 {
 	ASString* th=static_cast<ASString*>(obj);
@@ -1014,15 +1029,50 @@ ASFUNCTIONBODY(ASString,split)
 ASFUNCTIONBODY(ASString,substr)
 {
 	ASString* th=static_cast<ASString*>(obj);
-	int start=args[0]->toInt();
-	if(start<0)
+	int start=0;
+	if(argslen>=1)
+		start=args[0]->toInt();
+	if(start<0) {
 		start=th->data.size()+start;
+		if(start<0)
+			start=0;
+	}
+	if(start>(int)th->data.size())
+		start=th->data.size();
 
 	int len=0x7fffffff;
 	if(argslen==2)
 		len=args[1]->toInt();
 
 	return Class<ASString>::getInstanceS(th->data.substr(start,len));
+}
+
+ASFUNCTIONBODY(ASString,substring)
+{
+	ASString* th=static_cast<ASString*>(obj);
+	int start=0;
+	if (argslen>=1)
+		start=args[0]->toInt();
+	if(start<0)
+		start=0;
+	if(start>(int)th->data.size())
+		start=th->data.size();
+
+	int end=0x7fffffff;
+	if(argslen>=2)
+		end=args[1]->toInt();
+	if(end<0)
+		end=0;
+	if(end>(int)th->data.size())
+		end=th->data.size();
+
+	if(start>end) {
+		int tmp=start;
+		start=end;
+		end=tmp;
+	}
+
+	return Class<ASString>::getInstanceS(th->data.substr(start,end-start));
 }
 
 tiny_string Array::toString(bool debugMsg)
@@ -1340,6 +1390,7 @@ void Integer::sinit(Class_base* c)
 	c->setVariableByQName("MIN_VALUE","",new Integer(-2147483648));
 	c->super=Class<ASObject>::getClass();
 	c->max_level=c->super->max_level+1;
+	c->setMethodByQName("toString",AS3,Class<IFunction>::getFunction(Integer::_toString),true);
 }
 
 tiny_string UInteger::toString(bool debugMsg)
@@ -1409,6 +1460,13 @@ TRISTATE Number::isLess(ASObject* o)
 	}
 }
 
+ASFUNCTIONBODY(Number,_toString)
+{
+	Number* th=static_cast<Number*>(obj);
+	assert_and_throw(argslen==0);
+	return Class<ASString>::getInstanceS(th->Number::toString(false));
+}
+
 tiny_string Number::toString(bool debugMsg)
 {
 	char buf[20];
@@ -1427,6 +1485,7 @@ void Number::sinit(Class_base* c)
 	pinf->setPrototype(c);
 	c->setVariableByQName("NEGATIVE_INFINITY","",ninf);
 	c->setVariableByQName("POSITIVE_INFINITY","",pinf);
+	c->setMethodByQName("toString",AS3,Class<IFunction>::getFunction(Number::_toString),true);
 }
 
 Date::Date():year(-1),month(-1),date(-1),hour(-1),minute(-1),second(-1),millisecond(-1)
@@ -1680,10 +1739,13 @@ ASObject* SyntheticFunction::call(ASObject* obj, ASObject* const* args, uint32_t
 	if(bound && closure_this && !thisOverride)
 	{
 		LOG(LOG_CALLS,_("Calling with closure ") << this);
+		if(obj)
+			obj->decRef();
 		obj=closure_this;
 	}
 
 	cc->locals[0]=obj;
+	assert_and_throw(obj);
 	obj->incRef();
 
 	//Fixup missing parameters
@@ -1804,10 +1866,12 @@ ASObject* Function::call(ASObject* obj, ASObject* const* args, uint32_t num_args
 	if(bound && closure_this && !thisOverride)
 	{
 		LOG(LOG_CALLS,_("Calling with closure ") << this);
-		obj->decRef();
+		if(obj)
+			obj->decRef();
 		obj=closure_this;
 		obj->incRef();
 	}
+	assert_and_throw(obj);
 	ret=val(obj,args,num_args);
 
 	for(uint32_t i=0;i<num_args;i++)
@@ -1822,8 +1886,8 @@ void Math::sinit(Class_base* c)
 	c->setVariableByQName("E","",abstract_d(2.71828182845905));
 	c->setVariableByQName("LN10","",abstract_d(2.302585092994046));
 	c->setVariableByQName("LN2","",abstract_d(0.6931471805599453));
-	c->setVariableByQName(_("LOG10E"),"",abstract_d(0.4342944819032518));
-	c->setVariableByQName(_("LOG2E"),"",abstract_d(1.442695040888963387));
+	c->setVariableByQName("LOG10E","",abstract_d(0.4342944819032518));
+	c->setVariableByQName("LOG2E","",abstract_d(1.442695040888963387));
 	c->setVariableByQName("PI","",abstract_d(3.141592653589793));
 	c->setVariableByQName("SQRT1_2","",abstract_d(0.7071067811865476));
 	c->setVariableByQName("SQRT2","",abstract_d(1.4142135623730951));
@@ -2123,10 +2187,29 @@ ASFUNCTIONBODY(ASString,slice)
 	int startIndex=0;
 	if(argslen>=1)
 		startIndex=args[0]->toInt();
+	if(startIndex<0) {
+		startIndex=th->data.size()+startIndex;
+		if(startIndex<0)
+			startIndex=0;
+	}
+	if(startIndex>(int)th->data.size())
+		startIndex=th->data.size();
+
 	int endIndex=0x7fffffff;
 	if(argslen>=2)
 		endIndex=args[1]->toInt();
-	return Class<ASString>::getInstanceS(th->data.substr(startIndex,endIndex));
+	if(endIndex<0) {
+		endIndex=th->data.size()+endIndex;
+		if(endIndex<0)
+			endIndex=0;
+	}
+	if(endIndex>(int)th->data.size())
+		endIndex=th->data.size();
+
+	if(endIndex<=startIndex)
+		return Class<ASString>::getInstanceS("");
+	else
+		return Class<ASString>::getInstanceS(th->data.substr(startIndex,endIndex-startIndex));
 }
 
 ASFUNCTIONBODY(ASString,charAt)
@@ -2182,6 +2265,25 @@ ASFUNCTIONBODY(ASString,indexOf)
 		return abstract_i(-1);
 	else
 		return abstract_i(i);
+}
+
+ASFUNCTIONBODY(ASString,lastIndexOf)
+{
+	assert_and_throw(argslen==1 || argslen==2);
+	ASString* th=static_cast<ASString*>(obj);
+	const tiny_string& val=args[0]->toString();
+	int startIndex=0x7fffffff;
+	if(argslen == 2 && args[1]->getObjectType() != T_UNDEFINED && !isnan(args[1]->toNumber()))
+		startIndex=args[1]->toInt();
+		
+	if(startIndex < 0) //If negative offset is passed, clamp to 0 for start-of-string matches
+		return (th->data.substr(0, val.len()) == val.raw_buf() ? abstract_i(0) : abstract_i(-1));
+
+	size_t pos=th->data.rfind(val.raw_buf(), startIndex);
+	if(pos==th->data.npos)
+		return abstract_i(-1);
+	else
+		return abstract_i(pos);
 }
 
 ASFUNCTIONBODY(ASString,toLowerCase)
@@ -2796,36 +2898,6 @@ void Class_base::cleanUp()
 	}
 }
 
-ASObject* Class_inherit::getInstance(bool construct, ASObject* const* args, const unsigned int argslen)
-{
-	ASObject* ret=NULL;
-	if(tag)
-	{
-		ret=tag->instance();
-		assert_and_throw(ret);
-	}
-	else
-	{
-		assert_and_throw(super);
-		//Our super should not construct, we are going to do it ourselves
-		ret=super->getInstance(false,NULL,0);
-	}
-	//We override the prototype
-	ret->setPrototype(this);
-	if(construct)
-		handleConstruction(ret,args,argslen,true);
-	return ret;
-}
-
-void Class_inherit::buildInstanceTraits(ASObject* o) const
-{
-	assert_and_throw(class_index!=-1);
-	//The class is declared in the script and has an index
-	LOG(LOG_CALLS,_("Building instance traits"));
-
-	context->buildInstanceTraits(o,class_index);
-}
-
 Class_object* Class_object::getClass()
 {
 	//We check if we are registered in the class map
@@ -3154,6 +3226,11 @@ bool lightspark::Boolean_concrete(ASObject* obj)
 		LOG(LOG_CALLS,_("Array to bool"));
 		return true;
 	}
+	else if(obj->getObjectType()==T_FUNCTION)
+	{
+		LOG(LOG_CALLS,_("Function to bool"));
+		return true;
+	}
 	else if(obj->getObjectType()==T_UNDEFINED)
 	{
 		LOG(LOG_CALLS,_("Undefined to bool"));
@@ -3256,7 +3333,7 @@ ASFUNCTIONBODY(lightspark,isFinite)
 			return abstract_b(false);
 	}
 	else
-		throw UnsupportedException("Weird argument for isNaN");
+		throw UnsupportedException("Weird argument for isFinite");
 }
 
 ASFUNCTIONBODY(lightspark,encodeURI)
@@ -3351,7 +3428,7 @@ ASFUNCTIONBODY(lightspark,print)
 
 ASFUNCTIONBODY(lightspark,trace)
 {
-	for(intptr_t i = 0; i< argslen;i++)
+	for(uint32_t i = 0; i< argslen;i++)
 	{
 		if(i > 0)
 			cerr << " ";

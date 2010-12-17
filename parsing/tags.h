@@ -39,7 +39,6 @@ namespace lightspark
 enum TAGTYPE {TAG=0,DISPLAY_LIST_TAG,SHOW_TAG,CONTROL_TAG,DICT_TAG,FRAMELABEL_TAG,END_TAG};
 
 void ignore(std::istream& i, int count);
-void FromShaperecordListToShapeVector(const std::vector<SHAPERECORD>& shapeRecords, std::vector<GeomShape>& shapes);
 
 class Tag
 {
@@ -74,8 +73,6 @@ public:
 
 class DictionaryTag: public Tag
 {
-protected:
-	std::vector<GeomShape> cached;
 public:
 	Class_base* bindedTo;
 	RootMovieClip* loadedFrom;
@@ -94,28 +91,29 @@ public:
 	virtual void execute(RootMovieClip* root)=0;
 };
 
-class DefineShapeTag: public DictionaryTag, public DisplayObject
+class DefineShapeTag: public DictionaryTag, public Shape
 {
+private:
+	void computeCached();
+	void invalidate();
+	void FromShaperecordListToShapeVector(const std::vector<SHAPERECORD>& shapeRecords, 
+			std::vector<GeomToken>& tokens, const std::list<FILLSTYLE>& fillStyles);
+	/*
+	   	Computes the bounding rect, this is a non-virtual function!
+	*/
+	void boundsRect(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const;
 protected:
-	UI16 ShapeId;
+	UI16_SWF ShapeId;
 	RECT ShapeBounds;
 	SHAPEWITHSTYLE Shapes;
-	DefineShapeTag(RECORDHEADER h):DictionaryTag(h){};
+	DefineShapeTag(RECORDHEADER h,int v):DictionaryTag(h),Shapes(v){};
 public:
 	DefineShapeTag(RECORDHEADER h, std::istream& in);
 	virtual int getId(){ return ShapeId; }
-	virtual void Render();
-	virtual void inputRender();
+	void Render(bool maskEnabled);
 	virtual Vector2 debugRender(FTFont* font, bool deep);
-	bool getBounds(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const
-	{
-		//Apply transformation with the current matrix
-		getMatrix().multiply2D(ShapeBounds.Xmin/20,ShapeBounds.Ymin/20,xmin,ymin);
-		getMatrix().multiply2D(ShapeBounds.Xmax/20,ShapeBounds.Ymax/20,xmax,ymax);
-		//TODO: adapt for rotation
-		return true;
-	}
-
+	bool getBounds(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const;
+	InteractiveObject* hitTest(InteractiveObject* last, number_t x, number_t y);
 	ASObject* instance() const
 	{
 		DefineShapeTag* ret=new DefineShapeTag(*this);
@@ -127,7 +125,7 @@ public:
 class DefineShape2Tag: public DefineShapeTag
 {
 protected:
-	DefineShape2Tag(RECORDHEADER h):DefineShapeTag(h){};
+	DefineShape2Tag(RECORDHEADER h, int v):DefineShapeTag(h,v){};
 public:
 	DefineShape2Tag(RECORDHEADER h, std::istream& in);
 	virtual Vector2 debugRender(FTFont* font, bool deep);
@@ -142,7 +140,7 @@ public:
 class DefineShape3Tag: public DefineShape2Tag
 {
 protected:
-	DefineShape3Tag(RECORDHEADER h):DefineShape2Tag(h){};
+	DefineShape3Tag(RECORDHEADER h,int v):DefineShape2Tag(h,v){};
 public:
 	DefineShape3Tag(RECORDHEADER h, std::istream& in);
 	virtual int getId(){ return ShapeId; }
@@ -176,18 +174,18 @@ public:
 class DefineMorphShapeTag: public DictionaryTag, public MorphShape
 {
 private:
-	UI16 CharacterId;
+	UI16_SWF CharacterId;
 	RECT StartBounds;
 	RECT EndBounds;
-	UI32 Offset;
+	UI32_SWF Offset;
 	MORPHFILLSTYLEARRAY MorphFillStyles;
 	MORPHLINESTYLEARRAY MorphLineStyles;
 	SHAPE StartEdges;
 	SHAPE EndEdges;
 public:
 	DefineMorphShapeTag(RECORDHEADER h, std::istream& in);
-	virtual int getId(){ return CharacterId; }
-	virtual void Render();
+	int getId(){ return CharacterId; }
+	void Render(bool maskEnabled);
 	virtual ASObject* instance() const;
 };
 
@@ -195,7 +193,7 @@ public:
 class DefineEditTextTag: public DictionaryTag, public TextField
 {
 private:
-	UI16 CharacterID;
+	UI16_SWF CharacterID;
 	RECT Bounds;
 	UB HasText;
 	UB WordWrap;
@@ -213,23 +211,23 @@ private:
 	UB WasStatic;
 	UB HTML;
 	UB UseOutlines;
-	UI16 FontID;
+	UI16_SWF FontID;
 	STRING FontClass;
-	UI16 FontHeight;
+	UI16_SWF FontHeight;
 	RGBA TextColor;
-	UI16 MaxLength;
+	UI16_SWF MaxLength;
 	UI8 Align;
-	UI16 LeftMargin;
-	UI16 RightMargin;
-	UI16 Indent;
-	SI16 Leading;
+	UI16_SWF LeftMargin;
+	UI16_SWF RightMargin;
+	UI16_SWF Indent;
+	SI16_SWF Leading;
 	STRING VariableName;
 	STRING InitialText;
 
 public:
 	DefineEditTextTag(RECORDHEADER h, std::istream& s);
-	virtual int getId(){ return CharacterID; }
-	virtual void Render();
+	int getId(){ return CharacterID; }
+	void Render(bool maskEnabled);
 	virtual Vector2 debugRender(FTFont* font, bool deep);
 	ASObject* instance() const;
 };
@@ -237,12 +235,12 @@ public:
 class DefineSoundTag: public DictionaryTag, public Sound
 {
 private:
-	UI16 SoundId;
+	UI16_SWF SoundId;
 	char SoundFormat;
 	char SoundRate;
 	char SoundSize;
 	char SoundType;
-	UI32 SoundSampleCount;
+	UI32_SWF SoundSampleCount;
 public:
 	DefineSoundTag(RECORDHEADER h, std::istream& s);
 	virtual int getId() { return SoundId; }
@@ -271,8 +269,8 @@ public:
 /*class PlaceObjectTag: public Tag
 {
 private:
-	UI16 CharacterId;
-	UI16 Depth;
+	UI16_SWF CharacterId;
+	UI16_SWF Depth;
 	MATRIX Matrix;
 	CXFORM ColorTransform;
 public:
@@ -282,7 +280,7 @@ public:
 class RemoveObject2Tag: public DisplayListTag
 {
 private:
-	UI16 Depth;
+	UI16_SWF Depth;
 
 public:
 	RemoveObject2Tag(RECORDHEADER h, std::istream& in);
@@ -308,12 +306,12 @@ protected:
 	bool PlaceFlagHasMatrix;
 	bool PlaceFlagHasCharacter;
 	bool PlaceFlagMove;
-	UI16 Depth;
-	UI16 CharacterId;
+	UI16_SWF Depth;
+	UI16_SWF CharacterId;
 	MATRIX Matrix;
 	CXFORMWITHALPHA ColorTransform;
-	UI16 Ratio;
-	UI16 ClipDepth;
+	UI16_SWF Ratio;
+	UI16_SWF ClipDepth;
 	CLIPACTIONS ClipActions;
 	PlaceObject2Tag(RECORDHEADER h):DisplayListTag(h){}
 
@@ -369,10 +367,10 @@ class BUTTONCONDACTION;
 class DefineButton2Tag: public DictionaryTag, public DisplayObject
 {
 private:
-	UI16 ButtonId;
+	UI16_SWF ButtonId;
 	UB ReservedFlags;
 	UB TrackAsMenu;
-	UI16 ActionOffset;
+	UI16_SWF ActionOffset;
 	std::vector<BUTTONRECORD> Characters;
 	std::vector<BUTTONCONDACTION> Actions;
 	enum BUTTON_STATE { BUTTON_UP=0, BUTTON_OVER};
@@ -383,12 +381,9 @@ private:
 public:
 	DefineButton2Tag(RECORDHEADER h, std::istream& in);
 	virtual int getId(){ return ButtonId; }
-	virtual void Render();
+	void Render(bool maskEnabled);
 	virtual Vector2 debugRender(FTFont* font, bool deep);
-	bool getBounds(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const
-	{
-		throw UnsupportedException("DefineButton2Tag::getBounds");
-	}
+	bool getBounds(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const;
 	virtual void handleEvent(Event*);
 
 	ASObject* instance() const;
@@ -401,8 +396,8 @@ class KERNINGRECORD
 class DefineBinaryDataTag: public DictionaryTag, public ByteArray
 {
 private:
-	UI16 Tag;
-	UI32 Reserved;
+	UI16_SWF Tag;
+	UI32_SWF Reserved;
 public:
 	DefineBinaryDataTag(RECORDHEADER h,std::istream& s);
 	virtual int getId(){return Tag;} 
@@ -418,23 +413,23 @@ public:
 class FontTag: public DictionaryTag
 {
 protected:
-	UI16 FontID;
+	UI16_SWF FontID;
 public:
 	FontTag(RECORDHEADER h):DictionaryTag(h){}
-	virtual void genGlyphShape(std::vector<GeomShape>& s, int glyph)=0;
+	//virtual void genGlyphShape(std::vector<GeomShape>& s, int glyph)=0;
 };
 
 class DefineFontTag: public FontTag
 {
 	friend class DefineTextTag; 
 protected:
-	std::vector<UI16> OffsetTable;
-	std::vector < SHAPE > GlyphShapeTable;
+	std::vector<uint16_t> OffsetTable;
+	std::vector<SHAPE> GlyphShapeTable;
 
 public:
 	DefineFontTag(RECORDHEADER h, std::istream& in);
 	virtual int getId(){ return FontID; }
-	virtual void genGlyphShape(std::vector<GeomShape>& s, int glyph);
+	//virtual void genGlyphShape(std::vector<GeomShape>& s, int glyph);
 };
 
 class DefineFontInfoTag: public Tag
@@ -447,7 +442,7 @@ class DefineFont2Tag: public FontTag
 {
 	friend class DefineTextTag; 
 private:
-	std::vector<UI32> OffsetTable;
+	std::vector<uint32_t> OffsetTable;
 	std::vector < SHAPE > GlyphShapeTable;
 	bool FontFlagsHasLayout;
 	bool FontFlagsShiftJIS;
@@ -460,27 +455,27 @@ private:
 	LANGCODE LanguageCode;
 	UI8 FontNameLen;
 	std::vector <UI8> FontName;
-	UI16 NumGlyphs;
-	UI32 CodeTableOffset;
-	std::vector <UI16> CodeTable;
-	SI16 FontAscent;
-	SI16 FontDescent;
-	SI16 FontLeading;
-	std::vector < SI16 > FontAdvanceTable;
+	UI16_SWF NumGlyphs;
+	uint32_t CodeTableOffset;
+	std::vector <uint16_t> CodeTable;
+	SI16_SWF FontAscent;
+	SI16_SWF FontDescent;
+	SI16_SWF FontLeading;
+	std::vector < SI16_SWF > FontAdvanceTable;
 	std::vector < RECT > FontBoundsTable;
-	UI16 KerningCount;
+	UI16_SWF KerningCount;
 	std::vector <KERNINGRECORD> FontKerningTable;
 
 public:
 	DefineFont2Tag(RECORDHEADER h, std::istream& in);
 	virtual int getId(){ return FontID; }
-	virtual void genGlyphShape(std::vector<GeomShape>& s, int glyph);
+	//virtual void genGlyphShape(std::vector<GeomShape>& s, int glyph);
 };
 
 class DefineFont3Tag: public FontTag
 {
 private:
-	std::vector<UI32> OffsetTable;
+	std::vector<uint32_t> OffsetTable;
 	std::vector < SHAPE > GlyphShapeTable;
 	UB FontFlagsHasLayout;
 	UB FontFlagsShiftJIS;
@@ -493,41 +488,39 @@ private:
 	LANGCODE LanguageCode;
 	UI8 FontNameLen;
 	std::vector <UI8> FontName;
-	UI16 NumGlyphs;
-	UI32 CodeTableOffset;
-	std::vector <UI16> CodeTable;
-	SI16 FontAscent;
-	SI16 FontDescent;
-	SI16 FontLeading;
-	std::vector < SI16 > FontAdvanceTable;
+	UI16_SWF NumGlyphs;
+	uint32_t CodeTableOffset;
+	std::vector <UI16_SWF> CodeTable;
+	SI16_SWF FontAscent;
+	SI16_SWF FontDescent;
+	SI16_SWF FontLeading;
+	std::vector < SI16_SWF > FontAdvanceTable;
 	std::vector < RECT > FontBoundsTable;
-	UI16 KerningCount;
+	UI16_SWF KerningCount;
 	std::vector <KERNINGRECORD> FontKerningTable;
 
 public:
 	DefineFont3Tag(RECORDHEADER h, std::istream& in);
 	virtual int getId(){ return FontID; }
-	virtual void genGlyphShape(std::vector<GeomShape>& s, int glyph);
+	//virtual void genGlyphShape(std::vector<GeomShape>& s, int glyph);
 };
 
 class DefineTextTag: public DictionaryTag, public DisplayObject
 {
 	friend class GLYPHENTRY;
 private:
-	UI16 CharacterId;
+	UI16_SWF CharacterId;
 	RECT TextBounds;
 	MATRIX TextMatrix;
 	UI8 GlyphBits;
 	UI8 AdvanceBits;
 	std::vector < TEXTRECORD > TextRecords;
-	//Override the usual vector, we need special shapes
-	std::vector<GlyphShape> cached;
 public:
-	DefineTextTag(RECORDHEADER h, std::istream& in);
-	virtual int getId(){ return CharacterId; }
-	virtual void Render();
-	virtual void inputRender();
-	virtual Vector2 debugRender(FTFont* font, bool deep);
+	int version;
+	DefineTextTag(RECORDHEADER h, std::istream& in,int v=1);
+	int getId(){ return CharacterId; }
+	void Render(bool maskEnabled);
+	Vector2 debugRender(FTFont* font, bool deep);
 	bool getBounds(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const
 	{
 		getMatrix().multiply2D(TextBounds.Xmin/20,TextBounds.Ymin/20,xmin,ymin);
@@ -544,11 +537,21 @@ public:
 	}
 };
 
+class DefineText2Tag: public DefineTextTag
+{
+public:
+	DefineText2Tag(RECORDHEADER h, std::istream& in);
+	ASObject* instance() const
+	{
+		return new DefineText2Tag(*this);
+	}
+};
+
 class DefineSpriteTag: public DictionaryTag, public MovieClip
 {
 private:
-	UI16 SpriteID;
-	UI16 FrameCount;
+	UI16_SWF SpriteID;
+	UI16_SWF FrameCount;
 public:
 	DefineSpriteTag(RECORDHEADER h, std::istream& in);
 	virtual int getId(){ return SpriteID; }
@@ -563,50 +566,78 @@ public:
 	void execute(RootMovieClip* root){};
 };
 
-class DefineBitsLosslessTag: public DictionaryTag
+class DefineBitsLosslessTag: public DictionaryTag, public Bitmap
 {
 private:
-	UI16 CharacterId;
+	UI16_SWF CharacterId;
 	UI8 BitmapFormat;
-	UI16 BitmapWidth;
-	UI16 BitmapHeight;
+	UI16_SWF BitmapWidth;
+	UI16_SWF BitmapHeight;
 	UI8 BitmapColorTableSize;
 	//ZlibBitmapData;
 public:
 	DefineBitsLosslessTag(RECORDHEADER h, std::istream& in);
-	virtual int getId(){ return CharacterId; }
+	int getId(){ return CharacterId; }
 };
 
-class DefineBitsJPEG2Tag: public Tag
+class DefineBitsTag: public DictionaryTag, public Bitmap
 {
+private:
+	UI16_SWF CharacterId;
+	uint8_t* data;
+public:
+	DefineBitsTag(RECORDHEADER h, std::istream& in);
+	~DefineBitsTag();
+	int getId(){ return CharacterId; }
+};
+
+class DefineBitsJPEG2Tag: public DictionaryTag, public Bitmap
+{
+private:
+	UI16_SWF CharacterId;
+	uint8_t* data;
 public:
 	DefineBitsJPEG2Tag(RECORDHEADER h, std::istream& in);
+	~DefineBitsJPEG2Tag();
+	int getId(){ return CharacterId; }
+};
+
+class DefineBitsJPEG3Tag: public DictionaryTag, public Bitmap
+{
+private:
+	UI16_SWF CharacterId;
+	uint8_t* data;
+	uint8_t* alphaData;
+public:
+	DefineBitsJPEG3Tag(RECORDHEADER h, std::istream& in);
+	~DefineBitsJPEG3Tag();
+	int getId(){ return CharacterId; }
 };
 
 class DefineBitsLossless2Tag: public DictionaryTag, public Bitmap
 {
 private:
-	UI16 CharacterId;
+	UI16_SWF CharacterId;
 	UI8 BitmapFormat;
-	UI16 BitmapWidth;
-	UI16 BitmapHeight;
+	UI16_SWF BitmapWidth;
+	UI16_SWF BitmapHeight;
 	UI8 BitmapColorTableSize;
 	//ZlibBitmapData;
 public:
 	DefineBitsLossless2Tag(RECORDHEADER h, std::istream& in);
-	virtual int getId(){ return CharacterId; }
-	virtual ASObject* instance() const;
+	int getId(){ return CharacterId; }
+	ASObject* instance() const;
 	bool getBounds(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const
 	{
 		return false;
 	}
-	virtual void Render();
+	void Render(bool maskEnabled);
 };
 
 class DefineScalingGridTag: public Tag
 {
 public:
-	UI16 CharacterId;
+	UI16_SWF CharacterId;
 	RECT Splitter;
 	DefineScalingGridTag(RECORDHEADER h, std::istream& in);
 };
@@ -638,10 +669,10 @@ public:
 class DefineVideoStreamTag: public DictionaryTag
 {
 private:
-	UI16 CharacterID;
-	UI16 NumFrames;
-	UI16 Width;
-	UI16 Height;
+	UI16_SWF CharacterID;
+	UI16_SWF NumFrames;
+	UI16_SWF Width;
+	UI16_SWF Height;
 	UB VideoFlagsReserved;
 	UB VideoFlagsDeblocking;
 	UB VideoFlagsSmoothing;
@@ -649,7 +680,7 @@ private:
 public:
 	DefineVideoStreamTag(RECORDHEADER h, std::istream& in);
 	int getId(){ return CharacterID; }
-	void Render();
+	void Render(bool maskEnabled);
 };
 
 class SoundStreamBlockTag: public Tag
@@ -675,8 +706,8 @@ public:
 class ScriptLimitsTag: public Tag
 {
 private:
-	UI16 MaxRecursionDepth;
-	UI16 ScriptTimeoutSeconds;
+	UI16_SWF MaxRecursionDepth;
+	UI16_SWF ScriptTimeoutSeconds;
 public:
 	ScriptLimitsTag(RECORDHEADER h, std::istream& in);
 };
@@ -684,13 +715,13 @@ public:
 class ProductInfoTag: public Tag
 {
 private:
-	UI32 ProductId;
-	UI32 Edition;
+	UI32_SWF ProductId;
+	UI32_SWF Edition;
 	UI8 MajorVersion;
 	UI8 MinorVersion;
-	UI32 MinorBuild;
-	UI32 MajorBuild;
-	UI32 CompileTimeHi, CompileTimeLo;
+	UI32_SWF MinorBuild;
+	UI32_SWF MajorBuild;
+	UI32_SWF CompileTimeHi, CompileTimeLo;
 public:
 	ProductInfoTag(RECORDHEADER h, std::istream& in);
 };
@@ -718,7 +749,7 @@ public:
 class EnableDebugger2Tag: public Tag
 {
 private:
-	UI16 ReservedWord;
+	UI16_SWF ReservedWord;
 	STRING DebugPassword;
 public:
 	EnableDebugger2Tag(RECORDHEADER h, std::istream& in);

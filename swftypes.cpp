@@ -36,8 +36,6 @@
 using namespace std;
 using namespace lightspark;
 
-extern TLSDATA SystemState* sys;
-extern TLSDATA RenderThread* rt;
 extern TLSDATA ParseThread* pt;
 
 tiny_string multiname::qualifiedString() const
@@ -143,6 +141,19 @@ std::ostream& operator<<(std::ostream& s, const RGB& r)
 	return s;
 }
 
+MATRIX MATRIX::getInverted() const
+{
+	MATRIX ret;
+	const number_t den=ScaleX*ScaleY+RotateSkew0*RotateSkew1;
+	ret.ScaleX=ScaleY/den;
+	ret.RotateSkew1=-RotateSkew1/den;
+	ret.RotateSkew0=-RotateSkew0/den;
+	ret.ScaleY=ScaleX/den;
+	ret.TranslateX=(RotateSkew1*TranslateY-ScaleY*TranslateX)/den;
+	ret.TranslateY=(RotateSkew0*TranslateX-ScaleX*TranslateY)/den;
+	return ret;
+}
+
 void MATRIX::get4DMatrix(float matrix[16]) const
 {
 	memset(matrix,0,sizeof(float)*16);
@@ -165,10 +176,26 @@ void MATRIX::multiply2D(number_t xin, number_t yin, number_t& xout, number_t& yo
 	yout=xin*RotateSkew0 + yin*ScaleY + TranslateY;
 }
 
-void MATRIX::getTranslation(int& x, int& y) const
+MATRIX MATRIX::multiplyMatrix(const MATRIX& r) const
 {
-	x=TranslateX;
-	y=TranslateY;
+	MATRIX ret;
+	ret.ScaleX=ScaleX*r.ScaleX + RotateSkew1*r.RotateSkew0;
+	ret.RotateSkew1=ScaleX*r.RotateSkew1 + RotateSkew1*r.ScaleY;
+	ret.RotateSkew0=RotateSkew0*r.ScaleX + ScaleY*r.RotateSkew0;
+	ret.ScaleY=RotateSkew0*r.RotateSkew1 + ScaleY*r.ScaleY;
+	ret.TranslateX=ScaleX*r.TranslateX + RotateSkew1*r.TranslateY + TranslateX;
+	ret.TranslateY=RotateSkew0*r.TranslateX + ScaleY*r.TranslateY + TranslateY;
+	return ret;
+}
+
+const bool MATRIX::operator!=(const MATRIX& r) const
+{
+	return ScaleX!=r.ScaleX ||
+		RotateSkew1!=r.RotateSkew1 ||
+		RotateSkew0!=r.RotateSkew0 ||
+		ScaleY!=r.ScaleY ||
+		TranslateX!=r.TranslateX ||
+		TranslateY!=r.TranslateY;
 }
 
 std::ostream& operator<<(std::ostream& s, const MATRIX& r)
@@ -220,7 +247,7 @@ std::istream& lightspark::operator>>(std::istream& s, RGBA& v)
 void LINESTYLEARRAY::appendStyles(const LINESTYLEARRAY& r)
 {
 	unsigned int count = LineStyleCount + r.LineStyleCount;
-	assert_and_throw(version!=-1);
+	assert(version!=-1);
 
 	assert_and_throw(r.version==version);
 	if(version<4)
@@ -232,7 +259,7 @@ void LINESTYLEARRAY::appendStyles(const LINESTYLEARRAY& r)
 
 std::istream& lightspark::operator>>(std::istream& s, LINESTYLEARRAY& v)
 {
-	assert_and_throw(v.version!=-1);
+	assert(v.version!=-1);
 	s >> v.LineStyleCount;
 	if(v.LineStyleCount==0xff)
 		LOG(LOG_ERROR,_("Line array extended not supported"));
@@ -240,8 +267,7 @@ std::istream& lightspark::operator>>(std::istream& s, LINESTYLEARRAY& v)
 	{
 		for(int i=0;i<v.LineStyleCount;i++)
 		{
-			LINESTYLE tmp;
-			tmp.version=v.version;
+			LINESTYLE tmp(v.version);
 			s >> tmp;
 			v.LineStyles.push_back(tmp);
 		}
@@ -250,7 +276,7 @@ std::istream& lightspark::operator>>(std::istream& s, LINESTYLEARRAY& v)
 	{
 		for(int i=0;i<v.LineStyleCount;i++)
 		{
-			LINESTYLE2 tmp;
+			LINESTYLE2 tmp(v.version);
 			s >> tmp;
 			v.LineStyles2.push_back(tmp);
 		}
@@ -273,7 +299,7 @@ std::istream& lightspark::operator>>(std::istream& s, MORPHLINESTYLEARRAY& v)
 
 void FILLSTYLEARRAY::appendStyles(const FILLSTYLEARRAY& r)
 {
-	assert_and_throw(version!=-1);
+	assert(version!=-1);
 	unsigned int count = FillStyleCount + r.FillStyleCount;
 
 	FillStyles.insert(FillStyles.end(),r.FillStyles.begin(),r.FillStyles.end());
@@ -282,17 +308,16 @@ void FILLSTYLEARRAY::appendStyles(const FILLSTYLEARRAY& r)
 
 std::istream& lightspark::operator>>(std::istream& s, FILLSTYLEARRAY& v)
 {
-	assert_and_throw(v.version!=-1);
+	assert(v.version!=-1);
 	s >> v.FillStyleCount;
 	if(v.FillStyleCount==0xff)
 		LOG(LOG_ERROR,_("Fill array extended not supported"));
 
-	v.FillStyles.resize(v.FillStyleCount);
-	list<FILLSTYLE>::iterator it=v.FillStyles.begin();
-	for(;it!=v.FillStyles.end();++it)
+	for(int i=0;i<v.FillStyleCount;i++)
 	{
-		it->version=v.version;
-		s >> *it;
+		FILLSTYLE t(v.version);
+		s >> t;
+		v.FillStyles.push_back(t);
 	}
 	return s;
 }
@@ -403,9 +428,20 @@ std::istream& lightspark::operator>>(std::istream& in, TEXTRECORD& v)
 		in >> v.FontID;
 	if(v.StyleFlagsHasColor)
 	{
-		RGB t;
-		in >> t;
-		v.TextColor=t;
+		if(v.parent->version==1)
+		{
+			RGB t;
+			in >> t;
+			v.TextColor=t;
+		}
+		else if(v.parent->version==2)
+		{
+			RGBA t;
+			in >> t;
+			v.TextColor=t;
+		}
+		else
+			assert(false);
 	}
 	if(v.StyleFlagsHasXOffset)
 		in >> v.XOffset;
@@ -444,8 +480,7 @@ std::istream& lightspark::operator>>(std::istream& s, GRADIENT& v)
 	v.SpreadMode=UB(2,bs);
 	v.InterpolationMode=UB(2,bs);
 	v.NumGradient=UB(4,bs);
-	GRADRECORD gr;
-	gr.version=v.version;
+	GRADRECORD gr(v.version);
 	for(int i=0;i<v.NumGradient;i++)
 	{
 		s >> gr;
@@ -461,8 +496,7 @@ std::istream& lightspark::operator>>(std::istream& s, FOCALGRADIENT& v)
 	v.SpreadMode=UB(2,bs);
 	v.InterpolationMode=UB(2,bs);
 	v.NumGradient=UB(4,bs);
-	GRADRECORD gr;
-	gr.version=v.version;
+	GRADRECORD gr(v.version);
 	for(int i=0;i<v.NumGradient;i++)
 	{
 		s >> gr;
@@ -482,162 +516,12 @@ inline RGBA medianColor(const RGBA& a, const RGBA& b, float factor)
 		a.Alpha+(b.Alpha-a.Alpha)*factor);
 }
 
-void FILLSTYLE::setVertexData(arrayElem* elem)
-{
-	if(FillStyleType==0x00)
-	{
-		//LOG(TRACE,_("Fill color"));
-		elem->colors[0]=1;
-		elem->colors[1]=0;
-		elem->colors[2]=0;
-
-		elem->texcoord[0]=float(Color.Red)/256.0f;
-		elem->texcoord[1]=float(Color.Green)/256.0f;
-		elem->texcoord[2]=float(Color.Blue)/256.0f;
-		elem->texcoord[3]=float(Color.Alpha)/256.0f;
-	}
-	else if(FillStyleType==0x10)
-	{
-		//LOG(TRACE,_("Fill gradient"));
-		elem->colors[0]=0;
-		elem->colors[1]=1;
-		elem->colors[2]=0;
-
-		/*color_entry buffer[256];
-		int grad_index=0;
-		RGBA color_l(0,0,0,1);
-		int index_l=0;
-		RGBA color_r(Gradient.GradientRecords[0].Color);
-		int index_r=Gradient.GradientRecords[0].Ratio;
-
-		for(int i=0;i<256;i++)
-		{
-			float dist=i-index_l;
-			dist/=(index_r-index_l);
-			RGBA c=medianColor(color_l,color_r,dist);
-			buffer[i].r=float(c.Red)/256.0f;
-			buffer[i].g=float(c.Green)/256.0f;
-			buffer[i].b=float(c.Blue)/256.0f;
-			buffer[i].a=1;
-
-			if(Gradient.GradientRecords[grad_index].Ratio==i)
-			{
-				grad_index++;
-				color_l=color_r;
-				index_l=index_r;
-				color_r=Gradient.GradientRecords[grad_index].Color;
-				index_r=Gradient.GradientRecords[grad_index].Ratio;
-			}
-		}
-
-		glBindTexture(GL_TEXTURE_2D,rt->data_tex);
-		glTexImage2D(GL_TEXTURE_2D,0,4,256,1,0,GL_RGBA,GL_FLOAT,buffer);*/
-	}
-	else
-	{
-		LOG(LOG_NOT_IMPLEMENTED,_("Reverting to fixed function"));
-		elem->colors[0]=1;
-		elem->colors[1]=0;
-		elem->colors[2]=0;
-
-		elem->texcoord[0]=0.5;
-		elem->texcoord[1]=0.5;
-		elem->texcoord[2]=0;
-		elem->texcoord[3]=1;
-	}
-}
-
-void FILLSTYLE::setFragmentProgram() const
-{
-	//Let's abuse of glColor and glTexCoord to transport
-	//custom information
-	struct color_entry
-	{
-		float r,g,b,a;
-	};
-
-	//TODO: CHECK do we need to do this when the tex is not being used?
-	rt->dataTex.bind();
-
-	if(FillStyleType==0x00)
-	{
-		//LOG(TRACE,_("Fill color"));
-		glColor4f(1,0,0,0);
-		glTexCoord4f(float(Color.Red)/256.0f,
-			float(Color.Green)/256.0f,
-			float(Color.Blue)/256.0f,
-			float(Color.Alpha)/256.0f);
-	}
-	else if(FillStyleType==0x10)
-	{
-		//LOG(TRACE,_("Fill gradient"));
-
-#if 0
-		color_entry buffer[256];
-		unsigned int grad_index=0;
-		RGBA color_l(0,0,0,1);
-		int index_l=0;
-		RGBA color_r(Gradient.GradientRecords[0].Color);
-		int index_r=Gradient.GradientRecords[0].Ratio;
-
-		glColor4f(0,1,0,0);
-
-		for(int i=0;i<256;i++)
-		{
-			float dist=i-index_l;
-			dist/=(index_r-index_l);
-			RGBA c=medianColor(color_l,color_r,dist);
-			buffer[i].r=float(c.Red)/256.0f;
-			buffer[i].g=float(c.Green)/256.0f;
-			buffer[i].b=float(c.Blue)/256.0f;
-			buffer[i].a=1;
-
-			assert_and_throw(grad_index<Gradient.GradientRecords.size());
-			if(Gradient.GradientRecords[grad_index].Ratio==i)
-			{
-				color_l=color_r;
-				index_l=index_r;
-				color_r=Gradient.GradientRecords[grad_index].Color;
-				index_r=Gradient.GradientRecords[grad_index].Ratio;
-				grad_index++;
-			}
-		}
-
-		glBindTexture(GL_TEXTURE_2D,rt->data_tex);
-		glTexImage2D(GL_TEXTURE_2D,0,4,256,1,0,GL_RGBA,GL_FLOAT,buffer);
-#else
-		RGBA color_r(Gradient.GradientRecords[0].Color);
-#endif
-
-		//HACK: TODO: revamp gradient support
-		glColor4f(1,0,0,0);
-		glTexCoord4f(float(color_r.Red)/256.0f,
-			float(color_r.Green)/256.0f,
-			float(color_r.Blue)/256.0f,
-			float(color_r.Alpha)/256.0f);
-	}
-	else
-	{
-		LOG(LOG_NOT_IMPLEMENTED,_("Style not implemented"));
-		FILLSTYLE::fixedColor(0.5,0.5,0);
-	}
-}
-
-void FILLSTYLE::fixedColor(float r, float g, float b)
-{
-	//TODO: CHECK: do we need to this here?
-	rt->dataTex.bind();
-
-	//Let's abuse of glColor and glTexCoord to transport
-	//custom information
-	glColor4f(1,0,0,0);
-	glTexCoord4f(r,g,b,1);
-}
-
 std::istream& lightspark::operator>>(std::istream& s, FILLSTYLE& v)
 {
-	s >> v.FillStyleType;
-	if(v.FillStyleType==0x00)
+	UI8 tmp;
+	s >> tmp;
+	v.FillStyleType=(FILL_STYLE_TYPE)(int)tmp;
+	if(v.FillStyleType==SOLID_FILL)
 	{
 		if(v.version==1 || v.version==2)
 		{
@@ -648,23 +532,40 @@ std::istream& lightspark::operator>>(std::istream& s, FILLSTYLE& v)
 		else
 			s >> v.Color;
 	}
-	else if(v.FillStyleType==0x10 || v.FillStyleType==0x12 || v.FillStyleType==0x13)
+	else if(v.FillStyleType==LINEAR_GRADIENT || v.FillStyleType==RADIAL_GRADIENT || v.FillStyleType==FOCAL_RADIAL_GRADIENT)
 	{
-		s >> v.GradientMatrix;
-		v.Gradient.version=v.version;
+		s >> v.Matrix;
 		v.FocalGradient.version=v.version;
-		if(v.FillStyleType==0x13)
+		if(v.FillStyleType==FOCAL_RADIAL_GRADIENT)
 			s >> v.FocalGradient;
 		else
 			s >> v.Gradient;
 	}
-	else if(v.FillStyleType==0x41 || v.FillStyleType==0x42 || v.FillStyleType==0x43)
+	else if(v.FillStyleType==REPEATING_BITMAP || v.FillStyleType==CLIPPED_BITMAP || v.FillStyleType==NON_SMOOTHED_REPEATING_BITMAP || 
+			v.FillStyleType==NON_SMOOTHED_CLIPPED_BITMAP)
 	{
-		s >> v.BitmapId >> v.BitmapMatrix;
+		UI16_SWF bitmapId;
+		s >> bitmapId >> v.Matrix;
+		//Lookup the bitmap in the dictionary
+		if(bitmapId!=65535)
+		{
+			DictionaryTag* dict=pt->root->dictionaryLookup(bitmapId);
+			v.bitmap=dynamic_cast<Bitmap*>(dict);
+			if(v.bitmap==NULL)
+			{
+				LOG(LOG_ERROR,"Invalid bitmap ID " << bitmapId);
+				throw ParseException("Invalid ID for bitmap");
+			}
+		}
+		else
+		{
+			//The bitmap might be invalid, the style should not be used
+			v.bitmap=NULL;
+		}
 	}
 	else
 	{
-		LOG(LOG_ERROR,_("Not supported fill style ") << (int)v.FillStyleType << _("... Aborting"));
+		LOG(LOG_ERROR,_("Not supported fill style ") << (int)v.FillStyleType);
 		throw ParseException("Not supported fill style");
 	}
 	return s;
@@ -673,7 +574,9 @@ std::istream& lightspark::operator>>(std::istream& s, FILLSTYLE& v)
 
 std::istream& lightspark::operator>>(std::istream& s, MORPHFILLSTYLE& v)
 {
-	s >> v.FillStyleType;
+	UI8 tmp;
+	s >> tmp;
+	v.FillStyleType=(FILL_STYLE_TYPE)(int)tmp;
 	if(v.FillStyleType==0x00)
 	{
 		s >> v.StartColor >> v.EndColor;
@@ -772,14 +675,12 @@ SHAPERECORD::SHAPERECORD(SHAPE* p,BitStream& bs):parent(p),TypeFlag(false),State
 			if(ps==NULL)
 				throw ParseException("Malformed SWF file");
 			bs.pos=0;
-			FILLSTYLEARRAY a;
-			a.version=ps->FillStyles.version;
+			FILLSTYLEARRAY a(ps->FillStyles.version);
 			bs.f >> a;
 			p->fillOffset=ps->FillStyles.FillStyleCount;
 			ps->FillStyles.appendStyles(a);
 
-			LINESTYLEARRAY b;
-			b.version=ps->LineStyles.version;
+			LINESTYLEARRAY b(ps->LineStyles.version);
 			bs.f >> b;
 			p->lineOffset=ps->LineStyles.LineStyleCount;
 			ps->LineStyles.appendStyles(b);
@@ -1062,13 +963,15 @@ std::istream& lightspark::operator>>(std::istream& s, CLIPEVENTFLAGS& v)
 {
 	if(pt->version<=5)
 	{
-		UI16 t;
+		UI16_SWF t;
 		s >> t;
 		v.toParse=t;
 	}
 	else
 	{
-		s >> v.toParse;
+		UI32_SWF t;
+		s >> t;
+		v.toParse=t;
 	}
 	return s;
 }
@@ -1140,7 +1043,17 @@ void lightspark::stringToQName(const tiny_string& tmp, tiny_string& name, tiny_s
 			return;
 		}
 	}
-	//No double colons in the string
+	// No namespace, look for a package name
+	for(int i=tmp.len()-1;i>0;i--)
+	{
+		if(tmp[i]=='.')
+		{
+			ns=tmp.substr(0,i);
+			name=tmp.substr(i+1,tmp.len());
+			return;
+		}
+	}
+	//No namespace or package in the string
 	name=tmp;
 	ns="";
 }

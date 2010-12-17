@@ -30,6 +30,7 @@
 #include "compat.h"
 #include "class.h"
 #include "backends/rendering.h"
+#include "backends/geometry.h"
 #include "compat.h"
 
 #include <GL/glew.h>
@@ -39,9 +40,6 @@
 
 using namespace std;
 using namespace lightspark;
-
-extern TLSDATA SystemState* sys;
-extern TLSDATA RenderThread* rt;
 
 SET_NAMESPACE("flash.display");
 
@@ -59,8 +57,9 @@ REGISTER_CLASS_NAME(Graphics);
 REGISTER_CLASS_NAME(LineScaleMode);
 REGISTER_CLASS_NAME(StageScaleMode);
 REGISTER_CLASS_NAME(StageAlign);
+REGISTER_CLASS_NAME(StageQuality);
 REGISTER_CLASS_NAME(Bitmap);
-REGISTER_CLASS_NAME(Matrix);
+REGISTER_CLASS_NAME(SimpleButton);
 
 void LoaderInfo::sinit(Class_base* c)
 {
@@ -77,6 +76,43 @@ void LoaderInfo::sinit(Class_base* c)
 
 void LoaderInfo::buildTraits(ASObject* o)
 {
+}
+
+void LoaderInfo::setBytesLoaded(uint32_t b)
+{
+	if(b!=bytesLoaded)
+	{
+		SpinlockLocker l(spinlock);
+		bytesLoaded=b;
+		if(sys && sys->currentVm)
+			sys->currentVm->addEvent(this,Class<ProgressEvent>::getInstanceS(bytesLoaded,bytesTotal));
+		if(loadStatus==INIT_SENT)
+		{
+			//The clip is also complete now
+			Event* e=Class<Event>::getInstanceS("complete");
+			sys->currentVm->addEvent(this,e);
+			e->decRef();
+			loadStatus=COMPLETE;
+		}
+	}
+}
+
+void LoaderInfo::sendInit()
+{
+	Event* e=Class<Event>::getInstanceS("init");
+	sys->currentVm->addEvent(this,e);
+	e->decRef();
+	SpinlockLocker l(spinlock);
+	assert(loadStatus==STARTED);
+	loadStatus=INIT_SENT;
+	if(bytesTotal && bytesLoaded==bytesTotal)
+	{
+		//The clip is also complete now
+		e=Class<Event>::getInstanceS("complete");
+		sys->currentVm->addEvent(this,e);
+		e->decRef();
+		loadStatus=COMPLETE;
+	}
 }
 
 ASFUNCTIONBODY(LoaderInfo,_constructor)
@@ -141,15 +177,11 @@ ASFUNCTIONBODY(Loader,_getContentLoaderInfo)
 ASFUNCTIONBODY(Loader,load)
 {
 	Loader* th=static_cast<Loader*>(obj);
-/*	if(th->loading)
+	if(th->loading)
 		return NULL;
-	th->loading=true;*/
-	throw UnsupportedException("Loader::load");
-/*	if(args->at(0)->getClassName()!="URLRequest")
-	{
-		LOG(ERROR,_("ArgumentError"));
-		abort();
-	}*/
+	th->loading=true;
+	assert_and_throw(argslen > 0 && args[0] && argslen <= 2);
+	assert_and_throw(args[0]->getPrototype()->isSubClass(Class<URLRequest>::getClass()));
 	URLRequest* r=static_cast<URLRequest*>(args[0]);
 	th->url=r->url;
 	th->source=URL;
@@ -170,6 +202,7 @@ ASFUNCTIONBODY(Loader,loadBytes)
 	th->bytes=static_cast<ByteArray*>(args[0]);
 	if(th->bytes->bytes)
 	{
+		th->bytes->incRef();
 		th->loading=true;
 		th->source=BYTES;
 		//To be decreffed in jobFence
@@ -177,6 +210,12 @@ ASFUNCTIONBODY(Loader,loadBytes)
 		sys->addJob(th);
 	}
 	return NULL;
+}
+
+Loader::~Loader()
+{
+	if(local_root && !sys->finalizingDestruction)
+		local_root->decRef();
 }
 
 void Loader::jobFence()
@@ -191,7 +230,7 @@ void Loader::sinit(Class_base* c)
 	c->max_level=c->super->max_level+1;
 	c->setGetterByQName("contentLoaderInfo","",Class<IFunction>::getFunction(_getContentLoaderInfo),true);
 	c->setMethodByQName("loadBytes","",Class<IFunction>::getFunction(loadBytes),true);
-//	c->setVariableByQName("load","",Class<IFunction>::getFunction(load));
+	c->setMethodByQName("load","",Class<IFunction>::getFunction(load),true);
 }
 
 void Loader::buildTraits(ASObject* o)
@@ -200,35 +239,41 @@ void Loader::buildTraits(ASObject* o)
 
 void Loader::execute()
 {
-	LOG(LOG_NOT_IMPLEMENTED,_("Loader async execution ") << url);
+	assert(source==URL || source==BYTES);
+	//The loaderInfo of the content is our contentLoaderInfo
+	contentLoaderInfo->incRef();
+	local_root=RootMovieClip::getInstance(contentLoaderInfo);
 	if(source==URL)
 	{
-		threadAbort();
-		/*local_root=new RootMovieClip;
-		zlib_file_filter zf;
-		zf.open(url.raw_buf(),ios_base::in);
-		istream s(&zf);
-
-		ParseThread local_pt(sys,local_root,s);
-		local_pt.wait();*/
+		//TODO: add security checks
+		LOG(LOG_CALLS,_("Loader async execution ") << url);
+		Downloader* downloader=sys->downloadManager->download(url, false, contentLoaderInfo);
+		downloader->waitForData(); //Wait for some data, making sure our check for failure is working
+		if(downloader->hasFailed()) //Check to see if the download failed for some reason
+		{
+			LOG(LOG_ERROR, "Loader::execute(): Download of URL failed: " << url);
+			sys->currentVm->addEvent(contentLoaderInfo,Class<Event>::getInstanceS("ioError"));
+			sys->downloadManager->destroy(downloader);
+			return;
+		}
+		istream s(downloader);
+		ParseThread* local_pt=new ParseThread(local_root,s);
+		local_pt->run();
+		sys->downloadManager->destroy(downloader);
 	}
 	else if(source==BYTES)
 	{
-		//Implement loadBytes, now just dump
 		assert_and_throw(bytes->bytes);
 
 		//We only support swf files now
 		assert_and_throw(memcmp(bytes->bytes,"CWS",3)==0);
 
-		//The loaderInfo of the content is out contentLoaderInfo
-		contentLoaderInfo->incRef();
-		local_root=new RootMovieClip(contentLoaderInfo);
-		zlib_bytes_filter zf(bytes->bytes,bytes->len);
-		istream s(&zf);
+		bytes_buf bb(bytes->bytes,bytes->len);
+		istream s(&bb);
 
 		ParseThread* local_pt = new ParseThread(local_root,s);
 		local_pt->run();
-		content=local_root;
+		bytes->decRef();
 	}
 	loaded=true;
 	//Add a complete event for this object
@@ -241,39 +286,31 @@ void Loader::threadAbort()
 	throw UnsupportedException("Loader::threadAbort");
 }
 
-void Loader::Render()
+void Loader::Render(bool maskEnabled)
 {
-	if(!loaded)
+	if(!loaded || skipRender(maskEnabled))
 		return;
 
-	if(alpha==0.0)
-		return;
-	if(!visible)
-		return;
+	renderPrologue();
 
-	MatrixApplier ma(getMatrix());
-	local_root->Render();
-	ma.unapply();
+	local_root->Render(maskEnabled);
+
+	renderEpilogue();
 }
 
 bool Loader::getBounds(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const
 {
-	if(content)
+	if(local_root && local_root->getBounds(xmin,xmax,ymin,ymax))
 	{
-		if(content->getBounds(xmin,xmax,ymin,ymax))
-		{
-			getMatrix().multiply2D(xmin,ymin,xmin,ymin);
-			getMatrix().multiply2D(xmax,ymax,xmax,ymax);
-			return true;
-		}
-		else
-			return false;
+		getMatrix().multiply2D(xmin,ymin,xmin,ymin);
+		getMatrix().multiply2D(xmax,ymax,xmax,ymax);
+		return true;
 	}
 	else
 		return false;
 }
 
-Sprite::Sprite():graphics(NULL)
+Sprite::Sprite():GraphicsContainer(this)
 {
 }
 
@@ -283,6 +320,24 @@ void Sprite::sinit(Class_base* c)
 	c->super=Class<DisplayObjectContainer>::getClass();
 	c->max_level=c->super->max_level+1;
 	c->setGetterByQName("graphics","",Class<IFunction>::getFunction(_getGraphics),true);
+}
+
+void GraphicsContainer::invalidateGraphics()
+{
+	assert(graphics);
+	uint32_t x,y,width,height;
+	number_t bxmin,bxmax,bymin,bymax;
+	if(graphics->getBounds(bxmin,bxmax,bymin,bymax)==false)
+	{
+		//No contents, nothing to do
+		return;
+	}
+	owner->computeDeviceBoundsForRect(bxmin,bxmax,bymin,bymax,x,y,width,height);
+	if(width==0 || height==0)
+		return;
+	CairoRenderer* r=new CairoRenderer(&owner->shepherd, owner->cachedSurface, graphics->tokens,
+				owner->getConcatenatedMatrix(), x, y, width, height, 1);
+	sys->addJob(r);
 }
 
 void Sprite::buildTraits(ASObject* o)
@@ -359,27 +414,39 @@ bool Sprite::getBounds(number_t& xmin, number_t& xmax, number_t& ymin, number_t&
 	return ret;
 }
 
-void Sprite::Render()
+void Sprite::invalidate()
 {
-	number_t t1,t2,t3,t4;
-	bool notEmpty=boundsRect(t1,t2,t3,t4);
-	if(!notEmpty)
-		return;
+	DisplayObjectContainer::invalidate();
+	if(graphics)
+		invalidateGraphics();
+}
 
-	if(alpha==0.0)
-		return;
-	if(!visible)
-		return;
+void DisplayObject::renderPrologue() const
+{
+	if(mask)
+	{
+		if(mask->parent)
+			rt->pushMask(mask,mask->parent->getConcatenatedMatrix());
+		else
+			rt->pushMask(mask,MATRIX());
+	}
+}
 
-	MatrixApplier ma(getMatrix());
+void DisplayObject::renderEpilogue() const
+{
+	if(mask)
+		rt->popMask();
+}
 
+void Sprite::renderImpl(bool maskEnabled, number_t t1,number_t t2,number_t t3,number_t t4) const
+{
 	//Draw the dynamically added graphics, if any
 	if(graphics)
 	{
 		//Should clean only the bounds of the graphics
 		if(!isSimple())
 			rt->glAcquireTempBuffer(t1,t2,t3,t4);
-		graphics->Render();
+		defaultRender(maskEnabled);
 		if(!isSimple())
 			rt->glBlitTempBuffer(t1,t2,t3,t4);
 	}
@@ -387,37 +454,96 @@ void Sprite::Render()
 	{
 		Locker l(mutexDisplayList);
 		//Now draw also the display list
-		list<DisplayObject*>::iterator it=dynamicDisplayList.begin();
+		list<DisplayObject*>::const_iterator it=dynamicDisplayList.begin();
 		for(;it!=dynamicDisplayList.end();++it)
-			(*it)->Render();
+			(*it)->Render(maskEnabled);
 	}
-	ma.unapply();
 }
 
-void Sprite::inputRender()
+void Sprite::Render(bool maskEnabled)
 {
-	if(alpha==0.0)
+	if(skipRender(maskEnabled))
 		return;
-	if(!visible)
+
+	//TODO: TOLOCK
+	number_t t1,t2,t3,t4;
+	bool notEmpty=boundsRect(t1,t2,t3,t4);
+	if(!notEmpty)
 		return;
-	InteractiveObject::RenderProloue();
 
-	MatrixApplier ma(getMatrix());
+	renderPrologue();
 
-	if(graphics)
-		graphics->Render();
+	renderImpl(maskEnabled,t1,t2,t3,t4);
 
+	renderEpilogue();
+}
+
+void DisplayObject::hitTestPrologue() const
+{
+	if(mask)
+		sys->getInputThread()->pushMask(mask,mask->getConcatenatedMatrix().getInverted());
+}
+
+void DisplayObject::hitTestEpilogue() const
+{
+	if(mask)
+		sys->getInputThread()->popMask();
+}
+
+InteractiveObject* Sprite::hitTestImpl(number_t x, number_t y)
+{
+	InteractiveObject* ret=NULL;
 	{
+		//Test objects added at runtime, in reverse order
 		Locker l(mutexDisplayList);
-		//Now draw also the display list
-		list<DisplayObject*>::iterator it=dynamicDisplayList.begin();
-		for(;it!=dynamicDisplayList.end();++it)
-			(*it)->inputRender();
+		list<DisplayObject*>::const_reverse_iterator j=dynamicDisplayList.rbegin();
+		for(;j!=dynamicDisplayList.rend();++j)
+		{
+			number_t localX, localY;
+			(*j)->getMatrix().getInverted().multiply2D(x,y,localX,localY);
+			ret=(*j)->hitTest(this, localX,localY);
+			if(ret)
+				break;
+		}
 	}
 
-	ma.unapply();
-	
-	InteractiveObject::RenderEpilogue();
+	if(ret==NULL && graphics && mouseEnabled)
+	{
+		//The coordinates are locals
+		if(graphics->hitTest(x,y))
+		{
+			ret=this;
+			//Also test if the we are under the mask (if any)
+			if(sys->getInputThread()->isMaskPresent())
+			{
+				number_t globalX, globalY;
+				getConcatenatedMatrix().multiply2D(x,y,globalX,globalY);
+				if(!sys->getInputThread()->isMasked(globalX, globalY))
+					ret=NULL;
+			}
+		}
+	}
+	return ret;
+}
+
+InteractiveObject* Sprite::hitTest(InteractiveObject*, number_t x, number_t y)
+{
+	//NOTE: in hitTest the stuff must be rendered in the opposite order of Rendering
+	//TODO: TOLOCK
+	//First of all filter using the BBOX
+	number_t t1,t2,t3,t4;
+	bool notEmpty=boundsRect(t1,t2,t3,t4);
+	if(!notEmpty)
+		return NULL;
+	if(x<t1 || x>t2 || y<t3 || y>t4)
+		return NULL;
+
+	hitTestPrologue();
+
+	InteractiveObject* ret=hitTestImpl(x, y);
+
+	hitTestEpilogue();
+	return ret;
 }
 
 ASFUNCTIONBODY(Sprite,_constructor)
@@ -433,7 +559,7 @@ ASFUNCTIONBODY(Sprite,_getGraphics)
 	Sprite* th=static_cast<Sprite*>(obj);
 	//Probably graphics is not used often, so create it here
 	if(th->graphics==NULL)
-		th->graphics=Class<Graphics>::getInstanceS();
+		th->graphics=Class<Graphics>::getInstanceS(th);
 
 	th->graphics->incRef();
 	return th->graphics;
@@ -491,20 +617,24 @@ uint32_t MovieClip::getFrameIdByLabel(const tiny_string& l) const
 ASFUNCTIONBODY(MovieClip,addFrameScript)
 {
 	MovieClip* th=Class<MovieClip>::cast(obj);
-	assert_and_throw(argslen==2);
-	uint32_t frame=args[0]->toInt();
-	if(frame>=th->totalFrames)
-		return NULL;
-	if(args[1]->getObjectType()!=T_FUNCTION)
+	assert_and_throw(argslen>=2 && argslen%2==0);
+
+	for(uint32_t i=0;i<argslen;i+=2)
 	{
-		LOG(LOG_ERROR,_("Not a function"));
-		return NULL;
+		uint32_t frame=args[i]->toInt();
+		if(frame>=th->totalFrames)
+			return NULL;
+		if(args[i+1]->getObjectType()!=T_FUNCTION)
+		{
+			LOG(LOG_ERROR,_("Not a function"));
+			return NULL;
+		}
+		IFunction* f=static_cast<IFunction*>(args[i+1]);
+		f->incRef();
+		assert(th->frameScripts.size()==th->totalFrames);
+		th->frameScripts[frame]=f;
 	}
-	IFunction* f=static_cast<IFunction*>(args[1]);
-	f->incRef();
 	
-	assert(th->frameScripts.size()==th->totalFrames);
-	th->frameScripts[frame]=f;
 	return NULL;
 }
 
@@ -613,14 +743,43 @@ void MovieClip::advanceFrame()
 		//Should initialize all the frames from the current to the next
 		for(uint32_t i=(state.FP+1);i<=state.next_FP;i++)
 			frames[i].init(this,displayList);
+		bool frameChanging=(state.FP!=state.next_FP);
 		state.FP=state.next_FP;
 		if(!state.stop_FP && framesLoaded>0)
 			state.next_FP=imin(state.FP+1,framesLoaded-1);
 		state.explicit_FP=false;
-		if(frameScripts[state.FP])
+		assert(state.FP<frameScripts.size());
+		if(frameChanging && frameScripts[state.FP])
 			getVm()->addEvent(NULL,new FunctionEvent(frameScripts[state.FP]));
 	}
 
+}
+
+void MovieClip::invalidate()
+{
+	Sprite::invalidate();
+	//Now invalidate all the objects in all frames
+	for(uint32_t i=0;i<frames.size();i++)
+	{
+		list<std::pair<PlaceInfo, DisplayObject*> >::const_iterator it=frames[i].displayList.begin();
+		for(;it!=frames[i].displayList.end();it++)
+			it->second->invalidate();
+	}
+}
+
+void MovieClip::setOnStage(bool staged)
+{
+	if(staged!=onStage)
+	{
+		DisplayObjectContainer::setOnStage(staged);
+		//Now notify all the objects in all frames
+		for(uint32_t i=0;i<frames.size();i++)
+		{
+			list<std::pair<PlaceInfo, DisplayObject*> >::const_iterator it=frames[i].displayList.begin();
+			for(;it!=frames[i].displayList.end();it++)
+				it->second->setOnStage(staged);
+		}
+	}
 }
 
 void MovieClip::setRoot(RootMovieClip* r)
@@ -630,6 +789,13 @@ void MovieClip::setRoot(RootMovieClip* r)
 	if(root)
 		root->unregisterChildClip(this);
 	DisplayObjectContainer::setRoot(r);
+	//Now notify all the objects in all frames
+	for(uint32_t i=0;i<frames.size();i++)
+	{
+		list<std::pair<PlaceInfo, DisplayObject*> >::const_iterator it=frames[i].displayList.begin();
+		for(;it!=frames[i].displayList.end();it++)
+			it->second->setRoot(root);
+	}
 	if(root)
 		root->registerChildClip(this);
 }
@@ -643,80 +809,67 @@ void MovieClip::bootstrap()
 	frames[0].init(this,displayList);
 }
 
-void MovieClip::Render()
+void MovieClip::Render(bool maskEnabled)
 {
+	if(skipRender(maskEnabled))
+		return;
+
 	number_t t1,t2,t3,t4;
 	bool notEmpty=boundsRect(t1,t2,t3,t4);
 	if(!notEmpty)
 		return;
 
-	if(alpha==0.0)
-		return;
-	if(!visible)
-		return;
+	renderPrologue();
 
-	MatrixApplier ma(getMatrix());
-	//Save current frame, this may change during rendering
-	uint32_t curFP=state.FP;
+	Sprite::renderImpl(maskEnabled,t1,t2,t3,t4);
 
 	if(framesLoaded)
 	{
+		//Save current frame, this may change during rendering
+		uint32_t curFP=state.FP;
 		assert_and_throw(curFP<framesLoaded);
-		frames[curFP].Render();
+		frames[curFP].Render(maskEnabled);
 	}
 
-	{
-		//Render objects added at runtime
-		Locker l(mutexDisplayList);
-		list<DisplayObject*>::iterator j=dynamicDisplayList.begin();
-		for(;j!=dynamicDisplayList.end();++j)
-			(*j)->Render();
-	}
-
-	//Draw the dynamically added graphics, if any
-	if(graphics)
-	{
-		//Should clean only the bounds of the graphics
-		if(!isSimple())
-			rt->glAcquireTempBuffer(t1,t2,t3,t4);
-		graphics->Render();
-		if(!isSimple())
-			rt->glBlitTempBuffer(t1,t2,t3,t4);
-	}
-
-	ma.unapply();
+	renderEpilogue();
 }
 
-void MovieClip::inputRender()
+InteractiveObject* MovieClip::hitTest(InteractiveObject*, number_t x, number_t y)
 {
-	if(alpha==0.0)
-		return;
-	if(!visible)
-		return;
-	InteractiveObject::RenderProloue();
+	//NOTE: in hitTest the stuff must be tested in the opposite order of Rendering
 
-	MatrixApplier ma(getMatrix());
-	//Save current frame, this may change during rendering
-	uint32_t curFP=state.FP;
+	//TODO: TOLOCK
+	//First of all firter using the BBOX
+	number_t t1,t2,t3,t4;
+	bool notEmpty=boundsRect(t1,t2,t3,t4);
+	if(!notEmpty)
+		return NULL;
+	if(x<t1 || x>t2 || y<t3 || y>t4)
+		return NULL;
 
+	hitTestPrologue();
+
+	InteractiveObject* ret=NULL;
 	if(framesLoaded)
 	{
+		uint32_t curFP=state.FP;
 		assert_and_throw(curFP<framesLoaded);
-		frames[curFP].inputRender();
+		list<pair<PlaceInfo, DisplayObject*> >::const_iterator it=frames[curFP].displayList.begin();
+		for(;it!=frames[curFP].displayList.end();++it)
+		{
+			number_t localX, localY;
+			it->second->getMatrix().getInverted().multiply2D(x,y,localX,localY);
+			ret=it->second->hitTest(this, localX,localY);
+			if(ret)
+				break;
+		}
 	}
 
-	{
-		//Render objects added at runtime
-		Locker l(mutexDisplayList);
-		list<DisplayObject*>::iterator j=dynamicDisplayList.begin();
-		for(;j!=dynamicDisplayList.end();++j)
-			(*j)->inputRender();
-	}
+	if(ret==NULL)
+		ret=Sprite::hitTestImpl(x, y);
 
-	if(graphics)
-		graphics->Render();
-	ma.unapply();
-	InteractiveObject::RenderEpilogue();
+	hitTestEpilogue();
+	return ret;
 }
 
 Vector2 MovieClip::debugRender(FTFont* font, bool deep)
@@ -772,37 +925,7 @@ Vector2 MovieClip::debugRender(FTFont* font, bool deep)
 
 bool MovieClip::boundsRect(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const
 {
-	bool valid=false;
-	{
-		Locker l(mutexDisplayList);
-		
-		list<DisplayObject*>::const_iterator dynit=dynamicDisplayList.begin();
-		for(;dynit!=dynamicDisplayList.end();++dynit)
-		{
-			number_t t1,t2,t3,t4;
-			if((*dynit)->getBounds(t1,t2,t3,t4))
-			{
-				if(valid==false)
-				{
-					xmin=t1;
-					xmax=t2;
-					ymin=t3;
-					ymax=t4;
-					valid=true;
-					//Now values are valid
-					continue;
-				}
-				else
-				{
-					xmin=imin(xmin,t1);
-					xmax=imax(xmax,t2);
-					ymin=imin(ymin,t3);
-					ymax=imax(ymax,t4);
-				}
-				break;
-			}
-		}
-	}
+	bool valid=Sprite::boundsRect(xmin,xmax,ymin,ymax);
 	
 	if(framesLoaded==0) //We end here
 		return valid;
@@ -852,8 +975,13 @@ bool MovieClip::getBounds(number_t& xmin, number_t& xmax, number_t& ymin, number
 	return ret;
 }
 
-DisplayObject::DisplayObject():useMatrix(true),tx(0),ty(0),rotation(0),sx(1),sy(1),onStage(false),root(NULL),loaderInfo(NULL),
-	alpha(1.0),visible(true),parent(NULL)
+DisplayObject::DisplayObject():useMatrix(true),tx(0),ty(0),rotation(0),sx(1),sy(1),maskOf(NULL),mask(NULL),onStage(false),root(NULL),
+	loaderInfo(NULL),alpha(1.0),visible(true),parent(NULL)
+{
+}
+
+DisplayObject::DisplayObject(const DisplayObject& d):useMatrix(true),tx(d.tx),ty(d.ty),rotation(d.rotation),sx(d.sx),sy(d.sy),maskOf(NULL),
+	mask(NULL),onStage(false),root(NULL),loaderInfo(NULL),alpha(d.alpha),visible(d.visible),parent(NULL)
 {
 }
 
@@ -895,7 +1023,7 @@ void DisplayObject::sinit(Class_base* c)
 	c->setSetterByQName("scale9Grid","",Class<IFunction>::getFunction(undefinedFunction),true);
 	c->setGetterByQName("stage","",Class<IFunction>::getFunction(_getStage),true);
 	c->setGetterByQName("mask","",Class<IFunction>::getFunction(_getMask),true);
-	c->setSetterByQName("mask","",Class<IFunction>::getFunction(undefinedFunction),true);
+	c->setSetterByQName("mask","",Class<IFunction>::getFunction(_setMask),true);
 	c->setGetterByQName("alpha","",Class<IFunction>::getFunction(_getAlpha),true);
 	c->setSetterByQName("alpha","",Class<IFunction>::getFunction(_setAlpha),true);
 	c->setGetterByQName("cacheAsBitmap","",Class<IFunction>::getFunction(undefinedFunction),true);
@@ -912,14 +1040,70 @@ void DisplayObject::buildTraits(ASObject* o)
 
 void DisplayObject::setMatrix(const lightspark::MATRIX& m)
 {
-	Matrix=m;
+	if(ACQUIRE_READ(useMatrix))
+	{
+		bool mustInvalidate=false;
+		{
+			SpinlockLocker locker(spinlock);
+			if(Matrix!=m)
+			{
+				Matrix=m;
+				mustInvalidate=true;
+			}
+		}
+		if(mustInvalidate && onStage)
+			invalidate();
+	}
+}
+
+void DisplayObject::becomeMaskOf(DisplayObject* m)
+{
+	assert_and_throw(mask==NULL);
+	if(m)
+		m->incRef();
+	DisplayObject* tmp=maskOf;
+	maskOf=m;
+	if(tmp)
+	{
+		//We are changing owner
+		tmp->setMask(NULL);
+		tmp->decRef();
+	}
+}
+
+void DisplayObject::setMask(DisplayObject* m)
+{
+	bool mustInvalidate=(mask!=m) && onStage;
+	if(m)
+		m->incRef();
+	DisplayObject* tmp=mask;
+	mask=m;
+	if(tmp)
+	{
+		//Drop the previous mask
+		tmp->becomeMaskOf(NULL);
+		tmp->decRef();
+	}
+	if(mustInvalidate && onStage)
+		invalidate();
+}
+
+MATRIX DisplayObject::getConcatenatedMatrix() const
+{
+	if(parent)
+		return parent->getConcatenatedMatrix().multiplyMatrix(getMatrix());
+	else
+		return getMatrix();
 }
 
 MATRIX DisplayObject::getMatrix() const
 {
 	MATRIX ret;
-	if(useMatrix)
+	if(ACQUIRE_READ(useMatrix))
+	{
+		SpinlockLocker locker(spinlock);
 		ret=Matrix;
+	}
 	else
 	{
 		ret.TranslateX=tx;
@@ -935,6 +1119,7 @@ MATRIX DisplayObject::getMatrix() const
 void DisplayObject::valFromMatrix()
 {
 	assert(useMatrix);
+	SpinlockLocker locker(spinlock);
 	tx=Matrix.TranslateX;
 	ty=Matrix.TranslateY;
 	sx=Matrix.ScaleX;
@@ -947,6 +1132,82 @@ bool DisplayObject::isSimple() const
 	return alpha==1.0;
 }
 
+bool DisplayObject::skipRender(bool maskEnabled) const
+{
+	return visible==false || alpha==0.0 || (!maskEnabled && maskOf!=NULL);
+}
+
+void DisplayObject::defaultRender(bool maskEnabled) const
+{
+	//TODO: TOLOCK
+	if(!cachedSurface.tex.isValid())
+		return;
+	float enableMaskLookup=0.0f;
+	//If the maskEnabled is already set we are the mask!
+	if(!maskEnabled && rt->isMaskPresent())
+	{
+		rt->renderMaskToTmpBuffer();
+		enableMaskLookup=1.0f;
+		glColor4f(1,0,0,0);
+		glBegin(GL_QUADS);
+			glVertex2i(-1000,-1000);
+			glVertex2i(1000,-1000);
+			glVertex2i(1000,1000);
+			glVertex2i(-1000,1000);
+		glEnd();
+	}
+	glPushMatrix();
+	glLoadIdentity();
+	glColor4f(enableMaskLookup,0,1,0);
+	rt->renderTextured(cachedSurface.tex, cachedSurface.xOffset, cachedSurface.yOffset, cachedSurface.tex.width, cachedSurface.tex.height);
+	glPopMatrix();
+}
+
+void DisplayObject::computeDeviceBoundsForRect(number_t xmin, number_t xmax, number_t ymin, number_t ymax,
+		uint32_t& outXMin, uint32_t& outYMin, uint32_t& outWidth, uint32_t& outHeight) const
+{
+	//As the transformation is arbitrary we have to check all the four vertices
+	number_t coords[8];
+	localToGlobal(xmin,ymin,coords[0],coords[1]);
+	localToGlobal(xmin,ymax,coords[2],coords[3]);
+	localToGlobal(xmax,ymax,coords[4],coords[5]);
+	localToGlobal(xmax,ymin,coords[6],coords[7]);
+	//Now find out the minimum and maximum that represent the complete bounding rect
+	number_t minx=coords[6];
+	number_t maxx=coords[6];
+	number_t miny=coords[7];
+	number_t maxy=coords[7];
+	for(int i=0;i<6;i+=2)
+	{
+		if(coords[i]<minx)
+			minx=coords[i];
+		else if(coords[i]>maxx)
+			maxx=coords[i];
+		if(coords[i+1]<miny)
+			miny=coords[i+1];
+		else if(coords[i+1]>maxy)
+			maxy=coords[i+1];
+	}
+	outXMin=minx;
+	outYMin=miny;
+	outWidth=ceil(maxx-minx);
+	outHeight=ceil(maxy-miny);
+}
+
+void DisplayObject::invalidate()
+{
+	//Let's invalidate also the mask
+	if(mask)
+		mask->invalidate();
+}
+
+void DisplayObject::localToGlobal(number_t xin, number_t yin, number_t& xout, number_t& yout) const
+{
+	getMatrix().multiply2D(xin, yin, xout, yout);
+	if(parent)
+		parent->localToGlobal(xout, yout, xout, yout);
+}
+
 void DisplayObject::setRoot(RootMovieClip* r)
 {
 	root=r;
@@ -954,6 +1215,9 @@ void DisplayObject::setRoot(RootMovieClip* r)
 
 void DisplayObject::setOnStage(bool staged)
 {
+	//TODO: When removing from stage released the cachedTex
+	if(onStage==false && staged==true)
+		invalidate();
 	if(staged!=onStage)
 	{
 		//Our stage condition changed, send event
@@ -995,14 +1259,35 @@ ASFUNCTIONBODY(DisplayObject,_getAlpha)
 
 ASFUNCTIONBODY(DisplayObject,_getMask)
 {
-	//DisplayObject* th=static_cast<DisplayObject*>(obj->implementation);
-	return new Null;
+	DisplayObject* th=Class<DisplayObject>::cast(obj);
+	if(th->mask==NULL)
+		return new Null;
+
+	th->mask->incRef();
+	return th->mask;
+}
+
+ASFUNCTIONBODY(DisplayObject,_setMask)
+{
+	DisplayObject* th=Class<DisplayObject>::cast(obj);
+	assert_and_throw(argslen==1);
+	if(args[0] && args[0]->getPrototype() && args[0]->getPrototype()->isSubClass(Class<DisplayObject>::getClass()))
+	{
+		//We received a valid mask object
+		DisplayObject* newMask=Class<DisplayObject>::cast(args[0]);
+		newMask->becomeMaskOf(th);
+		th->setMask(newMask);
+	}
+	else
+		th->setMask(NULL);
+
+	return NULL;
 }
 
 ASFUNCTIONBODY(DisplayObject,_getScaleX)
 {
 	DisplayObject* th=static_cast<DisplayObject*>(obj);
-	if(th->useMatrix)
+	if(ACQUIRE_READ(th->useMatrix))
 		return abstract_d(th->Matrix.ScaleX);
 	else
 		return abstract_d(th->sx);
@@ -1013,19 +1298,21 @@ ASFUNCTIONBODY(DisplayObject,_setScaleX)
 	DisplayObject* th=static_cast<DisplayObject*>(obj);
 	assert_and_throw(argslen==1);
 	number_t val=args[0]->toNumber();
-	if(th->useMatrix)
+	if(ACQUIRE_READ(th->useMatrix))
 	{
 		th->valFromMatrix();
-		th->useMatrix=false;
+		RELEASE_WRITE(th->useMatrix,false);
 	}
 	th->sx=val;
+	if(th->onStage)
+		th->invalidate();
 	return NULL;
 }
 
 ASFUNCTIONBODY(DisplayObject,_getScaleY)
 {
 	DisplayObject* th=static_cast<DisplayObject*>(obj);
-	if(th->useMatrix)
+	if(ACQUIRE_READ(th->useMatrix))
 		return abstract_d(th->Matrix.ScaleY);
 	else
 		return abstract_d(th->sy);
@@ -1036,19 +1323,21 @@ ASFUNCTIONBODY(DisplayObject,_setScaleY)
 	DisplayObject* th=static_cast<DisplayObject*>(obj);
 	assert_and_throw(argslen==1);
 	number_t val=args[0]->toNumber();
-	if(th->useMatrix)
+	if(ACQUIRE_READ(th->useMatrix))
 	{
 		th->valFromMatrix();
-		th->useMatrix=false;
+		RELEASE_WRITE(th->useMatrix,false);
 	}
 	th->sy=val;
+	if(th->onStage)
+		th->invalidate();
 	return NULL;
 }
 
 ASFUNCTIONBODY(DisplayObject,_getX)
 {
 	DisplayObject* th=static_cast<DisplayObject*>(obj);
-	if(th->useMatrix)
+	if(ACQUIRE_READ(th->useMatrix))
 		return abstract_d(th->Matrix.TranslateX);
 	else
 		return abstract_d(th->tx);
@@ -1059,19 +1348,21 @@ ASFUNCTIONBODY(DisplayObject,_setX)
 	DisplayObject* th=static_cast<DisplayObject*>(obj);
 	assert_and_throw(argslen==1);
 	number_t val=args[0]->toNumber();
-	if(th->useMatrix)
+	if(ACQUIRE_READ(th->useMatrix))
 	{
 		th->valFromMatrix();
-		th->useMatrix=false;
+		RELEASE_WRITE(th->useMatrix,false);
 	}
 	th->tx=val;
+	if(th->onStage)
+		th->invalidate();
 	return NULL;
 }
 
 ASFUNCTIONBODY(DisplayObject,_getY)
 {
 	DisplayObject* th=static_cast<DisplayObject*>(obj);
-	if(th->useMatrix)
+	if(ACQUIRE_READ(th->useMatrix))
 		return abstract_d(th->Matrix.TranslateY);
 	else
 		return abstract_d(th->ty);
@@ -1082,12 +1373,14 @@ ASFUNCTIONBODY(DisplayObject,_setY)
 	DisplayObject* th=static_cast<DisplayObject*>(obj);
 	assert_and_throw(argslen==1);
 	number_t val=args[0]->toNumber();
-	if(th->useMatrix)
+	if(ACQUIRE_READ(th->useMatrix))
 	{
 		th->valFromMatrix();
-		th->useMatrix=false;
+		RELEASE_WRITE(th->useMatrix,false);
 	}
 	th->ty=val;
+	if(th->onStage)
+		th->invalidate();
 	return NULL;
 }
 
@@ -1176,12 +1469,14 @@ ASFUNCTIONBODY(DisplayObject,_setRotation)
 	DisplayObject* th=static_cast<DisplayObject*>(obj);
 	assert_and_throw(argslen==1);
 	number_t val=args[0]->toNumber();
-	if(th->useMatrix)
+	if(ACQUIRE_READ(th->useMatrix))
 	{
 		th->valFromMatrix();
-		th->useMatrix=false;
+		RELEASE_WRITE(th->useMatrix,false);
 	}
 	th->rotation=val;
+	if(th->onStage)
+		th->invalidate();
 	return NULL;
 }
 
@@ -1225,10 +1520,10 @@ ASFUNCTIONBODY(DisplayObject,_getRotation)
 {
 	DisplayObject* th=static_cast<DisplayObject*>(obj);
 	//There is no easy way to get rotation from matrix, let's ignore the matrix
-	if(th->useMatrix)
+	if(ACQUIRE_READ(th->useMatrix))
 	{
 		th->valFromMatrix();
-		th->useMatrix=false;
+		RELEASE_WRITE(th->useMatrix,false);
 	}
 	return abstract_d(th->rotation);
 }
@@ -1283,13 +1578,15 @@ ASFUNCTIONBODY(DisplayObject,_setWidth)
 	{
 		number_t newscale=newwidth;
 		newscale/=computed;
-		if(th->useMatrix)
+		if(ACQUIRE_READ(th->useMatrix))
 		{
 			th->valFromMatrix();
-			th->useMatrix=false;
+			RELEASE_WRITE(th->useMatrix,false);
 		}
 		th->sx=newscale;
 	}
+	if(th->onStage)
+		th->invalidate();
 	return NULL;
 }
 
@@ -1313,13 +1610,15 @@ ASFUNCTIONBODY(DisplayObject,_setHeight)
 	{
 		number_t newscale=newheight;
 		newscale/=computed;
-		if(th->useMatrix)
+		if(ACQUIRE_READ(th->useMatrix))
 		{
 			th->valFromMatrix();
-			th->useMatrix=false;
+			RELEASE_WRITE(th->useMatrix,false);
 		}
 		th->sy=newscale;
 	}
+	if(th->onStage)
+		th->invalidate();
 	return NULL;
 }
 
@@ -1360,7 +1659,7 @@ DisplayObjectContainer::~DisplayObjectContainer()
 	}
 }
 
-InteractiveObject::InteractiveObject():id(0)
+InteractiveObject::InteractiveObject():mouseEnabled(true)
 {
 }
 
@@ -1374,12 +1673,25 @@ ASFUNCTIONBODY(InteractiveObject,_constructor)
 {
 	InteractiveObject* th=static_cast<InteractiveObject*>(obj);
 	EventDispatcher::_constructor(obj,NULL,0);
-	assert_and_throw(th->id==0);
 	//Object registered very early are not supported this way (Stage for example)
 	if(sys && sys->getInputThread())
 		sys->getInputThread()->addListener(th);
 	
 	return NULL;
+}
+
+ASFUNCTIONBODY(InteractiveObject,_setMouseEnabled)
+{
+	InteractiveObject* th=static_cast<InteractiveObject*>(obj);
+	assert_and_throw(argslen==1);
+	th->mouseEnabled=Boolean_concrete(args[0]);
+	return NULL;
+}
+
+ASFUNCTIONBODY(InteractiveObject,_getMouseEnabled)
+{
+	InteractiveObject* th=static_cast<InteractiveObject*>(obj);
+	return abstract_b(th->mouseEnabled);
 }
 
 void InteractiveObject::buildTraits(ASObject* o)
@@ -1391,20 +1703,8 @@ void InteractiveObject::sinit(Class_base* c)
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
 	c->super=Class<DisplayObject>::getClass();
 	c->max_level=c->super->max_level+1;
-	//c->setSetterByQName("mouseEnabled","",Class<IFunction>::getFunction(undefinedFunction));
-	//c->setGetterByQName("mouseEnabled","",Class<IFunction>::getFunction(undefinedFunction));
-}
-
-void InteractiveObject::RenderProloue()
-{
-	rt->pushId();
-	rt->currentId=id;
-	FILLSTYLE::fixedColor(id,id,id);
-}
-
-void InteractiveObject::RenderEpilogue()
-{
-	rt->popId();
+	c->setSetterByQName("mouseEnabled","",Class<IFunction>::getFunction(_setMouseEnabled),true);
+	c->setGetterByQName("mouseEnabled","",Class<IFunction>::getFunction(_getMouseEnabled),true);
 }
 
 void DisplayObjectContainer::dumpDisplayList()
@@ -1438,6 +1738,7 @@ void DisplayObjectContainer::setOnStage(bool staged)
 	{
 		DisplayObject::setOnStage(staged);
 		//Notify childern
+		Locker l(mutexDisplayList);
 		list<DisplayObject*>::const_iterator it=dynamicDisplayList.begin();
 		for(;it!=dynamicDisplayList.end();++it)
 			(*it)->setOnStage(staged);
@@ -1454,6 +1755,15 @@ ASFUNCTIONBODY(DisplayObjectContainer,_getNumChildren)
 {
 	DisplayObjectContainer* th=static_cast<DisplayObjectContainer*>(obj);
 	return abstract_i(th->dynamicDisplayList.size());
+}
+
+void DisplayObjectContainer::invalidate()
+{
+	DisplayObject::invalidate();
+	Locker l(mutexDisplayList);
+	list<DisplayObject*>::const_iterator it=dynamicDisplayList.begin();
+	for(;it!=dynamicDisplayList.end();it++)
+		(*it)->invalidate();
 }
 
 void DisplayObjectContainer::_addChildAt(DisplayObject* child, unsigned int index)
@@ -1499,8 +1809,8 @@ void DisplayObjectContainer::_removeChild(DisplayObject* child)
 	assert_and_throw(child->parent==this);
 	assert_and_throw(child->getRoot()==root);
 
-	Locker l(mutexDisplayList);
 	{
+		Locker l(mutexDisplayList);
 		list<DisplayObject*>::iterator it=find(dynamicDisplayList.begin(),dynamicDisplayList.end(),child);
 		assert_and_throw(it!=dynamicDisplayList.end());
 		dynamicDisplayList.erase(it);
@@ -1721,51 +2031,78 @@ bool Shape::getBounds(number_t& xmin, number_t& xmax, number_t& ymin, number_t& 
 	return false;
 }
 
-void Shape::Render()
+
+bool Shape::isOpaque(number_t x, number_t y) const
 {
-	//If graphics is not yet initialized we have nothing to do
-	if(graphics==NULL)
-		return;
+	LOG(LOG_NOT_IMPLEMENTED,"Shape::isOpaque not really implemented");
+	return false;
+}
 
-	if(alpha==0.0)
-		return;
-	if(!visible)
-		return;
+InteractiveObject* Shape::hitTest(InteractiveObject* last, number_t x, number_t y)
+{
+	//NOTE: in hitTest the stuff must be rendered in the opposite order of Rendering
+	assert_and_throw(!sys->getInputThread()->isMaskPresent());
+	//TODO: TOLOCK
+	if(mask)
+	{
+		LOG(LOG_NOT_IMPLEMENTED,"Support masks in Shape::hitTest");
+		::abort();
+	}
 
-	number_t t1,t2,t3,t4;
-	bool ret=graphics->getBounds(t1,t2,t3,t4);
+	if(graphics)
+	{
+		//The coordinates are already local
+		if(graphics->hitTest(x,y))
+			return last;
+	}
 
-	if(!ret)
-		return;
+	return NULL;
+}
 
-	MatrixApplier ma(getMatrix());
+void Shape::renderImpl(bool maskEnabled, number_t t1, number_t t2, number_t t3, number_t t4) const
+{
+	renderPrologue();
 
 	if(!isSimple())
 		rt->glAcquireTempBuffer(t1,t2,t3,t4);
 
-	graphics->Render();
+	defaultRender(maskEnabled);
 
 	if(!isSimple())
 		rt->glBlitTempBuffer(t1,t2,t3,t4);
-	
-	ma.unapply();
+	renderEpilogue();
 }
 
-void Shape::inputRender()
+void Shape::Render(bool maskEnabled)
 {
 	//If graphics is not yet initialized we have nothing to do
-	if(graphics==NULL)
+	if(graphics==NULL || skipRender(maskEnabled))
 		return;
 
-	if(alpha==0.0)
+	number_t t1,t2,t3,t4;
+	bool ret=graphics->getBounds(t1,t2,t3,t4);
+	if(!ret)
 		return;
-	if(!visible)
-		return;
+	Shape::renderImpl(maskEnabled, t1, t2, t3, t4);
+}
 
-	MatrixApplier ma(getMatrix());
+const vector<GeomToken>& Shape::getTokens()
+{
+	return cachedTokens;
+}
 
-	graphics->Render();
-	ma.unapply();
+float Shape::getScaleFactor() const
+{
+	return 1;
+}
+
+void Shape::invalidate()
+{
+	if(graphics)
+	{
+		invalidateGraphics();
+		cachedTokens=graphics->getGraphicsTokens();
+	}
 }
 
 ASFUNCTIONBODY(Shape,_constructor)
@@ -1779,7 +2116,7 @@ ASFUNCTIONBODY(Shape,_getGraphics)
 	Shape* th=static_cast<Shape*>(obj);
 	//Probably graphics is not used often, so create it here
 	if(th->graphics==NULL)
-		th->graphics=Class<Graphics>::getInstanceS();
+		th->graphics=Class<Graphics>::getInstanceS(th);
 
 	th->graphics->incRef();
 	return th->graphics;
@@ -1810,6 +2147,8 @@ void Stage::sinit(Class_base* c)
 	c->max_level=c->super->max_level+1;
 	c->setGetterByQName("stageWidth","",Class<IFunction>::getFunction(_getStageWidth),true);
 	c->setGetterByQName("stageHeight","",Class<IFunction>::getFunction(_getStageHeight),true);
+	c->setGetterByQName("width","",Class<IFunction>::getFunction(_getStageWidth),true);
+	c->setGetterByQName("height","",Class<IFunction>::getFunction(_getStageHeight),true);
 	c->setGetterByQName("scaleMode","",Class<IFunction>::getFunction(_getScaleMode),true);
 	c->setSetterByQName("scaleMode","",Class<IFunction>::getFunction(_setScaleMode),true);
 }
@@ -1827,9 +2166,8 @@ ASFUNCTIONBODY(Stage,_constructor)
 	return NULL;
 }
 
-ASFUNCTIONBODY(Stage,_getStageWidth)
+uint32_t Stage::internalGetWidth() const
 {
-	//Stage* th=static_cast<Stage*>(obj);
 	uint32_t width;
 	if(sys->scaleMode==SystemState::NO_SCALE && sys->getRenderThread())
 		width=sys->getRenderThread()->windowWidth;
@@ -1838,12 +2176,11 @@ ASFUNCTIONBODY(Stage,_getStageWidth)
 		RECT size=sys->getFrameSize();
 		width=size.Xmax/20;
 	}
-	return abstract_d(width);
+	return width;
 }
 
-ASFUNCTIONBODY(Stage,_getStageHeight)
+uint32_t Stage::internalGetHeight() const
 {
-	//Stage* th=static_cast<Stage*>(obj);
 	uint32_t height;
 	if(sys->scaleMode==SystemState::NO_SCALE && sys->getRenderThread())
 		height=sys->getRenderThread()->windowHeight;
@@ -1852,7 +2189,19 @@ ASFUNCTIONBODY(Stage,_getStageHeight)
 		RECT size=sys->getFrameSize();
 		height=size.Ymax/20;
 	}
-	return abstract_d(height);
+	return height;
+}
+
+ASFUNCTIONBODY(Stage,_getStageWidth)
+{
+	Stage* th=static_cast<Stage*>(obj);
+	return abstract_d(th->internalGetWidth());
+}
+
+ASFUNCTIONBODY(Stage,_getStageHeight)
+{
+	Stage* th=static_cast<Stage*>(obj);
+	return abstract_d(th->internalGetHeight());
 }
 
 ASFUNCTIONBODY(Stage,_getScaleMode)
@@ -1907,31 +2256,31 @@ void Graphics::buildTraits(ASObject* o)
 {
 }
 
+vector<GeomToken> Graphics::getGraphicsTokens() const
+{
+	return tokens;
+}
+
+bool Graphics::hitTest(number_t x, number_t y) const
+{
+	return CairoRenderer::hitTest(tokens, 1, x, y);
+}
+
 bool Graphics::getBounds(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const
 {
-	Locker locker2(geometryMutex);
-	//If the geometry has been modified we have to generate it again
-	if(!validGeometry)
-	{
-		validGeometry=true;
-		Locker locker(builderMutex);
-		geometry.clear();
-		builder.outputShapes(geometry);
-		for(unsigned int i=0;i<geometry.size();i++)
-			geometry[i].BuildFromEdges(&styles);
-	}
-	if(geometry.size()==0)
+	if(tokens.size()==0)
 		return false;
 
 	//Initialize values to the first available
 	bool initialized=false;
-	for(unsigned int i=0;i<geometry.size();i++)
+	for(unsigned int i=0;i<tokens.size();i++)
 	{
-		for(unsigned int j=0;j<geometry[i].outlines.size();j++)
+		switch(tokens[i].type)
 		{
-			for(unsigned int k=0;k<geometry[i].outlines[j].size();k++)
+			case MOVE:
+			case STRAIGHT:
 			{
-				const Vector2& v=geometry[i].outlines[j][k];
+				const Vector2& v=tokens[i].p1;
 				if(initialized)
 				{
 					xmin=imin(v.x,xmin);
@@ -1947,7 +2296,10 @@ bool Graphics::getBounds(number_t& xmin, number_t& xmax, number_t& ymin, number_
 					ymax=v.y;
 					initialized=true;
 				}
+				break;
 			}
+			default:
+				break;
 		}
 	}
 	return initialized;
@@ -1961,11 +2313,7 @@ ASFUNCTIONBODY(Graphics,_constructor)
 ASFUNCTIONBODY(Graphics,clear)
 {
 	Graphics* th=static_cast<Graphics*>(obj);
-	{
-		Locker locker(th->builderMutex);
-		th->builder.clear();
-		th->validGeometry=false;
-	}
+	th->tokens.clear();
 	th->styles.clear();
 	return NULL;
 }
@@ -1977,6 +2325,9 @@ ASFUNCTIONBODY(Graphics,moveTo)
 
 	th->curX=args[0]->toInt();
 	th->curY=args[1]->toInt();
+	//TODO: support line styles to avoid this
+	if(!th->styles.empty())
+		th->tokens.emplace_back(MOVE, Vector2(th->curX, th->curY));
 	return NULL;
 }
 
@@ -1989,11 +2340,10 @@ ASFUNCTIONBODY(Graphics,lineTo)
 	int y=args[1]->toInt();
 
 	//TODO: support line styles to avoid this
-	if(th->styles.size())
+	if(!th->styles.empty())
 	{
-		Locker locker(th->builderMutex);
-		th->builder.extendOutlineForColor(th->styles.size(),Vector2(th->curX,th->curY),Vector2(x,y));
-		th->validGeometry=false;
+		th->tokens.emplace_back(STRAIGHT, Vector2(x, y));
+		th->owner->invalidateGraphics();
 	}
 
 	th->curX=x;
@@ -2017,14 +2367,13 @@ ASFUNCTIONBODY(Graphics,drawCircle)
 	const Vector2 d(x-radius,y+radius);
 
 	//TODO: support line styles to avoid this
-	if(th->styles.size())
+	if(!th->styles.empty())
 	{
-		Locker locker(th->builderMutex);
-		th->builder.extendOutlineForColor(th->styles.size(),a,b);
-		th->builder.extendOutlineForColor(th->styles.size(),b,c);
-		th->builder.extendOutlineForColor(th->styles.size(),c,d);
-		th->builder.extendOutlineForColor(th->styles.size(),d,a);
-		th->validGeometry=false;
+		th->tokens.emplace_back(MOVE, a);
+		th->tokens.emplace_back(STRAIGHT, b);
+		th->tokens.emplace_back(STRAIGHT, c);
+		th->tokens.emplace_back(STRAIGHT, d);
+		th->tokens.emplace_back(STRAIGHT, a);
 	}
 	return NULL;
 }
@@ -2045,14 +2394,14 @@ ASFUNCTIONBODY(Graphics,drawRect)
 	const Vector2 d(x,y+height);
 
 	//TODO: support line styles to avoid this
-	if(th->styles.size())
+	if(!th->styles.empty())
 	{
-		Locker locker(th->builderMutex);
-		th->builder.extendOutlineForColor(th->styles.size(),a,b);
-		th->builder.extendOutlineForColor(th->styles.size(),b,c);
-		th->builder.extendOutlineForColor(th->styles.size(),c,d);
-		th->builder.extendOutlineForColor(th->styles.size(),d,a);
-		th->validGeometry=false;
+		th->tokens.emplace_back(MOVE, a);
+		th->tokens.emplace_back(STRAIGHT, b);
+		th->tokens.emplace_back(STRAIGHT, c);
+		th->tokens.emplace_back(STRAIGHT, d);
+		th->tokens.emplace_back(STRAIGHT, a);
+		th->owner->invalidateGraphics();
 	}
 	return NULL;
 }
@@ -2060,8 +2409,6 @@ ASFUNCTIONBODY(Graphics,drawRect)
 ASFUNCTIONBODY(Graphics,beginGradientFill)
 {
 	Graphics* th=static_cast<Graphics*>(obj);
-	th->styles.push_back(FILLSTYLE());
-	th->styles.back().FillStyleType=0x00;
 	uint32_t color=0;
 	uint8_t alpha=255;
 	if(argslen>=2) //Colors
@@ -2071,22 +2418,26 @@ ASFUNCTIONBODY(Graphics,beginGradientFill)
 		assert_and_throw(ar->size()>=1);
 		color=ar->at(0)->toUInt();
 	}
-	th->styles.back().Color=RGBA(color&0xff,(color>>8)&0xff,(color>>16)&0xff,alpha);
+	th->styles.emplace_back(FILLSTYLE(-1));
+	th->styles.back().FillStyleType=SOLID_FILL;
+	th->styles.back().Color=RGBA((color>>16)&0xff,(color>>8)&0xff,color&0xff,alpha);
+	th->tokens.emplace_back(SET_FILL, th->styles.back());
 	return NULL;
 }
 
 ASFUNCTIONBODY(Graphics,beginFill)
 {
 	Graphics* th=static_cast<Graphics*>(obj);
-	th->styles.push_back(FILLSTYLE());
-	th->styles.back().FillStyleType=0x00;
 	uint32_t color=0;
 	uint8_t alpha=255;
 	if(argslen>=1)
 		color=args[0]->toUInt();
 	if(argslen>=2)
 		alpha=(uint8_t(args[1]->toNumber()*0xff));
+	th->styles.emplace_back(FILLSTYLE(-1));
+	th->styles.back().FillStyleType=SOLID_FILL;
 	th->styles.back().Color=RGBA((color>>16)&0xff,(color>>8)&0xff,color&0xff,alpha);
+	th->tokens.emplace_back(SET_FILL, th->styles.back());
 	return NULL;
 }
 
@@ -2097,27 +2448,9 @@ ASFUNCTIONBODY(Graphics,endFill)
 	return NULL;
 }
 
-void Graphics::Render()
-{
-	Locker locker2(geometryMutex);
-	//If the geometry has been modified we have to generate it again
-	if(!validGeometry)
-	{
-		validGeometry=true;
-		Locker locker(builderMutex);
-		cout << "Generating geometry" << endl;
-		geometry.clear();
-		builder.outputShapes(geometry);
-		for(unsigned int i=0;i<geometry.size();i++)
-			geometry[i].BuildFromEdges(&styles);
-	}
-
-	for(unsigned int i=0;i<geometry.size();i++)
-		geometry[i].Render();
-}
-
 void LineScaleMode::sinit(Class_base* c)
 {
+	c->setConstructor(NULL);
 	c->setVariableByQName("HORIZONTAL","",Class<ASString>::getInstanceS("horizontal"));
 	c->setVariableByQName("NONE","",Class<ASString>::getInstanceS("none"));
 	c->setVariableByQName("NORMAL","",Class<ASString>::getInstanceS("normal"));
@@ -2126,6 +2459,7 @@ void LineScaleMode::sinit(Class_base* c)
 
 void StageScaleMode::sinit(Class_base* c)
 {
+	c->setConstructor(NULL);
 	c->setVariableByQName("EXACT_FIT","",Class<ASString>::getInstanceS("exactFit"));
 	c->setVariableByQName("NO_BORDER","",Class<ASString>::getInstanceS("noBorder"));
 	c->setVariableByQName("NO_SCALE","",Class<ASString>::getInstanceS("noScale"));
@@ -2134,7 +2468,17 @@ void StageScaleMode::sinit(Class_base* c)
 
 void StageAlign::sinit(Class_base* c)
 {
+	c->setConstructor(NULL);
 	c->setVariableByQName("TOP_LEFT","",Class<ASString>::getInstanceS("TL"));
+}
+
+void StageQuality::sinit(Class_base* c)
+{
+	c->setConstructor(NULL);
+	c->setVariableByQName("BEST","",Class<ASString>::getInstanceS("best"));
+	c->setVariableByQName("HIGH","",Class<ASString>::getInstanceS("high"));
+	c->setVariableByQName("LOW","",Class<ASString>::getInstanceS("low"));
+	c->setVariableByQName("MEDIUM","",Class<ASString>::getInstanceS("medium"));
 }
 
 void Bitmap::sinit(Class_base* c)
@@ -2146,6 +2490,28 @@ void Bitmap::sinit(Class_base* c)
 }
 
 bool Bitmap::getBounds(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const
+{
+	return false;
+}
+
+IntSize Bitmap::getBitmapSize() const
+{
+	return IntSize(100,100);
+}
+
+void SimpleButton::sinit(Class_base* c)
+{
+//	c->setConstructor(Class<IFunction>::getFunction(_constructor));
+	c->setConstructor(NULL);
+	c->super=Class<InteractiveObject>::getClass();
+	c->max_level=c->super->max_level+1;
+}
+
+void SimpleButton::buildTraits(ASObject* o)
+{
+}
+
+bool SimpleButton::getBounds(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const
 {
 	return false;
 }

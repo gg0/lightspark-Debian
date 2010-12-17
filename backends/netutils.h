@@ -34,29 +34,23 @@ namespace lightspark
 {
 
 class Downloader;
+class LoaderInfo;
 
 class DLL_PUBLIC DownloadManager
 {
 private:
+	sem_t mutex;
 	std::list<Downloader*> downloaders;
 protected:
-	void addDownloader(Downloader* downloader) { downloaders.push_back(downloader); }
-	bool removeDownloader(Downloader* downloader) {
-		for(std::list<Downloader*>::iterator it=downloaders.begin(); it!=downloaders.end(); ++it)
-		{
-			if((*it) == downloader)
-			{
-				downloaders.erase(it);
-				return true;
-			}
-		}
-		return false;
-	}
+	DownloadManager();
+	void addDownloader(Downloader* downloader);
+	bool removeDownloader(Downloader* downloader);
+	void cleanUp();
 public:
-	virtual ~DownloadManager();
-	virtual Downloader* download(const tiny_string& url, bool cached=false)=0;
-	virtual Downloader* download(const URLInfo& url, bool cached=false)=0;
-	virtual void destroy(Downloader* downloader);
+	virtual ~DownloadManager() {};
+	virtual Downloader* download(const tiny_string& url, bool cached=false, LoaderInfo* owner=NULL)=0;
+	virtual Downloader* download(const URLInfo& url, bool cached=false, LoaderInfo* owner=NULL)=0;
+	virtual void destroy(Downloader* downloader)=0;
 
 	enum MANAGERTYPE { NPAPI, STANDALONE };
 	MANAGERTYPE type;
@@ -66,14 +60,14 @@ class DLL_PUBLIC StandaloneDownloadManager:public DownloadManager
 {
 public:
 	StandaloneDownloadManager();
-	~StandaloneDownloadManager(){}
-	Downloader* download(const tiny_string& url, bool cached=false);
-	Downloader* download(const URLInfo& url, bool cached=false);
+	~StandaloneDownloadManager();
+	Downloader* download(const tiny_string& url, bool cached=false, LoaderInfo* owner=NULL);
+	Downloader* download(const URLInfo& url, bool cached=false, LoaderInfo* owner=NULL);
+	void destroy(Downloader* downloader);
 };
 
 class DLL_PUBLIC Downloader: public std::streambuf
 {
-	friend class DownloadManager;
 private:
 	//Handles streambuf out-of-data events
 	virtual int_type underflow();
@@ -86,9 +80,6 @@ private:
 protected:
 	//Abstract base class, can't be constructed
 	Downloader(const tiny_string& _url, bool _cached);
-	//This class can only get destroyed by DownloadManager
-	virtual ~Downloader();
-
 	//-- LOCKING
 	//Provides internal mutual exclusing
 	sem_t mutex;
@@ -175,8 +166,14 @@ protected:
 	std::map<tiny_string, tiny_string> headers;
 	void parseHeaders(const char* headers, bool _setLength);
 	void parseHeader(std::string header, bool _setLength);
-public:
 
+	//-- PROGRESS MONITORING
+	LoaderInfo* owner;
+	void notifyOwnerAboutBytesTotal() const;
+	void notifyOwnerAboutBytesLoaded() const;
+public:
+	//This class can only get destroyed by DownloadManager derivate classes
+	virtual ~Downloader();
 	//Stop the download
 	void stop();
 	//Wait for cache to be opened
@@ -213,18 +210,23 @@ public:
 	bool isRedirected() { return redirected; }
 	const tiny_string& getOriginalURL() { return originalURL; }
 	uint16_t getRequestStatus() { return requestStatus; }
+
+	void setOwner(LoaderInfo* li) { owner=li; }
 };
 
 class ThreadedDownloader : public Downloader, public IThreadJob
 {
 private:
-	sem_t fenced;
+	ACQUIRE_RELEASE_FLAG(fenceState);
+public:
+	void enableFencingWaiting();
 	void jobFence();
+	void waitFencing();
 protected:
 	//Abstract base class, can not be constructed
 	ThreadedDownloader(const tiny_string& url, bool cached);
-	//This class can only get destroyed by DownloadManager
-	virtual ~ThreadedDownloader();
+//	//This class can only get destroyed by DownloadManager
+//	virtual ~ThreadedDownloader();
 };
 
 //CurlDownloader can be used as a thread job, standalone or as a streambuf

@@ -17,9 +17,13 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
+#include <libxml++/libxml++.h>
+#include <libxml++/parsers/textreader.h>
+
 #include <vector>
 #include <list>
 #include <algorithm>
+#include <sstream>
 #include "scripting/abc.h"
 #include "tags.h"
 #include "scripting/actions.h"
@@ -37,8 +41,6 @@
 using namespace std;
 using namespace lightspark;
 
-extern TLSDATA SystemState* sys;
-extern TLSDATA RenderThread* rt;
 extern TLSDATA ParseThread* pt;
 
 Tag* TagFactory::readTag()
@@ -64,6 +66,9 @@ Tag* TagFactory::readTag()
 			break;
 	//	case 4:
 	//		ret=new PlaceObjectTag(h,f);
+		case 6:
+			ret=new DefineBitsTag(h,f);
+			break;
 		case 9:
 			ret=new SetBackgroundColorTag(h,f);
 			break;
@@ -112,8 +117,14 @@ Tag* TagFactory::readTag()
 		case 32:
 			ret=new DefineShape3Tag(h,f);
 			break;
+		case 33:
+			ret=new DefineText2Tag(h,f);
+			break;
 		case 34:
 			ret=new DefineButton2Tag(h,f);
+			break;
+		case 35:
+			ret=new DefineBitsJPEG3Tag(h,f);
 			break;
 		case 36:
 			ret=new DefineBitsLossless2Tag(h,f);
@@ -247,6 +258,8 @@ void RemoveObject2Tag::execute(MovieClip* parent, list <pair<PlaceInfo, DisplayO
 	{
 		if(it->second->Depth==Depth)
 		{
+			it->second->parent=NULL;
+			it->second->setRoot(NULL);
 			it->second->decRef();
 			ls.erase(it);
 			break;
@@ -302,7 +315,7 @@ DefineEditTextTag::DefineEditTextTag(RECORDHEADER h, std::istream& in):Dictionar
 		in >> InitialText;
 }
 
-void DefineEditTextTag::Render()
+void DefineEditTextTag::Render(bool maskEnabled)
 {
 	LOG(LOG_NOT_IMPLEMENTED,_("DefineEditTextTag: Render"));
 }
@@ -404,6 +417,7 @@ ASObject* DefineSpriteTag::instance() const
 	else
 		ret->setPrototype(Class<MovieClip>::getClass());
 	ret->bootstrap();
+	//TODO: should we call the frameScripts?
 	return ret;
 }
 
@@ -440,7 +454,7 @@ DefineFontTag::DefineFontTag(RECORDHEADER h, std::istream& in):FontTag(h)
 	LOG(LOG_TRACE,_("DefineFont"));
 	in >> FontID;
 
-	UI16 t;
+	UI16_SWF t;
 	int NumGlyphs=0;
 	in >> t;
 	OffsetTable.push_back(t);
@@ -483,7 +497,7 @@ DefineFont2Tag::DefineFont2Tag(RECORDHEADER h, std::istream& in):FontTag(h)
 	in >> NumGlyphs;
 	if(FontFlagsWideOffsets)
 	{
-		UI32 t;
+		UI32_SWF t;
 		for(int i=0;i<NumGlyphs;i++)
 		{
 			in >> t;
@@ -494,7 +508,7 @@ DefineFont2Tag::DefineFont2Tag(RECORDHEADER h, std::istream& in):FontTag(h)
 	}
 	else
 	{
-		UI16 t;
+		UI16_SWF t;
 		for(int i=0;i<NumGlyphs;i++)
 		{
 			in >> t;
@@ -513,7 +527,7 @@ DefineFont2Tag::DefineFont2Tag(RECORDHEADER h, std::istream& in):FontTag(h)
 	{
 		for(int i=0;i<NumGlyphs;i++)
 		{
-			UI16 t;
+			UI16_SWF t;
 			in >> t;
 			CodeTable.push_back(t);
 		}
@@ -533,7 +547,7 @@ DefineFont2Tag::DefineFont2Tag(RECORDHEADER h, std::istream& in):FontTag(h)
 
 		for(int i=0;i<NumGlyphs;i++)
 		{
-			SI16 t;
+			SI16_SWF t;
 			in >> t;
 			FontAdvanceTable.push_back(t);
 		}
@@ -572,7 +586,7 @@ DefineFont3Tag::DefineFont3Tag(RECORDHEADER h, std::istream& in):FontTag(h)
 	in >> NumGlyphs;
 	if(FontFlagsWideOffsets)
 	{
-		UI32 t;
+		UI32_SWF t;
 		for(int i=0;i<NumGlyphs;i++)
 		{
 			in >> t;
@@ -583,7 +597,7 @@ DefineFont3Tag::DefineFont3Tag(RECORDHEADER h, std::istream& in):FontTag(h)
 	}
 	else
 	{
-		UI16 t;
+		UI16_SWF t;
 		for(int i=0;i<NumGlyphs;i++)
 		{
 			in >> t;
@@ -599,7 +613,7 @@ DefineFont3Tag::DefineFont3Tag(RECORDHEADER h, std::istream& in):FontTag(h)
 	}
 	for(int i=0;i<NumGlyphs;i++)
 	{
-		UI16 t;
+		UI16_SWF t;
 		in >> t;
 		CodeTable.push_back(t);
 	}
@@ -609,7 +623,7 @@ DefineFont3Tag::DefineFont3Tag(RECORDHEADER h, std::istream& in):FontTag(h)
 
 		for(int i=0;i<NumGlyphs;i++)
 		{
-			SI16 t;
+			SI16_SWF t;
 			in >> t;
 			FontAdvanceTable.push_back(t);
 		}
@@ -665,15 +679,19 @@ ASObject* DefineBitsLossless2Tag::instance() const
 	return ret;
 }
 
-void DefineBitsLossless2Tag::Render()
+void DefineBitsLossless2Tag::Render(bool maskEnabled)
 {
-	LOG(LOG_NOT_IMPLEMENTED,_("DefineBitsLossless2Tag::Render"));
+	LOG(LOG_NOT_IMPLEMENTED,"DefineBitsLossless2Tag::Render");
 }
 
-DefineTextTag::DefineTextTag(RECORDHEADER h, istream& in):DictionaryTag(h)
+DefineTextTag::DefineTextTag(RECORDHEADER h, istream& in, int v):DictionaryTag(h),version(v)
 {
 	in >> CharacterId >> TextBounds >> TextMatrix >> GlyphBits >> AdvanceBits;
-	LOG(LOG_TRACE,_("DefineText ID ") << CharacterId);
+	assert(v==1 || v==2);
+	if(v==1)
+		LOG(LOG_TRACE,"DefineText ID " << CharacterId);
+	else if(v==2)
+		LOG(LOG_TRACE,"DefineText2 ID " << CharacterId);
 
 	TEXTRECORD t(this);
 	while(1)
@@ -685,74 +703,19 @@ DefineTextTag::DefineTextTag(RECORDHEADER h, istream& in):DictionaryTag(h)
 	}
 }
 
-void DefineTextTag::inputRender()
+DefineText2Tag::DefineText2Tag(RECORDHEADER h, istream& in):DefineTextTag(h,in,2)
 {
-	if(alpha==0)
-		return;
-	if(!visible)
-		return;
-	std::vector < TEXTRECORD >::iterator it=TextRecords.begin();
-	if(it==TextRecords.end()) //Nothing to draw
-		return;
-	std::vector < GLYPHENTRY >::iterator it2;
-	int x=0,y=0;
-
-	//Build a fake FILLSTYLEs
-	FILLSTYLE f;
-	f.FillStyleType=0x00;
-	f.Color=it->TextColor;
-	MatrixApplier ma(getMatrix());
-	ma.concat(TextMatrix);
-	//Shapes are defined in twips, so scale then down
-	glScalef(0.05,0.05,1);
-	
-	//The next 1/20 scale is needed by DefineFont3. Should be conditional
-	glScalef(0.05,0.05,1);
-	float scale_cur=1;
-	int count=0;
-	unsigned int shapes_done=0;
-	it= TextRecords.begin();
-	for(;it!=TextRecords.end();++it)
-	{
-		if(it->StyleFlagsHasFont)
-		{
-			float scale=it->TextHeight;
-			scale/=1024;
-			glScalef(scale/scale_cur,scale/scale_cur,1);
-			scale_cur=scale;
-		}
-		it2 = it->GlyphEntries.begin();
-		int x2=x,y2=y;
-		x2+=(*it).XOffset;
-		y2+=(*it).YOffset;
-
-		for(;it2!=(it->GlyphEntries.end());++it2)
-		{
-			while(shapes_done<cached.size() &&  cached[shapes_done].id==count)
-			{
-				assert_and_throw(cached[shapes_done].color==1)
-				cached[shapes_done].style=&f;
-
-				cached[shapes_done].Render(x2/scale_cur*20,y2/scale_cur*20);
-				shapes_done++;
-				if(shapes_done==cached.size())
-					break;
-			}
-			x2+=it2->GlyphAdvance;
-			count++;
-		}
-	}
-	ma.unapply();
 }
 
-void DefineTextTag::Render()
+void DefineTextTag::Render(bool maskEnabled)
 {
-	LOG(LOG_TRACE,_("DefineText Render"));
+	LOG(LOG_TRACE,"DefineText Render");
 	if(alpha==0)
 		return;
 	if(!visible)
 		return;
-	if(cached.size()==0)
+	//TODO: reimplement
+/*	if(cached.size()==0)
 	{
 		FontTag* font=NULL;
 		int count=0;
@@ -788,7 +751,7 @@ void DefineTextTag::Render()
 
 	//Build a fake FILLSTYLEs
 	FILLSTYLE f;
-	f.FillStyleType=0x00;
+	f.FillStyleType=SOLID_FILL;
 	f.Color=it->TextColor;
 	MatrixApplier ma(getMatrix());
 	ma.concat(TextMatrix);
@@ -836,7 +799,7 @@ void DefineTextTag::Render()
 
 	if(!isSimple())
 		rt->glBlitTempBuffer(TextBounds.Xmin,TextBounds.Xmax,TextBounds.Ymin,TextBounds.Ymax);
-	ma.unapply();
+	ma.unapply();*/
 }
 
 Vector2 DefineTextTag::debugRender(FTFont* font, bool deep)
@@ -855,31 +818,27 @@ Vector2 DefineTextTag::debugRender(FTFont* font, bool deep)
 	return Vector2(100,100);
 }
 
-DefineShapeTag::DefineShapeTag(RECORDHEADER h, std::istream& in):DictionaryTag(h)
+DefineShapeTag::DefineShapeTag(RECORDHEADER h, std::istream& in):DictionaryTag(h),Shapes(1)
 {
 	LOG(LOG_TRACE,_("DefineShapeTag"));
-	Shapes.version=1;
 	in >> ShapeId >> ShapeBounds >> Shapes;
 }
 
-DefineShape2Tag::DefineShape2Tag(RECORDHEADER h, std::istream& in):DefineShapeTag(h)
+DefineShape2Tag::DefineShape2Tag(RECORDHEADER h, std::istream& in):DefineShapeTag(h,2)
 {
 	LOG(LOG_TRACE,_("DefineShape2Tag"));
-	Shapes.version=2;
 	in >> ShapeId >> ShapeBounds >> Shapes;
 }
 
-DefineShape3Tag::DefineShape3Tag(RECORDHEADER h, std::istream& in):DefineShape2Tag(h)
+DefineShape3Tag::DefineShape3Tag(RECORDHEADER h, std::istream& in):DefineShape2Tag(h,3)
 {
 	LOG(LOG_TRACE,_("DefineShape3Tag"));
-	Shapes.version=3;
 	in >> ShapeId >> ShapeBounds >> Shapes;
 }
 
-DefineShape4Tag::DefineShape4Tag(RECORDHEADER h, std::istream& in):DefineShape3Tag(h)
+DefineShape4Tag::DefineShape4Tag(RECORDHEADER h, std::istream& in):DefineShape3Tag(h,4)
 {
 	LOG(LOG_TRACE,_("DefineShape4Tag"));
-	Shapes.version=4;
 	in >> ShapeId >> ShapeBounds >> EdgeBounds;
 	BitStream bs(in);
 	UB(5,bs);
@@ -898,12 +857,6 @@ DefineMorphShapeTag::DefineMorphShapeTag(RECORDHEADER h, std::istream& in):Dicti
 		ignore(in,dest-in.tellg());
 }
 
-std::ostream& operator<<(std::ostream& s, const Vector2& p)
-{
-	s << "{ "<< p.x << ',' << p.y << " }" << std::endl;
-	return s;
-}
-
 ASObject* DefineMorphShapeTag::instance() const
 {
 	DefineMorphShapeTag* ret=new DefineMorphShapeTag(*this);
@@ -912,7 +865,7 @@ ASObject* DefineMorphShapeTag::instance() const
 	return ret;
 }
 
-void DefineMorphShapeTag::Render()
+void DefineMorphShapeTag::Render(bool maskEnabled)
 {
 	if(alpha==0)
 		return;
@@ -949,57 +902,113 @@ void DefineMorphShapeTag::Render()
 	glPopMatrix();*/
 }
 
-void DefineShapeTag::inputRender()
+void DefineShapeTag::computeCached()
 {
-	if(alpha==0)
-		return;
-	if(!visible)
-		return;
-
-	MatrixApplier ma(getMatrix());
-	glScalef(0.05,0.05,1);
-
-	std::vector < GeomShape >::iterator it=cached.begin();
-	for(;it!=cached.end();++it)
-	{
-		assert_and_throw(it->color <= Shapes.FillStyles.FillStyleCount);
-		it->Render();
-	}
-	ma.unapply();
+	if(cachedTokens.empty())
+		FromShaperecordListToShapeVector(Shapes.ShapeRecords,cachedTokens,Shapes.FillStyles.FillStyles);
 }
 
-void DefineShapeTag::Render()
+void DefineShapeTag::invalidate()
 {
-	if(alpha==0)
-		return;
-	if(!visible)
-		return;
-
-	if(cached.size()==0)
+	//Acquire the lock to avoid data changes
+//	SpinlockLocker locker(spinlock);
+	computeCached();
+	if(cachedTokens.empty())
 	{
-		FromShaperecordListToShapeVector(Shapes.ShapeRecords,cached);
+		//No contents, nothing to do
+		return;
+	}
+	uint32_t x,y,width,height;
+	number_t bxmin,bxmax,bymin,bymax;
+	boundsRect(bxmin,bxmax,bymin,bymax);
+	computeDeviceBoundsForRect(bxmin,bxmax,bymin,bymax,x,y,width,height);
+	CairoRenderer* r=new CairoRenderer(&shepherd, cachedSurface, cachedTokens, getConcatenatedMatrix(), x, y, width, height, 0.05);
+	sys->addJob(r);
+}
 
-		for(unsigned int i=0;i<cached.size();i++)
-			cached[i].BuildFromEdges(&Shapes.FillStyles.FillStyles);
+void DefineShapeTag::boundsRect(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const
+{
+	int a=ShapeBounds.Xmin;
+	int b=ShapeBounds.Ymin;
+	int c=ShapeBounds.Xmax;
+	int d=ShapeBounds.Ymax;
+	if(a<0)
+		a-=19;
+	else
+		a+=19;
+	a/=20;
+	if(b<0)
+		b-=19;
+	else
+		b+=19;
+	b/=20;
+	if(c<0)
+		c-=19;
+	else
+		c+=19;
+	c/=20;
+	if(d<0)
+		d-=19;
+	else
+		d+=19;
+	d/=20;
+	xmin=a;
+	ymin=b;
+	xmax=c;
+	ymax=d;
+}
+
+bool DefineShapeTag::getBounds(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const
+{
+	//Apply transformation with the current matrix
+	boundsRect(xmin,xmax,ymin,ymax);
+	getMatrix().multiply2D(xmin,ymin,xmin,ymin);
+	getMatrix().multiply2D(xmax,ymax,xmax,ymax);
+	//getMatrix().multiply2D(ShapeBounds.Xmin/20,ShapeBounds.Ymin/20,xmin,ymin);
+	//getMatrix().multiply2D(ShapeBounds.Xmax/20,ShapeBounds.Ymax/20,xmax,ymax);
+	//TODO: adapt for rotation
+	return true;
+}
+
+InteractiveObject* DefineShapeTag::hitTest(InteractiveObject* last, number_t x, number_t y)
+{
+	//TODO: TOLOCK
+	if(mask)
+	{
+		LOG(LOG_NOT_IMPLEMENTED,"Support masks in DefineShapeTag::hitTest");
+		::abort();
 	}
 
-	MatrixApplier ma(getMatrix());
-	glScalef(0.05,0.05,1);
+	number_t x1,x2,y1,y2;
+	boundsRect(x1,x2,y1,y2);
+	if(x<x1 || x>x2 || y<y1 || y>y2)
+		return NULL;
 
-	if(!isSimple())
-		rt->glAcquireTempBuffer(ShapeBounds.Xmin,ShapeBounds.Xmax,ShapeBounds.Ymin,ShapeBounds.Ymax);
-
-	std::vector < GeomShape >::iterator it=cached.begin();
-	for(;it!=cached.end();++it)
+	bool ret=CairoRenderer::hitTest(cachedTokens, 0.05, x, y);
+	if(ret)
 	{
-		assert_and_throw(it->color <= Shapes.FillStyles.FillStyleCount);
-		it->Render();
+		//Also test if the we are under the mask (if any)
+		if(sys->getInputThread()->isMaskPresent())
+		{
+			number_t globalX, globalY;
+			getConcatenatedMatrix().multiply2D(x,y,globalX,globalY);
+			if(!sys->getInputThread()->isMasked(globalX, globalY))
+				return NULL;
+		}
+		return last;
 	}
+	else
+		return NULL;
+}
 
-	if(!isSimple())
-		rt->glBlitTempBuffer(ShapeBounds.Xmin,ShapeBounds.Xmax,ShapeBounds.Ymin,ShapeBounds.Ymax);
+void DefineShapeTag::Render(bool maskEnabled)
+{
+	if(skipRender(maskEnabled))
+		return;
 
-	ma.unapply();
+	number_t t1,t2,t3,t4;
+	DefineShapeTag::boundsRect(t1,t2,t3,t4);
+	Shape::renderImpl(maskEnabled,t1,t2,t3,t4);
 }
 
 Vector2 DefineShapeTag::debugRender(FTFont* font, bool deep)
@@ -1054,7 +1063,8 @@ Vector2 DefineShape3Tag::debugRender(FTFont* font, bool deep)
 * * \param cur SHAPERECORD list head
 * * \param shapes a vector to be populated with the shapes */
 
-void lightspark::FromShaperecordListToShapeVector(const vector<SHAPERECORD>& shapeRecords, vector<GeomShape>& shapes)
+void DefineShapeTag::FromShaperecordListToShapeVector(const std::vector<SHAPERECORD>& shapeRecords, std::vector<GeomToken>& tokens,
+	const std::list<FILLSTYLE>& fillStyles)
 {
 	int startX=0;
 	int startY=0;
@@ -1076,9 +1086,9 @@ void lightspark::FromShaperecordListToShapeVector(const vector<SHAPERECORD>& sha
 				Vector2 p2(startX,startY);
 				
 				if(color0)
-					shapesBuilder.extendOutlineForColor(color0,p1,p2);
+					shapesBuilder.extendFilledOutlineForColor(color0,p1,p2);
 				if(color1)
-					shapesBuilder.extendOutlineForColor(color1,p1,p2);
+					shapesBuilder.extendFilledOutlineForColor(color1,p1,p2);
 			}
 			else
 			{
@@ -1092,13 +1102,13 @@ void lightspark::FromShaperecordListToShapeVector(const vector<SHAPERECORD>& sha
 
 				if(color0)
 				{
-					shapesBuilder.extendOutlineForColor(color0,p1,p2);
-					shapesBuilder.extendOutlineForColor(color0,p2,p3);
+					shapesBuilder.extendFilledOutlineForColor(color0,p1,p2);
+					shapesBuilder.extendFilledOutlineForColor(color0,p2,p3);
 				}
 				if(color1)
 				{
-					shapesBuilder.extendOutlineForColor(color1,p1,p2);
-					shapesBuilder.extendOutlineForColor(color1,p2,p3);
+					shapesBuilder.extendFilledOutlineForColor(color1,p1,p2);
+					shapesBuilder.extendFilledOutlineForColor(color1,p2,p3);
 				}
 			}
 		}
@@ -1125,16 +1135,16 @@ void lightspark::FromShaperecordListToShapeVector(const vector<SHAPERECORD>& sha
 		}
 	}
 
-	shapesBuilder.outputShapes(shapes);
+	shapesBuilder.outputTokens(fillStyles, tokens);
 }
 
-void DefineFont3Tag::genGlyphShape(vector<GeomShape>& s, int glyph)
-{
-	SHAPE& shape=GlyphShapeTable[glyph];
-	FromShaperecordListToShapeVector(shape.ShapeRecords,s);
+//void DefineFont3Tag::genGlyphShape(vector<GeomShape>& s, int glyph)
+//{
+//	SHAPE& shape=GlyphShapeTable[glyph];
+//	FromShaperecordListToShapeVector(shape.ShapeRecords,s);
 
-	for(unsigned int i=0;i<s.size();i++)
-		s[i].BuildFromEdges(NULL);
+/*	for(unsigned int i=0;i<s.size();i++)
+		s[i].BuildFromEdges(NULL);*/
 
 	//Should check fill state
 
@@ -1166,15 +1176,15 @@ void DefineFont3Tag::genGlyphShape(vector<GeomShape>& s, int glyph)
 		}
 		else
 			s.back().graphic.stroked=false;*/
-}
+//}
 
-void DefineFont2Tag::genGlyphShape(vector<GeomShape>& s, int glyph)
-{
-	SHAPE& shape=GlyphShapeTable[glyph];
-	FromShaperecordListToShapeVector(shape.ShapeRecords,s);
+//void DefineFont2Tag::genGlyphShape(vector<GeomShape>& s, int glyph)
+//{
+	//SHAPE& shape=GlyphShapeTable[glyph];
+	//FromShaperecordListToShapeVector(shape.ShapeRecords,s);
 
-	for(unsigned int i=0;i<s.size();i++)
-		s[i].BuildFromEdges(NULL);
+	/*for(unsigned int i=0;i<s.size();i++)
+		s[i].BuildFromEdges(NULL);*/
 
 	//Should check fill state
 
@@ -1206,18 +1216,18 @@ void DefineFont2Tag::genGlyphShape(vector<GeomShape>& s, int glyph)
 		}
 		else
 			s.back().graphic.stroked=false;*/
-}
+//}
 
-void DefineFontTag::genGlyphShape(vector<GeomShape>& s,int glyph)
-{
-	SHAPE& shape=GlyphShapeTable[glyph];
+//void DefineFontTag::genGlyphShape(vector<GeomShape>& s,int glyph)
+//{
+	/*SHAPE& shape=GlyphShapeTable[glyph];
 	FromShaperecordListToShapeVector(shape.ShapeRecords,s);
 
 	for(unsigned int i=0;i<s.size();i++)
-		s[i].BuildFromEdges(NULL);
+		s[i].BuildFromEdges(NULL);*/
 
 	//Should check fill state
-}
+//}
 
 ShowFrameTag::ShowFrameTag(RECORDHEADER h, std::istream& in):Tag(h)
 {
@@ -1315,6 +1325,8 @@ void PlaceObject2Tag::execute(MovieClip* parent, list < pair< PlaceInfo, Display
 				(ls.begin(),ls.end(),Depth,list_orderer());
 			//As we are inserting the object in the list we need to incref it
 			toAdd->incRef();
+			toAdd->parent=parent;
+			toAdd->setRoot(parent->getRoot());
 			ls.insert(it,make_pair(infos,toAdd));
 		}
 	}
@@ -1353,10 +1365,14 @@ void PlaceObject2Tag::execute(MovieClip* parent, list < pair< PlaceInfo, Display
 			}
 			else
 			{
+				it->second->parent=NULL;
+				it->second->setRoot(NULL);
 				it->second->decRef();
 				ls.erase(it);
 				list<pair<PlaceInfo, DisplayObject*> >::iterator it=lower_bound(ls.begin(),ls.end(),Depth,list_orderer());
 				toAdd->incRef();
+				toAdd->parent=parent;
+				toAdd->setRoot(parent->getRoot());
 				ls.insert(it,make_pair(infos,toAdd));
 			}
 		}
@@ -1482,6 +1498,8 @@ void PlaceObject3Tag::execute(MovieClip* parent, list < pair< PlaceInfo, Display
 				(ls.begin(),ls.end(),Depth,list_orderer());
 			//As we are inserting the object in the list we need to incref it
 			toAdd->incRef();
+			toAdd->parent=parent;
+			toAdd->setRoot(parent->getRoot());
 			ls.insert(it,make_pair(infos,toAdd));
 		}
 	}
@@ -1524,6 +1542,8 @@ void PlaceObject3Tag::execute(MovieClip* parent, list < pair< PlaceInfo, Display
 				ls.erase(it);
 				list<pair<PlaceInfo, DisplayObject*> >::iterator it=lower_bound(ls.begin(),ls.end(),Depth,list_orderer());
 				toAdd->incRef();
+				toAdd->parent=parent;
+				toAdd->setRoot(parent->getRoot());
 				ls.insert(it,make_pair(infos,toAdd));
 			}
 		}
@@ -1611,7 +1631,7 @@ ProductInfoTag::ProductInfoTag(RECORDHEADER h, std::istream& in):Tag(h)
 	LOG(LOG_NO_INFO,_("SWF Info:") << 
 	endl << "\tProductId: " << ProductId <<
 	endl << "\tEdition: " << Edition <<
-	endl << "\tVersion: " << UI32(MajorVersion) << "." << UI32(MinorVersion) << "." << MajorBuild << "." << MinorBuild <<
+	endl << "\tVersion: " << int(MajorVersion) << "." << int(MinorVersion) << "." << MajorBuild << "." << MinorBuild <<
 	endl << "\tCompileTime: " << longlongTime);
 }
 
@@ -1667,7 +1687,7 @@ void DefineButton2Tag::handleEvent(Event* e)
 	IdleToOverUp=true;
 }
 
-void DefineButton2Tag::Render()
+void DefineButton2Tag::Render(bool maskEnabled)
 {
 	LOG(LOG_NOT_IMPLEMENTED,_("DefineButton2Tag::Render"));
 	if(alpha==0)
@@ -1725,6 +1745,11 @@ Vector2 DefineButton2Tag::debugRender(FTFont* font, bool deep)
 	return Vector2(100,100);
 }
 
+bool DefineButton2Tag::getBounds(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const
+{
+	return false;
+}
+
 DefineVideoStreamTag::DefineVideoStreamTag(RECORDHEADER h, std::istream& in):DictionaryTag(h)
 {
 	LOG(LOG_NO_INFO,_("DefineVideoStreamTag"));
@@ -1736,7 +1761,7 @@ DefineVideoStreamTag::DefineVideoStreamTag(RECORDHEADER h, std::istream& in):Dic
 	in >> CodecID;
 }
 
-void DefineVideoStreamTag::Render()
+void DefineVideoStreamTag::Render(bool maskEnabled)
 {
 	LOG(LOG_NO_INFO,_("DefineVideoStreamTag Render"));
 /*	if(alpha==0)
@@ -1812,7 +1837,7 @@ ScriptLimitsTag::ScriptLimitsTag(RECORDHEADER h, std::istream& in):Tag(h)
 {
 	LOG(LOG_TRACE,_("ScriptLimitsTag Tag"));
 	in >> MaxRecursionDepth >> ScriptTimeoutSeconds;
-	LOG(LOG_NO_INFO,_("MaxRecusionDepth: ") << MaxRecursionDepth << _(", ScriptTimeoutSeconds: ") << ScriptTimeoutSeconds);
+	LOG(LOG_NO_INFO,_("MaxRecursionDepth: ") << MaxRecursionDepth << _(", ScriptTimeoutSeconds: ") << ScriptTimeoutSeconds);
 }
 
 DebugIDTag::DebugIDTag(RECORDHEADER h, std::istream& in):Tag(h)
@@ -1823,11 +1848,11 @@ DebugIDTag::DebugIDTag(RECORDHEADER h, std::istream& in):Tag(h)
 
 	//Note the switch to hex formatting on the ostream, and switch back to dec
 	LOG(LOG_NO_INFO,_("DebugId ") << hex <<
-		UI32(DebugId[0]) << UI32(DebugId[1]) << UI32(DebugId[2]) << UI32(DebugId[3]) << "-" <<
-		UI32(DebugId[4]) << UI32(DebugId[5]) << "-" <<
-		UI32(DebugId[6]) << UI32(DebugId[7]) << "-" <<
-		UI32(DebugId[8]) << UI32(DebugId[9]) << "-" <<
-		UI32(DebugId[10]) << UI32(DebugId[11]) << UI32(DebugId[12]) << UI32(DebugId[13]) << UI32(DebugId[14]) << UI32(DebugId[15]) <<
+		int(DebugId[0]) << int(DebugId[1]) << int(DebugId[2]) << int(DebugId[3]) << "-" <<
+		int(DebugId[4]) << int(DebugId[5]) << "-" <<
+		int(DebugId[6]) << int(DebugId[7]) << "-" <<
+		int(DebugId[8]) << int(DebugId[9]) << "-" <<
+		int(DebugId[10]) << int(DebugId[11]) << int(DebugId[12]) << int(DebugId[13]) << int(DebugId[14]) << int(DebugId[15]) <<
 		dec);
 }
 
@@ -1855,5 +1880,68 @@ MetadataTag::MetadataTag(RECORDHEADER h, std::istream& in):Tag(h)
 {
 	LOG(LOG_TRACE,_("MetadataTag Tag"));
 	in >> XmlString;
-	LOG(LOG_NO_INFO,_("MetaData: ") << XmlString);
+
+	string XmlStringStd = XmlString;
+	xmlpp::TextReader xml((const unsigned char*)XmlStringStd.c_str(), XmlStringStd.length());
+
+	ostringstream output;
+	while(xml.read())
+	{
+		if(xml.get_depth() == 2 && xml.read_string() != "")
+			output << endl << "\t" << xml.get_local_name() << ":\t\t" << xml.read_string();
+	}
+	LOG(LOG_NO_INFO, "SWF Metadata:" << output.str());
+}
+
+DefineBitsTag::DefineBitsTag(RECORDHEADER h, std::istream& in):DictionaryTag(h)
+{
+	LOG(LOG_TRACE,_("DefineBitsTag Tag"));
+	in >> CharacterId;
+	//Read image data
+	int dataSize=Header.getLength()-2;
+	data=new(nothrow) uint8_t[dataSize];
+	in.read((char*)data,dataSize);
+}
+
+DefineBitsTag::~DefineBitsTag()
+{
+	delete[] data;
+}
+
+DefineBitsJPEG2Tag::DefineBitsJPEG2Tag(RECORDHEADER h, std::istream& in):DictionaryTag(h)
+{
+	LOG(LOG_TRACE,_("DefineBitsJPEG2Tag Tag"));
+	in >> CharacterId;
+	//Read image data
+	int dataSize=Header.getLength()-2;
+	data=new(nothrow) uint8_t[dataSize];
+	in.read((char*)data,dataSize);
+}
+
+DefineBitsJPEG2Tag::~DefineBitsJPEG2Tag()
+{
+	delete[] data;
+}
+
+DefineBitsJPEG3Tag::DefineBitsJPEG3Tag(RECORDHEADER h, std::istream& in):DictionaryTag(h),alphaData(NULL)
+{
+	LOG(LOG_TRACE,_("DefineBitsJPEG3Tag Tag"));
+	UI32_SWF dataSize;
+	in >> CharacterId >> dataSize;
+	//Read image data
+	data=new(nothrow) uint8_t[dataSize];
+	in.read((char*)data,dataSize);
+	//Read alpha data (if any)
+	int alphaSize=Header.getLength()-dataSize-6;
+	if(alphaSize>0) //If less that 0 the consistency check on tag size will stop later
+	{
+		alphaData=new(nothrow) uint8_t[alphaSize];
+		in.read((char*)alphaData,alphaSize);
+	}
+}
+
+DefineBitsJPEG3Tag::~DefineBitsJPEG3Tag()
+{
+	delete[] data;
+	delete[] alphaData;
 }

@@ -33,11 +33,12 @@
 #include "scripting/flashnet.h"
 #include "scripting/flashsystem.h"
 #include "timer.h"
-#include "backends/graphics.h"
 #include "backends/audio.h"
+#include "backends/config.h"
+#include "backends/graphics.h"
 #include "backends/pluginmanager.h"
-#include "backends/urlutils.h"
 #include "backends/security.h"
+#include "backends/urlutils.h"
 
 #include "platforms/pluginutils.h"
 
@@ -60,27 +61,12 @@ class RenderThread;
 class ParseThread;
 class Tag;
 
-class SWF_HEADER
-{
-public:
-	UI8 Signature[3];
-	UI8 Version;
-	UI32 FileLength;
-	RECT FrameSize;
-	UI16 FrameRate;
-	UI16 FrameCount;
-	bool valid;
-	SWF_HEADER(std::istream& in);
-	const RECT& getFrameSize(){ return FrameSize; }
-};
-
-
 //RootMovieClip is used as a ThreadJob for timed rendering purpose
 class RootMovieClip: public MovieClip, public ITickJob
 {
 friend class ParseThread;
 protected:
-	sem_t mutex;
+	Mutex mutex;
 	bool initialized;
 	URLInfo origin;
 	void tick();
@@ -89,6 +75,7 @@ private:
 	sem_t new_frame;
 	bool parsingIsFailed;
 	RGB Background;
+	Spinlock dictSpinlock;
 	std::list < DictionaryTag* > dictionary;
 	//frameSize and frameRate are valid only after the header has been parsed
 	RECT frameSize;
@@ -102,8 +89,8 @@ private:
 public:
 	RootMovieClip(LoaderInfo* li, bool isSys=false);
 	~RootMovieClip();
-	unsigned int version;
-	unsigned int fileLenght;
+	uint32_t version;
+	uint32_t fileLength;
 	RGB getBackground();
 	void setBackground(const RGB& bg);
 	void setFrameSize(const RECT& f);
@@ -111,6 +98,7 @@ public:
 	float getFrameRate() const;
 	void setFrameRate(float f);
 	void setFrameCount(int f);
+	void setOnStage(bool staged);
 	void addToDictionary(DictionaryTag* r);
 	DictionaryTag* dictionaryLookup(int id);
 	void addToFrame(DisplayListTag* t);
@@ -118,7 +106,7 @@ public:
 	void labelCurrentFrame(const STRING& name);
 	void commitFrame(bool another);
 	void revertFrame();
-	void Render();
+	void Render(bool maskEnabled);
 	void parsingFailed();
 	bool getBounds(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const;
 	void bindToName(const tiny_string& n);
@@ -131,6 +119,7 @@ public:
 	void setVariableByString(const std::string& s, ASObject* o);*/
 	void registerChildClip(MovieClip* clip);
 	void unregisterChildClip(MovieClip* clip);
+	static RootMovieClip* getInstance(LoaderInfo* li);
 };
 
 class ThreadProfile
@@ -195,6 +184,7 @@ private:
 	*/
 #ifdef COMPILE_PLUGIN
 	static void delayedCreation(SystemState* th);
+	static void delayedStopping(SystemState* th);
 #endif
 	void stopEngines();
 	//Useful to wait for complete download of the SWF
@@ -215,16 +205,14 @@ private:
 	char cookiesFileName[32]; // "/tmp/lightsparkcookiesXXXXXX"
 
 	URLInfo url;
+	Spinlock profileDataSpinlock;
 public:
 	void setURL(const tiny_string& url) DLL_PUBLIC;
 	ENGINE getEngine() DLL_PUBLIC { return engine; };
 
 	//Interative analysis flags
 	bool showProfilingData;
-	bool showInteractiveMap;
 	bool showDebug;
-	int xOffset;
-	int yOffset;
 	
 	std::string errorCause;
 	void setError(const std::string& c);
@@ -243,7 +231,7 @@ public:
 
 	//Be careful, SystemState constructor does some global initialization that must be done
 	//before any other thread gets started
-	SystemState(ParseThread* p) DLL_PUBLIC;
+	SystemState(ParseThread* p, uint32_t fileSize) DLL_PUBLIC;
 	~SystemState();
 	
 	//Performance profiling
@@ -253,8 +241,9 @@ public:
 	Stage* stage;
 	ABCVm* currentVm;
 
-	PluginManager *pluginManager;
-	AudioManager *audioManager;
+	Config* config;
+	PluginManager* pluginManager;
+	AudioManager* audioManager;
 
 	//Application starting time in milliseconds
 	uint64_t startTime;
@@ -299,19 +288,22 @@ class ParseThread: public IThreadJob
 {
 private:
 	std::istream& f;
+	std::streambuf* zlibFilter;
+	std::streambuf* backend;
 	sem_t ended;
 	bool isEnded;
 	void execute();
 	void threadAbort();
 	void jobFence() {};
+	bool parseHeader();
 public:
 	RootMovieClip* root;
 	int version;
 	bool useAVM2;
 	ParseThread(RootMovieClip* r,std::istream& in) DLL_PUBLIC;
 	~ParseThread();
-	void wait() DLL_PUBLIC;
 };
 
 };
+extern TLSDATA lightspark::SystemState* sys DLL_PUBLIC;
 #endif

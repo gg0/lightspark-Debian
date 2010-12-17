@@ -33,12 +33,29 @@
 #include <assert.h>
 #include "exceptions.h"
 #ifndef WIN32
-// TODO: Proper CMake check
-#include <arpa/inet.h>
+ // TODO: Proper CMake check
+ #include <arpa/inet.h>
+#endif
+#include <stdatomic.h>
+#include <endian.h>
+
+#ifdef BIG_ENDIAN
+#include <algorithm>
 #endif
 
 namespace lightspark
 {
+
+#define ASFUNCTION(name) \
+	static ASObject* name(ASObject* , ASObject* const* args, const unsigned int argslen)
+#define ASFUNCTIONBODY(c,name) \
+	ASObject* c::name(ASObject* obj, ASObject* const* args, const unsigned int argslen)
+
+#define CLASSBUILDABLE(className) \
+	friend class Class<className>; 
+
+enum SWFOBJECT_TYPE { T_OBJECT=0, T_INTEGER=1, T_NUMBER=2, T_FUNCTION=3, T_UNDEFINED=4, T_NULL=5, T_STRING=6, 
+	T_DEFINABLE=7, T_BOOLEAN=8, T_ARRAY=9, T_CLASS=10, T_QNAME=11, T_NAMESPACE=12, T_UINTEGER=13, T_PROXY=14};
 
 enum STACK_TYPE{STACK_NONE=0,STACK_OBJECT,STACK_INT,STACK_UINT,STACK_NUMBER,STACK_BOOLEAN};
 
@@ -47,7 +64,7 @@ enum TRISTATE { TFALSE=0, TTRUE, TUNDEFINED };
 typedef double number_t;
 
 class ASObject;
-struct arrayElem;
+class Bitmap;
 
 class tiny_string
 {
@@ -253,62 +270,6 @@ public:
 	}
 };
 
-class UI32
-{
-friend std::istream& operator>>(std::istream& s, UI32& v);
-private:
-	uint32_t val;
-public:
-	UI32():val(0){}
-	UI32(uint32_t v):val(v){}
-	operator uint32_t() const{ return val; }
-	void bswap() { val=ntohl(val); }
-};
-
-class UI24
-{
-friend std::istream& operator>>(std::istream& s, UI24& v);
-private:
-	uint32_t val;
-public:
-	UI24():val(0){}
-	operator uint32_t() const { return val; }
-	void bswap()
-	{
-		val=ntohl(val)>>8; //The most significant byte is discarted
-	}
-};
-
-class SI24
-{
-friend std::istream& operator>>(std::istream& s, SI24& v);
-private:
-	int32_t val;
-public:
-	SI24():val(0){}
-	operator int32_t() const { return val; }
-	void bswap() 
-	{
-		val=ntohl(val)>>8; //The most significant byte is discarted
-		//Check for sign extension
-		if(val&0x800000)
-			val|=(0xff000000);
-	}
-};
-
-class UI16
-{
-friend std::istream& operator>>(std::istream& s, UI16& v);
-private:
-	uint16_t val;
-public:
-	UI16():val(0){}
-	UI16(uint16_t v):val(v){}
-	operator uint16_t() const { return val; }
-	operator UI32() const { return val; }
-	void bswap() { val=ntohs(val); }
-};
-
 class UI8 
 {
 friend std::istream& operator>>(std::istream& s, UI8& v);
@@ -318,7 +279,112 @@ public:
 	UI8():val(0){}
 	UI8(uint8_t v):val(v){}
 	operator uint8_t() const { return val; }
-	operator UI16(){ return val; }
+};
+
+class UI16_SWF
+{
+friend std::istream& operator>>(std::istream& s, UI16_SWF& v);
+protected:
+	uint16_t val;
+public:
+	UI16_SWF():val(0){}
+	UI16_SWF(uint16_t v):val(v){}
+	operator uint16_t() const { return val; }
+};
+
+class UI16_FLV
+{
+friend std::istream& operator>>(std::istream& s, UI16_FLV& v);
+protected:
+	uint16_t val;
+public:
+	UI16_FLV():val(0){}
+	UI16_FLV(uint16_t v):val(v){}
+	operator uint16_t() const { return val; }
+};
+
+class SI16_SWF
+{
+friend std::istream& operator>>(std::istream& s, SI16_SWF& v);
+protected:
+	int16_t val;
+public:
+	SI16_SWF():val(0){}
+	SI16_SWF(int16_t v):val(v){}
+	operator int16_t(){ return val; }
+};
+
+class SI16_FLV
+{
+friend std::istream& operator>>(std::istream& s, SI16_FLV& v);
+protected:
+	int16_t val;
+public:
+	SI16_FLV():val(0){}
+	SI16_FLV(int16_t v):val(v){}
+	operator int16_t(){ return val; }
+};
+
+class UI24_SWF
+{
+friend std::istream& operator>>(std::istream& s, UI24_SWF& v);
+protected:
+	uint32_t val;
+public:
+	UI24_SWF():val(0){}
+	operator uint32_t() const { return val; }
+};
+
+class UI24_FLV
+{
+friend std::istream& operator>>(std::istream& s, UI24_FLV& v);
+protected:
+	uint32_t val;
+public:
+	UI24_FLV():val(0){}
+	operator uint32_t() const { return val; }
+};
+
+class SI24_SWF
+{
+friend std::istream& operator>>(std::istream& s, SI24_SWF& v);
+protected:
+	int32_t val;
+public:
+	SI24_SWF():val(0){}
+	operator int32_t() const { return val; }
+};
+
+class SI24_FLV
+{
+friend std::istream& operator>>(std::istream& s, SI24_FLV& v);
+protected:
+	int32_t val;
+public:
+	SI24_FLV():val(0){}
+	operator int32_t() const { return val; }
+};
+
+class UI32_SWF
+{
+friend std::istream& operator>>(std::istream& s, UI32_SWF& v);
+protected:
+	uint32_t val;
+public:
+	UI32_SWF():val(0){}
+	UI32_SWF(uint32_t v):val(v){}
+	operator uint32_t() const{ return val; }
+};
+
+class UI32_FLV
+{
+friend std::istream& operator>>(std::istream& s, UI32_FLV& v);
+protected:
+	uint32_t val;
+public:
+	UI32_FLV():val(0){}
+	UI32_FLV(uint32_t v):val(v){}
+	operator uint32_t() const{ return val; }
 };
 
 class STRING
@@ -426,32 +492,18 @@ public:
 	operator double(){ return val; }
 };
 
-class SI16
-{
-friend std::istream& operator>>(std::istream& s, SI16& v);
-private:
-	int16_t val;
-public:
-	SI16():val(0){}
-	SI16(int16_t v):val(v){}
-	operator int16_t(){ return val; }
-};
+//TODO: Really implement or suppress
+typedef UI32_SWF FIXED;
 
 //TODO: Really implement or suppress
-typedef UI32 SI32;
-
-//TODO: Really implement or suppress
-typedef UI32 FIXED;
-
-//TODO: Really implement or suppress
-typedef UI16 FIXED8;
+typedef UI16_SWF FIXED8;
 
 class RECORDHEADER
 {
 friend std::istream& operator>>(std::istream& s, RECORDHEADER& v);
 private:
-	UI16 CodeAndLen;
-	SI32 Length;
+	UI16_SWF CodeAndLen;
+	UI32_SWF Length;
 public:
 	unsigned int getLength() const
 	{
@@ -493,6 +545,30 @@ public:
 		Alpha=255;
 		return *this;
 	}
+	float rf() const
+	{
+		float ret=Red;
+		ret/=255;
+		return ret;
+	}
+	float gf() const
+	{
+		float ret=Green;
+		ret/=255;
+		return ret;
+	}
+	float bf() const
+	{
+		float ret=Blue;
+		ret/=255;
+		return ret;
+	}
+	float af() const
+	{
+		float ret=Alpha;
+		ret/=255;
+		return ret;
+	}
 };
 
 typedef UI8 LANGCODE;
@@ -505,52 +581,107 @@ inline std::istream& operator>>(std::istream& s, UI8& v)
 	return s;
 }
 
-inline std::istream& operator>>(std::istream& s, SI16& v)
+inline std::istream& operator>>(std::istream& s, SI16_SWF& v)
 {
 	s.read((char*)&v.val,2);
+	v.val=LittleEndianToHost16(v.val);
 	return s;
 }
 
-inline std::istream& operator>>(std::istream& s, UI16& v)
+inline std::istream & operator>>(std::istream &s, SI16_FLV& v)
 {
 	s.read((char*)&v.val,2);
+	v.val=BigEndianToHost16(v.val);
 	return s;
 }
 
-inline std::istream& operator>>(std::istream& s, UI24& v)
+inline std::istream& operator>>(std::istream& s, UI16_SWF& v)
 {
-	assert_and_throw(v.val==0);
-	s.read((char*)&v.val,3);
+	s.read((char*)&v.val,2);
+	v.val=LittleEndianToHost16(v.val);
 	return s;
 }
 
-inline std::istream& operator>>(std::istream& s, SI24& v)
+inline std::istream& operator>>(std::istream& s, UI16_FLV& v)
 {
-	assert_and_throw(v.val==0);
-	s.read((char*)&v.val,3);
-	//Check for sign extesion
-	if(v.val&0x800000)
-		v.val|=0xff000000;
+	s.read((char*)&v.val,2);
+	v.val=BigEndianToHost16(v.val);
 	return s;
 }
 
-inline std::istream& operator>>(std::istream& s, UI32& v)
+inline std::istream& operator>>(std::istream& s, UI24_SWF& v)
+{
+	assert(v.val==0);
+	s.read((char*)&v.val,3);
+	v.val=LittleEndianToUnsignedHost24(v.val);
+	return s;
+}
+
+inline std::istream& operator>>(std::istream& s, UI24_FLV& v)
+{
+	assert(v.val==0);
+	s.read((char*)&v.val,3);
+	v.val=BigEndianToUnsignedHost24(v.val);
+	return s;
+}
+
+inline std::istream& operator>>(std::istream& s, SI24_SWF& v)
+{
+	assert(v.val==0);
+	s.read((char*)&v.val,3);
+	v.val=LittleEndianToSignedHost24(v.val);
+	return s;
+}
+
+inline std::istream& operator>>(std::istream& s, SI24_FLV& v)
+{
+	assert(v.val==0);
+	s.read((char*)&v.val,3);
+	v.val=BigEndianToSignedHost24(v.val);
+	return s;
+}
+
+inline std::istream& operator>>(std::istream& s, UI32_SWF& v)
 {
 	s.read((char*)&v.val,4);
+	v.val=LittleEndianToHost32(v.val);
+	return s;
+}
+
+inline std::istream& operator>>(std::istream& s, UI32_FLV& v)
+{
+	s.read((char*)&v.val,4);
+	v.val=BigEndianToHost32(v.val);
 	return s;
 }
 
 inline std::istream& operator>>(std::istream& s, FLOAT& v)
 {
-	s.read((char*)&v.val,4);
+	union float_reader
+	{
+		uint32_t dump;
+		float value;
+	};
+	float_reader dummy;
+	s.read((char*)&dummy.dump,4);
+	dummy.dump=LittleEndianToHost32(dummy.dump);
+	v.val=dummy.value;
 	return s;
 }
 
 inline std::istream& operator>>(std::istream& s, DOUBLE& v)
 {
+	union double_reader
+	{
+		uint64_t dump;
+		double value;
+	};
+	double_reader dummy;
 	// "Wacky format" is 45670123. Thanks to Gnash for reversing :-)
-	s.read(((char*)&v.val)+4,4);
-	s.read(((char*)&v.val),4);
+	s.read(((char*)&dummy.dump)+4,4);
+	s.read(((char*)&dummy.dump),4);
+	dummy.dump=LittleEndianToHost64(dummy.dump);
+	v.val=dummy.value;
 	return s;
 }
 
@@ -693,23 +824,26 @@ class MATRIX
 	friend std::istream& operator>>(std::istream& stream, MATRIX& v);
 	friend std::ostream& operator<<(std::ostream& s, const MATRIX& r);
 public:
-	float ScaleX;
-	float ScaleY;
-	float RotateSkew0;
-	float RotateSkew1;
+	number_t ScaleX;
+	number_t ScaleY;
+	number_t RotateSkew0;
+	number_t RotateSkew1;
 	int TranslateX;
 	int TranslateY;
 public:
 	MATRIX():ScaleX(1),ScaleY(1),RotateSkew0(0),RotateSkew1(0),TranslateX(0),TranslateY(0){}
 	void get4DMatrix(float matrix[16]) const;
-	void getTranslation(int& x, int& y) const;
 	void multiply2D(number_t xin, number_t yin, number_t& xout, number_t& yout) const;
+	MATRIX multiplyMatrix(const MATRIX& r) const;
+	const bool operator!=(const MATRIX& r) const;
+	MATRIX getInverted() const;
 };
 
 class GRADRECORD
 {
 	friend std::istream& operator>>(std::istream& s, GRADRECORD& v);
 public:
+	GRADRECORD(int v):version(v){}
 	int version;
 	UI8 Ratio;
 	RGBA Color;
@@ -723,6 +857,7 @@ class GRADIENT
 {
 	friend std::istream& operator>>(std::istream& s, GRADIENT& v);
 public:
+	GRADIENT(int v):version(v){}
 	int version;
 	int SpreadMode;
 	int InterpolationMode;
@@ -745,36 +880,27 @@ public:
 class FILLSTYLEARRAY;
 class MORPHFILLSTYLE;
 
+enum FILL_STYLE_TYPE { SOLID_FILL=0x00, LINEAR_GRADIENT=0x10, RADIAL_GRADIENT=0x12, FOCAL_RADIAL_GRADIENT=0x13, REPEATING_BITMAP=0x40,
+			CLIPPED_BITMAP=0x41, NON_SMOOTHED_REPEATING_BITMAP=0x42, NON_SMOOTHED_CLIPPED_BITMAP=0x43};
+
 class FILLSTYLE
 {
-	friend std::istream& operator>>(std::istream& s, FILLSTYLEARRAY& v);
-	friend std::istream& operator>>(std::istream& s, FILLSTYLE& v);
-	friend std::istream& operator>>(std::istream& s, MORPHFILLSTYLE& v);
-	friend class DefineTextTag;
-	friend class DefineShape2Tag;
-	friend class DefineShape3Tag;
-	friend class GeomShape;
-	friend class Graphics;
-private:
+public:
+	FILLSTYLE(int v):version(v),Gradient(v){}
 	int version;
-	UI8 FillStyleType;
+	FILL_STYLE_TYPE FillStyleType;
 	RGBA Color;
-	MATRIX GradientMatrix;
+	MATRIX Matrix;
 	GRADIENT Gradient;
 	FOCALGRADIENT FocalGradient;
-	UI16 BitmapId;
-	MATRIX BitmapMatrix;
-
-public:
-	virtual void setFragmentProgram() const;
-	static void fixedColor(float r, float g, float b);
-	virtual void setVertexData(arrayElem* elem);
+	Bitmap* bitmap;
 	virtual ~FILLSTYLE(){}
 };
 
 class MORPHFILLSTYLE:public FILLSTYLE
 {
 public:
+	MORPHFILLSTYLE():FILLSTYLE(1){}
 	RGBA StartColor;
 	RGBA EndColor;
 	MATRIX StartGradientMatrix;
@@ -784,21 +910,24 @@ public:
 	std::vector<UI8> EndRatios;
 	std::vector<RGBA> StartColors;
 	std::vector<RGBA> EndColors;
-	virtual ~MORPHFILLSTYLE(){}
+	~MORPHFILLSTYLE(){}
 };
 
 class LINESTYLE
 {
 public:
+	LINESTYLE(int v):version(v){}
 	int version;
-	UI16 Width;
+	UI16_SWF Width;
 	RGBA Color;
 };
 
 class LINESTYLE2
 {
 public:
-	UI16 Width;
+	LINESTYLE2(int v):version(v),FillType(v){}
+	int version;
+	UI16_SWF Width;
 	UB StartCapStyle;
 	UB JointStyle;
 	UB HasFillFlag;
@@ -807,7 +936,7 @@ public:
 	UB PixelHintingFlag;
 	UB NoClose;
 	UB EndCapStyle;
-	UI16 MiterLimitFactor;
+	UI16_SWF MiterLimitFactor;
 	RGBA Color;
 	FILLSTYLE FillType;
 };
@@ -815,8 +944,8 @@ public:
 class MORPHLINESTYLE
 {
 public:
-	UI16 StartWidth;
-	UI16 EndWidth;
+	UI16_SWF StartWidth;
+	UI16_SWF EndWidth;
 	RGBA StartColor;
 	RGBA EndColor;
 };
@@ -824,9 +953,9 @@ public:
 class LINESTYLEARRAY
 {
 public:
-	LINESTYLEARRAY():version(-1){}
-	void appendStyles(const LINESTYLEARRAY& r);
+	LINESTYLEARRAY(int v):version(v){}
 	int version;
+	void appendStyles(const LINESTYLEARRAY& r);
 	UI8 LineStyleCount;
 	std::list<LINESTYLE> LineStyles;
 	std::list<LINESTYLE2> LineStyles2;
@@ -842,9 +971,9 @@ public:
 class FILLSTYLEARRAY
 {
 public:
-	FILLSTYLEARRAY():version(-1){}
-	void appendStyles(const FILLSTYLEARRAY& r);
+	FILLSTYLEARRAY(int v):version(v){}
 	int version;
+	void appendStyles(const FILLSTYLEARRAY& r);
 	UI8 FillStyleCount;
 	std::list<FILLSTYLE> FillStyles;
 };
@@ -891,8 +1020,6 @@ public:
 	int32_t AnchorDeltaX;
 	int32_t AnchorDeltaY;
 
-//	SHAPERECORD():TypeFlag(false),StateNewStyles(false),StateLineStyle(false),StateFillStyle1(false),StateFillStyle0(false),
-//		StateMoveTo(false),MoveDeltaX(0),MoveDeltaY(0),DeltaX(0),DeltaY(0){};
 	SHAPERECORD(SHAPE* p,BitStream& bs);
 };
 
@@ -918,18 +1045,16 @@ public:
 	UB StyleFlagsHasColor;
 	UB StyleFlagsHasYOffset;
 	UB StyleFlagsHasXOffset;
-	UI16 FontID;
+	UI16_SWF FontID;
 	RGBA TextColor;
-	SI16 XOffset;
-	SI16 YOffset;
-	UI16 TextHeight;
+	SI16_SWF XOffset;
+	SI16_SWF YOffset;
+	UI16_SWF TextHeight;
 	UI8 GlyphCount;
 	std::vector <GLYPHENTRY> GlyphEntries;
 	DefineTextTag* parent;
 	TEXTRECORD(DefineTextTag* p):parent(p){}
 };
-
-class GeomShape;
 
 class SHAPE
 {
@@ -949,7 +1074,8 @@ class SHAPEWITHSTYLE : public SHAPE
 {
 	friend std::istream& operator>>(std::istream& stream, SHAPEWITHSTYLE& v);
 public:
-	int version;
+	SHAPEWITHSTYLE(int v):version(v),FillStyles(v),LineStyles(v){}
+	const int version;
 	FILLSTYLEARRAY FillStyles;
 	LINESTYLEARRAY LineStyles;
 };
@@ -1115,8 +1241,8 @@ public:
 	UB ButtonStateDown;
 	UB ButtonStateOver;
 	UB ButtonStateUp;
-	UI16 CharacterID;
-	UI16 PlaceDepth;
+	UI16_SWF CharacterID;
+	UI16_SWF PlaceDepth;
 	MATRIX PlaceMatrix;
 	CXFORMWITHALPHA	ColorTransform;
 	FILTERLIST FilterList;
@@ -1131,7 +1257,7 @@ public:
 class CLIPEVENTFLAGS
 {
 public:
-	UI32 toParse;
+	uint32_t toParse;
 	bool isNull();
 };
 
@@ -1139,14 +1265,14 @@ class CLIPACTIONRECORD
 {
 public:
 	CLIPEVENTFLAGS EventFlags;
-	UI32 ActionRecordSize;
+	UI32_SWF ActionRecordSize;
 	bool isLast();
 };
 
 class CLIPACTIONS
 {
 public:
-	UI16 Reserved;
+	UI16_SWF Reserved;
 	CLIPEVENTFLAGS AllEventFlags;
 	std::vector<CLIPACTIONRECORD> ClipActionRecords;
 };

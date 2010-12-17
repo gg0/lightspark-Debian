@@ -28,6 +28,22 @@ using namespace std;
 
 REGISTER_CLASS_NAME2(ASObject,"Object","");
 
+tiny_string ASObject::toStringImpl() const
+{
+	tiny_string ret;
+	if(getPrototype())
+	{
+		ret+="[object ";
+		ret+=getPrototype()->class_name.name;
+		ret+="]";
+		return ret;
+	}
+	else
+		ret="[object Object]";
+
+	return ret;
+}
+
 tiny_string ASObject::toString(bool debugMsg)
 {
 	check();
@@ -43,20 +59,13 @@ tiny_string ASObject::toString(bool debugMsg)
 			IFunction* f_toString=static_cast<IFunction*>(obj_toString);
 			ASObject* ret=f_toString->call(this,NULL,0);
 			assert_and_throw(ret->getObjectType()==T_STRING);
-			return ret->toString();
+			tiny_string retS=ret->toString();
+			ret->decRef();
+			return retS;
 		}
 	}
 
-	if(getPrototype())
-	{
-		tiny_string ret;
-		ret+="[object ";
-		ret+=getPrototype()->class_name.name;
-		ret+="]";
-		return ret;
-	}
-	else
-		return "[object Object]";
+	return toStringImpl();
 }
 
 TRISTATE ASObject::isLess(ASObject* r)
@@ -565,7 +574,7 @@ ASFUNCTIONBODY(ASObject,generator)
 
 ASFUNCTIONBODY(ASObject,_toString)
 {
-	return Class<ASString>::getInstanceS(obj->toString());
+	return Class<ASString>::getInstanceS(obj->toStringImpl());
 }
 
 ASFUNCTIONBODY(ASObject,hasOwnProperty)
@@ -767,7 +776,10 @@ ASObject::ASObject(Manager* m):type(T_OBJECT),ref_count(1),manager(m),cur_level(
 ASObject::ASObject(const ASObject& o):type(o.type),ref_count(1),manager(NULL),cur_level(0),prototype(o.prototype),implEnable(true)
 {
 	if(prototype)
+	{
 		prototype->incRef();
+		cur_level=prototype->max_level;
+	}
 
 #ifndef NDEBUG
 	//Stuff only used in debugging
@@ -816,15 +828,15 @@ Class_base* ASObject::getActualPrototype() const
 	Class_base* ret=prototype;
 	if(ret==NULL)
 	{
-		assert_and_throw(type==T_CLASS);
+		assert(type==T_CLASS);
 		return NULL;
 	}
 
 	for(int i=prototype->max_level;i>cur_level;i--)
 		ret=ret->super;
 
-	assert_and_throw(ret);
-	assert_and_throw(ret->max_level==cur_level);
+	assert(ret);
+	assert(ret->max_level==cur_level);
 	return ret;
 }
 

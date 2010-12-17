@@ -26,6 +26,7 @@
 // gettext support
 #include <locale.h>
 #include <libintl.h>
+#include <assert.h>
 #define _(STRING) gettext(STRING)
 
 #ifdef WIN32
@@ -96,8 +97,12 @@ long lrint(double f);
 #include <stdatomic.h>
 #define ATOMIC_INT32(x) std::atomic<int32_t> x
 #define ATOMIC_INCREMENT(x) x.fetch_add(1)
-#define ATOMIC_DECREMENT(x) x.fetch_sub(1)
+#define ATOMIC_DECREMENT(x) (x.fetch_sub(1)-1)
 
+//Boolean type con acquire release barrier semantics
+#define ACQUIRE_RELEASE_FLAG(x) std::atomic_bool x
+#define ACQUIRE_READ(x) x.load(memory_order_acquire)
+#define RELEASE_WRITE(x, v) x.store(v, memory_order_release)
 int aligned_malloc(void **memptr, size_t alignment, size_t size);
 void aligned_free(void *mem);
 #endif
@@ -170,5 +175,137 @@ std::uint64_t compat_get_current_time_us();
 std::uint64_t compat_get_thread_cputime_us();
 
 int kill_child(pid_t p);
+
+#if __BYTE_ORDER == __BIG_ENDIAN
+
+inline uint16_t LittleEndianToHost16(uint16_t x)
+{
+	return le16toh(x);
+}
+
+inline uint32_t LittleEndianToSignedHost24(uint32_t x)
+{
+	uint32_t ret=le32toh(x);
+	assert(ret<0x1000000);
+	//Sign extend
+	if(ret&0x800000)
+		ret|=0xff000000;
+	return ret;
+}
+
+inline uint32_t LittleEndianToUnsignedHost24(uint32_t x)
+{
+	assert(x<0x1000000);
+	uint32_t ret=le32toh(x);
+	return ret;
+}
+
+inline uint32_t LittleEndianToHost32(uint32_t x)
+{
+	return le32toh(x);
+}
+
+inline uint64_t LittleEndianToHost64(uint64_t x)
+{
+	return le64toh(x);
+}
+
+inline uint16_t BigEndianToHost16(uint16_t x)
+{
+	return x;
+}
+
+inline uint32_t BigEndianToSignedHost24(uint32_t x)
+{
+	//Sign extend
+	x>>=8;
+	assert(x<0x1000000);
+	if(x&0x800000)
+		x|=0xff000000;
+	return x;
+}
+
+inline uint32_t BigEndianToUnsignedHost24(uint32_t x)
+{
+	x>>=8;
+	assert(x<0x1000000);
+	return x;
+}
+
+inline uint32_t BigEndianToHost32(uint32_t x)
+{
+	return x;
+}
+
+inline uint64_t BigEndianToHost64(uint64_t x)
+{
+	return x;
+}
+
+#else
+inline uint16_t LittleEndianToHost16(uint16_t x)
+{
+	return x;
+}
+
+inline uint32_t LittleEndianToSignedHost24(uint32_t x)
+{
+	assert(x<0x1000000);
+	if(x&0x800000)
+		x|=0xff000000;
+	return x;
+}
+
+inline uint32_t LittleEndianToUnsignedHost24(uint32_t x)
+{
+	assert(x<0x1000000);
+	return x;
+}
+
+inline uint32_t LittleEndianToHost32(uint32_t x)
+{
+	return x;
+}
+
+inline uint64_t LittleEndianToHost64(uint64_t x)
+{
+	return x;
+}
+
+inline uint16_t BigEndianToHost16(uint16_t x)
+{
+	return be16toh(x);
+}
+
+inline uint32_t BigEndianToSignedHost24(uint32_t x)
+{
+	assert(x<0x1000000);
+	//Discard the lowest byte, as it was the highest
+	uint32_t ret=be32toh(x)>>8;
+	//Sign extend
+	if(ret&0x800000)
+		ret|=0xff000000;
+	return ret;
+}
+
+inline uint32_t BigEndianToUnsignedHost24(uint32_t x)
+{
+	assert(x<0x1000000);
+	//Discard the lowest byte, as it was the highest
+	uint32_t ret=be32toh(x)>>8;
+	return ret;
+}
+
+inline uint32_t BigEndianToHost32(uint32_t x)
+{
+	return be32toh(x);
+}
+
+inline uint64_t BigEndianToHost64(uint64_t x)
+{
+	return be64toh(x);
+}
+
+#endif // __BYTE_ORDER == __BIG_ENDIAN
 
 #endif

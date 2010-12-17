@@ -30,19 +30,45 @@
 #endif
 
 using namespace lightspark;
-extern TLSDATA SystemState* sys;
 
 /**
- * \brief Download manager destructor.
+ * \brief Download manager constructor
  *
- * Traverses the list of active downloaders, calling stop() on all of them.
- * Destruction of the downloader is up to the code using the downloader.
- * This method just makes sure the downloader isn't stuck waiting for data.
+ * Can only be called from within a derived class
  */
-DownloadManager::~DownloadManager()
+DownloadManager::DownloadManager()
 {
+	sem_init(&mutex, 0, 1);
+	//== Lock initialized
+}
+
+/**
+ * \brief Destroyes all the pending downloads, must be called in the destructor of each derived class
+ *
+ * Traverses the list of active downloaders, calling \c stop() and \c destroy() on all of them.
+ * If the downloader is already destroyed, destroy() won't do anything (no double delete).
+ * Waits for the mutex before proceeding.
+ * \see Downloader::stop()
+ * \see Downloader::destroy()
+ */
+void DownloadManager::cleanUp()
+{
+	sem_wait(&mutex);
+	//-- Lock acquired
+
 	for(std::list<Downloader*>::iterator it=downloaders.begin(); it!=downloaders.end(); ++it)
+	{
 		(*it)->stop();
+
+		//++ Release lock
+		sem_post(&mutex);
+		destroy(*it);
+		sem_wait(&mutex);
+		//-- Lock acquired
+	}
+
+	//== Destroy lock
+	sem_destroy(&mutex);
 }
 
 /**
@@ -52,11 +78,55 @@ DownloadManager::~DownloadManager()
  * \param downloader A pointer to the \c Downloader to be destroyed.
  * \see DownloadManager::download()
  */
-void DownloadManager::destroy(Downloader* downloader)
+void StandaloneDownloadManager::destroy(Downloader* downloader)
 {
 	//If the downloader was still in the active-downloader list, delete it
 	if(removeDownloader(downloader))
-		delete downloader;
+	{
+		downloader->waitForTermination();
+		//NOTE: the following static cast should be safe. we now the type of created objects
+		ThreadedDownloader* thd=static_cast<ThreadedDownloader*>(downloader);
+		thd->waitFencing();
+		delete thd;
+	}
+}
+
+/**
+ * \brief Add a Downloader to the active downloads list
+ *
+ * Waits for the mutex at start and releases the mutex when finished.
+ */
+void DownloadManager::addDownloader(Downloader* downloader)
+{
+	sem_wait(&mutex);
+	//-- Lock acquired
+	downloaders.push_back(downloader);
+	//++ Release lock
+	sem_post(&mutex);
+}
+
+/**
+ * \brief Remove a Downloader from the active downloads list
+ *
+ * Waits for the mutex at start and releases the mutex when finished.
+ */
+bool DownloadManager::removeDownloader(Downloader* downloader)
+{
+	sem_wait(&mutex);
+	//-- Lock acquired
+	for(std::list<Downloader*>::iterator it=downloaders.begin(); it!=downloaders.end(); ++it)
+	{
+		if((*it) == downloader)
+		{
+			downloaders.erase(it);
+			//++ Release lock
+			sem_post(&mutex);
+			return true;
+		}
+	}
+	//++ Release lock
+	sem_post(&mutex);
+	return false;
 }
 
 /**
@@ -70,6 +140,11 @@ StandaloneDownloadManager::StandaloneDownloadManager()
 	type = STANDALONE;
 }
 
+StandaloneDownloadManager::~StandaloneDownloadManager()
+{
+	cleanUp();
+}
+
 /**
  * \brief Create a Downloader for an URL.
  *
@@ -79,9 +154,9 @@ StandaloneDownloadManager::StandaloneDownloadManager()
  * \return A pointer to a newly created \c Downloader for the given URL.
  * \see DownloadManager::destroy()
  */
-Downloader* StandaloneDownloadManager::download(const tiny_string& url, bool cached)
+Downloader* StandaloneDownloadManager::download(const tiny_string& url, bool cached, LoaderInfo* owner)
 {
-	return download(sys->getOrigin().goToURL(url), cached);
+	return download(sys->getOrigin().goToURL(url), cached, owner);
 }
 
 /**
@@ -93,7 +168,7 @@ Downloader* StandaloneDownloadManager::download(const tiny_string& url, bool cac
  * \return A pointer to a newly created \c Downloader for the given URL.
  * \see DownloadManager::destroy()
  */
-Downloader* StandaloneDownloadManager::download(const URLInfo& url, bool cached)
+Downloader* StandaloneDownloadManager::download(const URLInfo& url, bool cached, LoaderInfo* owner)
 {
 	LOG(LOG_NO_INFO, _("NET: STANDALONE: DownloadManager::download '") << url.getParsedURL()
 			<< "'" << (cached ? _(" - cached") : ""));
@@ -108,6 +183,8 @@ Downloader* StandaloneDownloadManager::download(const URLInfo& url, bool cached)
 		LOG(LOG_NO_INFO, _("NET: STANDALONE: DownloadManager: remote file"));
 		downloader=new CurlDownloader(url.getParsedURL(), cached);
 	}
+	downloader->setOwner(owner);
+	downloader->enableFencingWaiting();
 	addDownloader(downloader);
 	sys->addJob(downloader);
 	return downloader;
@@ -128,7 +205,8 @@ Downloader::Downloader(const tiny_string& _url, bool _cached):
 	buffer(NULL),                                                 //BUFFERING
 	cached(_cached),cachePos(0),cacheSize(0),keepCache(false),    //CACHING
 	length(0),receivedLength(0),                                  //DOWNLOADED DATA
-	redirected(false),requestStatus(0)                            //HTTP REDIR, STATUS & HEADERS
+	redirected(false),requestStatus(0),                           //HTTP REDIR, STATUS & HEADERS
+	owner(NULL)                                                   //PROGRESS
 {
 	sem_init(&mutex,0,1);
 	//== Lock initialized 
@@ -521,7 +599,10 @@ void Downloader::openCache()
 	if(cached && !cache.is_open())
 	{
 		//Create a temporary file(name)
-		char cacheFilenameC[] = "/tmp/lightsparkdownloadXXXXXX";
+		std::string cacheFilenameS = sys->config->getCacheDirectory() + "/" + sys->config->getCachePrefix() + "XXXXXX";
+		char cacheFilenameC[cacheFilenameS.length()+1];
+		strncpy(cacheFilenameC, cacheFilenameS.c_str(), cacheFilenameS.length());
+		cacheFilenameC[cacheFilenameS.length()] = '\0';
 		//char cacheFilenameC[30] = "/tmp/lightsparkdownloadXXXXXX";
 		//strcpy(cacheFilenameC, "/tmp/lightsparkdownloadXXXXXX");
 		int fd = mkstemp(cacheFilenameC);
@@ -625,6 +706,7 @@ void Downloader::setLength(uint32_t _length)
 
 		allocateBuffer(length);
 	}
+	notifyOwnerAboutBytesTotal();
 }
 
 /**
@@ -650,10 +732,13 @@ void Downloader::append(uint8_t* buf, uint32_t added)
 	if((receivedLength+added)>length)
 	{
 		uint32_t newLength;
+		assert(length>=receivedLength);
+		//If reallocating the buffer ask for a minimum amount of space
 		if((receivedLength+added)-length > bufferMinGrowth)
 			newLength = receivedLength + added;
 		else
-			newLength = receivedLength + bufferMinGrowth;
+			newLength = length + bufferMinGrowth;
+		assert(newLength>=receivedLength+added);
 
 		//++ Release lock
 		sem_post(&mutex);
@@ -682,6 +767,7 @@ void Downloader::append(uint8_t* buf, uint32_t added)
 
 	//++ Release lock
 	sem_post(&mutex);
+	notifyOwnerAboutBytesLoaded();
 }
 
 /**
@@ -746,7 +832,7 @@ void Downloader::parseHeader(std::string header, bool _setLength)
 		if(colonPos != std::string::npos)
 		{
 			headerName = header.substr(0, colonPos);
-			if(header.substr(colonPos+1, 1) == " ")
+			if(header[colonPos+1] == ' ')
 				headerValue = header.substr(colonPos+2, header.length()-colonPos-1);
 			else
 				headerValue = header.substr(colonPos+1, header.length()-colonPos);
@@ -891,6 +977,39 @@ void Downloader::waitForTermination()
 	sem_post(&mutex);
 }
 
+void Downloader::notifyOwnerAboutBytesTotal() const
+{
+	if(owner)
+		owner->setBytesTotal(length);
+}
+
+void Downloader::notifyOwnerAboutBytesLoaded() const
+{
+	if(owner)
+		owner->setBytesLoaded(receivedLength);
+}
+
+void ThreadedDownloader::enableFencingWaiting()
+{
+	RELEASE_WRITE(fenceState,true);
+}
+
+/**
+ * \brief The jobFence for ThreadedDownloader.
+ *
+ * This is the very last thing \c ThreadPool does with the \c ThreadedDownloader.
+ * \post The \c fenceState is set to false
+ */
+void ThreadedDownloader::jobFence()
+{
+	RELEASE_WRITE(fenceState,false);
+}
+
+void ThreadedDownloader::waitFencing()
+{
+	while(fenceState);
+}
+
 /**
  * \brief Constructor for the ThreadedDownloader class.
  *
@@ -899,10 +1018,8 @@ void Downloader::waitForTermination()
  * \param[in] _cached Whether or not to cache this download.
  */
 ThreadedDownloader::ThreadedDownloader(const tiny_string& url, bool cached):
-	Downloader(url, cached)
+	Downloader(url, cached),fenceState(false)
 {
-	sem_init(&fenced, 0, 0);
-	//== Fenced signal initialized
 }
 
 /**
@@ -910,25 +1027,12 @@ ThreadedDownloader::ThreadedDownloader(const tiny_string& url, bool cached):
  *
  * Waits for the \c fenced signal.
  * \post \c fenced signalled was handled
- */
+ *
 ThreadedDownloader::~ThreadedDownloader()
 {
 	sem_wait(&fenced);
 	//-- Fenced signalled
-}
-
-/**
- * \brief The jobFence for ThreadedDownloader.
- *
- * This is the very last thing \c ThreadPool does with the \c ThreadedDownloader.
- * Signals \c fenced.
- * \post \c fenced signalled
- */
-void ThreadedDownloader::jobFence()
-{
-	//++ Signal fenced
-	sem_post(&fenced);
-}
+}*/
 
 /**
  * \brief Constructor for the CurlDownloader class.
@@ -1031,7 +1135,7 @@ size_t CurlDownloader::write_data(void *buffer, size_t size, size_t nmemb, void 
 {
 	CurlDownloader* th=static_cast<CurlDownloader*>(userp);
 	size_t added=size*nmemb;
-	if(th->getRequestStatus()/100 != 3)
+	if(th->getRequestStatus()/100 == 2)
 		th->append((uint8_t*)buffer,added);
 	return added;
 }
@@ -1113,6 +1217,8 @@ void LocalDownloader::execute()
 			//Report that we've downloaded everything already
 			length = cache.tellg();
 			receivedLength = length;
+			notifyOwnerAboutBytesLoaded();
+			notifyOwnerAboutBytesTotal();
 
 			//++ Release lock
 			sem_post(&mutex);

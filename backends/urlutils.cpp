@@ -28,7 +28,6 @@
 #include <fstream>
 
 using namespace lightspark;
-extern TLSDATA SystemState* sys;
 
 std::ostream& lightspark::operator<<(std::ostream& s, const URLInfo& u)
 {
@@ -217,7 +216,7 @@ tiny_string URLInfo::normalizePath(const tiny_string& u)
 	//Remove redundant last dot
 	if(pathStr.length() >= 2 && pathStr.substr(pathStr.length()-2, 2) == "/.")
 		pathStr.replace(pathStr.length()-1, 1, "");
-	if(pathStr.length() == 1 && pathStr.substr(pathStr.length()-1, 1) == ".")
+	if(pathStr.length() == 1 && pathStr[pathStr.length()-1] == '.')
 		pathStr.replace(pathStr.length()-1, 1, "");
 
 	return tiny_string(pathStr);
@@ -240,7 +239,7 @@ const URLInfo URLInfo::goToURL(const tiny_string& u) const
 			qualified += ":";
 			qualified += tiny_string((int) getPort());
 		}
-		if(str.substr(0,1) != "/")
+		if(str[0] != '/')
 			qualified += getPathDirectory();
 		qualified += str;
 		return URLInfo(qualified);

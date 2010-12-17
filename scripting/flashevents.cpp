@@ -26,8 +26,6 @@
 using namespace std;
 using namespace lightspark;
 
-extern TLSDATA SystemState* sys;
-
 SET_NAMESPACE("flash.events");
 
 REGISTER_CLASS_NAME(IEventDispatcher);
@@ -158,7 +156,11 @@ MouseEvent::MouseEvent(const tiny_string& t, bool b):Event(t,b)
 {
 }
 
-ProgressEvent::ProgressEvent():Event("progress"),bytesLoaded(0),bytesTotal(0)
+ProgressEvent::ProgressEvent():Event("progress",false),bytesLoaded(0),bytesTotal(0)
+{
+}
+
+ProgressEvent::ProgressEvent(uint32_t loaded, uint32_t total):Event("progress",false),bytesLoaded(loaded),bytesTotal(total)
 {
 }
 
@@ -347,6 +349,8 @@ ASFUNCTIONBODY(EventDispatcher,removeEventListener)
 			it->f->decRef();
 			h->second.erase(it);
 		}
+		if(h->second.empty()) //Remove the entry from the map
+			th->handlers.erase(h);
 	}
 	return NULL;
 }
@@ -360,10 +364,18 @@ ASFUNCTIONBODY(EventDispatcher,dispatchEvent)
 	Event* e=Class<Event>::cast(args[0]);
 	if(e==NULL || th==NULL)
 		return abstract_b(false);
-	//CHECK: maybe is to be cloned
-	e->incRef();
 	assert_and_throw(e->type!="");
-	th->handleEvent(e);
+	if(e->target)
+	{
+		//The object must be cloned
+		//TODO: support cloning of actual type
+		Event* newEvent=Class<Event>::getInstanceS(e->type,e->bubbles);
+		e=newEvent;
+	}
+	else
+		e->incRef();
+	th->incRef();
+	ABCVm::publicHandleEvent(th, e);
 	return abstract_b(true);
 }
 
@@ -407,8 +419,6 @@ void EventDispatcher::handleEvent(Event* e)
 	}
 	
 	e->check();
-	//If the number of handlers now if 0, then purge the entry from the map
-	//TODO
 }
 
 bool EventDispatcher::hasEventListener(const tiny_string& eventName)

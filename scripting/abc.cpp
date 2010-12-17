@@ -48,7 +48,6 @@
 using namespace std;
 using namespace lightspark;
 
-extern TLSDATA SystemState* sys;
 TLSDATA bool isVmThread=false;
 
 DoABCTag::DoABCTag(RECORDHEADER h, std::istream& in):ControlTag(h)
@@ -118,7 +117,7 @@ void SymbolClassTag::execute(RootMovieClip* root)
 			DictionaryTag* t=root->dictionaryLookup(Tags[i]);
 			ASObject* base=dynamic_cast<ASObject*>(t);
 			assert_and_throw(base!=NULL);
-			BindClassEvent* e=new BindClassEvent(base,(const char*)Names[i]);
+			BindClassEvent* e=new BindClassEvent(base,(const char*)Names[i],BindClassEvent::NONROOT);
 			sys->currentVm->addEvent(NULL,e);
 			e->decRef();
 		}
@@ -190,7 +189,7 @@ void ABCVm::registerClasses()
 	builtin->setVariableByQName("DisplayObject","flash.display",Class<DisplayObject>::getClass());
 	builtin->setVariableByQName("Loader","flash.display",Class<Loader>::getClass());
 	builtin->setVariableByQName("LoaderInfo","flash.display",Class<LoaderInfo>::getClass());
-	builtin->setVariableByQName("SimpleButton","flash.display",Class<ASObject>::getClass(QName("SimpleButton","flash.display")));
+	builtin->setVariableByQName("SimpleButton","flash.display",Class<SimpleButton>::getClass());
 	builtin->setVariableByQName("InteractiveObject","flash.display",Class<InteractiveObject>::getClass());
 	builtin->setVariableByQName("DisplayObjectContainer","flash.display",Class<DisplayObjectContainer>::getClass());
 	builtin->setVariableByQName("Sprite","flash.display",Class<Sprite>::getClass());
@@ -200,6 +199,7 @@ void ABCVm::registerClasses()
 	builtin->setVariableByQName("LineScaleMode","flash.display",Class<LineScaleMode>::getClass());
 	builtin->setVariableByQName("StageScaleMode","flash.display",Class<StageScaleMode>::getClass());
 	builtin->setVariableByQName("StageAlign","flash.display",Class<StageAlign>::getClass());
+	builtin->setVariableByQName("StageQuality","flash.display",Class<StageQuality>::getClass());
 	builtin->setVariableByQName("IBitmapDrawable","flash.display",Class<ASObject>::getClass(QName("IBitmapDrawable","flash.display")));
 	builtin->setVariableByQName("BitmapData","flash.display",Class<ASObject>::getClass(QName("BitmapData","flash.display")));
 	builtin->setVariableByQName("Bitmap","flash.display",Class<Bitmap>::getClass());
@@ -269,6 +269,7 @@ void ABCVm::registerClasses()
 	builtin->setVariableByQName("Capabilities","flash.system",Class<Capabilities>::getClass());
 	builtin->setVariableByQName("Security","flash.system",Class<Security>::getClass());
 	builtin->setVariableByQName("ApplicationDomain","flash.system",Class<ApplicationDomain>::getClass());
+	builtin->setVariableByQName("SecurityDomain","flash.system",Class<SecurityDomain>::getClass());
 	builtin->setVariableByQName("LoaderContext","flash.system",Class<ASObject>::getClass(QName("LoaderContext","flash.system")));
 
 	builtin->setVariableByQName("SoundTransform","flash.media",Class<SoundTransform>::getClass());
@@ -667,6 +668,7 @@ multiname* ABCContext::getMultiname(unsigned int n, call_context* th)
 		{
 			ret->name_s="any";
 			ret->name_type=multiname::NAME_STRING;
+			ret->ns.emplace_back("",NAMESPACE);
 			return ret;
 		}
 		switch(m->kind)
@@ -963,7 +965,7 @@ ABCContext::ABCContext(istream& in)
 	}
 }
 
-ABCVm::ABCVm(SystemState* s):m_sys(s),terminated(false),shuttingdown(false)
+ABCVm::ABCVm(SystemState* s):m_sys(s),status(CREATED),shuttingdown(false)
 {
 	sem_init(&event_queue_mutex,0,1);
 	sem_init(&sem_event_count,0,0);
@@ -974,15 +976,27 @@ ABCVm::ABCVm(SystemState* s):m_sys(s),terminated(false),shuttingdown(false)
 	LOG(LOG_NO_INFO,_("Global is ") << Global);
 	//Push a dummy default context
 	pushObjAndLevel(Class<ASObject>::getInstanceS(),0);
+}
+
+void ABCVm::start()
+{
+	status=STARTED;
 	pthread_create(&t,NULL,(thread_worker)Run,this);
 }
 
 void ABCVm::shutdown()
 {
-	//signal potentially blocking semaphores
-	shuttingdown=true;
-	sem_post(&sem_event_count);
-	wait();
+	if(status==STARTED)
+	{
+		//signal potentially blocking semaphores
+		shuttingdown=true;
+		sem_post(&sem_event_count);
+		if(pthread_join(t,NULL)!=0)
+		{
+			LOG(LOG_ERROR,_("pthread_join in ABCVm failed"));
+		}
+		status=TERMINATED;
+	}
 }
 
 ABCVm::~ABCVm()
@@ -991,18 +1005,7 @@ ABCVm::~ABCVm()
 	sem_destroy(&event_queue_mutex);
 	delete int_manager;
 	delete number_manager;
-}
-
-void ABCVm::wait()
-{
-	if(!terminated)
-	{
-		if(pthread_join(t,NULL)!=0)
-		{
-			LOG(LOG_ERROR,_("pthread_join in ABCVm failed"));
-		}
-		terminated=true;
-	}
+	delete Global;
 }
 
 int ABCVm::getEventQueueSize()
@@ -1010,33 +1013,41 @@ int ABCVm::getEventQueueSize()
 	return events_queue.size();
 }
 
-void ABCVm::handleEvent(pair<EventDispatcher*,Event*> e)
+void ABCVm::publicHandleEvent(EventDispatcher* dispatcher, Event* event)
+{
+	assert(dispatcher);
+
+	//TODO: implement capture phase
+	//Do target phase
+	assert_and_throw(event->target==NULL);
+	event->target=dispatcher;
+	event->currentTarget=dispatcher;
+	dispatcher->handleEvent(event);
+	//Do bubbling phase
+	if(event->bubbles && dispatcher->prototype->isSubClass(Class<DisplayObject>::getClass()))
+	{
+		DisplayObjectContainer* cur=static_cast<DisplayObject*>(dispatcher)->parent;
+		while(cur)
+		{
+			event->currentTarget=cur;
+			cur->handleEvent(event);
+			cur=cur->parent;
+		}
+	}
+	//Reset events so they might be recycled
+	event->currentTarget=NULL;
+	event->target=NULL;
+	dispatcher->decRef();
+	event->decRef();
+}
+
+void ABCVm::handleEvent(std::pair<EventDispatcher*, Event*> e)
 {
 	e.second->check();
 	if(e.first)
 	{
-		//TODO: implement capture phase
-		//Do target phase
-		Event* event=e.second;
-		assert_and_throw(event->target==NULL);
-		event->target=e.first;
-		event->currentTarget=e.first;
-		e.first->handleEvent(event);
-		//Do bubbling phase
-		if(event->bubbles && e.first->prototype->isSubClass(Class<DisplayObject>::getClass()))
-		{
-			DisplayObjectContainer* cur=static_cast<DisplayObject*>(e.first)->parent;
-			while(cur)
-			{
-				event->currentTarget=cur;
-				cur->handleEvent(event);
-				cur=cur->parent;
-			}
-		}
-		//Reset events so they might be recycled
-		event->currentTarget=NULL;
-		event->target=NULL;
-		e.first->decRef();
+		//decRef of both argments happens inside the function
+		publicHandleEvent(e.first, e.second);
 	}
 	else
 	{
@@ -1046,9 +1057,8 @@ void ABCVm::handleEvent(pair<EventDispatcher*,Event*> e)
 			case BIND_CLASS:
 			{
 				BindClassEvent* ev=static_cast<BindClassEvent*>(e.second);
-				bool isRoot= ev->base==sys;
 				LOG(LOG_CALLS,_("Binding of ") << ev->class_name);
-				buildClassAndInjectBase(ev->class_name.raw_buf(),ev->base,NULL,0,isRoot);
+				buildClassAndInjectBase(ev->class_name.raw_buf(),ev->base,NULL,0,ev->isRoot);
 				LOG(LOG_CALLS,_("End of binding of ") << ev->class_name);
 				break;
 			}
@@ -1101,8 +1111,8 @@ void ABCVm::handleEvent(pair<EventDispatcher*,Event*> e)
 			default:
 				throw UnsupportedException("Not supported event");
 		}
+		e.second->decRef();
 	}
-	e.second->decRef();
 }
 
 /*! \brief enqueue an event, a reference is acquired
@@ -1907,99 +1917,105 @@ ASObject* method_info::getOptional(unsigned int i)
 istream& lightspark::operator>>(istream& in, u32& v)
 {
 	int i=0;
-	uint8_t t,t2;
 	v.val=0;
+	uint8_t t;
 	do
 	{
 		in.read((char*)&t,1);
-		t2=t;
-		t&=0x7f;
-
-		v.val|=(t<<i);
-		i+=7;
-		if(i==35)
+		//No more than 5 bytes should be read
+		if(i==28)
 		{
-			if(t>15)
-				LOG(LOG_ERROR,_("parsing u32 ") << (int)t);
+			//Only the first 4 bits should be used to reach 32 bits
+			if((t&0xf0))
+				LOG(LOG_ERROR,"Error in u32");
+			uint8_t t2=(t&0xf);
+			v.val|=(t2<<i);
 			break;
 		}
+		else
+		{
+			uint8_t t2=(t&0x7f);
+			v.val|=(t2<<i);
+			i+=7;
+		}
 	}
-	while(t2&0x80);
+	while(t&0x80);
 	return in;
 }
 
 istream& lightspark::operator>>(istream& in, s32& v)
 {
 	int i=0;
-	uint8_t t,t2;
 	v.val=0;
+	uint8_t t;
+	bool signExtend=true;
 	do
 	{
 		in.read((char*)&t,1);
-		t2=t;
-		t&=0x7f;
-
-		v.val|=(t<<i);
-		i+=7;
-		if(i==35)
+		//No more than 5 bytes should be read
+		if(i==28)
 		{
-			if(t>15)
-			{
-				LOG(LOG_ERROR,_("parsing s32"));
-			}
+			//Only the first 4 bits should be used to reach 32 bits
+			if((t&0xf0))
+				LOG(LOG_ERROR,"Error in s32");
+			uint8_t t2=(t&0xf);
+			v.val|=(t2<<i);
+			//The number is filled, no sign extension
+			signExtend=false;
 			break;
 		}
+		else
+		{
+			uint8_t t2=(t&0x7f);
+			v.val|=(t2<<i);
+			i+=7;
+		}
 	}
-	while(t2&0x80);
+	while(t&0x80);
 /*	//Sign extension usage not clear at all
-	if(t2&0x40)
+	if(signExtend && t&0x40)
 	{
 		//Sign extend
-		for(i;i<32;i++)
-			v.val|=(1<<i);
+		v.val|=(0xffffffff<<i);
 	}*/
 	return in;
 }
 
 istream& lightspark::operator>>(istream& in, s24& v)
 {
-	int i=0;
-	v.val=0;
-	uint8_t t;
-	for(i=0;i<24;i+=8)
-	{
-		in.read((char*)&t,1);
-		v.val|=(t<<i);
-	}
-
-	if(t&0x80)
-	{
-		//Sign extend
-		for(;i<32;i++)
-			v.val|=(1<<i);
-	}
+	uint32_t ret=0;
+	in.read((char*)&ret,3);
+	v.val=LittleEndianToSignedHost24(ret);
 	return in;
 }
 
 istream& lightspark::operator>>(istream& in, u30& v)
 {
 	int i=0;
-	uint8_t t,t2;
 	v.val=0;
+	uint8_t t;
 	do
 	{
 		in.read((char*)&t,1);
-		t2=t;
-		t&=0x7f;
-
-		v.val|=(t<<i);
-		i+=7;
-		if(i>29)
-			LOG(LOG_ERROR,_("parsing u30"));
+		//No more than 5 bytes should be read
+		if(i==28)
+		{
+			//Only the first 2 bits should be used to reach 30 bits
+			if((t&0xfc))
+				LOG(LOG_ERROR,"Error in u30");
+			uint8_t t2=(t&0x3);
+			v.val|=(t2<<i);
+			break;
+		}
+		else
+		{
+			uint8_t t2=(t&0x7f);
+			v.val|=(t2<<i);
+			i+=7;
+		}
 	}
-	while(t2&0x80);
-	if(v.val&0xc0000000)
-			LOG(LOG_ERROR,_("parsing u30"));
+	while(t&0x80);
+	assert((v.val&0xc0000000)==0);
 	return in;
 }
 
@@ -2015,14 +2031,21 @@ istream& lightspark::operator>>(istream& in, u16& v)
 {
 	uint16_t t;
 	in.read((char*)&t,2);
-	v.val=t;
+	v.val=LittleEndianToHost16(t);
 	return in;
 }
 
 istream& lightspark::operator>>(istream& in, d64& v)
 {
-	//Should check if this is right
-	in.read((char*)&v.val,8);
+	union double_reader
+	{
+		uint64_t dump;
+		double value;
+	};
+	double_reader dummy;
+	in.read((char*)&dummy.dump,8);
+	dummy.dump=LittleEndianToHost64(dummy.dump);
+	v.val=dummy.value;
 	return in;
 }
 

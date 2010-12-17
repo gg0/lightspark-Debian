@@ -3,8 +3,10 @@ lightspark (0.4.5.1-1) UNRELEASED; urgency=low
   * New upstream release.
   * debian/patches/hurd.patch:
     - Refresh due to new upstream release.
+  * debian/control:
+    - Allow build on powerpc architecture.
 
- -- Luca Falavigna <dktrkranz@debian.org>  Fri, 17 Dec 2010 21:39:12 +0100
+ -- Luca Falavigna <dktrkranz@debian.org>  Fri, 17 Dec 2010 21:42:47 +0100
 
 lightspark (0.4.4.3-1) experimental; urgency=low
 

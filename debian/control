@@ -27,7 +27,7 @@ Build-Depends: debhelper (>= 7.0.50),
 	xulrunner-dev (>= 1.9.2),
 	libsdl-dev,
 	libffi-dev,
-	libxml++2.6-dev,
+	libxml++2.6-dev (>= 2.33.1),
 	gnash-common
 Standards-Version: 3.9.1
 Homepage: http://lightspark.sf.net

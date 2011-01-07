@@ -1,9 +1,9 @@
-lightspark (0.4.5.1-2) UNRELEASED; urgency=low
+lightspark (0.4.5.1-2) experimental; urgency=low
 
   * Bump B-D on libxml++2.6-dev to >= 2.33.1 (see #605773)
   * Change my e-mail address to @d.o and remove the DMUA flag.
 
- -- Didier Raboud <odyx@debian.org>  Fri, 07 Jan 2011 14:06:14 +0100
+ -- Didier Raboud <odyx@debian.org>  Fri, 07 Jan 2011 14:06:52 +0100
 
 lightspark (0.4.5.1-1) experimental; urgency=low
 

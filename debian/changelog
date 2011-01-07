@@ -1,3 +1,9 @@
+lightspark (0.4.5.1-2) UNRELEASED; urgency=low
+
+  * Change my e-mail address to @d.o and remove the DMUA flag.
+
+ -- Didier Raboud <odyx@debian.org>  Fri, 07 Jan 2011 13:37:38 +0100
+
 lightspark (0.4.5.1-1) experimental; urgency=low
 
   * New upstream release.

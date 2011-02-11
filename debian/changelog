@@ -1,3 +1,12 @@
+lightspark (0.4.5.2-1) experimental; urgency=low
+
+  * New upstream release
+    - Fix YouTube breakage
+
+  * Add new /etc/xdg/lightspark.conf file to -common.
+
+ -- Didier Raboud <odyx@debian.org>  Fri, 11 Feb 2011 13:35:35 +0100
+
 lightspark (0.4.5.1-2) experimental; urgency=low
 
   * Bump B-D on libxml++2.6-dev to >= 2.33.1 (see #605773)

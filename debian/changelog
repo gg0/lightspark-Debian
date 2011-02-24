@@ -1,3 +1,10 @@
+lightspark (0.4.5.3-1) experimental; urgency=low
+
+  * New upstream release.
+    - Fix YouTube breakage
+
+ -- Didier Raboud <odyx@debian.org>  Thu, 24 Feb 2011 12:05:07 +0100
+
 lightspark (0.4.5.2-1) experimental; urgency=low
 
   * New upstream release

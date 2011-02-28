@@ -2,7 +2,7 @@ Source: lightspark
 Section: utils
 Priority: optional
 Maintainer: Debian Flash Maintainers <pkg-flash-devel@lists.alioth.debian.org>
-Uploaders: Didier Raboud <odyx@debian.org>, Luca Falavigna <dktrkranz@debian.org>
+Uploaders: Didier Raboud <odyx@debian.org>
 Build-Depends: debhelper (>= 7.0.50),
 	cmake,
 	nasm,

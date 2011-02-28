@@ -1,3 +1,10 @@
+lightspark (0.4.5.3-2) UNRELEASED; urgency=low
+
+  * debian/control:
+    - Remove myself from Uploaders.
+
+ -- Luca Falavigna <dktrkranz@debian.org>  Mon, 28 Feb 2011 22:23:42 +0100
+
 lightspark (0.4.5.3-1) experimental; urgency=low
 
   * New upstream release.

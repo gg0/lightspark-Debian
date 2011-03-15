@@ -54,6 +54,25 @@ tiny_string multiname::qualifiedString() const
 	}
 }
 
+tiny_string multiname::normalizedName() const
+{
+	switch(name_type)
+	{
+		case multiname::NAME_INT:
+			return tiny_string(name_i);
+		case multiname::NAME_NUMBER:
+			return tiny_string(name_d);
+		case multiname::NAME_STRING:
+			return name_s;
+		case multiname::NAME_OBJECT:
+			return name_o->toString();
+		default:
+			assert("Unexpected name kind" && false);
+			//Should never reach this
+			return "";
+	}
+}
+
 std::ostream& lightspark::operator<<(std::ostream& s, const QName& r)
 {
 	s << r.ns << ':' << r.name;
@@ -549,12 +568,21 @@ std::istream& lightspark::operator>>(std::istream& s, FILLSTYLE& v)
 		//Lookup the bitmap in the dictionary
 		if(bitmapId!=65535)
 		{
-			DictionaryTag* dict=pt->root->dictionaryLookup(bitmapId);
-			v.bitmap=dynamic_cast<Bitmap*>(dict);
-			if(v.bitmap==NULL)
+			try
 			{
-				LOG(LOG_ERROR,"Invalid bitmap ID " << bitmapId);
-				throw ParseException("Invalid ID for bitmap");
+				DictionaryTag* dict=pt->root->dictionaryLookup(bitmapId);
+				v.bitmap=dynamic_cast<Bitmap*>(dict);
+				if(v.bitmap==NULL)
+				{
+					LOG(LOG_ERROR,"Invalid bitmap ID " << bitmapId);
+					throw ParseException("Invalid ID for bitmap");
+				}
+			}
+			catch(RunTimeException& e)
+			{
+				//Thrown if the bitmapId does not exists in dictionary
+				LOG(LOG_ERROR,"Exception in FillStyle parsing: " << e.what());
+				v.bitmap=NULL;
 			}
 		}
 		else

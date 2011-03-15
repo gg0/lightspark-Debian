@@ -169,7 +169,7 @@ ASFUNCTIONBODY(Video,attachNetStream)
 {
 	Video* th=Class<Video>::cast(obj);
 	assert_and_throw(argslen==1);
-	if(args[0]->getObjectType()==T_NULL) //Drop the connection
+	if(args[0]->getObjectType()==T_NULL || args[0]->getObjectType()==T_UNDEFINED) //Drop the connection
 	{
 		sem_wait(&th->mutex);
 		th->netStream=NULL;
@@ -178,14 +178,15 @@ ASFUNCTIONBODY(Video,attachNetStream)
 	}
 
 	//Validate the parameter
-	if(args[0]->getPrototype()!=Class<NetStream>::getClass())
+	if(!args[0]->getPrototype()->isSubClass(Class<NetStream>::getClass()))
 		throw RunTimeException("Type mismatch in Video::attachNetStream");
 
 	//Acquire the netStream
 	args[0]->incRef();
 
-	assert_and_throw(th->netStream==NULL);
 	sem_wait(&th->mutex);
+	if(th->netStream)
+		th->netStream->decRef();
 	th->netStream=Class<NetStream>::cast(args[0]);
 	sem_post(&th->mutex);
 	return NULL;

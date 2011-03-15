@@ -58,6 +58,10 @@ REGISTER_CLASS_NAME(LineScaleMode);
 REGISTER_CLASS_NAME(StageScaleMode);
 REGISTER_CLASS_NAME(StageAlign);
 REGISTER_CLASS_NAME(StageQuality);
+REGISTER_CLASS_NAME(StageDisplayState);
+REGISTER_CLASS_NAME(GradientType);
+REGISTER_CLASS_NAME(SpreadMethod);
+REGISTER_CLASS_NAME(InterpolationMethod);
 REGISTER_CLASS_NAME(Bitmap);
 REGISTER_CLASS_NAME(SimpleButton);
 
@@ -67,6 +71,8 @@ void LoaderInfo::sinit(Class_base* c)
 	c->super=Class<EventDispatcher>::getClass();
 	c->max_level=c->super->max_level+1;
 	c->setGetterByQName("loaderURL","",Class<IFunction>::getFunction(_getLoaderURL),true);
+	c->setGetterByQName("loader","",Class<IFunction>::getFunction(_getLoader),true);
+	c->setGetterByQName("content","",Class<IFunction>::getFunction(_getContent),true);
 	c->setGetterByQName("url","",Class<IFunction>::getFunction(_getURL),true);
 	c->setGetterByQName("bytesLoaded","",Class<IFunction>::getFunction(_getBytesLoaded),true);
 	c->setGetterByQName("bytesTotal","",Class<IFunction>::getFunction(_getBytesTotal),true);
@@ -129,6 +135,28 @@ ASFUNCTIONBODY(LoaderInfo,_getLoaderURL)
 	return Class<ASString>::getInstanceS(th->loaderURL);
 }
 
+ASFUNCTIONBODY(LoaderInfo,_getContent)
+{
+	//Use Loader::getContent
+	LoaderInfo* th=static_cast<LoaderInfo*>(obj);
+	if(th->loader)
+		return Loader::_getContent(th->loader,NULL,0);
+	else
+		return new Undefined;
+}
+
+ASFUNCTIONBODY(LoaderInfo,_getLoader)
+{
+	LoaderInfo* th=static_cast<LoaderInfo*>(obj);
+	if(th->loader)
+	{
+		th->loader->incRef();
+		return th->loader;
+	}
+	else
+		return new Undefined;
+}
+
 ASFUNCTIONBODY(LoaderInfo,_getSharedEvents)
 {
 	LoaderInfo* th=static_cast<LoaderInfo*>(obj);
@@ -163,8 +191,20 @@ ASFUNCTIONBODY(Loader,_constructor)
 {
 	Loader* th=static_cast<Loader*>(obj);
 	DisplayObjectContainer::_constructor(obj,NULL,0);
-	th->contentLoaderInfo=Class<LoaderInfo>::getInstanceS();
+	th->contentLoaderInfo=Class<LoaderInfo>::getInstanceS(th);
 	return NULL;
+}
+
+ASFUNCTIONBODY(Loader,_getContent)
+{
+	Loader* th=static_cast<Loader*>(obj);
+	if(th->local_root)
+	{
+		th->local_root->incRef();
+		return th->local_root;
+	}
+	else
+		return new Undefined;
 }
 
 ASFUNCTIONBODY(Loader,_getContentLoaderInfo)
@@ -183,6 +223,7 @@ ASFUNCTIONBODY(Loader,load)
 	assert_and_throw(argslen > 0 && args[0] && argslen <= 2);
 	assert_and_throw(args[0]->getPrototype()->isSubClass(Class<URLRequest>::getClass()));
 	URLRequest* r=static_cast<URLRequest*>(args[0]);
+	assert_and_throw(r->method==URLRequest::GET);
 	th->url=r->url;
 	th->source=URL;
 	//To be decreffed in jobFence
@@ -229,6 +270,7 @@ void Loader::sinit(Class_base* c)
 	c->super=Class<DisplayObjectContainer>::getClass();
 	c->max_level=c->super->max_level+1;
 	c->setGetterByQName("contentLoaderInfo","",Class<IFunction>::getFunction(_getContentLoaderInfo),true);
+	c->setGetterByQName("content","",Class<IFunction>::getFunction(_getContent),true);
 	c->setMethodByQName("loadBytes","",Class<IFunction>::getFunction(loadBytes),true);
 	c->setMethodByQName("load","",Class<IFunction>::getFunction(load),true);
 }
@@ -247,7 +289,7 @@ void Loader::execute()
 	{
 		//TODO: add security checks
 		LOG(LOG_CALLS,_("Loader async execution ") << url);
-		Downloader* downloader=sys->downloadManager->download(url, false, contentLoaderInfo);
+		downloader=sys->downloadManager->download(url, false, contentLoaderInfo);
 		downloader->waitForData(); //Wait for some data, making sure our check for failure is working
 		if(downloader->hasFailed()) //Check to see if the download failed for some reason
 		{
@@ -256,13 +298,21 @@ void Loader::execute()
 			sys->downloadManager->destroy(downloader);
 			return;
 		}
+		sys->currentVm->addEvent(contentLoaderInfo,Class<Event>::getInstanceS("open"));
 		istream s(downloader);
 		ParseThread* local_pt=new ParseThread(local_root,s);
 		local_pt->run();
-		sys->downloadManager->destroy(downloader);
+		{
+			//Acquire the lock to ensure consistency in threadAbort
+			SpinlockLocker l(downloaderLock);
+			sys->downloadManager->destroy(downloader);
+			downloader=NULL;
+		}
+		//complete event is dispatched when the LoaderInfo has sent init and bytesTotal==bytesLoaded
 	}
 	else if(source==BYTES)
 	{
+		//TODO: set bytesLoaded and bytesTotal
 		assert_and_throw(bytes->bytes);
 
 		//We only support swf files now
@@ -274,16 +324,21 @@ void Loader::execute()
 		ParseThread* local_pt = new ParseThread(local_root,s);
 		local_pt->run();
 		bytes->decRef();
+		//Add a complete event for this object
+		sys->currentVm->addEvent(contentLoaderInfo,Class<Event>::getInstanceS("complete"));
 	}
 	loaded=true;
-	//Add a complete event for this object
-	sys->currentVm->addEvent(contentLoaderInfo,Class<Event>::getInstanceS("complete"));
 }
 
 void Loader::threadAbort()
 {
-	//TODO: implement
-	throw UnsupportedException("Loader::threadAbort");
+	if(source==URL)
+	{
+		//We have to stop the downloader
+		SpinlockLocker l(downloaderLock);
+		if(downloader != NULL)
+			downloader->stop();
+	}
 }
 
 void Loader::Render(bool maskEnabled)
@@ -325,6 +380,8 @@ void Sprite::sinit(Class_base* c)
 void GraphicsContainer::invalidateGraphics()
 {
 	assert(graphics);
+	if(!owner->isOnStage())
+		return;
 	uint32_t x,y,width,height;
 	number_t bxmin,bxmax,bymin,bymax;
 	if(graphics->getBounds(bxmin,bxmax,bymin,bymax)==false)
@@ -416,9 +473,15 @@ bool Sprite::getBounds(number_t& xmin, number_t& xmax, number_t& ymin, number_t&
 
 void Sprite::invalidate()
 {
-	DisplayObjectContainer::invalidate();
+	assert(graphics);
+	invalidateGraphics();
+}
+
+void Sprite::requestInvalidation()
+{
+	DisplayObjectContainer::requestInvalidation();
 	if(graphics)
-		invalidateGraphics();
+		sys->addToInvalidateQueue(this);
 }
 
 void DisplayObject::renderPrologue() const
@@ -750,20 +813,41 @@ void MovieClip::advanceFrame()
 		state.explicit_FP=false;
 		assert(state.FP<frameScripts.size());
 		if(frameChanging && frameScripts[state.FP])
-			getVm()->addEvent(NULL,new FunctionEvent(frameScripts[state.FP]));
+		{
+			FunctionEvent* funcEvent = new FunctionEvent(frameScripts[state.FP]);
+			getVm()->addEvent(NULL, funcEvent);
+			funcEvent->decRef();
+		}
+
+		//Invalidate the current frame is needed
+		Frame& curFrame=frames[state.FP];
+		if(curFrame.isInvalid())
+		{
+			list<std::pair<PlaceInfo, DisplayObject*> >::const_iterator it=curFrame.displayList.begin();
+			for(;it!=curFrame.displayList.end();it++)
+				it->second->requestInvalidation();
+			curFrame.setInvalid(false);
+		}
 	}
 
 }
 
-void MovieClip::invalidate()
+void MovieClip::requestInvalidation()
 {
-	Sprite::invalidate();
-	//Now invalidate all the objects in all frames
+	Sprite::requestInvalidation();
+	//Mark all frames as not valid
 	for(uint32_t i=0;i<frames.size();i++)
+		frames[i].setInvalid(true);
+
+	if(framesLoaded)
 	{
-		list<std::pair<PlaceInfo, DisplayObject*> >::const_iterator it=frames[i].displayList.begin();
-		for(;it!=frames[i].displayList.end();it++)
-			it->second->invalidate();
+		assert(state.FP<framesLoaded);
+		//Actually invalidate the current frame
+		Frame& curFrame=frames[state.FP];
+		list<std::pair<PlaceInfo, DisplayObject*> >::const_iterator it=curFrame.displayList.begin();
+		for(;it!=curFrame.displayList.end();it++)
+			it->second->requestInvalidation();
+		curFrame.setInvalid(false);
 	}
 }
 
@@ -975,13 +1059,13 @@ bool MovieClip::getBounds(number_t& xmin, number_t& xmax, number_t& ymin, number
 	return ret;
 }
 
-DisplayObject::DisplayObject():useMatrix(true),tx(0),ty(0),rotation(0),sx(1),sy(1),maskOf(NULL),mask(NULL),onStage(false),root(NULL),
-	loaderInfo(NULL),alpha(1.0),visible(true),parent(NULL)
+DisplayObject::DisplayObject():useMatrix(true),tx(0),ty(0),rotation(0),sx(1),sy(1),maskOf(NULL),parent(NULL),mask(NULL),onStage(false),
+	root(NULL),loaderInfo(NULL),alpha(1.0),visible(true),invalidateQueueNext(NULL)
 {
 }
 
 DisplayObject::DisplayObject(const DisplayObject& d):useMatrix(true),tx(d.tx),ty(d.ty),rotation(d.rotation),sx(d.sx),sy(d.sy),maskOf(NULL),
-	mask(NULL),onStage(false),root(NULL),loaderInfo(NULL),alpha(d.alpha),visible(d.visible),parent(NULL)
+	parent(NULL),mask(NULL),onStage(false),root(NULL),loaderInfo(NULL),alpha(d.alpha),visible(d.visible),invalidateQueueNext(NULL)
 {
 }
 
@@ -1052,7 +1136,7 @@ void DisplayObject::setMatrix(const lightspark::MATRIX& m)
 			}
 		}
 		if(mustInvalidate && onStage)
-			invalidate();
+			requestInvalidation();
 	}
 }
 
@@ -1085,7 +1169,7 @@ void DisplayObject::setMask(DisplayObject* m)
 		tmp->decRef();
 	}
 	if(mustInvalidate && onStage)
-		invalidate();
+		requestInvalidation();
 }
 
 MATRIX DisplayObject::getConcatenatedMatrix() const
@@ -1196,9 +1280,15 @@ void DisplayObject::computeDeviceBoundsForRect(number_t xmin, number_t xmax, num
 
 void DisplayObject::invalidate()
 {
+	//Not supposed to be called
+	throw RunTimeException("DisplayObject::invalidate");
+}
+
+void DisplayObject::requestInvalidation()
+{
 	//Let's invalidate also the mask
 	if(mask)
-		mask->invalidate();
+		mask->requestInvalidation();
 }
 
 void DisplayObject::localToGlobal(number_t xin, number_t yin, number_t& xout, number_t& yout) const
@@ -1216,12 +1306,12 @@ void DisplayObject::setRoot(RootMovieClip* r)
 void DisplayObject::setOnStage(bool staged)
 {
 	//TODO: When removing from stage released the cachedTex
-	if(onStage==false && staged==true)
-		invalidate();
 	if(staged!=onStage)
 	{
 		//Our stage condition changed, send event
 		onStage=staged;
+		if(staged==true)
+			requestInvalidation();
 		if(getVm()==NULL)
 			return;
 		if(onStage==true && hasEventListener("addedToStage"))
@@ -1305,7 +1395,7 @@ ASFUNCTIONBODY(DisplayObject,_setScaleX)
 	}
 	th->sx=val;
 	if(th->onStage)
-		th->invalidate();
+		th->requestInvalidation();
 	return NULL;
 }
 
@@ -1330,7 +1420,7 @@ ASFUNCTIONBODY(DisplayObject,_setScaleY)
 	}
 	th->sy=val;
 	if(th->onStage)
-		th->invalidate();
+		th->requestInvalidation();
 	return NULL;
 }
 
@@ -1355,7 +1445,7 @@ ASFUNCTIONBODY(DisplayObject,_setX)
 	}
 	th->tx=val;
 	if(th->onStage)
-		th->invalidate();
+		th->requestInvalidation();
 	return NULL;
 }
 
@@ -1380,7 +1470,7 @@ ASFUNCTIONBODY(DisplayObject,_setY)
 	}
 	th->ty=val;
 	if(th->onStage)
-		th->invalidate();
+		th->requestInvalidation();
 	return NULL;
 }
 
@@ -1433,9 +1523,15 @@ ASFUNCTIONBODY(DisplayObject,_getLoaderInfo)
 
 ASFUNCTIONBODY(DisplayObject,_getStage)
 {
-	assert(sys->stage);
-	sys->stage->incRef();
-	return sys->stage;
+	DisplayObject* th=static_cast<DisplayObject*>(obj);
+	if(th->onStage)
+	{
+		assert(sys->stage);
+		sys->stage->incRef();
+		return sys->stage;
+	}
+	else
+		return new Null;
 }
 
 ASFUNCTIONBODY(DisplayObject,_getScale9Grid)
@@ -1476,7 +1572,7 @@ ASFUNCTIONBODY(DisplayObject,_setRotation)
 	}
 	th->rotation=val;
 	if(th->onStage)
-		th->invalidate();
+		th->requestInvalidation();
 	return NULL;
 }
 
@@ -1492,6 +1588,15 @@ ASFUNCTIONBODY(DisplayObject,_getName)
 {
 	DisplayObject* th=static_cast<DisplayObject*>(obj);
 	return Class<ASString>::getInstanceS(th->name);
+}
+
+void DisplayObject::setParent(DisplayObjectContainer* p)
+{
+	if(parent!=p)
+	{
+		parent=p;
+		requestInvalidation();
+	}
 }
 
 ASFUNCTIONBODY(DisplayObject,_getParent)
@@ -1586,7 +1691,7 @@ ASFUNCTIONBODY(DisplayObject,_setWidth)
 		th->sx=newscale;
 	}
 	if(th->onStage)
-		th->invalidate();
+		th->requestInvalidation();
 	return NULL;
 }
 
@@ -1618,7 +1723,7 @@ ASFUNCTIONBODY(DisplayObject,_setHeight)
 		th->sy=newscale;
 	}
 	if(th->onStage)
-		th->invalidate();
+		th->requestInvalidation();
 	return NULL;
 }
 
@@ -1757,28 +1862,29 @@ ASFUNCTIONBODY(DisplayObjectContainer,_getNumChildren)
 	return abstract_i(th->dynamicDisplayList.size());
 }
 
-void DisplayObjectContainer::invalidate()
+void DisplayObjectContainer::requestInvalidation()
 {
-	DisplayObject::invalidate();
+	DisplayObject::requestInvalidation();
 	Locker l(mutexDisplayList);
 	list<DisplayObject*>::const_iterator it=dynamicDisplayList.begin();
 	for(;it!=dynamicDisplayList.end();it++)
-		(*it)->invalidate();
+		(*it)->requestInvalidation();
 }
 
 void DisplayObjectContainer::_addChildAt(DisplayObject* child, unsigned int index)
 {
 	//If the child has no parent, set this container to parent
 	//If there is a previous parent, purge the child from his list
-	if(child->parent)
+	if(child->getParent())
 	{
 		//Child already in this container
-		if(child->parent==this)
+		if(child->getParent()==this)
 			return;
 		else
-			child->parent->_removeChild(child);
+			child->getParent()->_removeChild(child);
 	}
-	child->parent=this;
+	child->setParent(this);
+	incRef();
 
 	//Set the root of the movie to this container
 	child->setRoot(root);
@@ -1795,32 +1901,35 @@ void DisplayObjectContainer::_addChildAt(DisplayObject* child, unsigned int inde
 			for(unsigned int i=0;i<index;i++)
 				++it;
 			dynamicDisplayList.insert(it,child);
-			//We acquire a reference to the child
-			child->incRef();
 		}
+		//We acquire a reference to the child
+		child->incRef();
 	}
 	child->setOnStage(onStage);
 }
 
-void DisplayObjectContainer::_removeChild(DisplayObject* child)
+bool DisplayObjectContainer::_removeChild(DisplayObject* child)
 {
-	if(child->parent==NULL)
-		return; //Should throw an ArgumentError
-	assert_and_throw(child->parent==this);
+	if(child->getParent()==NULL)
+		return false;
+	assert_and_throw(child->getParent()==this);
 	assert_and_throw(child->getRoot()==root);
 
 	{
 		Locker l(mutexDisplayList);
 		list<DisplayObject*>::iterator it=find(dynamicDisplayList.begin(),dynamicDisplayList.end(),child);
-		assert_and_throw(it!=dynamicDisplayList.end());
+		if(it==dynamicDisplayList.end())
+			return false;
 		dynamicDisplayList.erase(it);
 	}
 	//Set the root of the movie to NULL
 	child->setRoot(NULL);
 	//We can release the reference to the child
-	child->parent=NULL;
+	child->getParent()->decRef();
+	child->setParent(NULL);
 	child->setOnStage(false);
 	child->decRef();
+	return true;
 }
 
 bool DisplayObjectContainer::_contains(DisplayObject* d)
@@ -1871,7 +1980,6 @@ ASFUNCTIONBODY(DisplayObjectContainer,addChildAt)
 	//Validate object type
 	assert_and_throw(args[0] && args[0]->getPrototype() && 
 		args[0]->getPrototype()->isSubClass(Class<DisplayObject>::getClass()));
-	args[0]->incRef();
 
 	int index=args[1]->toInt();
 
@@ -1880,9 +1988,10 @@ ASFUNCTIONBODY(DisplayObjectContainer,addChildAt)
 	th->_addChildAt(d,index);
 
 	//Notify the object
-	d->incRef();
 	sys->currentVm->addEvent(d,Class<Event>::getInstanceS("added"));
 
+	//incRef again as the value is getting returned
+	d->incRef();
 	return d;
 }
 
@@ -1897,16 +2006,15 @@ ASFUNCTIONBODY(DisplayObjectContainer,addChild)
 	//Validate object type
 	assert_and_throw(args[0] && args[0]->getPrototype() && 
 		args[0]->getPrototype()->isSubClass(Class<DisplayObject>::getClass()));
-	args[0]->incRef();
 
 	//Cast to object
 	DisplayObject* d=Class<DisplayObject>::cast(args[0]);
 	th->_addChildAt(d,numeric_limits<unsigned int>::max());
 
 	//Notify the object
-	d->incRef();
 	sys->currentVm->addEvent(d,Class<Event>::getInstanceS("added"));
 
+	d->incRef();
 	return d;
 }
 
@@ -1925,9 +2033,11 @@ ASFUNCTIONBODY(DisplayObjectContainer,removeChild)
 	//Cast to object
 	DisplayObject* d=Class<DisplayObject>::cast(args[0]);
 
-	th->_removeChild(d);
+	if(!th->_removeChild(d))
+		throw Class<ArgumentError>::getInstanceS("removeChild: child not in list");
 
-	//As we return the child we don't decRef it again
+	//As we return the child we have to incRef it
+	d->incRef();
 	return d;
 }
 
@@ -1943,7 +2053,7 @@ ASFUNCTIONBODY(DisplayObjectContainer,removeChildAt)
 	{
 		Locker l(th->mutexDisplayList);
 		if(index>=int(th->dynamicDisplayList.size()) || index<0)
-			return NULL;
+			throw Class<RangeError>::getInstanceS("removeChildAt: invalid index");
 		list<DisplayObject*>::iterator it=th->dynamicDisplayList.begin();
 		for(int32_t i=0;i<index;i++)
 			++it;
@@ -1951,7 +2061,8 @@ ASFUNCTIONBODY(DisplayObjectContainer,removeChildAt)
 		th->dynamicDisplayList.erase(it);
 	}
 	//We can release the reference to the child
-	child->parent=NULL;
+	child->getParent()->decRef();
+	child->setParent(NULL);
 	child->setOnStage(false);
 
 	//As we return the child we don't decRef it
@@ -1987,7 +2098,8 @@ ASFUNCTIONBODY(DisplayObjectContainer,getChildAt)
 	DisplayObjectContainer* th=static_cast<DisplayObjectContainer*>(obj);
 	assert_and_throw(argslen==1);
 	unsigned int index=args[0]->toInt();
-	assert_and_throw(index<th->dynamicDisplayList.size());
+	if(index>=th->dynamicDisplayList.size())
+		throw Class<RangeError>::getInstanceS("getChildAt: invalid index");
 	list<DisplayObject*>::iterator it=th->dynamicDisplayList.begin();
 	for(unsigned int i=0;i<index;i++)
 		++it;
@@ -2016,7 +2128,8 @@ ASFUNCTIONBODY(DisplayObjectContainer,getChildIndex)
 		
 		ret++;
 		++it;
-		assert_and_throw(it!=th->dynamicDisplayList.end());
+		if(it==th->dynamicDisplayList.end())   
+			throw Class<ArgumentError>::getInstanceS("getChildIndex: child not in list");
 	}
 	while(1);
 	return abstract_i(ret);
@@ -2116,11 +2229,15 @@ float Shape::getScaleFactor() const
 
 void Shape::invalidate()
 {
+	assert(graphics);
+	invalidateGraphics();
+	cachedTokens=graphics->getGraphicsTokens();
+}
+
+void Shape::requestInvalidation()
+{
 	if(graphics)
-	{
-		invalidateGraphics();
-		cachedTokens=graphics->getGraphicsTokens();
-	}
+		sys->addToInvalidateQueue(this);
 }
 
 ASFUNCTIONBODY(Shape,_constructor)
@@ -2169,6 +2286,7 @@ void Stage::sinit(Class_base* c)
 	c->setGetterByQName("height","",Class<IFunction>::getFunction(_getStageHeight),true);
 	c->setGetterByQName("scaleMode","",Class<IFunction>::getFunction(_getScaleMode),true);
 	c->setSetterByQName("scaleMode","",Class<IFunction>::getFunction(_setScaleMode),true);
+	c->setGetterByQName("loaderInfo","",Class<IFunction>::getFunction(_getLoaderInfo),true);
 }
 
 void Stage::buildTraits(ASObject* o)
@@ -2222,6 +2340,11 @@ ASFUNCTIONBODY(Stage,_getStageHeight)
 	return abstract_d(th->internalGetHeight());
 }
 
+ASFUNCTIONBODY(Stage,_getLoaderInfo)
+{
+	return SystemState::_getLoaderInfo(sys,NULL,0);
+}
+
 ASFUNCTIONBODY(Stage,_getScaleMode)
 {
 	//Stage* th=static_cast<Stage*>(obj);
@@ -2262,9 +2385,13 @@ void Graphics::sinit(Class_base* c)
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
 	c->setMethodByQName("clear","",Class<IFunction>::getFunction(clear),true);
 	c->setMethodByQName("drawRect","",Class<IFunction>::getFunction(drawRect),true);
+	c->setMethodByQName("drawRoundRect","",Class<IFunction>::getFunction(drawRoundRect),true);
 	c->setMethodByQName("drawCircle","",Class<IFunction>::getFunction(drawCircle),true);
 	c->setMethodByQName("moveTo","",Class<IFunction>::getFunction(moveTo),true);
+	c->setMethodByQName("curveTo","",Class<IFunction>::getFunction(curveTo),true);
+	c->setMethodByQName("cubicCurveTo","",Class<IFunction>::getFunction(cubicCurveTo),true);
 	c->setMethodByQName("lineTo","",Class<IFunction>::getFunction(lineTo),true);
+	c->setMethodByQName("lineStyle","",Class<IFunction>::getFunction(lineStyle),true);
 	c->setMethodByQName("beginFill","",Class<IFunction>::getFunction(beginFill),true);
 	c->setMethodByQName("beginGradientFill","",Class<IFunction>::getFunction(beginGradientFill),true);
 	c->setMethodByQName("endFill","",Class<IFunction>::getFunction(endFill),true);
@@ -2286,41 +2413,60 @@ bool Graphics::hitTest(number_t x, number_t y) const
 
 bool Graphics::getBounds(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const
 {
+
+	#define VECTOR_BOUNDS(v) \
+		xmin=dmin(v.x-strokeWidth,xmin); \
+		xmax=dmax(v.x+strokeWidth,xmax); \
+		ymin=dmin(v.y-strokeWidth,ymin); \
+		ymax=dmax(v.y+strokeWidth,ymax);
+
 	if(tokens.size()==0)
 		return false;
 
-	//Initialize values to the first available
-	bool initialized=false;
+	xmin = numeric_limits<double>::infinity();
+	ymin = numeric_limits<double>::infinity();
+	xmax = -numeric_limits<double>::infinity();
+	ymax = -numeric_limits<double>::infinity();
+
+	bool hasContent = false;
+	double strokeWidth = 0;
+
 	for(unsigned int i=0;i<tokens.size();i++)
 	{
 		switch(tokens[i].type)
 		{
-			case MOVE:
+			case CURVE_CUBIC:
+			{
+				VECTOR_BOUNDS(tokens[i].p3);
+				// fall through
+			}
+			case CURVE_QUADRATIC:
+			{
+				VECTOR_BOUNDS(tokens[i].p2);
+				// fall through
+			}
 			case STRAIGHT:
 			{
-				const Vector2& v=tokens[i].p1;
-				if(initialized)
-				{
-					xmin=imin(v.x,xmin);
-					xmax=imax(v.x,xmax);
-					ymin=imin(v.y,ymin);
-					ymax=imax(v.y,ymax);
-				}
-				else
-				{
-					xmin=v.x;
-					xmax=v.x;
-					ymin=v.y;
-					ymax=v.y;
-					initialized=true;
-				}
+				hasContent = true;
+				// fall through
+			}
+			case MOVE:
+			{
+				VECTOR_BOUNDS(tokens[i].p1);
 				break;
 			}
-			default:
+			case CLEAR_FILL:
+			case CLEAR_STROKE:
+			case SET_FILL:
+				break;
+			case SET_STROKE:
+				strokeWidth = (double)(tokens[i].lineStyle.Width / 20.0);
 				break;
 		}
 	}
-	return initialized;
+	return hasContent;
+
+#undef VECTOR_BOUNDS
 }
 
 ASFUNCTIONBODY(Graphics,_constructor)
@@ -2332,7 +2478,6 @@ ASFUNCTIONBODY(Graphics,clear)
 {
 	Graphics* th=static_cast<Graphics*>(obj);
 	th->tokens.clear();
-	th->styles.clear();
 	return NULL;
 }
 
@@ -2343,9 +2488,8 @@ ASFUNCTIONBODY(Graphics,moveTo)
 
 	th->curX=args[0]->toInt();
 	th->curY=args[1]->toInt();
-	//TODO: support line styles to avoid this
-	if(!th->styles.empty())
-		th->tokens.emplace_back(MOVE, Vector2(th->curX, th->curY));
+
+	th->tokens.emplace_back(MOVE, Vector2(th->curX, th->curY));
 	return NULL;
 }
 
@@ -2357,15 +2501,145 @@ ASFUNCTIONBODY(Graphics,lineTo)
 	int x=args[0]->toInt();
 	int y=args[1]->toInt();
 
-	//TODO: support line styles to avoid this
-	if(!th->styles.empty())
-	{
-		th->tokens.emplace_back(STRAIGHT, Vector2(x, y));
-		th->owner->invalidateGraphics();
-	}
+	th->tokens.emplace_back(STRAIGHT, Vector2(x, y));
+	th->owner->owner->requestInvalidation();
 
 	th->curX=x;
 	th->curY=y;
+	return NULL;
+}
+
+ASFUNCTIONBODY(Graphics,curveTo)
+{
+	Graphics* th=static_cast<Graphics*>(obj);
+	assert_and_throw(argslen==4);
+
+	int controlX=args[0]->toInt();
+	int controlY=args[1]->toInt();
+
+	int anchorX=args[2]->toInt();
+	int anchorY=args[3]->toInt();
+
+	th->tokens.emplace_back(CURVE_QUADRATIC,
+	                        Vector2(controlX, controlY),
+	                        Vector2(anchorX, anchorY));
+	th->owner->owner->requestInvalidation();
+
+	th->curX=anchorX;
+	th->curY=anchorY;
+	return NULL;
+}
+
+ASFUNCTIONBODY(Graphics,cubicCurveTo)
+{
+	Graphics* th=static_cast<Graphics*>(obj);
+	assert_and_throw(argslen==6);
+
+	int control1X=args[0]->toInt();
+	int control1Y=args[1]->toInt();
+
+	int control2X=args[2]->toInt();
+	int control2Y=args[3]->toInt();
+
+	int anchorX=args[4]->toInt();
+	int anchorY=args[5]->toInt();
+
+	th->tokens.emplace_back(CURVE_CUBIC,
+	                        Vector2(control1X, control1Y),
+	                        Vector2(control2X, control2Y),
+	                        Vector2(anchorX, anchorY));
+	th->owner->owner->requestInvalidation();
+
+	th->curX=anchorX;
+	th->curY=anchorY;
+	return NULL;
+}
+
+/* KAPPA = 4 * (sqrt2 - 1) / 3
+ * This value was found in a Python prompt:
+ *
+ * >>> 4.0 * (2**0.5 - 1) / 3.0
+ *
+ * Source: http://whizkidtech.redprince.net/bezier/circle/
+ */
+const double KAPPA = 0.55228474983079356;
+
+ASFUNCTIONBODY(Graphics,drawRoundRect)
+{
+	Graphics* th=static_cast<Graphics*>(obj);
+	assert_and_throw(argslen==5 || argslen==6);
+
+	double x=args[0]->toNumber();
+	double y=args[1]->toNumber();
+	double width=args[2]->toNumber();
+	double height=args[3]->toNumber();
+	double ellipseWidth=args[4]->toNumber();
+	double ellipseHeight;
+	if (argslen == 6)
+		ellipseHeight=args[5]->toNumber();
+
+	if (argslen == 5 || std::isnan(ellipseHeight))
+		ellipseHeight=ellipseWidth;
+
+	ellipseHeight /= 2;
+	ellipseWidth  /= 2;
+
+	double kappaW = KAPPA * ellipseWidth;
+	double kappaH = KAPPA * ellipseHeight;
+
+	/*
+	 *    A-----B
+	 *   /       \
+	 *  H         C
+	 *  |         |
+	 *  G         D
+	 *   \       /
+	 *    F-----E
+	 * 
+	 * Flash starts and stops the pen at 'D', so we will too.
+	 */
+
+	// D
+	th->tokens.emplace_back(MOVE, Vector2(x+width, y+height-ellipseHeight));
+
+	// D -> E
+	th->tokens.emplace_back(CURVE_CUBIC,
+	                        Vector2(x+width, y+height-ellipseHeight+kappaH),
+	                        Vector2(x+width-ellipseWidth+kappaW, y+height),
+	                        Vector2(x+width-ellipseWidth, y+height));
+
+	// E -> F
+	th->tokens.emplace_back(STRAIGHT, Vector2(x+ellipseWidth, y+height));
+
+	// F -> G
+	th->tokens.emplace_back(CURVE_CUBIC,
+	                        Vector2(x+ellipseWidth-kappaW, y+height),
+	                        Vector2(x, y+height-kappaH),
+	                        Vector2(x, y+height-ellipseHeight));
+
+	// G -> H
+	th->tokens.emplace_back(STRAIGHT, Vector2(x, y+ellipseHeight));
+
+	// H -> A
+	th->tokens.emplace_back(CURVE_CUBIC,
+	                        Vector2(x, y+ellipseHeight-kappaH),
+	                        Vector2(x+ellipseWidth-kappaW, y),
+	                        Vector2(x+ellipseWidth, y));
+
+	// A -> B
+	th->tokens.emplace_back(STRAIGHT, Vector2(x+width-ellipseWidth, y));
+
+	// B -> C
+	th->tokens.emplace_back(CURVE_CUBIC,
+	                        Vector2(x+width-ellipseWidth+kappaW, y),
+	                        Vector2(x+width, y+kappaH),
+	                        Vector2(x+width, y+ellipseHeight));
+
+	// C -> D
+	th->tokens.emplace_back(STRAIGHT, Vector2(x+width, y+height-ellipseHeight));
+
+	th->owner->owner->requestInvalidation();
+	
 	return NULL;
 }
 
@@ -2378,21 +2652,37 @@ ASFUNCTIONBODY(Graphics,drawCircle)
 	double y=args[1]->toNumber();
 	double radius=args[2]->toNumber();
 
-	//Well, right now let's build a square anyway
-	const Vector2 a(x-radius,y-radius);
-	const Vector2 b(x+radius,y-radius);
-	const Vector2 c(x+radius,y+radius);
-	const Vector2 d(x-radius,y+radius);
+	double kappa = KAPPA*radius;
 
-	//TODO: support line styles to avoid this
-	if(!th->styles.empty())
-	{
-		th->tokens.emplace_back(MOVE, a);
-		th->tokens.emplace_back(STRAIGHT, b);
-		th->tokens.emplace_back(STRAIGHT, c);
-		th->tokens.emplace_back(STRAIGHT, d);
-		th->tokens.emplace_back(STRAIGHT, a);
-	}
+	// right
+	th->tokens.emplace_back(MOVE, Vector2(x+radius, y));
+
+	// bottom
+	th->tokens.emplace_back(CURVE_CUBIC,
+	                        Vector2(x+radius, y+kappa ),
+	                        Vector2(x+kappa , y+radius),
+	                        Vector2(x       , y+radius));
+
+	// left
+	th->tokens.emplace_back(CURVE_CUBIC,
+	                        Vector2(x-kappa , y+radius),
+	                        Vector2(x-radius, y+kappa ),
+	                        Vector2(x-radius, y       ));
+
+	// top
+	th->tokens.emplace_back(CURVE_CUBIC,
+	                        Vector2(x-radius, y-kappa ),
+	                        Vector2(x-kappa , y-radius),
+	                        Vector2(x       , y-radius));
+
+	// back to right
+	th->tokens.emplace_back(CURVE_CUBIC,
+	                        Vector2(x+kappa , y-radius),
+	                        Vector2(x+radius, y-kappa ),
+	                        Vector2(x+radius, y       ));
+
+	th->owner->owner->requestInvalidation();
+	
 	return NULL;
 }
 
@@ -2411,35 +2701,122 @@ ASFUNCTIONBODY(Graphics,drawRect)
 	const Vector2 c(x+width,y+height);
 	const Vector2 d(x,y+height);
 
-	//TODO: support line styles to avoid this
-	if(!th->styles.empty())
+	th->tokens.emplace_back(MOVE, a);
+	th->tokens.emplace_back(STRAIGHT, b);
+	th->tokens.emplace_back(STRAIGHT, c);
+	th->tokens.emplace_back(STRAIGHT, d);
+	th->tokens.emplace_back(STRAIGHT, a);
+	th->owner->owner->requestInvalidation();
+	
+	return NULL;
+}
+
+ASFUNCTIONBODY(Graphics,lineStyle)
+{
+	Graphics* th=static_cast<Graphics*>(obj);
+	if (argslen == 0)
 	{
-		th->tokens.emplace_back(MOVE, a);
-		th->tokens.emplace_back(STRAIGHT, b);
-		th->tokens.emplace_back(STRAIGHT, c);
-		th->tokens.emplace_back(STRAIGHT, d);
-		th->tokens.emplace_back(STRAIGHT, a);
-		th->owner->invalidateGraphics();
+		th->tokens.emplace_back(CLEAR_STROKE);
+		return NULL;
 	}
+	uint32_t color = 0;
+	uint8_t alpha = 255;
+	UI16_SWF thickness = UI16_SWF(args[0]->toNumber() * 20);
+	if (argslen >= 2)
+		color = args[1]->toUInt();
+	if (argslen >= 3)
+		alpha = uint8_t(args[1]->toNumber() * 255);
+
+	// TODO: pixel hinting, scaling, caps, miter, joints
+	
+	LINESTYLE2 style(-1);
+	style.Color = RGBA(color, alpha);
+	style.Width = thickness;
+	th->tokens.emplace_back(SET_STROKE, style);
 	return NULL;
 }
 
 ASFUNCTIONBODY(Graphics,beginGradientFill)
 {
 	Graphics* th=static_cast<Graphics*>(obj);
-	uint32_t color=0;
-	uint8_t alpha=255;
-	if(argslen>=2) //Colors
+	assert_and_throw(argslen>=4);
+
+	FILLSTYLE style(-1);
+
+	assert_and_throw(args[1]->getObjectType()==T_ARRAY);
+	Array* colors=Class<Array>::cast(args[1]);
+
+	assert_and_throw(args[2]->getObjectType()==T_ARRAY);
+	Array* alphas=Class<Array>::cast(args[2]);
+
+	assert_and_throw(args[3]->getObjectType()==T_ARRAY);
+	Array* ratios=Class<Array>::cast(args[3]);
+
+	int NumGradient = colors->size();
+	if (NumGradient != alphas->size() || NumGradient != ratios->size())
+		return NULL;
+
+	if (NumGradient < 1 || NumGradient > 15)
+		return NULL;
+
+	const tiny_string& type=args[0]->toString();
+
+	if(type == "linear")
+		style.FillStyleType=LINEAR_GRADIENT;
+	else if(type == "radial")
+		style.FillStyleType=RADIAL_GRADIENT;
+	else
+		return NULL;
+
+	// Don't support FOCALGRADIENT for now.
+	GRADIENT grad(-1);
+	grad.NumGradient = NumGradient;
+	for(int i = 0; i < NumGradient; i ++)
 	{
-		assert_and_throw(args[1]->getObjectType()==T_ARRAY);
-		Array* ar=Class<Array>::cast(args[1]);
-		assert_and_throw(ar->size()>=1);
-		color=ar->at(0)->toUInt();
+		GRADRECORD record(-1);
+		record.Color = RGBA(colors->at(i)->toUInt(), (int)alphas->at(i)->toNumber()*255);
+		record.Ratio = UI8(ratios->at(i)->toUInt());
+		grad.GradientRecords.push_back(record);
 	}
-	th->styles.emplace_back(FILLSTYLE(-1));
-	th->styles.back().FillStyleType=SOLID_FILL;
-	th->styles.back().Color=RGBA((color>>16)&0xff,(color>>8)&0xff,color&0xff,alpha);
-	th->tokens.emplace_back(SET_FILL, th->styles.back());
+
+	if(argslen > 4 && args[4]->getPrototype()==Class<Matrix>::getClass())
+	{
+		style.Matrix = static_cast<Matrix*>(args[4])->getMATRIX();
+		//Conversion from twips to pixels
+		style.Matrix.ScaleX /= 20.0;
+		style.Matrix.RotateSkew0 /= 20.0;
+		style.Matrix.RotateSkew1 /= 20.0;
+		style.Matrix.ScaleY /= 20.0;
+		//Traslations are ok, that is applied already in the pixel space
+	}
+	else
+	{
+		style.Matrix.ScaleX = 100.0/16384.0;
+		style.Matrix.ScaleY = 100.0/16384.0;
+	}
+
+	if(argslen > 5)
+	{
+		const tiny_string& spread=args[5]->toString();
+		if (spread == "pad")
+			grad.SpreadMode = 0;
+		else if (spread == "reflect")
+			grad.SpreadMode = 1;
+		else if (spread == "repeat")
+			grad.SpreadMode = 2;
+	}
+
+	if(argslen > 6)
+	{
+		const tiny_string& interp=args[6]->toString();
+		if (interp == "rgb")
+			grad.InterpolationMode = 0;
+		else if (interp == "linearRGB")
+			grad.InterpolationMode = 1;
+	}
+
+	style.Gradient = grad;
+	th->tokens.emplace_back(SET_FILL, style);
 	return NULL;
 }
 
@@ -2452,17 +2829,17 @@ ASFUNCTIONBODY(Graphics,beginFill)
 		color=args[0]->toUInt();
 	if(argslen>=2)
 		alpha=(uint8_t(args[1]->toNumber()*0xff));
-	th->styles.emplace_back(FILLSTYLE(-1));
-	th->styles.back().FillStyleType=SOLID_FILL;
-	th->styles.back().Color=RGBA((color>>16)&0xff,(color>>8)&0xff,color&0xff,alpha);
-	th->tokens.emplace_back(SET_FILL, th->styles.back());
+	FILLSTYLE style(-1);
+	style.FillStyleType = SOLID_FILL;
+	style.Color         = RGBA(color, alpha);
+	th->tokens.emplace_back(SET_FILL, style);
 	return NULL;
 }
 
 ASFUNCTIONBODY(Graphics,endFill)
 {
-//	Graphics* th=static_cast<Graphics*>(obj);
-	//TODO: close the path if open
+	Graphics* th=static_cast<Graphics*>(obj);
+	th->tokens.emplace_back(CLEAR_FILL);
 	return NULL;
 }
 
@@ -2499,6 +2876,13 @@ void StageQuality::sinit(Class_base* c)
 	c->setVariableByQName("MEDIUM","",Class<ASString>::getInstanceS("medium"));
 }
 
+void StageDisplayState::sinit(Class_base* c)
+{
+	c->setConstructor(NULL);
+	c->setVariableByQName("FULL_SCREEN","",Class<ASString>::getInstanceS("fullScreen"));
+	c->setVariableByQName("NORMAL","",Class<ASString>::getInstanceS("normal"));
+}
+
 void Bitmap::sinit(Class_base* c)
 {
 //	c->constructor=Class<IFunction>::getFunction(_constructor);
@@ -2523,6 +2907,28 @@ void SimpleButton::sinit(Class_base* c)
 	c->setConstructor(NULL);
 	c->super=Class<InteractiveObject>::getClass();
 	c->max_level=c->super->max_level+1;
+}
+
+void GradientType::sinit(Class_base* c)
+{
+	c->setConstructor(NULL);
+	c->setVariableByQName("LINEAR","",Class<ASString>::getInstanceS("linear"));
+	c->setVariableByQName("RADIAL","",Class<ASString>::getInstanceS("radial"));
+}
+
+void SpreadMethod::sinit(Class_base* c)
+{
+	c->setConstructor(NULL);
+	c->setVariableByQName("PAD","",Class<ASString>::getInstanceS("pad"));
+	c->setVariableByQName("REFLECT","",Class<ASString>::getInstanceS("reflect"));
+	c->setVariableByQName("REPEAT","",Class<ASString>::getInstanceS("repeat"));
+}
+
+void InterpolationMethod::sinit(Class_base* c)
+{
+	c->setConstructor(NULL);
+	c->setVariableByQName("RGB","",Class<ASString>::getInstanceS("rgb"));
+	c->setVariableByQName("LINEAR_RGB","",Class<ASString>::getInstanceS("linearRGB"));
 }
 
 void SimpleButton::buildTraits(ASObject* o)

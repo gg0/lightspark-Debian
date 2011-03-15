@@ -59,17 +59,20 @@ Event::Event(const tiny_string& t, bool b):type(t),target(NULL),currentTarget(NU
 
 Event::~Event()
 {
-//	cout << "Destroying event type " << type << " this " << this << endl;
 }
 
 void Event::sinit(Class_base* c)
 {
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
+	c->super=Class<ASObject>::getClass();
+	c->max_level=c->super->max_level+1;
+
 	c->setVariableByQName("ENTER_FRAME","",Class<ASString>::getInstanceS("enterFrame"));
 	c->setVariableByQName("RENDER","",Class<ASString>::getInstanceS("render"));
 	c->setVariableByQName("ADDED_TO_STAGE","",Class<ASString>::getInstanceS("addedToStage"));
 	c->setVariableByQName("REMOVED_FROM_STAGE","",Class<ASString>::getInstanceS("removedFromStage"));
 	c->setVariableByQName("INIT","",Class<ASString>::getInstanceS("init"));
+	c->setVariableByQName("OPEN","",Class<ASString>::getInstanceS("open"));
 	c->setVariableByQName("CLOSE","",Class<ASString>::getInstanceS("close"));
 	c->setVariableByQName("ADDED","",Class<ASString>::getInstanceS("added"));
 	c->setVariableByQName("COMPLETE","",Class<ASString>::getInstanceS("complete"));
@@ -87,6 +90,7 @@ void Event::sinit(Class_base* c)
 
 	c->setGetterByQName("target","",Class<IFunction>::getFunction(_getTarget),true);
 	c->setGetterByQName("type","",Class<IFunction>::getFunction(_getType),true);
+	c->setMethodByQName("formatToString","",Class<IFunction>::getFunction(formatToString),true);
 }
 
 void Event::buildTraits(ASObject* o)
@@ -130,6 +134,33 @@ ASFUNCTIONBODY(Event,_getType)
 	return Class<ASString>::getInstanceS(th->type);
 }
 
+ASFUNCTIONBODY(Event,formatToString)
+{
+	assert_and_throw(argslen>=1);
+	Event* th=static_cast<Event*>(obj);
+	tiny_string msg = "[";
+	msg += args[0]->toString();
+
+	for(unsigned int i=1; i<argslen; i++)
+	{
+		tiny_string prop(args[i]->toString());
+		msg += " ";
+		msg += prop;
+		msg += "=";
+
+		multiname propName;
+		propName.name_type=multiname::NAME_STRING;
+		propName.name_s=prop;
+		propName.ns.push_back(nsNameAndKind("",PACKAGE_NAMESPACE));
+		ASObject *obj=th->getVariableByMultiname(propName);
+		if (obj)
+			msg += obj->toString();
+	}
+	msg += "]";
+
+	return Class<ASString>::getInstanceS(msg);
+}
+
 FocusEvent::FocusEvent():Event("focusEvent")
 {
 }
@@ -137,6 +168,9 @@ FocusEvent::FocusEvent():Event("focusEvent")
 void FocusEvent::sinit(Class_base* c)
 {
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
+	c->super=Class<Event>::getClass();
+	c->max_level=c->super->max_level+1;
+
 	c->setVariableByQName("FOCUS_IN","",Class<ASString>::getInstanceS("focusIn"));
 	c->setVariableByQName("FOCUS_OUT","",Class<ASString>::getInstanceS("focusOut"));
 	c->setVariableByQName("MOUSE_FOCUS_CHANGE","",Class<ASString>::getInstanceS("mouseFocusChange"));
@@ -167,8 +201,10 @@ ProgressEvent::ProgressEvent(uint32_t loaded, uint32_t total):Event("progress",f
 void ProgressEvent::sinit(Class_base* c)
 {
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
-	c->setVariableByQName("PROGRESS","",Class<ASString>::getInstanceS("progress"));
+	c->super=Class<Event>::getClass();
+	c->max_level=c->super->max_level+1;
 
+	c->setVariableByQName("PROGRESS","",Class<ASString>::getInstanceS("progress"));
 	c->setGetterByQName("bytesLoaded","",Class<IFunction>::getFunction(_getBytesLoaded),true);
 	c->setGetterByQName("bytesTotal","",Class<IFunction>::getFunction(_getBytesTotal),true);
 }
@@ -202,16 +238,20 @@ ASFUNCTIONBODY(ProgressEvent,_getBytesTotal)
 
 void TimerEvent::sinit(Class_base* c)
 {
+//	c->constructor=Class<IFunction>::getFunction(_constructor);
+	c->super=Class<Event>::getClass();
+	c->max_level=c->super->max_level+1;
+
 	c->setVariableByQName("TIMER","",Class<ASString>::getInstanceS("timer"));
 	c->setVariableByQName("TIMER_COMPLETE","",Class<ASString>::getInstanceS("timerComplete"));
 }
 
 void MouseEvent::sinit(Class_base* c)
 {
-//	assert(c->constructor==NULL);
 //	c->constructor=Class<IFunction>::getFunction(_constructor);
 	c->super=Class<Event>::getClass();
 	c->max_level=c->super->max_level+1;
+
 	c->setVariableByQName("CLICK","",Class<ASString>::getInstanceS("click"));
 	c->setVariableByQName("DOUBLE_CLICK","",Class<ASString>::getInstanceS("doubleClick"));
 	c->setVariableByQName("MOUSE_DOWN","",Class<ASString>::getInstanceS("mouseDown"));
@@ -237,6 +277,10 @@ IOErrorEvent::IOErrorEvent()
 
 void IOErrorEvent::sinit(Class_base* c)
 {
+//	c->constructor=Class<IFunction>::getFunction(_constructor);
+	c->super=Class<Event>::getClass();
+	c->max_level=c->super->max_level+1;
+
 	c->setVariableByQName("IO_ERROR","",Class<ASString>::getInstanceS("ioError"));
 }
 
@@ -272,7 +316,7 @@ void EventDispatcher::dumpHandlers()
 
 ASFUNCTIONBODY(EventDispatcher,addEventListener)
 {
-	EventDispatcher* th=static_cast<EventDispatcher*>(obj);
+	EventDispatcher* th=Class<EventDispatcher>::cast(obj);
 	if(args[0]->getObjectType()==T_UNDEFINED)
 	{
 		LOG(LOG_NOT_IMPLEMENTED,"HACK: undefined event type passed to addEventListener");
@@ -282,31 +326,40 @@ ASFUNCTIONBODY(EventDispatcher,addEventListener)
 		throw RunTimeException("Type mismatch in EventDispatcher::addEventListener");
 
 	bool useCapture=false;
-	int priority=0;
+	uint32_t priority=0;
 
 	if(argslen>=3)
 		useCapture=Boolean_concrete(args[2]);
 	if(argslen>=4)
 		priority=args[3]->toInt();
 
-	if(useCapture || priority!=0)
+	if(useCapture)
 		LOG(LOG_NOT_IMPLEMENTED,_("Not implemented mode for addEventListener"));
 
 	const tiny_string& eventName=args[0]->toString();
 	IFunction* f=static_cast<IFunction*>(args[1]);
 
+	DisplayObject* dispobj=dynamic_cast<DisplayObject*>(th);
+	if(eventName=="enterFrame" && dispobj)
+	{
+		sys->registerEnterFrameListener(dispobj);
+	}
+
 	{
 		Locker l(th->handlersMutex);
-		std::map<tiny_string,std::list<listener> >::iterator it=th->handlers.insert(make_pair(eventName,list<listener>())).first;
-
-		if(find(it->second.begin(),it->second.end(),f)!=it->second.end())
+		//Search if any listener is already registered for the event
+		list<listener>& listeners=th->handlers[eventName];
+		f->incRef();
+		const listener newListener(f, priority);
+		//Ordered insertion
+		list<listener>::iterator insertionPoint=lower_bound(listeners.begin(),listeners.end(),newListener);
+		//Error check
+		if(insertionPoint!=listeners.end() && insertionPoint->f==f)
 		{
 			LOG(LOG_CALLS,_("Weird event reregistration"));
 			return NULL;
 		}
-
-		f->incRef();
-		it->second.push_back(listener(f));
+		listeners.insert(insertionPoint,newListener);
 	}
 
 	return NULL;
@@ -332,9 +385,11 @@ ASFUNCTIONBODY(EventDispatcher,removeEventListener)
 	if(args[0]->getObjectType()!=T_STRING || args[1]->getObjectType()!=T_FUNCTION)
 		throw RunTimeException("Type mismatch in EventDispatcher::removeEventListener");
 
+	const tiny_string& eventName=args[0]->toString();
+
 	{
 		Locker l(th->handlersMutex);
-		map<tiny_string, list<listener> >::iterator h=th->handlers.find(args[0]->toString());
+		map<tiny_string, list<listener> >::iterator h=th->handlers.find(eventName);
 		if(h==th->handlers.end())
 		{
 			LOG(LOG_CALLS,_("Event not found"));
@@ -352,6 +407,14 @@ ASFUNCTIONBODY(EventDispatcher,removeEventListener)
 		if(h->second.empty()) //Remove the entry from the map
 			th->handlers.erase(h);
 	}
+
+	// Only unregister the enterFrame listener _after_ the handlers have been erased.
+	DisplayObject* dispobj=dynamic_cast<DisplayObject*>(th);
+	if(eventName=="enterFrame" && dispobj)
+	{
+		sys->unregisterEnterFrameListener(dispobj);
+	}
+
 	return NULL;
 }
 
@@ -369,6 +432,7 @@ ASFUNCTIONBODY(EventDispatcher,dispatchEvent)
 	{
 		//The object must be cloned
 		//TODO: support cloning of actual type
+		LOG(LOG_NOT_IMPLEMENTED,"Event cloning not supported!");
 		Event* newEvent=Class<Event>::getInstanceS(e->type,e->bubbles);
 		e=newEvent;
 	}
@@ -432,20 +496,46 @@ bool EventDispatcher::hasEventListener(const tiny_string& eventName)
 
 NetStatusEvent::NetStatusEvent(const tiny_string& l, const tiny_string& c):Event("netStatus"),level(l),code(c)
 {
+	//The object has been initialized internally
+	ASObject* info=Class<ASObject>::getInstanceS();
+	info->setVariableByQName("level","",Class<ASString>::getInstanceS(level));
+	info->setVariableByQName("code","",Class<ASString>::getInstanceS(code));
+	setVariableByQName("info","",info);
 }
 
 void NetStatusEvent::sinit(Class_base* c)
 {
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
+	c->super=Class<Event>::getClass();
+	c->max_level=c->super->max_level+1;
+
 	c->setVariableByQName("NET_STATUS","",Class<ASString>::getInstanceS("netStatus"));
 }
 
 ASFUNCTIONBODY(NetStatusEvent,_constructor)
 {
 	NetStatusEvent* th=Class<NetStatusEvent>::cast(obj);
-	ASObject* info=Class<ASObject>::getInstanceS();
-	info->setVariableByQName("level","",Class<ASString>::getInstanceS(th->level));
-	info->setVariableByQName("code","",Class<ASString>::getInstanceS(th->code));
+	if(th->level!="" && th->code!="")
+	{
+		//TODO: purge this away
+		return NULL;
+	}
+	assert_and_throw(argslen>=1 && argslen<=4);
+	//Also call the base class constructor, using only the first arguments
+	uint32_t baseClassArgs=imin(argslen,3);
+	Event::_constructor(obj,args,baseClassArgs);
+	ASObject* info;
+	if(argslen==4)
+	{
+		//Building from AS code, use the data
+		args[3]->incRef();
+		info=args[3];
+	}
+	else
+	{
+		//Uninitialized info
+		info=new Null;
+	}
 	obj->setVariableByQName("info","",info);
 	return NULL;
 }
@@ -457,6 +547,9 @@ FullScreenEvent::FullScreenEvent():Event("fullScreenEvent")
 void FullScreenEvent::sinit(Class_base* c)
 {
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
+	c->super=Class<Event>::getClass();
+	c->max_level=c->super->max_level+1;
+
 	c->setVariableByQName("FULL_SCREEN","",Class<ASString>::getInstanceS("fullScreen"));
 }
 
@@ -472,6 +565,9 @@ KeyboardEvent::KeyboardEvent():Event("keyboardEvent")
 void KeyboardEvent::sinit(Class_base* c)
 {
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
+	c->super=Class<Event>::getClass();
+	c->max_level=c->super->max_level+1;
+
 	c->setVariableByQName("KEY_DOWN","",Class<ASString>::getInstanceS("keyDown"));
 	c->setVariableByQName("KEY_UP","",Class<ASString>::getInstanceS("keyUp"));
 }
@@ -488,9 +584,10 @@ TextEvent::TextEvent():Event("textEvent")
 void TextEvent::sinit(Class_base* c)
 {
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
-	c->setVariableByQName("TEXT_INPUT","",Class<ASString>::getInstanceS("textInput"));
 	c->super=Class<Event>::getClass();
 	c->max_level=c->super->max_level+1;
+
+	c->setVariableByQName("TEXT_INPUT","",Class<ASString>::getInstanceS("textInput"));
 }
 
 ASFUNCTIONBODY(TextEvent,_constructor)
@@ -567,11 +664,15 @@ ShutdownEvent::ShutdownEvent():Event("shutdownEvent")
 void HTTPStatusEvent::sinit(Class_base* c)
 {
 //	c->setConstructor(Class<IFunction>::getFunction(_constructor));
+	c->super=Class<Event>::getClass();
+	c->max_level=c->super->max_level+1;
+
 	c->setVariableByQName("HTTP_STATUS","",Class<ASString>::getInstanceS("httpStatus"));
 }
 
-FunctionEvent::FunctionEvent(IFunction* _f, ASObject* _obj, ASObject** _args, uint32_t _numArgs, bool _thisOverride):
-		Event("FunctionEvent"),f(_f),obj(_obj),numArgs(_numArgs),thisOverride(_thisOverride)
+FunctionEvent::FunctionEvent(IFunction* _f, ASObject* _obj, ASObject** _args, uint32_t _numArgs, ASObject** _result, ASObject** _exception, SynchronizationEvent* _sync, bool _thisOverride):
+		Event("FunctionEvent"),f(_f),obj(_obj),numArgs(_numArgs),
+		result(_result),exception(_exception),sync(_sync),thisOverride(_thisOverride)
 {
 	args = new ASObject*[numArgs];
 	uint32_t i;

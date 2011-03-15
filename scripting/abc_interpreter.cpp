@@ -26,6 +26,14 @@
 using namespace std;
 using namespace lightspark;
 
+uint64_t ABCVm::profilingCheckpoint(uint64_t& startTime)
+{
+	uint64_t cur=compat_get_thread_cputime_us();
+	uint64_t ret=cur-startTime;
+	startTime=cur;
+	return ret;
+}
+
 ASObject* ABCVm::executeFunction(SyntheticFunction* function, call_context* context)
 {
 	method_info* mi=function->mi;
@@ -34,6 +42,13 @@ ASObject* ABCVm::executeFunction(SyntheticFunction* function, call_context* cont
 	int code_len=code.str().length();
 
 	u8 opcode;
+
+#ifdef PROFILING_SUPPORT
+	uint64_t startTime=compat_get_thread_cputime_us();
+#define PROF_ACCOUNT_TIME(a, b) a+=b;
+#else
+#define PROF_ACCOUNT_TIME(a, b)
+#endif
 
 	//Each case block builds the correct parameters for the interpreter function and call it
 	while(1)
@@ -44,6 +59,11 @@ ASObject* ABCVm::executeFunction(SyntheticFunction* function, call_context* cont
 
 		switch(opcode)
 		{
+			case 0x02:
+			{
+				//nop
+				break;
+			}
 			case 0x03:
 			{
 				//throw
@@ -469,7 +489,9 @@ ASObject* ABCVm::executeFunction(SyntheticFunction* function, call_context* cont
 			case 0x25:
 			{
 				//pushshort
-				u30 t;
+				// specs say pushshort is a u30, but it's really a u32
+				// see https://bugs.adobe.com/jira/browse/ASC-4181
+				u32 t;
 				code >> t;
 				context->runtime_stack_push(abstract_i(t));
 				pushShort(t);
@@ -593,7 +615,11 @@ ASObject* ABCVm::executeFunction(SyntheticFunction* function, call_context* cont
 				//call
 				u30 t;
 				code >> t;
-				call(context,t);
+				method_info* called_mi=NULL;
+				PROF_ACCOUNT_TIME(mi->profTime,profilingCheckpoint(startTime));
+				call(context,t,called_mi);
+				if(called_mi)
+					PROF_ACCOUNT_TIME(mi->profCalls[called_mi],profilingCheckpoint(startTime));
 				break;
 			}
 			case 0x42:
@@ -610,7 +636,11 @@ ASObject* ABCVm::executeFunction(SyntheticFunction* function, call_context* cont
 				u30 t,t2;
 				code >> t;
 				code >> t2;
-				callSuper(context,t,t2);
+				method_info* called_mi=NULL;
+				PROF_ACCOUNT_TIME(mi->profTime,profilingCheckpoint(startTime));
+				callSuper(context,t,t2,called_mi);
+				if(called_mi)
+					PROF_ACCOUNT_TIME(mi->profCalls[called_mi],profilingCheckpoint(startTime));
 				break;
 			}
 			case 0x46:
@@ -620,13 +650,18 @@ ASObject* ABCVm::executeFunction(SyntheticFunction* function, call_context* cont
 				u30 t,t2;
 				code >> t;
 				code >> t2;
-				callProperty(context,t,t2);
+				method_info* called_mi=NULL;
+				PROF_ACCOUNT_TIME(mi->profTime,profilingCheckpoint(startTime));
+				callProperty(context,t,t2,called_mi);
+				if(called_mi)
+					PROF_ACCOUNT_TIME(mi->profCalls[called_mi],profilingCheckpoint(startTime));
 				break;
 			}
 			case 0x47:
 			{
 				//returnvoid
 				LOG(LOG_CALLS,_("returnVoid"));
+				PROF_ACCOUNT_TIME(mi->profTime,profilingCheckpoint(startTime));
 				return NULL;
 			}
 			case 0x48:
@@ -634,6 +669,7 @@ ASObject* ABCVm::executeFunction(SyntheticFunction* function, call_context* cont
 				//returnvalue
 				ASObject* ret=context->runtime_stack_pop();
 				LOG(LOG_CALLS,_("returnValue ") << ret);
+				PROF_ACCOUNT_TIME(mi->profTime,profilingCheckpoint(startTime));
 				return ret;
 			}
 			case 0x49:
@@ -659,7 +695,11 @@ ASObject* ABCVm::executeFunction(SyntheticFunction* function, call_context* cont
 				u30 t,t2;
 				code >> t;
 				code >> t2;
-				callSuperVoid(context,t,t2);
+				method_info* called_mi=NULL;
+				PROF_ACCOUNT_TIME(mi->profTime,profilingCheckpoint(startTime));
+				callSuperVoid(context,t,t2,called_mi);
+				if(called_mi)
+					PROF_ACCOUNT_TIME(mi->profCalls[called_mi],profilingCheckpoint(startTime));
 				break;
 			}
 			case 0x4f:
@@ -668,7 +708,11 @@ ASObject* ABCVm::executeFunction(SyntheticFunction* function, call_context* cont
 				u30 t,t2;
 				code >> t;
 				code >> t2;
-				callPropVoid(context,t,t2);
+				method_info* called_mi=NULL;
+				PROF_ACCOUNT_TIME(mi->profTime,profilingCheckpoint(startTime));
+				callPropVoid(context,t,t2,called_mi);
+				if(called_mi)
+					PROF_ACCOUNT_TIME(mi->profCalls[called_mi],profilingCheckpoint(startTime));
 				break;
 			}
 			case 0x53:
@@ -856,6 +900,8 @@ ASObject* ABCVm::executeFunction(SyntheticFunction* function, call_context* cont
 			case 0x70:
 			{
 				//convert_s
+				ASObject* val=context->runtime_stack_pop();
+				context->runtime_stack_push(convert_s(val));
 				break;
 			}
 			case 0x73:
@@ -913,6 +959,19 @@ ASObject* ABCVm::executeFunction(SyntheticFunction* function, call_context* cont
 				context->runtime_stack_push(coerce_s(context->runtime_stack_pop()));
 				break;
 			}
+			case 0x86:
+			{
+				//astype
+				u30 t;
+				code >> t;
+				multiname* name=context->context->getMultiname(t,context);
+
+				ASObject* v1=context->runtime_stack_pop();
+
+				ASObject* ret=asType(v1, name);
+				context->runtime_stack_push(ret);
+				break;
+			}
 			case 0x87:
 			{
 				//astypelate
@@ -939,12 +998,28 @@ ASObject* ABCVm::executeFunction(SyntheticFunction* function, call_context* cont
 				context->runtime_stack_push(ret);
 				break;
 			}
+			case 0x92:
+			{
+				//inclocal
+				u30 t;
+				code >> t;
+				incLocal(context, t);
+				break;
+			}
 			case 0x93:
 			{
 				//decrement
 				ASObject* val=context->runtime_stack_pop();
 				ASObject* ret=abstract_i(decrement(val));
 				context->runtime_stack_push(ret);
+				break;
+			}
+			case 0x94:
+			{
+				//declocal
+				u30 t;
+				code >> t;
+				decLocal(context, t);
 				break;
 			}
 			case 0x95:
@@ -1199,6 +1274,52 @@ ASObject* ABCVm::executeFunction(SyntheticFunction* function, call_context* cont
 				incLocal_i(context, t);
 				break;
 			}
+			case 0xc3:
+			{
+				//declocal_i
+				u30 t;
+				code >> t;
+				decLocal_i(context, t);
+				break;
+			}
+			case 0xc4:
+			{
+				//negate_i
+				ASObject *val=context->runtime_stack_pop();
+				ASObject* ret=abstract_i(negate_i(val));
+				context->runtime_stack_push(ret);
+				break;
+			}
+			case 0xc5:
+			{
+				//add_i
+				ASObject* v2=context->runtime_stack_pop();
+				ASObject* v1=context->runtime_stack_pop();
+
+				ASObject* ret=abstract_i(add_i(v2, v1));
+				context->runtime_stack_push(ret);
+				break;
+			}
+			case 0xc6:
+			{
+				//subtract_i
+				ASObject* v2=context->runtime_stack_pop();
+				ASObject* v1=context->runtime_stack_pop();
+
+				ASObject* ret=abstract_i(subtract_i(v2, v1));
+				context->runtime_stack_push(ret);
+				break;
+			}
+			case 0xc7:
+			{
+				//multiply_i
+				ASObject* v2=context->runtime_stack_pop();
+				ASObject* v1=context->runtime_stack_pop();
+
+				ASObject* ret=abstract_i(multiply_i(v2, v1));
+				context->runtime_stack_push(ret);
+				break;
+			}
 			case 0xd0:
 			case 0xd1:
 			case 0xd2:
@@ -1223,8 +1344,6 @@ ASObject* ABCVm::executeFunction(SyntheticFunction* function, call_context* cont
 				ASObject* obj=context->runtime_stack_pop();
 				if(context->locals[i])
 					context->locals[i]->decRef();
-				if(obj==NULL)
-					obj=new Undefined;
 				context->locals[i]=obj;
 				break;
 			}
@@ -1265,6 +1384,7 @@ ASObject* ABCVm::executeFunction(SyntheticFunction* function, call_context* cont
 		}
 	}
 
+#undef PROF_ACCOUNT_TIME 
 	//We managed to execute all the function
 	return context->runtime_stack_pop();
 }

@@ -1,7 +1,8 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2009,2010  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2009,2010,2011  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2010,2011  Timon Van Overveldt (timonvo@gmail.com)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -19,6 +20,7 @@
 
 #include "swf.h"
 #include "netutils.h"
+#include "rtmputils.h"
 #include "compat.h"
 #include <string>
 #include <algorithm>
@@ -178,10 +180,47 @@ Downloader* StandaloneDownloadManager::download(const URLInfo& url, bool cached,
 		LOG(LOG_NO_INFO, _("NET: STANDALONE: DownloadManager: local file"));
 		downloader=new LocalDownloader(url.getPath(), cached);
 	}
+	else if(url.getProtocol() == "rtmpe")
+	{
+		LOG(LOG_NO_INFO, _("NET: STANDALONE: DownloadManager: RTMPE stream"));
+		downloader=new RTMPDownloader(url.getParsedURL(), url.getStream());
+	}
 	else
 	{
 		LOG(LOG_NO_INFO, _("NET: STANDALONE: DownloadManager: remote file"));
 		downloader=new CurlDownloader(url.getParsedURL(), cached);
+	}
+	downloader->setOwner(owner);
+	downloader->enableFencingWaiting();
+	addDownloader(downloader);
+	sys->addJob(downloader);
+	return downloader;
+}
+
+/**
+ * \brief Create a Downloader for an URL and send data to the host
+ *
+ * Returns a pointer to a newly created \c Downloader for the given URL.
+ * \param[in] url The URL (as a \c URLInfo) the \c Downloader is requested for
+ * \param[in] data The binary data to send to the host
+ * \return A pointer to a newly created \c Downloader for the given URL.
+ * \see DownloadManager::destroy()
+ */
+Downloader* StandaloneDownloadManager::downloadWithData(const URLInfo& url, const std::vector<uint8_t>& data, LoaderInfo* owner)
+{
+	LOG(LOG_NO_INFO, _("NET: STANDALONE: DownloadManager::downloadWithData '") << url.getParsedURL());
+	ThreadedDownloader* downloader;
+	if(url.getProtocol() == "file")
+	{
+		LOG(LOG_NO_INFO, _("NET: STANDALONE: DownloadManager: local file - Ignoring data field"));
+		downloader=new LocalDownloader(url.getPath(), false);
+	}
+	else if(url.getProtocol() == "rtmpe")
+		throw RunTimeException("RTMPE does not support additional data");
+	else
+	{
+		LOG(LOG_NO_INFO, _("NET: STANDALONE: DownloadManager: remote file"));
+		downloader=new CurlDownloader(url.getParsedURL(), data);
 	}
 	downloader->setOwner(owner);
 	downloader->enableFencingWaiting();
@@ -202,10 +241,42 @@ Downloader::Downloader(const tiny_string& _url, bool _cached):
 	waitingForCache(false),waitingForData(false),waitingForTermination(false), //STATUS
 	forceStop(true),failed(false),finished(false),                //FLAGS
 	url(_url),originalURL(url),                                   //PROPERTIES
-	buffer(NULL),                                                 //BUFFERING
+	buffer(NULL),stableBuffer(NULL),                              //BUFFERING
 	cached(_cached),cachePos(0),cacheSize(0),keepCache(false),    //CACHING
 	length(0),receivedLength(0),                                  //DOWNLOADED DATA
 	redirected(false),requestStatus(0),                           //HTTP REDIR, STATUS & HEADERS
+	owner(NULL)                                                   //PROGRESS
+{
+	sem_init(&mutex,0,1);
+	//== Lock initialized 
+
+	sem_init(&cacheOpened,0,0);
+	//== Initialize cacheOpened signal
+	sem_init(&dataAvailable,0,0);
+	//== Initialize dataAvailable signal
+
+	sem_init(&terminated,0,0);
+	//== Initialize terminated signal
+
+	setg(NULL,NULL,NULL);
+}
+
+/**
+ * \brief Downloader constructor.
+ *
+ * Constructor for the Downloader class. Can only be called from derived classes.
+ * \param[in] _url The URL for the Downloader.
+ * \param[in] data Additional data to send to the host
+ */
+Downloader::Downloader(const tiny_string& _url, const std::vector<uint8_t>& _data):
+	cacheHasOpened(false),hasTerminated(false),                   //LOCKING
+	waitingForCache(false),waitingForData(false),waitingForTermination(false), //STATUS
+	forceStop(true),failed(false),finished(false),                //FLAGS
+	url(_url),originalURL(url),                                   //PROPERTIES
+	buffer(NULL),stableBuffer(NULL),                              //BUFFERING
+	cached(false),cachePos(0),cacheSize(0),keepCache(false),      //CACHING
+	length(0),receivedLength(0),                                  //DOWNLOADED DATA
+	redirected(false),requestStatus(0),data(_data),               //HTTP REDIR, STATUS & HEADERS
 	owner(NULL)                                                   //PROGRESS
 {
 	sem_init(&mutex,0,1);
@@ -247,6 +318,10 @@ Downloader::~Downloader()
 	{
 		free(buffer);
 	}
+	if(stableBuffer != NULL && stableBuffer!=buffer)
+	{
+		free(stableBuffer);
+	}
 
 	//== Destroy terminated signal
 	sem_destroy(&terminated);
@@ -272,15 +347,21 @@ Downloader::int_type Downloader::underflow()
 	sem_wait(&mutex);
 	//-- Lock acquired
 
-	assert(gptr()==egptr());
+	//Let's see if the other buffer contains new data
+	syncBuffers();
+	if(egptr()-gptr()>0)
+	{
+		//There is data already
+		return *(uint8_t*)gptr();
+	}
 	const unsigned int startOffset=getOffset();
 	const unsigned int startReceivedLength=receivedLength;
 	assert(startOffset<=startReceivedLength);
 	//If we have read all available data
 	if(startReceivedLength==startOffset)
 	{
-		//The download has failed, has finished or the end is reached
-		if(failed || finished || (startReceivedLength==length && length!=0))
+		//The download has failed or has finished
+		if(failed || finished)
 		{
 			//++ Release lock
 			sem_post(&mutex);
@@ -294,6 +375,7 @@ Downloader::int_type Downloader::underflow()
 			waitForData();
 			sem_wait(&mutex);
 			//-- Lock acquired
+			syncBuffers();
 			
 			//Check if we haven't failed or finished (and there wasn't any new data)
 			if(failed || (finished && startReceivedLength==receivedLength))
@@ -332,20 +414,24 @@ Downloader::int_type Downloader::underflow()
 		//Seek to the start of our new window
 		cache.seekg(cachePos);
 		//Read into our buffer window
-		cache.read((char*)buffer, cacheSize);
+		cache.read((char*)stableBuffer, cacheSize);
 		if(cache.fail())
+		{
+			sem_post(&mutex);
 			throw RunTimeException(_("Downloader::underflow: reading from cache file failed"));
+		}
 
-		begin=(char*)buffer;
-		cur=(char*)buffer;
-		end=(char*)buffer+cacheSize;
+		begin=(char*)stableBuffer;
+		cur=(char*)stableBuffer;
+		end=(char*)stableBuffer+cacheSize;
 		index=0;
+
 	}
 	else
 	{
-		begin=(char*)buffer;
-		cur=gptr();
-		end=(char*)buffer+receivedLength;
+		begin=(char*)stableBuffer;
+		cur=(char*)stableBuffer+startOffset;
+		end=(char*)stableBuffer+receivedLength;
 		index=startOffset;
 	}
 
@@ -365,7 +451,27 @@ Downloader::int_type Downloader::underflow()
 
 
 	//Cast to unsigned, otherwise 0xff would become eof
-	return (unsigned char)buffer[index];
+	return (unsigned char)stableBuffer[index];
+}
+
+/**
+  * Internal function to synchronize oldBuffer and buffer
+  *
+  * \pre Must be called from a function called by the streambuf API
+  */
+void Downloader::syncBuffers()
+{
+	if(stableBuffer!=buffer)
+	{
+		//The buffer have been changed
+		free(stableBuffer);
+		stableBuffer=buffer;
+		//Remember the relative positions of the input pointers
+		intptr_t curPos = (intptr_t) (gptr()-eback());
+		intptr_t curLen = (intptr_t) (egptr()-eback());
+		//Do some pointer arithmetic to point the input pointers to the right places in the new buffer
+		setg((char*)stableBuffer,(char*)(stableBuffer+curPos),(char*)(stableBuffer+curLen));
+	}
 }
 
 /**
@@ -378,11 +484,12 @@ Downloader::int_type Downloader::underflow()
 Downloader::pos_type Downloader::seekpos(pos_type pos, std::ios_base::openmode mode)
 {
 	assert_and_throw(mode==std::ios_base::in);
+	assert_and_throw(buffer && stableBuffer);
 
 	sem_wait(&mutex);
 	//-- Lock acquired
+	syncBuffers();
 	
-	assert_and_throw(buffer != NULL);
 	if(cached)
 	{
 		//++ Release lock
@@ -395,7 +502,7 @@ Downloader::pos_type Downloader::seekpos(pos_type pos, std::ios_base::openmode m
 		if(pos >= cachePos && pos <= cachePos+cacheSize)
 		{
 			//Just move our cursor to the correct position in our window
-			setg((char*)buffer, (char*)buffer+pos-cachePos, (char*)buffer+cacheSize);
+			setg((char*)stableBuffer, (char*)stableBuffer+pos-cachePos, (char*)stableBuffer+cacheSize);
 		}
 		//The requested position is outside our current window
 		else if(pos <= receivedLength)
@@ -408,12 +515,12 @@ Downloader::pos_type Downloader::seekpos(pos_type pos, std::ios_base::openmode m
 			//Seek to the requested position
 			cache.seekg(cachePos);
 			//Read into our window
-			cache.read((char*)buffer, cacheSize);
+			cache.read((char*)stableBuffer, cacheSize);
 			if(cache.fail())
 				throw RunTimeException(_("Downloader::seekpos: reading from cache file failed"));
 
 			//Our window starts at position pos
-			setg((char*) buffer, (char*) buffer, ((char*) buffer)+cacheSize);
+			setg((char*) stableBuffer, (char*) stableBuffer, ((char*) stableBuffer)+cacheSize);
 		}
 		//The requested position is bigger then our current amount of available data
 		else if(pos > receivedLength)
@@ -427,7 +534,7 @@ Downloader::pos_type Downloader::seekpos(pos_type pos, std::ios_base::openmode m
 	{
 		//The requested position is valid
 		if(pos <= receivedLength)
-			setg((char*)buffer,(char*)buffer+pos,(char*)buffer+receivedLength);
+			setg((char*)stableBuffer,(char*)stableBuffer+pos,(char*)stableBuffer+receivedLength);
 		//The requested position is bigger then our current amount of available data
 		else
 		{
@@ -563,18 +670,30 @@ void Downloader::allocateBuffer(size_t size)
 	if(buffer == NULL)
 	{
 
-		buffer= (uint8_t*) calloc(size, sizeof(uint8_t));
+		buffer = (uint8_t*) calloc(size, sizeof(uint8_t));
+		stableBuffer = buffer;
 		setg((char*)buffer,(char*)buffer,(char*)buffer);
 	}
 	//If the buffer already exists, reallocate
 	else
 	{
-		//Remember the relative positions of the input pointers
-		intptr_t curPos = (intptr_t) (gptr()-eback());
+		assert(!cached);
 		intptr_t curLen = (intptr_t) (egptr()-eback());
-		buffer = (uint8_t*) realloc(buffer, size);
-		//Do some pointer arithmetic to point the input pointers to the right places in the new buffer
-		setg((char*)buffer,(char*)(buffer+curPos),(char*)(buffer+curLen));
+		//We have to extend the buffer, so create a new one
+		if(stableBuffer!=buffer)
+		{
+			//We're already filling a different buffer from the one used to read
+			//Extend it!
+			buffer = (uint8_t*)realloc(buffer,size);
+		}
+		else
+		{
+			//Create a different buffer
+			buffer = (uint8_t*) calloc(size, sizeof(uint8_t));
+			//Copy the stableBuffer into this
+			memcpy(buffer,stableBuffer,curLen);
+		}
+		//Synchronization of the buffers will be done at the first chance
 	}
 
 	//++ Release lock
@@ -1023,6 +1142,18 @@ ThreadedDownloader::ThreadedDownloader(const tiny_string& url, bool cached):
 }
 
 /**
+ * \brief Constructor for the ThreadedDownloader class.
+ *
+ * Constructor for the ThreadedDownloader class. Can only be called from derived classes.
+ * \param[in] _url The URL for the Downloader.
+ * \param[in] data Additional data to send to the host
+ */
+ThreadedDownloader::ThreadedDownloader(const tiny_string& url, const std::vector<uint8_t>& data):
+	Downloader(url, data),fenceState(false)
+{
+}
+
+/**
  * \brief Destructor for the ThreadedDownloader class.
  *
  * Waits for the \c fenced signal.
@@ -1041,6 +1172,16 @@ ThreadedDownloader::~ThreadedDownloader()
  * \param[in] _cached Whether or not to cache this download.
  */
 CurlDownloader::CurlDownloader(const tiny_string& _url, bool _cached):ThreadedDownloader(_url, _cached)
+{
+}
+
+/**
+ * \brief Constructor for the CurlDownloader class.
+ *
+ * \param[in] _url The URL for the Downloader.
+ * \param[in] data Additional data to send to the host
+ */
+CurlDownloader::CurlDownloader(const tiny_string& _url, const std::vector<uint8_t>& _data):ThreadedDownloader(_url, _data)
 {
 }
 
@@ -1090,6 +1231,13 @@ void CurlDownloader::execute()
 		curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1);
 		//Its probably a good idea to limit redirections, 100 should be more than enough
 		curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 100);
+		if(!data.empty())
+		{
+			curl_easy_setopt(curl, CURLOPT_POST, 1);
+			//data is const, it would not be invalidated
+			curl_easy_setopt(curl, CURLOPT_POSTFIELDS, &data.front());
+			curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, data.size());
+		}
 		//curl_easy_setopt(curl, CURLOPT_VERBOSE, 1);
 		res = curl_easy_perform(curl);
 		if(res!=0)

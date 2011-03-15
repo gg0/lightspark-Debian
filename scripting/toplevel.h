@@ -26,6 +26,8 @@
 #include "frame.h"
 #include "exceptions.h"
 #include "threading.h"
+#include <libxml/tree.h>
+#include <libxml++/parsers/domparser.h>
 
 namespace lightspark
 {
@@ -151,10 +153,7 @@ private:
 		throw RunTimeException("Class_function::buildInstanceTraits");
 	}
 public:
-	//Class_function is both used as the prototype for each function and as the Function classs object
-	Class_function():Class_base(QName("Function","")),f(NULL),asprototype(NULL){}
-	Class_function(IFunction* _f, ASObject* _p):Class_base(QName("Function","")),f(_f),asprototype(_p){}
-	tiny_string class_name;
+	Class_function(IFunction* _f, ASObject* _p);
 	ASObject* getVariableByMultiname(const multiname& name, bool skip_impl=false, ASObject* base=NULL)
 	{
 		ASObject* ret=Class_base::getVariableByMultiname(name,skip_impl, base);
@@ -179,7 +178,6 @@ public:
 	{
 		throw UnsupportedException("Class_function::setVariableByMultiname");
 	}
-	static Class_function* getClass();
 };
 
 class IFunction: public ASObject
@@ -229,6 +227,7 @@ public:
 	{
 		closure_level=l;
 	}
+	virtual method_info* getMethodInfo() const=0;
 	static void sinit(Class_base* c);
 };
 
@@ -245,6 +244,7 @@ private:
 	{
 		return new Function(*this);
 	}
+	method_info* getMethodInfo() const { return NULL; }
 public:
 	ASObject* call(ASObject* obj, ASObject* const* args, uint32_t num_args, bool thisOverride=false);
 	IFunction* toFunction();
@@ -272,6 +272,7 @@ private:
 	{
 		return new SyntheticFunction(*this);
 	}
+	method_info* getMethodInfo() const { return mi; }
 public:
 	ASObject* call(ASObject* obj, ASObject* const* args, uint32_t num_args, bool thisOverride=false);
 	IFunction* toFunction();
@@ -341,10 +342,14 @@ private:
 public:
 	int32_t toInt()
 	{
-		return val;
+		return val ? 1 : 0;
 	}
 	bool isEqual(ASObject* r);
 	tiny_string toString(bool debugMsg);
+	double toNumber()
+	{
+		return val ? 1.0 : 0.0;
+	}
 	static void buildTraits(ASObject* o){};
 };
 
@@ -354,7 +359,7 @@ public:
 	ASFUNCTION(call);
 	Undefined();
 	tiny_string toString(bool debugMsg);
-	int toInt();
+	int32_t toInt();
 	double toNumber();
 	bool isEqual(ASObject* r);
 	TRISTATE isLess(ASObject* r);
@@ -406,6 +411,9 @@ public:
 	Null(){type=T_NULL;}
 	tiny_string toString(bool debugMsg);
 	bool isEqual(ASObject* r);
+	TRISTATE isLess(ASObject* r);
+	int32_t toInt();
+	double toNumber();
 };
 
 class ASQName: public ASObject
@@ -477,6 +485,7 @@ private:
 		sortComparatorWrapper(IFunction* c):comparator(c){}
 		bool operator()(const data_slot& d1, const data_slot& d2);
 	};
+	tiny_string toString_priv() const;
 public:
 	//These utility methods are also used by ByteArray 
 	static bool isValidMultiname(const multiname& name, unsigned int& index);
@@ -549,7 +558,6 @@ public:
 	bool hasNext(unsigned int& index, bool& out);
 	bool nextName(unsigned int index, ASObject*& out);
 	bool nextValue(unsigned int index, ASObject*& out);
-	tiny_string toString_priv() const;
 };
 
 class Integer : public ASObject
@@ -611,6 +619,7 @@ class Number : public ASObject
 {
 friend ASObject* abstract_d(number_t i);
 friend class ABCContext;
+friend class ABCVm;
 CLASSBUILDABLE(Number);
 private:
 	double val;
@@ -644,25 +653,58 @@ public:
 	static void sinit(Class_base* c);
 };
 
-class ASMovieClipLoader: public ASObject
-{
-public:
-	ASMovieClipLoader();
-	ASFUNCTION(addListener);
-	ASFUNCTION(constructor);
-
-};
-
-class ASXML: public ASObject
+class XML: public ASObject
 {
 private:
-	char* xml_buf;
-	int xml_index;
-	static size_t write_data(void *buffer, size_t size, size_t nmemb, void *userp);
+	//The parser will destroy the document and all the childs on destruction
+	xmlpp::DomParser parser;
+	//Pointer to the root XML element, the one that owns the parser that created this node
+	XML* root;
+	//The node this object represent
+	xmlpp::Node* node;
+	static void recursiveGetDescendantsByQName(XML* root, xmlpp::Node* node, const tiny_string& name, const tiny_string& ns, 
+			std::vector<XML*>& ret);
+	tiny_string toString_priv();
+	void toXMLString_priv(xmlBufferPtr buf);
+	void buildFromString(const std::string& str);
+	bool constructed;
 public:
-	ASXML();
-	ASFUNCTION(constructor);
-	ASFUNCTION(load);
+	XML();
+	XML(const std::string& str);
+	XML(XML* _r, xmlpp::Node* _n);
+	~XML();
+	ASFUNCTION(_constructor);
+	ASFUNCTION(_toString);
+	ASFUNCTION(toXMLString);
+	ASFUNCTION(nodeKind);
+	ASFUNCTION(children);
+	ASFUNCTION(attributes);
+	ASFUNCTION(appendChild);
+	ASFUNCTION(localName);
+	ASFUNCTION(generator);
+	static void buildTraits(ASObject* o){};
+	static void sinit(Class_base* c);
+	void getDescendantsByQName(const tiny_string& name, const tiny_string& ns, std::vector<XML*>& ret);
+	ASObject* getVariableByMultiname(const multiname& name, bool skip_impl, ASObject* base=NULL);
+	tiny_string toString(bool debugMsg=false);
+};
+
+class XMLList: public ASObject
+{
+private:
+	std::vector<XML*> nodes;
+	bool constructed;
+public:
+	XMLList():constructed(false){}
+	XMLList(const std::vector<XML*>& r):nodes(r),constructed(true){}
+	~XMLList();
+	static void buildTraits(ASObject* o){};
+	static void sinit(Class_base* c);
+	ASFUNCTION(_constructor);
+	ASFUNCTION(_getLength);
+	ASFUNCTION(appendChild);
+	ASObject* getVariableByMultiname(const multiname& name, bool skip_impl, ASObject* base=NULL);
+	XML* convertToXML() const;
 };
 
 class Date: public ASObject
@@ -689,6 +731,11 @@ public:
 	ASFUNCTION(getFullYear);
 	ASFUNCTION(getHours);
 	ASFUNCTION(getMinutes);
+	ASFUNCTION(getUTCFullYear);
+	ASFUNCTION(getUTCMonth);
+	ASFUNCTION(getUTCDate);
+	ASFUNCTION(getUTCHours);
+	ASFUNCTION(getUTCMinutes);
 	ASFUNCTION(valueOf);
 	tiny_string toString(bool debugMsg=false);
 	tiny_string toString_priv() const;
@@ -748,6 +795,7 @@ private:
 	bool global;
 	bool ignoreCase;
 	bool extended;
+	bool multiline;
 	int lastIndex;
 	RegExp();
 public:

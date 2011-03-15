@@ -54,8 +54,7 @@ DoABCTag::DoABCTag(RECORDHEADER h, std::istream& in):ControlTag(h)
 {
 	int dest=in.tellg();
 	dest+=h.getLength();
-	in >> Flags >> Name;
-	LOG(LOG_CALLS,_("DoABCTag Name: ") << Name);
+	LOG(LOG_CALLS,_("DoABCTag"));
 
 	context=new ABCContext(in);
 
@@ -73,6 +72,43 @@ DoABCTag::~DoABCTag()
 }
 
 void DoABCTag::execute(RootMovieClip*)
+{
+	LOG(LOG_CALLS,_("ABC Exec"));
+	sys->currentVm->addEvent(NULL,new ABCContextInitEvent(context));
+	SynchronizationEvent* se=new SynchronizationEvent;
+	bool added=sys->currentVm->addEvent(NULL,se);
+	if(!added)
+	{
+		se->decRef();
+		throw RunTimeException("Could not add event");
+	}
+	se->wait();
+	se->decRef();
+}
+
+DoABCDefineTag::DoABCDefineTag(RECORDHEADER h, std::istream& in):ControlTag(h)
+{
+	int dest=in.tellg();
+	dest+=h.getLength();
+	in >> Flags >> Name;
+	LOG(LOG_CALLS,_("DoABCDefineTag Name: ") << Name);
+
+	context=new ABCContext(in);
+
+	int pos=in.tellg();
+	if(dest!=pos)
+	{
+		LOG(LOG_ERROR,_("Corrupted ABC data: missing ") << dest-in.tellg());
+		throw ParseException("Not complete ABC data");
+	}
+}
+
+DoABCDefineTag::~DoABCDefineTag()
+{
+	delete context;
+}
+
+void DoABCDefineTag::execute(RootMovieClip*)
 {
 	LOG(LOG_CALLS,_("ABC Exec ") << Name);
 	sys->currentVm->addEvent(NULL,new ABCContextInitEvent(context));
@@ -148,7 +184,7 @@ void ABCVm::registerClasses()
 	builtin->setVariableByQName("Infinity","",abstract_d(numeric_limits<double>::infinity()));
 	builtin->setVariableByQName("String","",Class<ASString>::getClass());
 	builtin->setVariableByQName("Array","",Class<Array>::getClass());
-	builtin->setVariableByQName("Function","",Class_function::getClass());
+	builtin->setVariableByQName("Function","",Class<IFunction>::getClass());
 	builtin->setVariableByQName("undefined","",new Undefined);
 	builtin->setVariableByQName("Math","",Class<Math>::getClass());
 	builtin->setVariableByQName("Date","",Class<Date>::getClass());
@@ -166,8 +202,8 @@ void ABCVm::registerClasses()
 	builtin->setVariableByQName("TypeError","",Class<TypeError>::getClass());
 	builtin->setVariableByQName("URIError","",Class<URIError>::getClass());
 	builtin->setVariableByQName("VerifyError","",Class<VerifyError>::getClass());
-	builtin->setVariableByQName("XML","",Class<ASObject>::getClass(QName("XML","")));
-	builtin->setVariableByQName("XMLList","",Class<ASObject>::getClass(QName("XMLList","")));
+	builtin->setVariableByQName("XML","",Class<XML>::getClass());
+	builtin->setVariableByQName("XMLList","",Class<XMLList>::getClass());
 	builtin->setVariableByQName("int","",Class<Integer>::getClass());
 
 	builtin->setVariableByQName("print","",Class<IFunction>::getFunction(print));
@@ -196,16 +232,24 @@ void ABCVm::registerClasses()
 	builtin->setVariableByQName("Shape","flash.display",Class<Shape>::getClass());
 	builtin->setVariableByQName("Stage","flash.display",Class<Stage>::getClass());
 	builtin->setVariableByQName("Graphics","flash.display",Class<Graphics>::getClass());
+	builtin->setVariableByQName("GradientType","flash.display",Class<GradientType>::getClass());
 	builtin->setVariableByQName("LineScaleMode","flash.display",Class<LineScaleMode>::getClass());
 	builtin->setVariableByQName("StageScaleMode","flash.display",Class<StageScaleMode>::getClass());
 	builtin->setVariableByQName("StageAlign","flash.display",Class<StageAlign>::getClass());
 	builtin->setVariableByQName("StageQuality","flash.display",Class<StageQuality>::getClass());
+	builtin->setVariableByQName("StageDisplayState","flash.display",Class<StageDisplayState>::getClass());
 	builtin->setVariableByQName("IBitmapDrawable","flash.display",Class<ASObject>::getClass(QName("IBitmapDrawable","flash.display")));
 	builtin->setVariableByQName("BitmapData","flash.display",Class<ASObject>::getClass(QName("BitmapData","flash.display")));
 	builtin->setVariableByQName("Bitmap","flash.display",Class<Bitmap>::getClass());
+	builtin->setVariableByQName("GraphicsGradientFill","flash.display",
+			Class<ASObject>::getClass(QName("GraphicsGradientFill","flash.display")));
+	builtin->setVariableByQName("GraphicsPath","flash.display",Class<ASObject>::getClass(QName("GraphicsPath","flash.display")));
 
 	builtin->setVariableByQName("DropShadowFilter","flash.filters",Class<ASObject>::getClass(QName("DropShadowFilter","flash.filters")));
 	builtin->setVariableByQName("BitmapFilter","flash.filters",Class<ASObject>::getClass(QName("BitmapFilter","flash.filters")));
+	builtin->setVariableByQName("GlowFilter","flash.filters",Class<ASObject>::getClass(QName("GlowFilter","flash.filters")));
+	builtin->setVariableByQName("BevelFilter","flash.filters",Class<ASObject>::getClass(QName("BevelFilter","flash.filters")));
+	builtin->setVariableByQName("ColorMatrixFilter","flash.filters",Class<ASObject>::getClass(QName("ColorMatrixFilter","flash.filters")));
 
 	builtin->setVariableByQName("Font","flash.text",Class<Font>::getClass());
 	builtin->setVariableByQName("StyleSheet","flash.text",Class<StyleSheet>::getClass());
@@ -214,6 +258,7 @@ void ABCVm::registerClasses()
 	builtin->setVariableByQName("TextFormat","flash.text",Class<ASObject>::getClass(QName("TextFormat","flash.text")));
 
 	builtin->setVariableByQName("XMLDocument","flash.xml",Class<XMLDocument>::getClass());
+	builtin->setVariableByQName("XMLNode","flash.xml",Class<XMLNode>::getClass());
 
 	builtin->setVariableByQName("ExternalInterface","flash.external",Class<ExternalInterface>::getClass());
 
@@ -258,9 +303,11 @@ void ABCVm::registerClasses()
 	builtin->setVariableByQName("LocalConnection","flash.net",Class<ASObject>::getClass(QName("LocalConnection","flash.net")));
 	builtin->setVariableByQName("NetConnection","flash.net",Class<NetConnection>::getClass());
 	builtin->setVariableByQName("NetStream","flash.net",Class<NetStream>::getClass());
+	builtin->setVariableByQName("NetStreamPlayOptions","flash.net",Class<ASObject>::getClass(QName("NetStreamPlayOptions","flash.net")));
 	builtin->setVariableByQName("URLLoader","flash.net",Class<URLLoader>::getClass());
 	builtin->setVariableByQName("URLLoaderDataFormat","flash.net",Class<URLLoaderDataFormat>::getClass());
 	builtin->setVariableByQName("URLRequest","flash.net",Class<URLRequest>::getClass());
+	builtin->setVariableByQName("URLRequestMethod","flash.net",Class<URLRequestMethod>::getClass());
 	builtin->setVariableByQName("URLVariables","flash.net",Class<URLVariables>::getClass());
 	builtin->setVariableByQName("SharedObject","flash.net",Class<SharedObject>::getClass());
 	builtin->setVariableByQName("ObjectEncoding","flash.net",Class<ObjectEncoding>::getClass());
@@ -333,6 +380,7 @@ multiname* ABCContext::s_getMultiname_d(call_context* th, number_t rtd, int n)
 	{
 		m->cached=new multiname;
 		ret=m->cached;
+		ret->isAttribute=m->isAttributeName();
 		switch(m->kind)
 		{
 			case 0x1b:
@@ -383,6 +431,7 @@ multiname* ABCContext::s_getMultiname(call_context* th, ASObject* rt1, int n)
 		ret=new multiname;
 		ret->name_s="any";
 		ret->name_type=multiname::NAME_STRING;
+		ret->isAttribute=false;
 		return ret;
 	}
 
@@ -391,6 +440,7 @@ multiname* ABCContext::s_getMultiname(call_context* th, ASObject* rt1, int n)
 	{
 		m->cached=new multiname;
 		ret=m->cached;
+		ret->isAttribute=m->isAttributeName();
 		switch(m->kind)
 		{
 			case 0x07:
@@ -461,7 +511,6 @@ multiname* ABCContext::s_getMultiname(call_context* th, ASObject* rt1, int n)
 				}
 				else
 				{
-					
 					throw UnsupportedException("Multiname to String not implemented");
 					//ret->name_s=rt1->toString();
 					//ret->name_type=multiname::NAME_STRING;
@@ -511,6 +560,7 @@ multiname* ABCContext::s_getMultiname(call_context* th, ASObject* rt1, int n)
 		{
 			case 0x07:
 			case 0x09:
+			case 0x0e:
 			{
 				//Nothing to do, the cached value is enough
 				break;
@@ -588,9 +638,6 @@ multiname* ABCContext::s_getMultiname(call_context* th, ASObject* rt1, int n)
 			case 0x12:
 				LOG(CALLS, _("RTQNameLA"));
 				break;
-			case 0x0e:
-				LOG(CALLS, _("MultinameA"));
-				break;
 			case 0x1c:
 				LOG(CALLS, _("MultinameLA"));
 				break;*/
@@ -613,6 +660,7 @@ multiname* ABCContext::s_getMultiname_i(call_context* th, uintptr_t rti, int n)
 	{
 		m->cached=new multiname;
 		ret=m->cached;
+		ret->isAttribute=m->isAttributeName();
 		switch(m->kind)
 		{
 			case 0x1b:
@@ -663,6 +711,7 @@ multiname* ABCContext::getMultiname(unsigned int n, call_context* th)
 	{
 		m->cached=new multiname;
 		ret=m->cached;
+		ret->isAttribute=m->isAttributeName();
 
 		if(n==0)
 		{
@@ -685,7 +734,8 @@ multiname* ABCContext::getMultiname(unsigned int n, call_context* th)
 				ret->name_type=multiname::NAME_STRING;
 				break;
 			}
-			case 0x09:
+			case 0x09: //Multiname
+			case 0x0e: //MultinameA
 			{
 				const ns_set_info* s=&constant_pool.ns_sets[m->ns_set];
 				ret->ns.reserve(s->count);
@@ -787,9 +837,6 @@ multiname* ABCContext::getMultiname(unsigned int n, call_context* th)
 			case 0x12:
 				LOG(CALLS, _("RTQNameLA"));
 				break;
-			case 0x0e:
-				LOG(CALLS, _("MultinameA"));
-				break;
 			case 0x1c:
 				LOG(CALLS, _("MultinameLA"));
 				break;*/
@@ -809,6 +856,7 @@ multiname* ABCContext::getMultiname(unsigned int n, call_context* th)
 			case 0x1d: //Generics, still not implemented
 			case 0x07:
 			case 0x09:
+			case 0x0e:
 			{
 				//Nothing to do, the cached value is enough
 				break;
@@ -881,14 +929,11 @@ multiname* ABCContext::getMultiname(unsigned int n, call_context* th)
 			case 0x12:
 				LOG(CALLS, _("RTQNameLA"));
 				break;
-			case 0x0e:
-				LOG(CALLS, _("MultinameA"));
-				break;
 			case 0x1c:
 				LOG(CALLS, _("MultinameLA"));
 				break;*/
 			default:
-				LOG(LOG_ERROR,_("dMultiname to String not yet implemented for this kind ") << hex << m->kind);
+				LOG(LOG_ERROR,_("Multiname to String not yet implemented for this kind ") << hex << m->kind);
 				throw UnsupportedException("Multiname to String not implemented");
 		}
 		ret->name_s.len();
@@ -965,6 +1010,45 @@ ABCContext::ABCContext(istream& in)
 	}
 }
 
+ABCContext::~ABCContext()
+{
+#ifdef PROFILING_SUPPORT
+	if(sys->getProfilingOutput().len())
+	{
+		ofstream f(sys->getProfilingOutput().raw_buf());
+		f << "events: Time" << endl;
+		for(uint32_t i=0;i<methods.size();i++)
+		{
+			if(methods[i].profTime)
+			{
+				if(methods[i].name)
+				{
+					const multiname* m=getMultiname(methods[i].name,NULL);
+					f << "fn=" << *m << endl;
+				}
+				else
+					f << "fn=" << &methods[i] << " " << i << endl;
+				f << "1 " << methods[i].profTime << endl;
+				auto it=methods[i].profCalls.begin();
+				for(;it!=methods[i].profCalls.end();it++)
+				{
+					if(it->first->name)
+					{
+						const multiname* m=getMultiname(it->first->name,NULL);
+						f << "cfn=" << *m << endl;
+					}
+					else
+						f << "cfn=" << it->first << endl;
+					f << "calls=1 1" << endl;
+					f << "1 " << it->second << endl;
+				}
+			}
+		}
+		f.close();
+	}
+#endif
+}
+
 ABCVm::ABCVm(SystemState* s):m_sys(s),status(CREATED),shuttingdown(false)
 {
 	sem_init(&event_queue_mutex,0,1);
@@ -1026,12 +1110,12 @@ void ABCVm::publicHandleEvent(EventDispatcher* dispatcher, Event* event)
 	//Do bubbling phase
 	if(event->bubbles && dispatcher->prototype->isSubClass(Class<DisplayObject>::getClass()))
 	{
-		DisplayObjectContainer* cur=static_cast<DisplayObject*>(dispatcher)->parent;
+		DisplayObjectContainer* cur=static_cast<DisplayObject*>(dispatcher)->getParent();
 		while(cur)
 		{
 			event->currentTarget=cur;
 			cur->handleEvent(event);
-			cur=cur->parent;
+			cur=cur->getParent();
 		}
 	}
 	//Reset events so they might be recycled
@@ -1074,8 +1158,35 @@ void ABCVm::handleEvent(std::pair<EventDispatcher*, Event*> e)
 			case FUNCTION:
 			{
 				FunctionEvent* ev=static_cast<FunctionEvent*>(e.second);
-				//We hope the method is binded
-				ev->f->call(ev->obj,ev->args,ev->numArgs,ev->thisOverride);
+				// We should catch exceptions and report them
+				if(ev->exception != NULL)
+				{
+					try
+					{
+						//We hope the method is bound
+						ASObject* result = ev->f->call(ev->obj,ev->args,ev->numArgs,ev->thisOverride);
+						// We should report the function result
+						if(ev->result != NULL)
+							*(ev->result) = result;
+					}
+					catch(ASObject* exception)
+					{
+						// Report the exception
+						*(ev->exception) = exception;
+					}
+				}
+				// Exceptions aren't expected and shouldn't be ignored
+				else
+				{
+					//We hope the method is bound
+					ASObject* result = ev->f->call(ev->obj,ev->args,ev->numArgs,ev->thisOverride);
+					// We should report the function result
+					if(ev->result != NULL)
+						*(ev->result) = result;
+				}
+				// We should synchronize the passed SynchronizationEvent
+				if(ev->sync != NULL)
+					ev->sync->sync();
 				break;
 			}
 			case CONTEXT_INIT:
@@ -1179,6 +1290,11 @@ void ABCVm::buildClassAndInjectBase(const string& s, ASObject* base, ASObject* c
 	//Now the class is valid, check that it's not a builtin one
 	assert_and_throw(static_cast<Class_base*>(derived_class)->class_index!=-1);
 	Class_inherit* derived_class_tmp=static_cast<Class_inherit*>(derived_class);
+	if(derived_class_tmp->isBinded())
+	{
+		LOG(LOG_ERROR, "Class already binded to a tag. Not binding");
+		return;
+	}
 
 	if(isRoot)
 	{
@@ -1189,6 +1305,7 @@ void ABCVm::buildClassAndInjectBase(const string& s, ASObject* base, ASObject* c
 		derived_class_tmp->handleConstruction(base,args,argslen,true);
 		thisAndLevel tl=getVm()->popObjAndLevel();
 		assert_and_throw(tl.cur_this==base);
+		derived_class_tmp->bindToRoot();
 	}
 	else
 	{
@@ -1196,7 +1313,7 @@ void ABCVm::buildClassAndInjectBase(const string& s, ASObject* base, ASObject* c
 		assert_and_throw(t);
 
 		t->bindedTo=derived_class_tmp;
-		derived_class_tmp->bindTag(t);
+		derived_class_tmp->bindToTag(t);
 	}
 }
 
@@ -1249,7 +1366,7 @@ ASObject* call_context::runtime_stack_peek()
 	return stack[stack_index-1];
 }
 
-call_context::call_context(method_info* th, int level, ASObject* const* args, const unsigned int num_args)
+call_context::call_context(method_info* th, int level, ASObject* const* args, const unsigned int num_args):code(NULL)
 {
 	mi=th;
 	locals=new ASObject*[th->body->local_count+1];
@@ -1286,6 +1403,7 @@ call_context::~call_context()
 
 	for(unsigned int i=0;i<scope_stack.size();i++)
 		scope_stack[i]->decRef();
+	delete code;
 }
 
 bool ABCContext::isinstance(ASObject* obj, multiname* name)
@@ -1331,10 +1449,6 @@ bool ABCContext::isinstance(ASObject* obj, multiname* name)
 	}
 	else
 	{
-		//Special cases
-		if(obj->getObjectType()==T_FUNCTION && type==Class_function::getClass())
-			return true;
-
 		real_ret=obj->getObjectType()==type->getObjectType();
 		LOG(LOG_CALLS,_("isType on non classed object ") << real_ret);
 		return real_ret;
@@ -1467,6 +1581,8 @@ void ABCVm::Run(ABCVm* th)
 			th->handleEvent(e);
 			if(th->shuttingdown)
 				bailOut=true;
+			//Flush the invalidation queue
+			th->m_sys->flushInvalidationQueue();
 			profile->accountTime(chronometer.checkpoint());
 		}
 		catch(LightsparkException& e)
@@ -1691,6 +1807,11 @@ void ABCContext::buildTrait(ASObject* obj, const traits_info* t, bool isBorrowed
 			LOG(LOG_CALLS,_("Getter trait: ") << mname << _(" #") << t->method);
 			//syntetize method and create a new LLVM function object
 			method_info* m=&methods[t->method];
+			if(m->name==0)
+			{
+				//Use this name as the method name
+				m->name=t->name;
+			}
 			SyntheticFunction* f=Class<IFunction>::getSyntheticFunction(m);
 
 			//We have to override if there is a method with the same name,
@@ -1730,6 +1851,11 @@ void ABCContext::buildTrait(ASObject* obj, const traits_info* t, bool isBorrowed
 			LOG(LOG_CALLS,_("Setter trait: ") << mname << _(" #") << t->method);
 			//syntetize method and create a new LLVM function object
 			method_info* m=&methods[t->method];
+			if(m->name==0)
+			{
+				//Use this name as the method name
+				m->name=t->name;
+			}
 
 			IFunction* f=Class<IFunction>::getSyntheticFunction(m);
 
@@ -1770,6 +1896,11 @@ void ABCContext::buildTrait(ASObject* obj, const traits_info* t, bool isBorrowed
 			LOG(LOG_CALLS,_("Method trait: ") << mname << _(" #") << t->method);
 			//syntetize method and create a new LLVM function object
 			method_info* m=&methods[t->method];
+			if(m->name==0)
+			{
+				//Use this name as the method name
+				m->name=t->name;
+			}
 			SyntheticFunction* f=Class<IFunction>::getSyntheticFunction(m);
 
 			if(obj->getObjectType()==T_CLASS)
@@ -2330,4 +2461,19 @@ ASFUNCTIONBODY(lightspark,undefinedFunction)
 {
 	LOG(LOG_NOT_IMPLEMENTED,_("Function not implemented"));
 	return NULL;
+}
+
+bool multiname_info::isAttributeName() const
+{
+	switch(kind)
+	{
+		case 0x0d:
+		case 0x10:
+		case 0x12:
+		case 0x0e:
+		case 0x1c:
+			return true;
+		default:
+			return false;
+	}
 }

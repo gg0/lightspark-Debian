@@ -183,6 +183,9 @@ Tag* TagFactory::readTag()
 		case 70:
 			ret=new PlaceObject3Tag(h,f);
 			break;
+		case 72:
+			ret=new DoABCTag(h,f);
+			break;
 		case 73:
 			ret=new DefineFontAlignZonesTag(h,f);
 			break;
@@ -202,7 +205,7 @@ Tag* TagFactory::readTag()
 			ret=new DefineScalingGridTag(h,f);
 			break;
 		case 82:
-			ret=new DoABCTag(h,f);
+			ret=new DoABCDefineTag(h,f);
 			break;
 		case 83:
 			ret=new DefineShape4Tag(h,f);
@@ -258,7 +261,7 @@ void RemoveObject2Tag::execute(MovieClip* parent, list <pair<PlaceInfo, DisplayO
 	{
 		if(it->second->Depth==Depth)
 		{
-			it->second->parent=NULL;
+			it->second->setParent(NULL);
 			it->second->setRoot(NULL);
 			it->second->decRef();
 			ls.erase(it);
@@ -908,6 +911,11 @@ void DefineShapeTag::computeCached()
 		FromShaperecordListToShapeVector(Shapes.ShapeRecords,cachedTokens,Shapes.FillStyles.FillStyles);
 }
 
+void DefineShapeTag::requestInvalidation()
+{
+	sys->addToInvalidateQueue(this);
+}
+
 void DefineShapeTag::invalidate()
 {
 	//Acquire the lock to avoid data changes
@@ -1101,15 +1109,9 @@ void DefineShapeTag::FromShaperecordListToShapeVector(const std::vector<SHAPEREC
 				Vector2 p3(startX,startY);
 
 				if(color0)
-				{
-					shapesBuilder.extendFilledOutlineForColor(color0,p1,p2);
-					shapesBuilder.extendFilledOutlineForColor(color0,p2,p3);
-				}
+					shapesBuilder.extendFilledOutlineForColorCurve(color0,p1,p2,p3);
 				if(color1)
-				{
-					shapesBuilder.extendFilledOutlineForColor(color1,p1,p2);
-					shapesBuilder.extendFilledOutlineForColor(color1,p2,p3);
-				}
+					shapesBuilder.extendFilledOutlineForColorCurve(color1,p1,p2,p3);
 			}
 		}
 		else
@@ -1325,7 +1327,7 @@ void PlaceObject2Tag::execute(MovieClip* parent, list < pair< PlaceInfo, Display
 				(ls.begin(),ls.end(),Depth,list_orderer());
 			//As we are inserting the object in the list we need to incref it
 			toAdd->incRef();
-			toAdd->parent=parent;
+			toAdd->setParent(parent);
 			toAdd->setRoot(parent->getRoot());
 			ls.insert(it,make_pair(infos,toAdd));
 		}
@@ -1365,13 +1367,13 @@ void PlaceObject2Tag::execute(MovieClip* parent, list < pair< PlaceInfo, Display
 			}
 			else
 			{
-				it->second->parent=NULL;
+				it->second->setParent(NULL);
 				it->second->setRoot(NULL);
 				it->second->decRef();
 				ls.erase(it);
 				list<pair<PlaceInfo, DisplayObject*> >::iterator it=lower_bound(ls.begin(),ls.end(),Depth,list_orderer());
 				toAdd->incRef();
-				toAdd->parent=parent;
+				toAdd->setParent(parent);
 				toAdd->setRoot(parent->getRoot());
 				ls.insert(it,make_pair(infos,toAdd));
 			}
@@ -1498,7 +1500,7 @@ void PlaceObject3Tag::execute(MovieClip* parent, list < pair< PlaceInfo, Display
 				(ls.begin(),ls.end(),Depth,list_orderer());
 			//As we are inserting the object in the list we need to incref it
 			toAdd->incRef();
-			toAdd->parent=parent;
+			toAdd->setParent(parent);
 			toAdd->setRoot(parent->getRoot());
 			ls.insert(it,make_pair(infos,toAdd));
 		}
@@ -1542,7 +1544,7 @@ void PlaceObject3Tag::execute(MovieClip* parent, list < pair< PlaceInfo, Display
 				ls.erase(it);
 				list<pair<PlaceInfo, DisplayObject*> >::iterator it=lower_bound(ls.begin(),ls.end(),Depth,list_orderer());
 				toAdd->incRef();
-				toAdd->parent=parent;
+				toAdd->setParent(parent);
 				toAdd->setRoot(parent->getRoot());
 				ls.insert(it,make_pair(infos,toAdd));
 			}
@@ -1629,10 +1631,10 @@ ProductInfoTag::ProductInfoTag(RECORDHEADER h, std::istream& in):Tag(h)
 	longlongTime|=CompileTimeLo;
 
 	LOG(LOG_NO_INFO,_("SWF Info:") << 
-	endl << "\tProductId: " << ProductId <<
-	endl << "\tEdition: " << Edition <<
-	endl << "\tVersion: " << int(MajorVersion) << "." << int(MinorVersion) << "." << MajorBuild << "." << MinorBuild <<
-	endl << "\tCompileTime: " << longlongTime);
+	endl << "\tProductId:\t\t" << ProductId <<
+	endl << "\tEdition:\t\t" << Edition <<
+	endl << "\tVersion:\t\t" << int(MajorVersion) << "." << int(MinorVersion) << "." << MajorBuild << "." << MinorBuild <<
+	endl << "\tCompileTime:\t\t" << longlongTime);
 }
 
 FrameLabelTag::FrameLabelTag(RECORDHEADER h, std::istream& in):Tag(h)
@@ -1887,7 +1889,7 @@ MetadataTag::MetadataTag(RECORDHEADER h, std::istream& in):Tag(h)
 	ostringstream output;
 	while(xml.read())
 	{
-		if(xml.get_depth() == 2 && xml.read_string() != "")
+		if(xml.get_depth() == 2 && xml.get_node_type() == xmlpp::TextReader::Element)
 			output << endl << "\t" << xml.get_local_name() << ":\t\t" << xml.read_string();
 	}
 	LOG(LOG_NO_INFO, "SWF Metadata:" << output.str());

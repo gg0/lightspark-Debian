@@ -151,7 +151,9 @@ public:
 	number_t a, b, c, d, tx, ty;
 	static void sinit(Class_base* c);
 	static void buildTraits(ASObject* o);
-	
+	void _createBox(number_t scaleX, number_t scaleY, number_t angle, number_t x, number_t y);
+	MATRIX getMATRIX() const;
+
 	//Overloads
 	tiny_string toString(bool debugMsg=false);
 	
@@ -161,7 +163,7 @@ public:
 	ASFUNCTION(clone);
 	ASFUNCTION(concat);
 	ASFUNCTION(createBox);
-	//ASFUNCTION(createGradientBox);
+	ASFUNCTION(createGradientBox);
 	ASFUNCTION(deltaTransformPoint);
 	ASFUNCTION(identity);
 	ASFUNCTION(invert);

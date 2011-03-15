@@ -34,13 +34,14 @@ SET_NAMESPACE("flash.net");
 REGISTER_CLASS_NAME(URLLoader);
 REGISTER_CLASS_NAME(URLLoaderDataFormat);
 REGISTER_CLASS_NAME(URLRequest);
+REGISTER_CLASS_NAME(URLRequestMethod);
 REGISTER_CLASS_NAME(URLVariables);
 REGISTER_CLASS_NAME(SharedObject);
 REGISTER_CLASS_NAME(ObjectEncoding);
 REGISTER_CLASS_NAME(NetConnection);
 REGISTER_CLASS_NAME(NetStream);
 
-URLRequest::URLRequest()
+URLRequest::URLRequest():method(GET)
 {
 }
 
@@ -49,6 +50,8 @@ void URLRequest::sinit(Class_base* c)
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
 	c->setSetterByQName("url","",Class<IFunction>::getFunction(_setURL),true);
 	c->setGetterByQName("url","",Class<IFunction>::getFunction(_getURL),true);
+	c->setSetterByQName("method","",Class<IFunction>::getFunction(_setMethod),true);
+	c->setGetterByQName("method","",Class<IFunction>::getFunction(_getMethod),true);
 }
 
 void URLRequest::buildTraits(ASObject* o)
@@ -78,7 +81,38 @@ ASFUNCTIONBODY(URLRequest,_getURL)
 	return Class<ASString>::getInstanceS(th->url);
 }
 
-URLLoader::URLLoader():dataFormat("text"),data(NULL),downloader(NULL),executingAbort(false)
+ASFUNCTIONBODY(URLRequest,_setMethod)
+{
+	URLRequest* th=static_cast<URLRequest*>(obj);
+	const tiny_string& tmp=args[0]->toString();
+	if(tmp=="GET")
+		th->method=GET;
+	else if(tmp=="POST")
+		th->method=POST;
+	else
+		throw UnsupportedException("Unsupported method in URLLoader");
+	return NULL;
+}
+
+ASFUNCTIONBODY(URLRequest,_getMethod)
+{
+	URLRequest* th=static_cast<URLRequest*>(obj);
+	switch(th->method)
+	{
+		case GET:
+			return Class<ASString>::getInstanceS("GET");
+		case POST:
+			return Class<ASString>::getInstanceS("POST");
+	}
+}
+
+void URLRequestMethod::sinit(Class_base* c)
+{
+	c->setVariableByQName("GET","",Class<ASString>::getInstanceS("GET"));
+	c->setVariableByQName("POST","",Class<ASString>::getInstanceS("POST"));
+}
+
+URLLoader::URLLoader():dataFormat("text"),data(NULL),downloader(NULL)
 {
 }
 
@@ -108,6 +142,7 @@ ASFUNCTIONBODY(URLLoader,load)
 	URLLoader* th=static_cast<URLLoader*>(obj);
 	ASObject* arg=args[0];
 	assert_and_throw(arg->getPrototype()==Class<URLRequest>::getClass());
+	assert_and_throw(th->downloader==NULL);
 	URLRequest* urlRequest=static_cast<URLRequest*>(arg);
 	//Check for URLRequest.url != null
 	if(urlRequest->url.len() == 0)
@@ -151,38 +186,64 @@ ASFUNCTIONBODY(URLLoader,load)
 	dataName.name_s="data";
 	dataName.ns.push_back(nsNameAndKind("",NAMESPACE));
 	ASObject* data=arg->getVariableByMultiname(dataName);
-	if(data)
-	{
-		if(data->getPrototype()==Class<URLVariables>::getClass())
-			throw RunTimeException("Type mismatch in URLLoader::load parameter: "
-					"URLVariables instead of URLRequest");
-		else
-		{
-			tiny_string newURL = th->url.getParsedURL();
-			if(th->url.getQuery() == "")
-				newURL += "?";
-			else
-				newURL += "&amp;";
-			newURL += data->toString();
-			th->url=th->url.goToURL(newURL);
-		}
-	}
 	assert_and_throw(th->dataFormat=="binary" || th->dataFormat=="text");
-	
-	if(!th->url.isValid())
+	if(urlRequest->method==URLRequest::GET)
 	{
-		//Notify an error during loading
-		sys->currentVm->addEvent(th,Class<Event>::getInstanceS("ioError"));
-	}
-	else //The URL is valid so we can start the download and add ourself as a job
-	{
+		if(data)
+		{
+			if(data->getPrototype()==Class<URLVariables>::getClass())
+				throw RunTimeException("URLVariables not support in URLLoader::load");
+			else if(data->getPrototype()==Class<ByteArray>::getClass())
+				throw RunTimeException("ByteArray not support in URLLoader::load");
+			else
+			{
+				tiny_string newURL = th->url.getParsedURL();
+				if(th->url.getQuery() == "")
+					newURL += "?";
+				else
+					newURL += "&amp;";
+				newURL += data->toString();
+				th->url=th->url.goToURL(newURL);
+			}
+		}
+		if(!th->url.isValid())
+		{
+			//Notify an error during loading
+			sys->currentVm->addEvent(th,Class<Event>::getInstanceS("ioError"));
+			return NULL;
+		}
+		//The URL is valid so we can start the download and add ourself as a job
 		//Don't cache our downloaded files
 		th->downloader=sys->downloadManager->download(th->url, false);
-
-		//To be decreffed in jobFence
-		th->incRef();
-		sys->addJob(th);
 	}
+	else //POST
+	{
+		vector<uint8_t> postData;
+		if(data)
+		{
+			if(data->getPrototype()==Class<URLVariables>::getClass())
+				throw RunTimeException("URLVariables not support in URLLoader::load");
+			else if(data->getPrototype()==Class<ByteArray>::getClass())
+				throw RunTimeException("ByteArray not support in URLLoader::load");
+			else
+			{
+				const tiny_string& strData=data->toString();
+				postData.insert(postData.end(),strData.raw_buf(),strData.raw_buf()+strData.len());
+			}
+		}
+		if(!th->url.isValid())
+		{
+			//Notify an error during loading
+			sys->currentVm->addEvent(th,Class<Event>::getInstanceS("ioError"));
+			return NULL;
+		}
+		//The URL is valid so we can start the download and add ourself as a job
+		th->downloader=sys->downloadManager->downloadWithData(th->url, postData);
+	}
+	//To be decreffed in jobFence
+	th->incRef();
+	assert(th->downloader);
+	sys->addJob(th);
 	return NULL;
 }
 
@@ -198,6 +259,8 @@ void URLLoader::execute()
 	if(!downloader->hasFailed())
 	{
 		downloader->waitForTermination();
+		//HACK: the downloader may have been cleared in the mean time
+		assert(downloader);
 		if(!downloader->hasFailed())
 		{
 			istream s(downloader);
@@ -210,7 +273,7 @@ void URLLoader::execute()
 				ByteArray* byteArray=Class<ByteArray>::getInstanceS();
 				byteArray->acquireBuffer(buf,downloader->getLength());
 				data=byteArray;
-				//The buffers must not be deleted, it's now handled bt the ByteArray instance
+				//The buffers must not be deleted, it's now handled by the ByteArray instance
 			}
 			else if(dataFormat=="text")
 			{
@@ -220,6 +283,11 @@ void URLLoader::execute()
 			//Send a complete event for this object
 			sys->currentVm->addEvent(this,Class<Event>::getInstanceS("complete"));
 		}
+		else
+		{
+			//Notify an error during loading
+			sys->currentVm->addEvent(this,Class<Event>::getInstanceS("ioError"));
+		}
 	}
 	else
 	{
@@ -227,18 +295,19 @@ void URLLoader::execute()
 		sys->currentVm->addEvent(this,Class<Event>::getInstanceS("ioError"));
 	}
 
-	sys->downloadManager->destroy(downloader);
-	downloader = NULL;
+	{
+		//Acquire the lock to ensure consistency in threadAbort
+		SpinlockLocker l(downloaderLock);
+		sys->downloadManager->destroy(downloader);
+		downloader = NULL;
+	}
 }
 
 void URLLoader::threadAbort()
 {
-	executingAbort=true;
+	SpinlockLocker l(downloaderLock);
 	if(downloader != NULL)
-	{
 		downloader->stop();
-	}
-	executingAbort=false;
 }
 
 ASFUNCTIONBODY(URLLoader,_getDataFormat)
@@ -283,7 +352,7 @@ void ObjectEncoding::sinit(Class_base* c)
 	c->setVariableByQName("DEFAULT","",abstract_i(DEFAULT));
 };
 
-NetConnection::NetConnection()
+NetConnection::NetConnection():_connected(false)
 {
 }
 
@@ -295,8 +364,8 @@ void NetConnection::sinit(Class_base* c)
 	c->max_level=c->super->max_level+1;
 	c->setMethodByQName("connect","",Class<IFunction>::getFunction(connect),true);
 	c->setGetterByQName("connected","",Class<IFunction>::getFunction(_getConnected),true);
-	c->setGetterByQName("defaultObjectEncoding","",Class<IFunction>::getFunction(_getDefaultObjectEncoding),true);
-	c->setSetterByQName("defaultObjectEncoding","",Class<IFunction>::getFunction(_setDefaultObjectEncoding),true);
+	c->setGetterByQName("defaultObjectEncoding","",Class<IFunction>::getFunction(_getDefaultObjectEncoding),false);
+	c->setSetterByQName("defaultObjectEncoding","",Class<IFunction>::getFunction(_setDefaultObjectEncoding),false);
 	sys->staticNetConnectionDefaultObjectEncoding = ObjectEncoding::DEFAULT;
 	c->setGetterByQName("objectEncoding","",Class<IFunction>::getFunction(_getObjectEncoding),true);
 	c->setSetterByQName("objectEncoding","",Class<IFunction>::getFunction(_setObjectEncoding),true);
@@ -371,8 +440,10 @@ ASFUNCTIONBODY(NetConnection,_setDefaultObjectEncoding)
 	int32_t value = args[0]->toInt();
 	if(value == 0)
 		sys->staticNetConnectionDefaultObjectEncoding = ObjectEncoding::AMF0;
-	else
+	else if(value == 3)
 		sys->staticNetConnectionDefaultObjectEncoding = ObjectEncoding::AMF3;
+	else
+		throw RunTimeException("Invalid object encoding");
 	return NULL;
 }
 
@@ -410,13 +481,16 @@ ASFUNCTIONBODY(NetConnection,_getProtocol)
 ASFUNCTIONBODY(NetConnection,_getURI)
 {
 	NetConnection* th=Class<NetConnection>::cast(obj);
-	if(th->_connected)
+	if(th->_connected && th->uri.isValid())
 		return Class<ASString>::getInstanceS(th->uri.getURL());
 	else
-		return new Undefined;
+	{
+		//Reference says the return should be undefined. The right thing is "null" as a string
+		return Class<ASString>::getInstanceS("null");
+	}
 }
 
-NetStream::NetStream():frameRate(0),tickStarted(false),downloader(NULL),
+NetStream::NetStream():frameRate(0),tickStarted(false),connection(NULL),downloader(NULL),
 	videoDecoder(NULL),audioDecoder(NULL),audioStream(NULL),streamTime(0),
 		paused(false),closed(true),checkPolicyFile(false),rawAccessAllowed(false)
 {
@@ -430,6 +504,8 @@ NetStream::~NetStream()
 		sys->removeJob(this);
 	delete videoDecoder; 
 	delete audioDecoder; 
+	if(connection)
+		connection->decRef();
 	sem_destroy(&mutex);
 }
 
@@ -522,8 +598,9 @@ ASFUNCTIONBODY(NetStream,_constructor)
 	}
 
 	th->client = th;
+	th->connection=netConnection;
+	th->connection->incRef();
 
-	assert_and_throw(netConnection->uri.getURL()=="");
 	return NULL;
 }
 
@@ -541,33 +618,47 @@ ASFUNCTIONBODY(NetStream,play)
 	th->paused = false;
 //	th->audioPaused = false;
 
-	assert_and_throw(argslen==1);
-	const tiny_string& arg0=args[0]->toString();
-	th->url = sys->getOrigin().goToURL(arg0);
-
-	//checkPolicyFile only applies to per-pixel access, loading and playing is always allowed.
-	//So there is no need to disallow playing if policy files disallow it.
-	//We do need to check if per-pixel access is allowed.
-	SecurityManager::EVALUATIONRESULT evaluationResult = 
-		sys->securityManager->evaluateURL(th->url, th->checkPolicyFile, 
-			~(SecurityManager::LOCAL_WITH_FILE),
-			SecurityManager::LOCAL_WITH_FILE | SecurityManager::LOCAL_TRUSTED,
-			true); //Check for navigating up in local directories (not allowed)
-	if(evaluationResult == SecurityManager::NA_REMOTE_SANDBOX)
-		throw Class<SecurityError>::getInstanceS("SecurityError: NetStream::play: "
-				"connect to network");
-	//Local-with-filesystem sandbox can't access network
-	else if(evaluationResult == SecurityManager::NA_LOCAL_SANDBOX)
-		throw Class<SecurityError>::getInstanceS("SecurityError: NetStream::play: "
-				"connect to local file");
-	else if(evaluationResult == SecurityManager::NA_PORT)
-		throw Class<SecurityError>::getInstanceS("SecurityError: NetStream::play: "
-				"connect to restricted port");
-	else if(evaluationResult == SecurityManager::NA_RESTRICT_LOCAL_DIRECTORY)
-		throw Class<SecurityError>::getInstanceS("SecurityError: NetStream::play: "
-				"not allowed to navigate up for local files");
-	else if(evaluationResult == SecurityManager::NA_CROSSDOMAIN_POLICY)
-		th->rawAccessAllowed = true;
+	
+	if(th->connection->uri.isValid())
+	{
+		//We should connect to FMS
+		assert_and_throw(argslen>=2 && argslen<=4);
+		//Args: name, start, len, reset
+		th->url=th->connection->uri;
+		th->url.setStream(args[0]->toString());
+		assert(th->url.getProtocol()=="rtmpe");
+	}
+	else
+	{
+		//HTTP download
+		assert_and_throw(argslen>=1);
+		//args[0] is the url
+		//what is the meaning of the other arguments
+		th->url = sys->getOrigin().goToURL(args[0]->toString());
+		//checkPolicyFile only applies to per-pixel access, loading and playing is always allowed.
+		//So there is no need to disallow playing if policy files disallow it.
+		//We do need to check if per-pixel access is allowed.
+		SecurityManager::EVALUATIONRESULT evaluationResult = 
+			sys->securityManager->evaluateURL(th->url, th->checkPolicyFile, 
+				~(SecurityManager::LOCAL_WITH_FILE),
+				SecurityManager::LOCAL_WITH_FILE | SecurityManager::LOCAL_TRUSTED,
+				true); //Check for navigating up in local directories (not allowed)
+		if(evaluationResult == SecurityManager::NA_REMOTE_SANDBOX)
+			throw Class<SecurityError>::getInstanceS("SecurityError: NetStream::play: "
+					"connect to network");
+		//Local-with-filesystem sandbox can't access network
+		else if(evaluationResult == SecurityManager::NA_LOCAL_SANDBOX)
+			throw Class<SecurityError>::getInstanceS("SecurityError: NetStream::play: "
+					"connect to local file");
+		else if(evaluationResult == SecurityManager::NA_PORT)
+			throw Class<SecurityError>::getInstanceS("SecurityError: NetStream::play: "
+					"connect to restricted port");
+		else if(evaluationResult == SecurityManager::NA_RESTRICT_LOCAL_DIRECTORY)
+			throw Class<SecurityError>::getInstanceS("SecurityError: NetStream::play: "
+					"not allowed to navigate up for local files");
+		else if(evaluationResult == SecurityManager::NA_CROSSDOMAIN_POLICY)
+			th->rawAccessAllowed = true;
+	}
 
 	assert_and_throw(th->downloader==NULL);
 	
@@ -965,7 +1056,7 @@ void NetStream::execute()
 	}
 	catch(LightsparkException& e)
 	{
-		cout << e.cause << endl;
+		LOG(LOG_ERROR, "Exception in NetStream " << e.cause);
 		threadAbort();
 		waitForFlush=false;
 	}
@@ -989,6 +1080,13 @@ void NetStream::execute()
 			audioDecoder->waitFlushed();
 		if(videoDecoder)
 			videoDecoder->waitFlushed();
+
+		Event* status=Class<NetStatusEvent>::getInstanceS("status", "NetStream.Play.Stop");
+		getVm()->addEvent(this, status);
+		status->decRef();
+		status=Class<NetStatusEvent>::getInstanceS("status", "NetStream.Buffer.Flush");
+		getVm()->addEvent(this, status);
+		status->decRef();
 	}
 	//Before deleting stops ticking, removeJobs also spin waits for termination
 	sys->removeJob(this);

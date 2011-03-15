@@ -54,11 +54,17 @@ ByteArray::~ByteArray()
 void ByteArray::sinit(Class_base* c)
 {
 	c->setGetterByQName("length","",Class<IFunction>::getFunction(_getLength),true);
+	c->setSetterByQName("length","",Class<IFunction>::getFunction(_setLength),true);
 	c->setGetterByQName("bytesAvailable","",Class<IFunction>::getFunction(_getBytesAvailable),true);
 	c->setGetterByQName("position","",Class<IFunction>::getFunction(_getPosition),true);
 	c->setSetterByQName("position","",Class<IFunction>::getFunction(_setPosition),true);
+	c->setGetterByQName("defaultObjectEncoding","",Class<IFunction>::getFunction(_getDefaultObjectEncoding),false);
+	c->setSetterByQName("defaultObjectEncoding","",Class<IFunction>::getFunction(_setDefaultObjectEncoding),false);
+	sys->staticByteArrayDefaultObjectEncoding = ObjectEncoding::DEFAULT;
 	c->setMethodByQName("readBytes","",Class<IFunction>::getFunction(readBytes),true);
 	c->setMethodByQName("readObject","",Class<IFunction>::getFunction(readObject),true);
+	c->setMethodByQName("writeUTFBytes","",Class<IFunction>::getFunction(writeUTFBytes),true);
+	c->setMethodByQName("writeBytes","",Class<IFunction>::getFunction(writeBytes),true);
 //	c->setMethodByQName("toString",AS3,Class<IFunction>::getFunction(ByteArray::_toString),true);
 	c->setMethodByQName("toString","",Class<IFunction>::getFunction(ByteArray::_toString),true);
 }
@@ -67,16 +73,25 @@ void ByteArray::buildTraits(ASObject* o)
 {
 }
 
-uint8_t* ByteArray::getBuffer(unsigned int size)
+uint8_t* ByteArray::getBuffer(unsigned int size, bool enableResize)
 {
 	if(bytes==NULL)
 	{
 		len=size;
 		bytes=new uint8_t[len];
 	}
-	else
+	else if(enableResize==false)
 	{
 		assert_and_throw(size<=len);
+	}
+	else if(len<size) // && enableResize==true
+	{
+		//Resize the buffer
+		uint8_t* bytes2=new uint8_t[size];
+		len=size;
+		memcpy(bytes2,bytes,len);
+		delete[] bytes;
+		bytes=bytes2;
 	}
 	return bytes;
 }
@@ -92,6 +107,51 @@ ASFUNCTIONBODY(ByteArray,_setPosition)
 	ByteArray* th=static_cast<ByteArray*>(obj);
 	int pos=args[0]->toInt();
 	th->position=pos;
+	return NULL;
+}
+
+ASFUNCTIONBODY(ByteArray,_getDefaultObjectEncoding)
+{
+	return abstract_i(sys->staticNetConnectionDefaultObjectEncoding);
+}
+
+ASFUNCTIONBODY(ByteArray,_setDefaultObjectEncoding)
+{
+	assert_and_throw(argslen == 1);
+	int32_t value = args[0]->toInt();
+	if(value == 0)
+		sys->staticByteArrayDefaultObjectEncoding = ObjectEncoding::AMF0;
+	else if(value == 3)
+		sys->staticByteArrayDefaultObjectEncoding = ObjectEncoding::AMF3;
+	else
+		throw RunTimeException("Invalid object encoding");
+	return NULL;
+}
+
+ASFUNCTIONBODY(ByteArray,_setLength)
+{
+	ByteArray* th=static_cast<ByteArray*>(obj);
+	assert_and_throw(argslen==1);
+	uint32_t newLen=args[0]->toInt();
+	if(newLen==th->len) //Nothing to do
+		return NULL;
+	uint8_t* newBytes=new uint8_t[newLen];
+	if(th->len<newLen)
+	{
+		//Extend
+		memcpy(newBytes,th->bytes,th->len);
+		memset(newBytes+th->len,0,newLen-th->len);
+	}
+	else
+	{
+		//Truncate
+		memcpy(newBytes,th->bytes,newLen);
+	}
+	delete[] th->bytes;
+	th->bytes=newBytes;
+	th->len=newLen;
+	//TODO: check position
+	th->position=0;
 	return NULL;
 }
 
@@ -111,14 +171,18 @@ ASFUNCTIONBODY(ByteArray,readBytes)
 {
 	ByteArray* th=static_cast<ByteArray*>(obj);
 	//Validate parameters
-	assert_and_throw(argslen==3);
+	assert_and_throw(argslen>=1 && argslen<=3);
 	assert_and_throw(args[0]->getPrototype()==Class<ByteArray>::getClass());
 
 	ByteArray* out=Class<ByteArray>::cast(args[0]);
-	uint32_t offset=args[1]->toInt();
-	uint32_t length=args[2]->toInt();
+	uint32_t offset=0;
+	uint32_t length=0;
+	if(argslen>=2)
+		offset=args[1]->toInt();
+	if(argslen==3)
+		length=args[2]->toInt();
 	//TODO: Support offset (offset is in the destination!)
-	if(offset!=0)
+	if(offset!=0 || length==0)
 		throw UnsupportedException("offset in ByteArray::readBytes");
 
 	//Error checks
@@ -128,8 +192,52 @@ ASFUNCTIONBODY(ByteArray,readBytes)
 		//TODO: throw AS exceptions
 		return NULL;
 	}
-	uint8_t* buf=out->getBuffer(length);
+	uint8_t* buf=out->getBuffer(length,true);
 	memcpy(buf,th->bytes+th->position,length);
+	th->position+=length;
+
+	return NULL;
+}
+
+ASFUNCTIONBODY(ByteArray,writeUTFBytes)
+{
+	ByteArray* th=static_cast<ByteArray*>(obj);
+	//Validate parameters
+	assert_and_throw(argslen==1);
+	assert_and_throw(args[0]->getObjectType()==T_STRING);
+	ASString* str=Class<ASString>::cast(args[0]);
+	th->getBuffer(th->position+str->data.size()+1,true);
+	memcpy(th->bytes+th->position,str->data.c_str(),str->data.size()+1);
+
+	return NULL;
+}
+
+ASFUNCTIONBODY(ByteArray,writeBytes)
+{
+	ByteArray* th=static_cast<ByteArray*>(obj);
+	//Validate parameters
+	assert_and_throw(argslen>=1 && argslen<=3);
+	assert_and_throw(args[0]->getPrototype()==Class<ByteArray>::getClass());
+	ByteArray* out=Class<ByteArray>::cast(args[0]);
+	uint32_t offset=0;
+	uint32_t length=0;
+	if(argslen>=2)
+		offset=args[1]->toInt();
+	if(argslen==3)
+		length=args[2]->toInt();
+
+	//If the length is 0 the whole buffer must be copied
+	if(length == 0)
+		length=(out->getLength()-offset);
+	else if(length > (out->getLength()-offset))
+	{
+		LOG(LOG_ERROR,"ByteArray::writeBytes not enough data");
+		//TODO: throw AS exceptions
+		return NULL;
+	}
+	uint8_t* buf=out->getBuffer(offset+length,false);
+	th->getBuffer(th->position+length,true);
+	memcpy(th->bytes+th->position,buf+offset,length);
 	th->position+=length;
 
 	return NULL;
@@ -267,8 +375,8 @@ void Timer::tick()
 		sys->addWait(delay,this);
 	else
 	{
-		repeatCount--;
-		if(repeatCount)
+		currentCount++;
+		if(currentCount<=repeatCount)
 			sys->addWait(delay,this);
 	}
 }
@@ -286,6 +394,7 @@ ASFUNCTIONBODY(Timer,_constructor)
 	Timer* th=static_cast<Timer*>(obj);
 	obj->setVariableByQName("start","",Class<IFunction>::getFunction(start));
 	obj->setVariableByQName("reset","",Class<IFunction>::getFunction(reset));
+	obj->setVariableByQName("stop","",Class<IFunction>::getFunction(stop));
 
 	th->delay=args[0]->toInt();
 	if(argslen>=2)
@@ -299,6 +408,7 @@ ASFUNCTIONBODY(Timer,start)
 	Timer* th=static_cast<Timer*>(obj);
 	th->running=true;
 	th->incRef();
+	//TODO: use addTick when more than s single shot is used
 	sys->addWait(th->delay,th);
 	return NULL;
 }
@@ -306,7 +416,34 @@ ASFUNCTIONBODY(Timer,start)
 ASFUNCTIONBODY(Timer,reset)
 {
 	Timer* th=static_cast<Timer*>(obj);
-	th->running=false;
+	if(th->running)
+	{
+		//This spin waits if the timer is running right now
+		sys->removeJob(th);
+		//NOTE: although no new events will be sent now there might be old events in the queue.
+		//Is this behaviour right?
+		th->currentCount=0;
+		//This is not anymore used by the timer, so it can die
+		th->decRef();
+		th->running=false;
+	}
+	return NULL;
+}
+
+ASFUNCTIONBODY(Timer,stop)
+{
+	Timer* th=static_cast<Timer*>(obj);
+	if(th->running)
+	{
+		//This spin waits if the timer is running right now
+		sys->removeJob(th);
+		//NOTE: although no new events will be sent now there might be old events in the queue.
+		//Is this behaviour right?
+
+		//This is not anymore used by the timer, so it can die
+		th->decRef();
+		th->running=false;
+	}
 	return NULL;
 }
 
@@ -400,6 +537,8 @@ Dictionary::~Dictionary()
 void Dictionary::sinit(Class_base* c)
 {
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
+	c->super=Class<ASObject>::getClass();
+	c->max_level=c->super->max_level+1;
 }
 
 void Dictionary::buildTraits(ASObject* o)
@@ -428,15 +567,14 @@ void Dictionary::setVariableByMultiname(const multiname& name, ASObject* o, ASOb
 		multiname* tmp=const_cast<multiname*>(&name);
 		tmp->name_o=NULL;
 	}
-	else if(name.name_type==multiname::NAME_STRING)
-		data[Class<ASString>::getInstanceS(name.name_s)]=o;
-	else if(name.name_type==multiname::NAME_INT)
-		data[abstract_i(name.name_i)]=o;
-	else if(name.name_type==multiname::NAME_NUMBER)
-		data[abstract_d(name.name_d)]=o;
 	else
 	{
-		throw UnsupportedException("Unsupported name kind in Dictionary::setVariableByMultiname");
+		//Primitive types _must_ be handled by the normal ASObject path
+		//REFERENCE: Dictionary Object on AS3 reference
+		assert(name.name_type==multiname::NAME_STRING ||
+			name.name_type==multiname::NAME_INT ||
+			name.name_type==multiname::NAME_NUMBER);
+		ASObject::setVariableByMultiname(name, o, base);
 	}
 }
 
@@ -444,112 +582,55 @@ void Dictionary::deleteVariableByMultiname(const multiname& name)
 {
 	assert_and_throw(implEnable);
 	
-	map<ASObject*, ASObject*>::iterator it;
-	getIteratorByMultiname(name, it);
-	
-	assert_and_throw(it != data.end());
-	
-	it->second->decRef();
-	data.erase(it);
-
-	//This is ugly, but at least we are sure that we own name_o
-	multiname* tmp=const_cast<multiname*>(&name);
-	tmp->name_o=NULL;
-}
-
-void Dictionary::getIteratorByMultiname(const multiname& name, map<ASObject*, ASObject*>::iterator& iter)
-{
-	assert_and_throw(implEnable);
-	//It seems that various kind of implementation works only with the empty namespace
-	assert_and_throw(name.ns.size()>0 && name.ns[0].name=="");
 	if(name.name_type==multiname::NAME_OBJECT)
 	{
-		//From specs, then === operator compare references when working on generic objects
 		map<ASObject*,ASObject*>::iterator it=data.find(name.name_o);
 		if(it != data.end())
 		{
-			iter = it;
-			//This is ugly, but at least we are sure that we own name_o
-			multiname* tmp=const_cast<multiname*>(&name);
-			tmp->name_o=NULL;
-			return;
-		}
-	}
-	else if(name.name_type==multiname::NAME_STRING)
-	{
-		//Ok, we need to do the slow lookup on every object and check for === comparison
-		map<ASObject*, ASObject*>::iterator it=data.begin();
-		for(;it!=data.end();++it)
-		{
-			if(it->first->getObjectType()==T_STRING)
-			{
-				ASString* s=Class<ASString>::cast(it->first);
-				if(name.name_s == s->data.c_str())
-				{
-					//Value found
-					iter = it;
-					return;
-				}
-			}
-		}
-	}
-	else if(name.name_type==multiname::NAME_INT)
-	{
-		//Ok, we need to do the slow lookup on every object and check for === comparison
-		map<ASObject*, ASObject*>::iterator it=data.begin();
-		for(;it!=data.end();++it)
-		{
-			SWFOBJECT_TYPE type=it->first->getObjectType();
-			if(type==T_INTEGER || type==T_UINTEGER || type==T_NUMBER)
-			{
-				if(name.name_i == it->first->toNumber())
-				{
-					//Value found
-					iter = it;
-					return;
-				}
-			}
-		}
-	}
-	else if(name.name_type==multiname::NAME_NUMBER)
-	{
-		//Ok, we need to do the slow lookup on every object and check for === comparison
-		map<ASObject*, ASObject*>::iterator it=data.begin();
-		for(;it!=data.end();++it)
-		{
-			SWFOBJECT_TYPE type=it->first->getObjectType();
-			if(type==T_INTEGER || type==T_UINTEGER || type==T_NUMBER)
-			{
-				if(name.name_d == it->first->toNumber())
-				{
-					//Value found
-					iter = it;
-					return;
-				}
-			}
+			it->first->decRef();
+			it->second->decRef();
+			data.erase(it);
 		}
 	}
 	else
 	{
-		throw UnsupportedException("Unsupported name kind on Dictionary::getVariableByMultiname");
+		//Primitive types _must_ be handled by the normal ASObject path
+		//REFERENCE: Dictionary Object on AS3 reference
+		assert(name.name_type==multiname::NAME_STRING ||
+			name.name_type==multiname::NAME_INT ||
+			name.name_type==multiname::NAME_NUMBER);
+		return ASObject::deleteVariableByMultiname(name);
 	}
-	iter = data.end();
 }
-
 
 ASObject* Dictionary::getVariableByMultiname(const multiname& name, bool skip_impl, ASObject* base)
 {
-	assert_and_throw(!skip_impl);
-	assert_and_throw(implEnable);
-	
-	map<ASObject*, ASObject*>::iterator it;
-	getIteratorByMultiname(name, it);
-	
-	if (it == data.end())
-		return new Undefined;
-		
-	it->second->incRef();
-	return it->second;
+	if(!skip_impl && implEnable)
+	{
+		if(name.name_type==multiname::NAME_OBJECT)
+		{
+			map<ASObject*,ASObject*>::iterator it=data.find(name.name_o);
+			if(it != data.end())
+			{
+				//This is ugly, but at least we are sure that we own name_o
+				multiname* tmp=const_cast<multiname*>(&name);
+				tmp->name_o=NULL;
+				it->second->incRef();
+				return it->second;
+			}
+		}
+		else
+		{
+			//Primitive types _must_ be handled by the normal ASObject path
+			//REFERENCE: Dictionary Object on AS3 reference
+			assert(name.name_type==multiname::NAME_STRING ||
+				name.name_type==multiname::NAME_INT ||
+				name.name_type==multiname::NAME_NUMBER);
+			return ASObject::getVariableByMultiname(name, skip_impl, base);
+		}
+	}
+	//Try with the base implementation
+	return ASObject::getVariableByMultiname(name, skip_impl, base);
 }
 
 bool Dictionary::hasNext(unsigned int& index, bool& out)
@@ -570,6 +651,7 @@ bool Dictionary::nextName(unsigned int index, ASObject*& out)
 	for(unsigned int i=0;i<index;i++)
 		++it;
 	out=it->first;
+	out->incRef();
 	return true;
 }
 
@@ -674,10 +756,9 @@ ASObject* Proxy::getVariableByMultiname(const multiname& name, bool skip_impl, A
 	ASObject* arg=Class<ASString>::getInstanceS(name.name_s);
 	//We now suppress special handling
 	implEnable=false;
-	LOG(LOG_CALLS,_("Proxy::getProperty"));
+	LOG(LOG_CALLS,"Proxy::getProperty");
 	incRef();
 	ASObject* ret=f->call(this,&arg,1);
-	assert_and_throw(ret);
 	implEnable=true;
 	return ret;
 }
@@ -685,7 +766,7 @@ ASObject* Proxy::getVariableByMultiname(const multiname& name, bool skip_impl, A
 bool Proxy::hasNext(unsigned int& index, bool& out)
 {
 	assert_and_throw(implEnable);
-	LOG(LOG_CALLS, _("Proxy::hasNext"));
+	LOG(LOG_CALLS,"Proxy::hasNext");
 	//Check if there is a custom enumerator, skipping implementation to avoid recursive calls
 	multiname nextNameIndexName;
 	nextNameIndexName.name_type=multiname::NAME_STRING;
@@ -830,7 +911,7 @@ IntervalManager::~IntervalManager()
 	{
 		sys->removeJob((*it).second);
 		delete((*it).second);
-		runners.erase(it);
+		runners.erase(it++);
 	}
 	sem_destroy(&mutex);
 }

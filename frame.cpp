@@ -114,7 +114,8 @@ void Frame::init(MovieClip* parent, list <pair<PlaceInfo, DisplayObject*> >& d)
 			i->second->setMatrix(i->first.Matrix);
 			//Take a chance to also invalidate the content
 			if(i->second->isOnStage())
-				i->second->invalidate();
+				i->second->requestInvalidation();
 		}
+		invalid=false;
 	}
 }

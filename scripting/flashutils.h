@@ -46,10 +46,15 @@ public:
 	~ByteArray();
 	ASFUNCTION(_getBytesAvailable);
 	ASFUNCTION(_getLength);
+	ASFUNCTION(_setLength);
 	ASFUNCTION(_getPosition);
 	ASFUNCTION(_setPosition);
+	ASFUNCTION(_getDefaultObjectEncoding);
+	ASFUNCTION(_setDefaultObjectEncoding);
 	ASFUNCTION(readBytes);
 	ASFUNCTION(readObject);
+	ASFUNCTION(writeBytes);
+	ASFUNCTION(writeUTFBytes);
 	ASFUNCTION(_toString);
 
 	/**
@@ -59,7 +64,7 @@ public:
 		@pre buf must be allocated using new[]
 	*/
 	void acquireBuffer(uint8_t* buf, int bufLen);
-	uint8_t* getBuffer(unsigned int size);
+	uint8_t* getBuffer(unsigned int size, bool enableResize);
 	uint32_t getLength() const { return len; }
 
 	static void sinit(Class_base* c);
@@ -78,13 +83,15 @@ private:
 protected:
 	uint32_t delay;
 	uint32_t repeatCount;
+	uint32_t currentCount;
 	bool running;
 public:
-	Timer():delay(0),repeatCount(0),running(false){};
+	Timer():delay(0),repeatCount(0),currentCount(0),running(false){};
 	static void sinit(Class_base* c);
 	ASFUNCTION(_constructor);
 	ASFUNCTION(start);
 	ASFUNCTION(reset);
+	ASFUNCTION(stop);
 };
 
 class Dictionary: public ASObject
@@ -98,7 +105,6 @@ public:
 	static void sinit(Class_base*);
 	static void buildTraits(ASObject* o);
 	ASFUNCTION(_constructor);
-	void getIteratorByMultiname(const multiname& name, std::map<ASObject*, ASObject*>::iterator& iter);
 	ASObject* getVariableByMultiname(const multiname& name, bool skip_impl=false, ASObject* base=NULL);
 	intptr_t getVariableByMultiname_i(const multiname& name)
 	{

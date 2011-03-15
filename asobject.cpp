@@ -108,19 +108,30 @@ TRISTATE ASObject::isLess(ASObject* r)
 bool ASObject::hasNext(unsigned int& index, bool& out)
 {
 	assert_and_throw(implEnable);
-	return false;
+
+	out = index < numVariables();
+	index++;
+
+	return true;
 }
 
 bool ASObject::nextName(unsigned int index, ASObject*& out)
 {
 	assert_and_throw(implEnable);
-	return false;
+
+	out = Class<ASString>::getInstanceS(getNameAt(index-1));
+
+	return true;
 }
 
 bool ASObject::nextValue(unsigned int index, ASObject*& out)
 {
 	assert_and_throw(implEnable);
-	return false;
+
+	out = getValueAt(index);
+	out->incRef();
+
+	return true;
 }
 
 void ASObject::sinit(Class_base* c)
@@ -207,14 +218,14 @@ unsigned int ASObject::toUInt()
 int ASObject::toInt()
 {
 	LOG(LOG_ERROR,_("Cannot convert object of type ") << getObjectType() << _(" to int"));
-	throw RunTimeException("Cannot converto object to int");
+	throw RunTimeException("Cannot convert object to int");
 	return 0;
 }
 
 double ASObject::toNumber()
 {
 	LOG(LOG_ERROR,_("Cannot convert object of type ") << getObjectType() << _(" to float"));
-	throw RunTimeException("Cannot converto object to float");
+	throw RunTimeException("Cannot convert object to float");
 	return 0;
 }
 
@@ -465,23 +476,7 @@ void ASObject::setVariableByQName(const tiny_string& name, const tiny_string& ns
 
 void variables_map::killObjVar(const multiname& mname)
 {
-	tiny_string name;
-	switch(mname.name_type)
-	{
-		case multiname::NAME_INT:
-			name=tiny_string(mname.name_i);
-			break;
-		case multiname::NAME_NUMBER:
-			name=tiny_string(mname.name_d);
-			break;
-		case multiname::NAME_STRING:
-			name=mname.name_s;
-			break;
-		default:
-			assert_and_throw("Unexpected name kind" && false);
-	}
-
-
+	tiny_string name=mname.normalizedName();
 	const pair<var_iterator, var_iterator> ret=Variables.equal_range(name);
 	assert_and_throw(ret.first!=ret.second);
 
@@ -506,24 +501,7 @@ void variables_map::killObjVar(const multiname& mname)
 
 obj_var* variables_map::findObjVar(const multiname& mname, bool create, bool borrowedMode)
 {
-	tiny_string name;
-	switch(mname.name_type)
-	{
-		case multiname::NAME_INT:
-			name=tiny_string(mname.name_i);
-			break;
-		case multiname::NAME_NUMBER:
-			name=tiny_string(mname.name_d);
-			break;
-		case multiname::NAME_STRING:
-			name=mname.name_s;
-			break;
-		case multiname::NAME_OBJECT:
-			name=mname.name_o->toString();
-			break;
-		default:
-			assert_and_throw("Unexpected name kind" && false);
-	}
+	tiny_string name=mname.normalizedName();
 
 	const var_iterator ret_begin=Variables.lower_bound(name);
 	//This actually look for the first different name, if we accept also previous levels
@@ -565,7 +543,7 @@ obj_var* variables_map::findObjVar(const multiname& mname, bool create, bool bor
 
 ASFUNCTIONBODY(ASObject,generator)
 {
-	//By default we assume it's a passtrough cast
+	//By default we assume it's a passthrough cast
 	assert_and_throw(argslen==1);
 	LOG(LOG_CALLS,_("Passthrough of ") << args[0]);
 	args[0]->incRef();
@@ -801,6 +779,7 @@ void ASObject::setPrototype(Class_base* c)
 	{
 		prototype->acquireObject(this);
 		prototype->incRef();
+		setLevel(prototype->max_level);
 	}
 }
 

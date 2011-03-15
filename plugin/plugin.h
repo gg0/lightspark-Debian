@@ -1,7 +1,8 @@
 /**************************************************************************
     Lighspark, a free flash player implementation
 
-    Copyright (C) 2009  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2009,2010  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2010  Timon Van Overveldt (timonvo@gmail.com)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -28,6 +29,7 @@
 #include "parsing/streams.h"
 #include "backends/netutils.h"
 #include "backends/urlutils.h"
+#include "npscriptobject.h"
 #include <GL/glx.h>
 
 class NPDownloader;
@@ -42,6 +44,8 @@ public:
 	~NPDownloadManager();
 	lightspark::Downloader* download(const lightspark::tiny_string& url, bool cached=false, lightspark::LoaderInfo* owner=NULL);
 	lightspark::Downloader* download(const lightspark::URLInfo& url, bool cached=false, lightspark::LoaderInfo* owner=NULL);
+	lightspark::Downloader* downloadWithData(const lightspark::URLInfo& url, const std::vector<uint8_t>& data, 
+			lightspark::LoaderInfo* owner=NULL);
 	void destroy(lightspark::Downloader* downloader);
 };
 
@@ -54,7 +58,10 @@ private:
 	bool started;
 	static void dlStartCallback(void* th);
 public:
+	//Constructor used for the main file
+	NPDownloader(const lightspark::tiny_string& _url, lightspark::LoaderInfo* owner);
 	NPDownloader(const lightspark::tiny_string& _url, bool _cached, NPP _instance, lightspark::LoaderInfo* owner);
+	NPDownloader(const lightspark::tiny_string& _url, const std::vector<uint8_t>& _data, NPP _instance, lightspark::LoaderInfo* owner);
 };
 
 class nsPluginInstance : public nsPluginInstanceBase
@@ -72,7 +79,6 @@ public:
 	NPError DestroyStream(NPStream *stream, NPError reason);
 	int32_t Write(NPStream *stream, int32_t offset, int32_t len, void *buffer);
 	int32_t WriteReady(NPStream *stream);
-	void    URLNotify(const char* url, NPReason reason, void* notifyData);
 	void    StreamAsFile(NPStream* stream, const char* fname);
 
 	// locals
@@ -81,6 +87,7 @@ public:
 
 private:
 	static void AsyncHelper(void* th, helper_t func, void* privArg);
+	static void StopDownloaderHelper(void* th_void);
 	std::string getPageURL() const;
 
 	NPP mInstance;
@@ -95,9 +102,9 @@ private:
 	Colormap mColormap;
 	unsigned int mDepth;
 
-	std::istream swf_stream;
-	sync_stream swf_buf;
-
+	std::istream mainDownloaderStream;
+	NPDownloader* mainDownloader;
+	NPScriptObjectGW* scriptObject;
 	lightspark::SystemState* m_sys;
 	lightspark::ParseThread* m_pt;
 };

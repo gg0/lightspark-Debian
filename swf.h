@@ -39,6 +39,7 @@
 #include "backends/pluginmanager.h"
 #include "backends/security.h"
 #include "backends/urlutils.h"
+#include "backends/extscriptobject.h"
 
 #include "platforms/pluginutils.h"
 
@@ -163,7 +164,6 @@ private:
 	friend class SystemState::EngineCreator;
 	ThreadPool* threadPool;
 	TimerThread* timerThread;
-	ParseThread* parseThread;
 	sem_t terminated;
 	float renderRate;
 	bool error;
@@ -206,6 +206,27 @@ private:
 
 	URLInfo url;
 	Spinlock profileDataSpinlock;
+
+	Mutex mutexEnterFrameListeners;
+	std::set<DisplayObject*> enterFrameListeners;
+	/*
+	   The head of the invalidate queue
+	*/
+	DisplayObject* invalidateQueueHead;
+	/*
+	   The tail of the invalidate queue
+	*/
+	DisplayObject* invalidateQueueTail;
+	/*
+	   The lock for the invalidate queue
+	*/
+	Spinlock invalidateQueueLock;
+#ifdef PROFILING_SUPPORT
+	/*
+	   Output file for the profiling data
+	*/
+	tiny_string profOut;
+#endif
 public:
 	void setURL(const tiny_string& url) DLL_PUBLIC;
 	ENGINE getEngine() DLL_PUBLIC { return engine; };
@@ -216,6 +237,8 @@ public:
 	
 	std::string errorCause;
 	void setError(const std::string& c);
+	bool hasError() { return error; }
+	std::string& getErrorCause() { return errorCause; }
 	bool shouldTerminate() const;
 	bool isShuttingDown() const DLL_PUBLIC;
 	bool isOnError() const;
@@ -266,6 +289,10 @@ public:
 	bool removeJob(ITickJob* job);
 	void setRenderRate(float rate);
 	float getRenderRate();
+	/*
+	   This is not supposed to be used in the VM, it's only useful to create the Downloader when plugin is being used
+	*/
+	LoaderInfo* getLoaderInfo() const { return loaderInfo; }
 
 	//Stuff to be done once for process and not for plugin instance
 	static void staticInit() DLL_PUBLIC;
@@ -274,6 +301,7 @@ public:
 	DownloadManager* downloadManager;
 	IntervalManager* intervalManager;
 	SecurityManager* securityManager;
+	ExtScriptObject* extScriptObject;
 
 	enum SCALE_MODE { EXACT_FIT=0, NO_BORDER=1, NO_SCALE=2, SHOW_ALL=3 };
 	SCALE_MODE scaleMode;
@@ -282,6 +310,20 @@ public:
 	//NAMING: static$CLASSNAME$$PROPERTYNAME$
 	//	NetConnection
 	ObjectEncoding::ENCODING staticNetConnectionDefaultObjectEncoding;
+	ObjectEncoding::ENCODING staticByteArrayDefaultObjectEncoding;
+	
+	//enterFrame event management
+	void registerEnterFrameListener(DisplayObject* clip);
+	void unregisterEnterFrameListener(DisplayObject* clip);
+
+	//Invalidation queue management
+	void addToInvalidateQueue(DisplayObject* d);
+	void flushInvalidationQueue();
+
+#ifdef PROFILING_SUPPORT
+	void setProfilingOutput(const tiny_string& t) DLL_PUBLIC;
+	const tiny_string& getProfilingOutput() const;
+#endif
 };
 
 class ParseThread: public IThreadJob
@@ -295,7 +337,13 @@ private:
 	void execute();
 	void threadAbort();
 	void jobFence() {};
-	bool parseHeader();
+	/*
+	   parseHeader takes the first four characters as argument
+	*/
+	enum FILE_TYPE { NONE=0, SWF, COMPRESSED_SWF, PNG, JPEG };
+	void parseSWFHeader();
+	void checkType(uint8_t c1, uint8_t c2, uint8_t c3, uint8_t c4);
+	FILE_TYPE fileType;
 public:
 	RootMovieClip* root;
 	int version;

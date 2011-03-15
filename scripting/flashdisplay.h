@@ -38,10 +38,10 @@ class DisplayListTag;
 class LoaderInfo;
 class DisplayObjectContainer;
 class InteractiveObject;
+class Downloader;
 
 class DisplayObject: public EventDispatcher
 {
-//friend class DisplayObjectContainer;
 friend class GraphicsContainer;
 private:
 	MATRIX Matrix;
@@ -56,6 +56,7 @@ private:
 	void localToGlobal(number_t xin, number_t yin, number_t& xout, number_t& yout) const;
 	void becomeMaskOf(DisplayObject* m);
 	void setMask(DisplayObject* m);
+	DisplayObjectContainer* parent;
 protected:
 	/**
 	  	The object that masks us, if any
@@ -91,11 +92,17 @@ public:
 	UI16_SWF Ratio;
 	UI16_SWF ClipDepth;
 	CLIPACTIONS ClipActions;
-	DisplayObjectContainer* parent;
+	DisplayObjectContainer* getParent() const { return parent; }
+	void setParent(DisplayObjectContainer* p);
+	/*
+	   Used to link DisplayObjects the invalidation queue
+	*/
+	DisplayObject* invalidateQueueNext;
 	DisplayObject();
 	~DisplayObject();
 	MATRIX getMatrix() const;
 	virtual void invalidate();
+	virtual void requestInvalidation();
 	MATRIX getConcatenatedMatrix() const;
 	virtual const std::vector<GeomToken>& getTokens()
 	{
@@ -195,7 +202,7 @@ private:
 	void _addChildAt(DisplayObject* child, unsigned int index);
 	bool _contains(DisplayObject* d);
 protected:
-	void invalidate();
+	void requestInvalidation();
 	//This is shared between RenderThread and VM
 	std::list < DisplayObject* > dynamicDisplayList;
 	//The lock should only be taken when doing write operations
@@ -205,7 +212,7 @@ protected:
 	void setOnStage(bool staged);
 public:
 	void dumpDisplayList();
-	void _removeChild(DisplayObject*);
+	bool _removeChild(DisplayObject*);
 	DisplayObjectContainer();
 	virtual ~DisplayObjectContainer();
 	static void sinit(Class_base* c);
@@ -229,8 +236,6 @@ class Graphics: public ASObject
 friend class GraphicsContainer;
 private:
 	std::vector<GeomToken> tokens;
-	//We need a list to preserve pointers
-	std::list<FILLSTYLE> styles; 
 	int curX, curY;
 	GraphicsContainer *const owner;
 	//TODO: Add spinlock
@@ -245,13 +250,17 @@ public:
 	static void sinit(Class_base* c);
 	static void buildTraits(ASObject* o);
 	ASFUNCTION(_constructor);
+	ASFUNCTION(lineStyle);
 	ASFUNCTION(beginFill);
 	ASFUNCTION(beginGradientFill);
 	ASFUNCTION(endFill);
 	ASFUNCTION(drawRect);
+	ASFUNCTION(drawRoundRect);
 	ASFUNCTION(drawCircle);
 	ASFUNCTION(moveTo);
 	ASFUNCTION(lineTo);
+	ASFUNCTION(curveTo);
+	ASFUNCTION(cubicCurveTo);
 	ASFUNCTION(clear);
 	bool getBounds(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const;
 	std::vector<GeomToken> getGraphicsTokens() const;
@@ -284,6 +293,7 @@ public:
 	InteractiveObject* hitTest(InteractiveObject* last, number_t x, number_t y);
 	bool isOpaque(number_t x, number_t y) const;
 	void invalidate();
+	void requestInvalidation();
 	const std::vector<GeomToken>& getTokens();
 	float getScaleFactor() const;
 };
@@ -298,6 +308,8 @@ public:
 	//void Render();
 };
 
+class Loader;
+
 class LoaderInfo: public EventDispatcher
 {
 friend class RootMovieClip;
@@ -307,13 +319,13 @@ private:
 	tiny_string url;
 	tiny_string loaderURL;
 	EventDispatcher* sharedEvents;
+	Loader* loader;
 	enum LOAD_STATUS { STARTED=0, INIT_SENT, COMPLETE };
 	LOAD_STATUS loadStatus;
 	Spinlock spinlock;
 public:
-	LoaderInfo():bytesLoaded(0),bytesTotal(0),loadStatus(STARTED)
-	{
-	}
+	LoaderInfo():bytesLoaded(0),bytesTotal(0),loader(NULL),loadStatus(STARTED) {}
+	LoaderInfo(Loader* l):bytesLoaded(0),bytesTotal(0),loader(l),loadStatus(STARTED) {}
 	static void sinit(Class_base* c);
 	static void buildTraits(ASObject* o);
 	ASFUNCTION(_constructor);
@@ -323,6 +335,8 @@ public:
 	ASFUNCTION(_getBytesLoaded);
 	ASFUNCTION(_getBytesTotal);
 	ASFUNCTION(_getApplicationDomain);
+	ASFUNCTION(_getLoader);
+	ASFUNCTION(_getContent);
 	ASFUNCTION(_getSharedEvents);
 	void setBytesTotal(uint32_t b)
 	{
@@ -343,11 +357,13 @@ private:
 	tiny_string url;
 	ByteArray* bytes;
 	LoaderInfo* contentLoaderInfo;
+	Spinlock downloaderLock;
+	Downloader* downloader;
 	void execute();
 	void threadAbort();
 	void jobFence();
 public:
-	Loader():local_root(NULL),loading(false),loaded(false)
+	Loader():local_root(NULL),loading(false),loaded(false),bytes(NULL),contentLoaderInfo(NULL),downloader(NULL)
 	{
 	}
 	~Loader();
@@ -357,6 +373,7 @@ public:
 	ASFUNCTION(load);
 	ASFUNCTION(loadBytes);
 	ASFUNCTION(_getContentLoaderInfo);
+	ASFUNCTION(_getContent);
 	int getDepth() const
 	{
 		return 0;
@@ -386,6 +403,7 @@ public:
 	void Render(bool maskEnabled);
 	InteractiveObject* hitTest(InteractiveObject* last, number_t x, number_t y);
 	void invalidate();
+	void requestInvalidation();
 };
 
 class MovieClip: public Sprite
@@ -425,7 +443,7 @@ public:
 	//DisplayObject interface
 	void Render(bool maskEnabled);
 	InteractiveObject* hitTest(InteractiveObject* last, number_t x, number_t y);
-	void invalidate();
+	void requestInvalidation();
 	void setRoot(RootMovieClip* r);
 	void setOnStage(bool staged);
 	
@@ -454,6 +472,7 @@ public:
 	ASFUNCTION(_getStageHeight);
 	ASFUNCTION(_getScaleMode);
 	ASFUNCTION(_setScaleMode);
+	ASFUNCTION(_getLoaderInfo);
 };
 
 class StageScaleMode: public ASObject
@@ -480,7 +499,31 @@ public:
 	static void sinit(Class_base* c);
 };
 
+class StageDisplayState: public ASObject
+{
+public:
+	static void sinit(Class_base* c);
+};
+
 class LineScaleMode: public ASObject
+{
+public:
+	static void sinit(Class_base* c);
+};
+
+class GradientType: public ASObject
+{
+public:
+	static void sinit(Class_base* c);
+};
+
+class InterpolationMethod: public ASObject
+{
+public:
+	static void sinit(Class_base* c);
+};
+
+class SpreadMethod: public ASObject
 {
 public:
 	static void sinit(Class_base* c);

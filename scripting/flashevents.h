@@ -46,6 +46,7 @@ public:
 	ASFUNCTION(_constructor);
 	ASFUNCTION(_getType);
 	ASFUNCTION(_getTarget);
+	ASFUNCTION(formatToString);
 	virtual EVENT_TYPE getEventType() {return EVENT;}
 	tiny_string type;
 	//Altough events may be recycled and sent to more than a handler, the target property is set before sending
@@ -207,11 +208,17 @@ class listener
 friend class EventDispatcher;
 private:
 	IFunction* f;
+	uint32_t priority;
 public:
-	explicit listener(IFunction* _f):f(_f){};
+	explicit listener(IFunction* _f, uint32_t _p):f(_f),priority(_p){};
 	bool operator==(IFunction* r)
 	{
 		return f->isEqual(r);
+	}
+	bool operator<(const listener& r) const
+	{
+		//The higher the priority the earlier this must be executed
+		return priority>r.priority;
 	}
 };
 
@@ -266,6 +273,7 @@ public:
 	EVENT_TYPE getEventType() { return SHUTDOWN; }
 };
 
+class SynchronizationEvent;
 class FunctionEvent: public Event
 {
 friend class ABCVm;
@@ -274,9 +282,12 @@ private:
 	ASObject* obj;
 	ASObject** args;
 	unsigned int numArgs;
+	ASObject** result;
+	ASObject** exception;
+	SynchronizationEvent* sync;
 	bool thisOverride;
 public:
-	FunctionEvent(IFunction* _f, ASObject* _obj=NULL, ASObject** _args=NULL, uint32_t _numArgs=0, bool _thisOverride=false);
+	FunctionEvent(IFunction* _f, ASObject* _obj=NULL, ASObject** _args=NULL, uint32_t _numArgs=0, ASObject** _result=NULL, ASObject** _exception=NULL, SynchronizationEvent* _sync=NULL, bool _thisOverride=false);
 	~FunctionEvent();
 	static void sinit(Class_base*);
 	EVENT_TYPE getEventType() { return FUNCTION; }

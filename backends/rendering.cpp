@@ -108,6 +108,11 @@ void RenderThread::start(ENGINE e,void* params)
 #endif
 }
 
+void RenderThread::stop()
+{
+	initialized.signal();
+}
+
 RenderThread::~RenderThread()
 {
 	wait();
@@ -324,7 +329,7 @@ void* RenderThread::gtkplug_worker(RenderThread* th)
 			{
 				glLoadIdentity();
 				glScalef(1.0f/th->scaleX,-1.0f/th->scaleY,1);
-				glTranslatef(-th->offsetX,(th->offsetY+th->windowHeight)*(-1.0f),0);
+				glTranslatef(-th->offsetX,(th->windowHeight-th->offsetY)*(-1.0f),0);
 				glUseProgram(0);
 				glActiveTexture(GL_TEXTURE1);
 				glDisable(GL_TEXTURE_2D);
@@ -338,16 +343,19 @@ void* RenderThread::gtkplug_worker(RenderThread* th)
 				glColor3f(0.8,0.8,0.8);
 					    
 				font.Render("We're sorry, Lightspark encountered a yet unsupported Flash file",
-						-1,FTPoint(0,th->windowHeight/2));
+						-1,FTPoint(0,th->windowHeight/2+20));
 
 				stringstream errorMsg;
 				errorMsg << "SWF file: " << th->m_sys->getOrigin().getParsedURL();
 				font.Render(errorMsg.str().c_str(),
-						-1,FTPoint(0,th->windowHeight/2-20));
+						-1,FTPoint(0,th->windowHeight/2));
 					    
 				errorMsg.str("");
 				errorMsg << "Cause: " << th->m_sys->errorCause;
 				font.Render(errorMsg.str().c_str(),
+						-1,FTPoint(0,th->windowHeight/2-20));
+
+				font.Render("Press C to copy this error to clipboard",
 						-1,FTPoint(0,th->windowHeight/2-40));
 				
 				glFlush();
@@ -506,7 +514,7 @@ void RenderThread::commonGLInit(int width, int height)
 	//Load shaders
 	loadShaderPrograms();
 
-	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+	glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
 	glEnable(GL_BLEND);
 
 	glActiveTexture(GL_TEXTURE0);
@@ -533,15 +541,12 @@ void RenderThread::commonGLInit(int width, int height)
 	glUseProgram(gpu_program);
 	cleanGLErrors();
 	int tex=glGetUniformLocation(gpu_program,"g_tex1");
-	cout << tex << endl;
 	if(tex!=-1)
 		glUniform1i(tex,0);
 	tex=glGetUniformLocation(gpu_program,"g_tex2");
-	cout << tex << endl;
 	if(tex!=-1)
 		glUniform1i(tex,1);
 	fragmentTexScaleUniform=glGetUniformLocation(gpu_program,"texScale");
-	cout << fragmentTexScaleUniform << endl;
 	if(fragmentTexScaleUniform!=-1)
 		glUniform2f(fragmentTexScaleUniform,1.0f/width,1.0f/height);
 	cleanGLErrors();
@@ -656,7 +661,7 @@ void RenderThread::commonGLResize()
 	glOrtho(0,windowWidth,0,windowHeight,-100,0);
 	//scaleY is negated to adapt the flash and gl coordinates system
 	//An additional translation is added for the same reason
-	glTranslatef(offsetX,offsetY+windowHeight,0);
+	glTranslatef(offsetX,windowHeight-offsetY,0);
 	glScalef(scaleX,-scaleY,1);
 
 	glMatrixMode(GL_MODELVIEW);
@@ -720,7 +725,7 @@ void RenderThread::coreRendering(FTFont& font, bool testMode)
 	{
 		glLoadIdentity();
 		glScalef(1.0f/scaleX,-1.0f/scaleY,1);
-		glTranslatef(-offsetX,(offsetY+windowHeight)*(-1.0f),0);
+		glTranslatef(-offsetX,(windowHeight-offsetY)*(-1.0f),0);
 		glUseProgram(0);
 		glDisable(GL_BLEND);
 		glActiveTexture(GL_TEXTURE1);
@@ -743,7 +748,7 @@ void RenderThread::coreRendering(FTFont& font, bool testMode)
 	{
 		glLoadIdentity();
 		glScalef(1.0f/scaleX,-1.0f/scaleY,1);
-		glTranslatef(-offsetX,(offsetY+windowHeight)*(-1.0f),0);
+		glTranslatef(-offsetX,(windowHeight-offsetY)*(-1.0f),0);
 		glUseProgram(0);
 		glActiveTexture(GL_TEXTURE1);
 		glDisable(GL_TEXTURE_2D);
@@ -850,7 +855,7 @@ void* RenderThread::sdl_worker(RenderThread* th)
 			{
 				glLoadIdentity();
 				glScalef(1.0f/th->scaleX,-1.0f/th->scaleY,1);
-				glTranslatef(-th->offsetX,(th->offsetY+th->windowHeight)*(-1.0f),0);
+				glTranslatef(-th->offsetX,(th->windowHeight-th->offsetY)*(-1.0f),0);
 				glUseProgram(0);
 				glActiveTexture(GL_TEXTURE1);
 				glDisable(GL_TEXTURE_2D);
@@ -864,16 +869,19 @@ void* RenderThread::sdl_worker(RenderThread* th)
 				glColor3f(0.8,0.8,0.8);
 					    
 				font.Render("We're sorry, Lightspark encountered a yet unsupported Flash file",
-						-1,FTPoint(0,th->windowHeight/2));
+						-1,FTPoint(0,th->windowHeight/2+20));
 
 				stringstream errorMsg;
 				errorMsg << "SWF file: " << th->m_sys->getOrigin().getParsedURL();
 				font.Render(errorMsg.str().c_str(),
-						-1,FTPoint(0,th->windowHeight/2-20));
+						-1,FTPoint(0,th->windowHeight/2));
 					    
 				errorMsg.str("");
 				errorMsg << "Cause: " << th->m_sys->errorCause;
 				font.Render(errorMsg.str().c_str(),
+						-1,FTPoint(0,th->windowHeight/2-20));
+				
+				font.Render("Please look at the console output to copy this error",
 						-1,FTPoint(0,th->windowHeight/2-40));
 
 				font.Render("Press 'Q' to exit",-1,FTPoint(0,th->windowHeight/2-60));

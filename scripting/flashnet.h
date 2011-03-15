@@ -40,12 +40,22 @@ friend ASObject* sendToURL(ASObject* obj,ASObject* const* args, const unsigned i
 private:
 	tiny_string url;
 public:
+	enum METHOD { GET=0, POST };
+	METHOD method;
 	URLRequest();
 	static void sinit(Class_base*);
 	static void buildTraits(ASObject* o);
 	ASFUNCTION(_constructor);
 	ASFUNCTION(_getURL);
 	ASFUNCTION(_setURL);
+	ASFUNCTION(_getMethod);
+	ASFUNCTION(_setMethod);
+};
+
+class URLRequestMethod: public ASObject
+{
+public:
+	static void sinit(Class_base*);
 };
 
 class URLVariables: public ASObject
@@ -81,8 +91,8 @@ private:
 	tiny_string dataFormat;
 	URLInfo url;
 	ASObject* data;
+	Spinlock downloaderLock;
 	Downloader* downloader;
-	volatile bool executingAbort;
 	void execute();
 	void threadAbort();
 	void jobFence();
@@ -130,6 +140,8 @@ private:
 	STREAM_TYPE classifyStream(std::istream& s);
 	double frameRate;
 	bool tickStarted;
+	//The NetConnection used by this NetStream
+	NetConnection* connection;
 	Downloader* downloader;
 	VideoDecoder* videoDecoder;
 	AudioDecoder* audioDecoder;

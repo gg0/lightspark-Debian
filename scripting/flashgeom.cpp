@@ -947,6 +947,7 @@ void Matrix::sinit(Class_base* c)
 	c->setMethodByQName("clone","",Class<IFunction>::getFunction(clone),true);
 	c->setMethodByQName("concat","",Class<IFunction>::getFunction(concat),true);
 	c->setMethodByQName("createBox","",Class<IFunction>::getFunction(createBox),true);
+	c->setMethodByQName("createGradientBox","",Class<IFunction>::getFunction(createGradientBox),true);
 	c->setMethodByQName("deltaTransformPoint","",Class<IFunction>::getFunction(deltaTransformPoint),true);
 	c->setMethodByQName("identity","",Class<IFunction>::getFunction(identity),true);
 	c->setMethodByQName("invert","",Class<IFunction>::getFunction(invert),true);
@@ -996,6 +997,18 @@ tiny_string Matrix::toString(bool debugMsg)
 		a, b, c, d, tx, ty);
 	
 	return tiny_string(buf, true);
+}
+
+MATRIX Matrix::getMATRIX() const
+{
+	MATRIX ret;
+	ret.ScaleX = a;
+	ret.ScaleY = d;
+	ret.RotateSkew0 = c;
+	ret.RotateSkew1 = b;
+	ret.TranslateX = tx;
+	ret.TranslateY = ty;
+	return ret;
 }
 
 ASFUNCTIONBODY(Matrix,_get_a)
@@ -1213,34 +1226,53 @@ ASFUNCTIONBODY(Matrix,scale)
 	return NULL;
 }
 
+void Matrix::_createBox (number_t scaleX, number_t scaleY, number_t angle, number_t x, number_t y) {
+	a = scaleX * cos(angle);
+	b = scaleX * sin(angle);
+	c = -scaleY * sin(angle);
+	d = scaleY * cos(angle);
+	tx = x * cos(angle) - y * sin(angle);
+	ty = x * sin(angle) + y * cos(angle);
+}
+
 ASFUNCTIONBODY(Matrix,createBox)
 {
 	assert_and_throw(argslen>=2 && argslen <= 5);
 	Matrix* th=static_cast<Matrix*>(obj);
 	number_t scaleX = args[0]->toNumber();
 	number_t scaleY = args[1]->toNumber();
+
 	number_t angle = 0;
 	if ( argslen > 2 ) angle = args[2]->toNumber();
+
 	number_t translateX = 0;
 	if ( argslen > 3 ) translateX = args[3]->toNumber();
+
 	number_t translateY = 0;
 	if ( argslen > 4 ) translateY = args[4]->toNumber();
 
-	number_t ta, tb, tc, td, ttx, tty;
+	th->_createBox(scaleX, scaleY, angle, translateX, translateY);
 
-	ta = scaleX * cos(angle);
-	tb = scaleX * sin(angle);
-	tc = -scaleY * sin(angle);
-	td = scaleY * cos(angle);
-	ttx = translateX * scaleX * cos(angle) - translateY * scaleY * sin(angle);
-	tty = translateX * scaleX * sin(angle) + translateY * scaleY * cos(angle);
+	return NULL;
+}
 
-	th->a = ta;
-	th->b = tb;
-	th->c = tc;
-	th->d = td;
-	th->tx = ttx;
-	th->ty = tty;
+ASFUNCTIONBODY(Matrix,createGradientBox)
+{
+	assert_and_throw(argslen>=2 && argslen <= 5);
+	Matrix* th=static_cast<Matrix*>(obj);
+	number_t width  = args[0]->toNumber();
+	number_t height = args[1]->toNumber();
+
+	number_t angle = 0;
+	if ( argslen > 2 ) angle = args[2]->toNumber();
+
+	number_t translateX = width/2;
+	if ( argslen > 3 ) translateX += args[3]->toNumber();
+
+	number_t translateY = height/2;
+	if ( argslen > 4 ) translateY += args[4]->toNumber();
+
+	th->_createBox(width / 1638.4, height / 1638.4, angle, translateX, translateY);
 
 	return NULL;
 }

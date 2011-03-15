@@ -49,6 +49,9 @@ int main(int argc, char* argv[])
 	char* fileName=NULL;
 	char* url=NULL;
 	char* paramsFileName=NULL;
+#ifdef PROFILING_SUPPORT
+	char* profilingFileName=NULL;
+#endif
 	SecurityManager::SANDBOXTYPE sandboxType=SecurityManager::REMOTE;
 	bool useInterpreter=true;
 	bool useJit=false;
@@ -57,6 +60,8 @@ int main(int argc, char* argv[])
 	setlocale(LC_ALL, "");
 	bindtextdomain("lightspark", "/usr/share/locale");
 	textdomain("lightspark");
+
+	cout << "Lightspark version " << VERSION << " Copyright 2009-2011 Alessandro Pignotti and others" << endl;
 
 	for(int i=1;i<argc;i++)
 	{
@@ -98,6 +103,19 @@ int main(int argc, char* argv[])
 			}
 			paramsFileName=argv[i];
 		}
+#ifdef PROFILING_SUPPORT
+		else if(strcmp(argv[i],"-o")==0 || 
+			strcmp(argv[i],"--profiling-output")==0)
+		{
+			i++;
+			if(i==argc)
+			{
+				fileName=NULL;
+				break;
+			}
+			profilingFileName=argv[i];
+		}
+#endif
 		else if(strcmp(argv[i],"-s")==0 || 
 			strcmp(argv[i],"--security-sandbox")==0)
 		{
@@ -119,7 +137,6 @@ int main(int argc, char* argv[])
 		else if(strcmp(argv[i],"-v")==0 || 
 			strcmp(argv[i],"--version")==0)
 		{
-			cout << "Lightspark version " << VERSION << " Copyright 2009-2010 Alessandro Pignotti" << endl;
 			exit(0);
 		}
 		else
@@ -134,12 +151,15 @@ int main(int argc, char* argv[])
 		}
 	}
 
-
 	if(fileName==NULL)
 	{
-		cout << "Usage: " << argv[0] << " [--url|-u http://loader.url/file.swf]" << 
+		cout << endl << "Usage: " << argv[0] << " [--url|-u http://loader.url/file.swf]" << 
 			" [--disable-interpreter|-ni] [--enable-jit|-j] [--log-level|-l 0-4]" << 
-			" [--parameters-file|-p params-file] [--security-sandbox|-s sandbox] <file.swf>" << endl;
+			" [--parameters-file|-p params-file] [--security-sandbox|-s sandbox]" <<
+#ifdef PROFILING_SUPPORT
+			" [--profiling-output|-o profiling-file]" << 
+#endif
+			" <file.swf>" << endl;
 		exit(1);
 	}
 
@@ -203,6 +223,10 @@ int main(int argc, char* argv[])
 	sys->useJit=useJit;
 	if(paramsFileName)
 		sys->parseParametersFromFile(paramsFileName);
+#ifdef PROFILING_SUPPORT
+	if(profilingFileName)
+		sys->setProfilingOutput(profilingFileName);
+#endif
 	
 	SDL_Init ( SDL_INIT_VIDEO |SDL_INIT_EVENTTHREAD );
 	sys->setParamsAndEngine(SDL, NULL);

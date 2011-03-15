@@ -96,6 +96,7 @@ class DefineShapeTag: public DictionaryTag, public Shape
 private:
 	void computeCached();
 	void invalidate();
+	void requestInvalidation();
 	void FromShaperecordListToShapeVector(const std::vector<SHAPERECORD>& shapeRecords, 
 			std::vector<GeomToken>& tokens, const std::list<FILLSTYLE>& fillStyles);
 	/*
@@ -186,6 +187,10 @@ public:
 	DefineMorphShapeTag(RECORDHEADER h, std::istream& in);
 	int getId(){ return CharacterId; }
 	void Render(bool maskEnabled);
+	bool getBounds(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const
+	{
+		return false;
+	}
 	virtual ASObject* instance() const;
 };
 
@@ -410,7 +415,7 @@ public:
 	}
 };
 
-class FontTag: public DictionaryTag
+class FontTag: public DictionaryTag, public Font
 {
 protected:
 	UI16_SWF FontID;

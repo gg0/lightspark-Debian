@@ -1,11 +1,9 @@
 Description: basic GNU/Hurd support
 Last-Update: 2010-12-17
 
-Index: lightspark/CMakeLists.txt
-===================================================================
---- lightspark.orig/CMakeLists.txt	2010-08-30 14:32:20.000000000 +0200
-+++ lightspark/CMakeLists.txt	2010-08-30 14:32:48.000000000 +0200
-@@ -89,6 +89,13 @@
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -95,6 +95,13 @@
  	SET(ppc 1)
  	SET(LIB_SUFFIX "" CACHE STRING "Choose the suffix of the lib folder (if any) : None ppc")
  	SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -maltivec -D__STDC_CONSTANT_MACROS -fPIC")

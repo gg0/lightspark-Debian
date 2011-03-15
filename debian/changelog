@@ -1,9 +1,23 @@
-lightspark (0.4.5.3-2) UNRELEASED; urgency=low
+lightspark (0.4.6-1) experimental; urgency=low
 
+  * New 0.4.6 upstream release.
+
+  [ Luca Falavigna ]
   * debian/control:
     - Remove myself from Uploaders.
 
- -- Luca Falavigna <dktrkranz@debian.org>  Mon, 28 Feb 2011 22:23:42 +0100
+  [ Didier Raboud ]
+  * Merge changes done in Ubuntu, thanks Jani!
+  * Re-indent Build-Depends.
+  * Add lintian override for empty mozilla/plugins directory.
+
+  [ Jani Monoses ]
+  * Build on armel:
+    - debian/patches/armel.patch: Add arm target to CMakeLists.txt.
+    - debian/control: Allow build on armel architecture.
+  * Drop libffi-dev B-D.
+
+ -- Didier Raboud <odyx@debian.org>  Tue, 15 Mar 2011 13:48:10 +0100
 
 lightspark (0.4.5.3-1) experimental; urgency=low
 

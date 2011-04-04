@@ -1,3 +1,11 @@
+lightspark (0.4.6.1-2) experimental; urgency=low
+
+  * Drop architecture restrictions by patching the buildsystem
+    (all_arches.patch).
+  * Rephrase descriptions to s/mozilla/browser/.
+
+ -- Didier Raboud <odyx@debian.org>  Mon, 04 Apr 2011 15:14:33 +0200
+
 lightspark (0.4.6.1-1) experimental; urgency=low
 
   * New 0.4.6.1 upstream release.

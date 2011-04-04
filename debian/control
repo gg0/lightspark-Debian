@@ -42,7 +42,7 @@ Description: High-performance SWF player (experimental)
  by using modern technologies such as JIT compilation and OpenGL shaders.
  .
  The project is currently in an alpha status and provides the standalone
- player and mozilla plugin for testing purposes only.
+ player and browser plugin for testing purposes only.
  .
  Nice features:
   * JIT compilation of ActionScript to native x86 bytecode
@@ -61,7 +61,7 @@ Description: High-performance SWF player - Mozilla Plugin (experimental)
  by using modern technologies such as JIT compilation and OpenGL shaders.
  .
  The project is currently in an alpha status and provides the standalone
- player and mozilla plugin for testing purposes only.
+ player and browser plugin for testing purposes only.
  .
  Nice features:
   * JIT compilation of ActionScript to native x86 bytecode
@@ -71,7 +71,7 @@ Description: High-performance SWF player - Mozilla Plugin (experimental)
     hardware. Designed from scratch after the official Flash documentation was
     released.
  .
- This package contains the mozilla plugin.
+ This package contains the browser plugin.
 
 Package: lightspark-common
 Architecture: any-i386 any-amd64 powerpc armel
@@ -107,7 +107,7 @@ Description: High-performance SWF player (experimental) - Debug symbols
  by using modern technologies such as JIT compilation and OpenGL shaders.
  .
  The project is currently in an alpha status and provides the standalone
- player and mozilla plugin for testing purposes only.
+ player and browser plugin for testing purposes only.
  .
  Nice features:
   * JIT compilation of ActionScript to native x86 bytecode

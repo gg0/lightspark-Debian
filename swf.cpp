@@ -70,6 +70,8 @@ RootMovieClip::RootMovieClip(LoaderInfo* li, bool isSys):mutex("mutexRoot"),init
 
 RootMovieClip::~RootMovieClip()
 {
+	if(this!=sys)
+		sys->removeJob(this);
 	sem_destroy(&new_frame);
 }
 
@@ -130,6 +132,13 @@ void SystemState::unregisterEnterFrameListener(DisplayObject* obj)
 	Locker l(mutexEnterFrameListeners);
 	if(enterFrameListeners.erase(obj))
 		obj->decRef();
+}
+
+void SystemState::registerTag(Tag* t)
+{
+	SpinlockLocker l(tagsStorageLock);
+	cout << "Tag " << t << " has type " << t->getType() << endl;
+	tagsStorage.push_back(t);
 }
 
 void RootMovieClip::setOnStage(bool staged)
@@ -331,8 +340,25 @@ void SystemState::stopEngines()
 	
 }
 
+#ifdef PROFILING_SUPPORT
+void SystemState::saveProfilingInformation()
+{
+	if(profOut.len())
+	{
+		ofstream f(profOut.raw_buf());
+		f << "events: Time" << endl;
+		for(uint32_t i=0;i<contextes.size();i++)
+			contextes[i]->dumpProfilingData(f);
+		f.close();
+	}
+}
+#endif
+
 SystemState::~SystemState()
 {
+#ifdef PROFILING_SUPPORT
+	saveProfilingInformation();
+#endif
 	//Kill our child process if any
 	if(childPid)
 	{
@@ -1061,7 +1087,7 @@ void ParseThread::execute()
 		while(!done)
 		{
 			Tag* tag=factory.readTag();
-			sys->tagsStorage.push_back(tag);
+			sys->registerTag(tag);
 			switch(tag->getType())
 			{
 				case END_TAG:
@@ -1130,20 +1156,13 @@ void RootMovieClip::initialize()
 	{
 		initialized=true;
 		//Let's see if we have to bind the root movie clip itself
-		if(bindName.len())
+		if(bindName.len()) //The object is constructed after binding
 			sys->currentVm->addEvent(NULL,new BindClassEvent(this,bindName,BindClassEvent::ISROOT));
+		else
+			setConstructed();
+
 		//Now signal the completion for this root
 		loaderInfo->sendInit();
-		//Wait for handling of all previous events
-		SynchronizationEvent* se=new SynchronizationEvent;
-		bool added=sys->currentVm->addEvent(NULL, se);
-		if(!added)
-		{
-			se->decRef();
-			throw RunTimeException("Could not add event");
-		}
-		se->wait();
-		se->decRef();
 	}
 }
 
@@ -1184,7 +1203,8 @@ void RootMovieClip::setFrameCount(int f)
 	//TODO, maybe the next is a regular assert
 	assert_and_throw(cur_frame==&frames.back());
 	//Reserving guarantees than the vector is never invalidated
-	frames.reserve(f);
+	//Add 1 as the commit procedure will add one more (see commitFrame)
+	frames.reserve(f+1);
 	cur_frame=&frames.back();
 }
 
@@ -1238,7 +1258,7 @@ void RootMovieClip::commitFrame(bool another)
 	framesLoaded=frames.size();
 	if(another)
 	{
-		frames.push_back(Frame());
+		frames.emplace_back();
 		cur_frame=&frames.back();
 	}
 	else

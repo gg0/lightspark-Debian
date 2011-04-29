@@ -325,12 +325,13 @@ void ABCVm::callProperty(call_context* th, int n, int m, method_info*& called_mi
 		if(o->getObjectType()==T_FUNCTION)
 		{
 			IFunction* f=static_cast<IFunction*>(o);
-			called_mi=f->getMethodInfo();
 			//Methods has to be runned with their own class this
 			//The owner has to be increffed
 			obj->incRef();
 			f->incRef();
 			ASObject* ret=f->call(obj,args,m);
+			//call getMethodInfo only after the call, so it's updated
+			called_mi=f->getMethodInfo();
 			f->decRef();
 			if(ret==NULL)
 				ret=new Undefined;
@@ -367,8 +368,6 @@ void ABCVm::callProperty(call_context* th, int n, int m, method_info*& called_mi
 				assert_and_throw(o->getObjectType()==T_FUNCTION);
 
 				IFunction* f=static_cast<IFunction*>(o);
-				called_mi=f->getMethodInfo();
-
 				//Create a new array
 				ASObject** proxyArgs=new ASObject*[m+1];
 				//Well, I don't how to pass multiname to an as function. I'll just pass the name as a string
@@ -381,6 +380,8 @@ void ABCVm::callProperty(call_context* th, int n, int m, method_info*& called_mi
 				LOG(LOG_CALLS,_("Proxy::callProperty"));
 				f->incRef();
 				ASObject* ret=f->call(obj,proxyArgs,m+1);
+				//call getMethodInfo only after the call, so it's updated
+				called_mi=f->getMethodInfo();
 				f->decRef();
 				if(ret==NULL)
 					ret=new Undefined;
@@ -729,6 +730,14 @@ void ABCVm::construct(call_context* th, int m)
 			break;
 		}
 
+		case T_OBJECT:
+		{
+			Class_base* o_class=static_cast<Class_base*>(obj->getPrototype());
+			assert(o_class);
+			ret=o_class->getInstance(true,args,m);
+			break;
+		}
+
 		case T_UNDEFINED:
 		case T_NULL:
 		{
@@ -893,11 +902,12 @@ void ABCVm::callPropVoid(call_context* th, int n, int m, method_info*& called_mi
 		if(o->getObjectType()==T_FUNCTION)
 		{
 			IFunction* f=static_cast<IFunction*>(o);
-			called_mi=f->getMethodInfo();
 			obj->incRef();
 
 			f->incRef();
 			ASObject* ret=f->call(obj,args,m);
+			//call getMethodInfo only after the call, so it's updated
+			called_mi=f->getMethodInfo();
 			f->decRef();
 			if(ret)
 				ret->decRef();
@@ -926,7 +936,6 @@ void ABCVm::callPropVoid(call_context* th, int n, int m, method_info*& called_mi
 				assert_and_throw(o->getObjectType()==T_FUNCTION);
 
 				IFunction* f=static_cast<IFunction*>(o);
-				called_mi=f->getMethodInfo();
 
 				//Create a new array
 				ASObject** proxyArgs=new ASObject*[m+1];
@@ -940,6 +949,8 @@ void ABCVm::callPropVoid(call_context* th, int n, int m, method_info*& called_mi
 				LOG(LOG_CALLS,_("Proxy::callProperty"));
 				f->incRef();
 				ASObject* ret=f->call(obj,proxyArgs,m+1);
+				//call getMethodInfo only after the call, so it's updated
+				called_mi=f->getMethodInfo();
 				f->decRef();
 				if(ret)
 					ret->decRef();
@@ -1760,10 +1771,11 @@ void ABCVm::callSuper(call_context* th, int n, int m, method_info*& called_mi)
 		if(o->getObjectType()==T_FUNCTION)
 		{
 			IFunction* f=static_cast<IFunction*>(o);
-			called_mi=f->getMethodInfo();
 			obj->incRef();
 			f->incRef();
 			ASObject* ret=f->call(obj,args,m);
+			//call getMethodInfo only after the call, so it's updated
+			called_mi=f->getMethodInfo();
 			f->decRef();
 			th->runtime_stack_push(ret);
 		}
@@ -1846,10 +1858,11 @@ void ABCVm::callSuperVoid(call_context* th, int n, int m, method_info*& called_m
 		if(o->getObjectType()==T_FUNCTION)
 		{
 			IFunction* f=static_cast<IFunction*>(o);
-			called_mi=f->getMethodInfo();
 			obj->incRef();
 			f->incRef();
 			ASObject* ret=f->call(obj,args,m);
+			//call getMethodInfo only after the call, so it's updated
+			called_mi=f->getMethodInfo();
 			f->decRef();
 			if(ret)
 				ret->decRef();
@@ -2353,10 +2366,16 @@ void ABCVm::newClass(call_context* th, int n)
 	int name_index=th->context->instances[n].name;
 	assert_and_throw(name_index);
 	const multiname* mname=th->context->getMultiname(name_index,NULL);
-	constructor->name=name_index;
 
 	assert_and_throw(mname->ns.size()==1);
 	Class_inherit* ret=new Class_inherit(QName(mname->name_s,mname->ns[0].name));
+#ifdef PROFILING_SUPPORT
+	if(!constructor->validProfName)
+	{
+		constructor->profName=mname->name_s+"::__CONSTRUCTOR__";
+		constructor->validProfName=true;
+	}
+#endif
 	ret->class_scope=th->scope_stack;
 	for(uint32_t i=0;i<ret->class_scope.size();i++)
 		ret->class_scope[i]->incRef();
@@ -2510,10 +2529,11 @@ void ABCVm::call(call_context* th, int m, method_info*& called_mi)
 	if(f->getObjectType()==T_FUNCTION)
 	{
 		IFunction* func=static_cast<IFunction*>(f);
-		called_mi=func->getMethodInfo();
 		//TODO: check for correct level, member function are already binded
 		func->incRef();
 		ASObject* ret=func->call(obj,args,m);
+		//call getMethodInfo only after the call, so it's updated
+		called_mi=func->getMethodInfo();
 		func->decRef();
 		//Push the value only if not null
 		if(ret)

@@ -187,7 +187,7 @@ struct call_context
 	ASObject* runtime_stack_pop();
 	ASObject* runtime_stack_peek();
 	method_info* mi;
-	std::stringstream* code;
+	std::istringstream* code;
 	call_context(method_info* th, int l, ASObject* const* args, const unsigned int numArgs);
 	~call_context();
 };
@@ -267,7 +267,9 @@ private:
 public:
 #ifdef PROFILING_SUPPORT
 	std::map<method_info*,uint64_t> profCalls;
-	uint64_t profTime;
+	std::vector<uint64_t> profTime;
+	tiny_string profName;
+	bool validProfName;
 #endif
 
 	u30 option_count;
@@ -284,6 +286,7 @@ public:
 	method_info():
 #ifdef PROFILING_SUPPORT
 		profTime(0),
+		validProfName(false),
 #endif
 		option_count(0),f(NULL),context(NULL),body(NULL)
 	{
@@ -433,10 +436,13 @@ public:
 	multiname* getMultiname(unsigned int m, call_context* th);
 	void buildInstanceTraits(ASObject* obj, int class_index);
 	ABCContext(std::istream& in) DLL_PUBLIC;
-	~ABCContext() DLL_PUBLIC;
 	void exec();
 
 	static bool isinstance(ASObject* obj, multiname* name);
+
+#ifdef PROFILING_SUPPORT
+	void dumpProfilingData(std::ostream& f) const;
+#endif
 };
 
 struct thisAndLevel

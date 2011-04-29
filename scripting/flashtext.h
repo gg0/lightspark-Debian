@@ -47,12 +47,38 @@ public:
 	static void buildTraits(ASObject* o);
 	bool getBounds(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const;
 	void Render(bool maskEnabled);
+	ASFUNCTION(appendText);
 	ASFUNCTION(_getWidth);
 	ASFUNCTION(_setWidth);
 	ASFUNCTION(_getHeight);
 	ASFUNCTION(_setHeight);
 	ASFUNCTION(_getText);
 	ASFUNCTION(_setText);
+};
+
+class TextFormat: public ASObject
+{
+public:
+	static void sinit(Class_base* c);
+	static void buildTraits(ASObject* o);
+};
+
+class TextFieldType: public ASObject
+{
+public:
+	static void sinit(Class_base* c);
+};
+
+class TextFormatAlign: public ASObject
+{
+public:
+	static void sinit(Class_base* c);
+};
+
+class TextFieldAutoSize: public ASObject
+{
+public:
+	static void sinit(Class_base* c);
 };
 
 class StyleSheet: public EventDispatcher

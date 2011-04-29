@@ -75,15 +75,6 @@ void DoABCTag::execute(RootMovieClip*)
 {
 	LOG(LOG_CALLS,_("ABC Exec"));
 	sys->currentVm->addEvent(NULL,new ABCContextInitEvent(context));
-	SynchronizationEvent* se=new SynchronizationEvent;
-	bool added=sys->currentVm->addEvent(NULL,se);
-	if(!added)
-	{
-		se->decRef();
-		throw RunTimeException("Could not add event");
-	}
-	se->wait();
-	se->decRef();
 }
 
 DoABCDefineTag::DoABCDefineTag(RECORDHEADER h, std::istream& in):ControlTag(h)
@@ -112,15 +103,6 @@ void DoABCDefineTag::execute(RootMovieClip*)
 {
 	LOG(LOG_CALLS,_("ABC Exec ") << Name);
 	sys->currentVm->addEvent(NULL,new ABCContextInitEvent(context));
-	SynchronizationEvent* se=new SynchronizationEvent;
-	bool added=sys->currentVm->addEvent(NULL,se);
-	if(!added)
-	{
-		se->decRef();
-		throw RunTimeException("Could not add event");
-	}
-	se->wait();
-	se->decRef();
 }
 
 SymbolClassTag::SymbolClassTag(RECORDHEADER h, istream& in):ControlTag(h)
@@ -254,8 +236,10 @@ void ABCVm::registerClasses()
 	builtin->setVariableByQName("Font","flash.text",Class<Font>::getClass());
 	builtin->setVariableByQName("StyleSheet","flash.text",Class<StyleSheet>::getClass());
 	builtin->setVariableByQName("TextField","flash.text",Class<TextField>::getClass());
-	builtin->setVariableByQName("TextFieldType","flash.text",Class<ASObject>::getClass(QName("TextFieldType","flash.text")));
-	builtin->setVariableByQName("TextFormat","flash.text",Class<ASObject>::getClass(QName("TextFormat","flash.text")));
+	builtin->setVariableByQName("TextFieldType","flash.text",Class<TextFieldType>::getClass());
+	builtin->setVariableByQName("TextFieldAutoSize","flash.text",Class<TextFieldAutoSize>::getClass());
+	builtin->setVariableByQName("TextFormat","flash.text",Class<TextFormat>::getClass());
+	builtin->setVariableByQName("TextFormatAlign","flash.text",Class<TextFormatAlign>::getClass());
 
 	builtin->setVariableByQName("XMLDocument","flash.xml",Class<XMLDocument>::getClass());
 	builtin->setVariableByQName("XMLNode","flash.xml",Class<XMLNode>::getClass());
@@ -1008,46 +992,43 @@ ABCContext::ABCContext(istream& in)
 		else
 			methods[method_body[i].method].body=&method_body[i];
 	}
-}
 
-ABCContext::~ABCContext()
-{
 #ifdef PROFILING_SUPPORT
-	if(sys->getProfilingOutput().len())
-	{
-		ofstream f(sys->getProfilingOutput().raw_buf());
-		f << "events: Time" << endl;
-		for(uint32_t i=0;i<methods.size();i++)
-		{
-			if(methods[i].profTime)
-			{
-				if(methods[i].name)
-				{
-					const multiname* m=getMultiname(methods[i].name,NULL);
-					f << "fn=" << *m << endl;
-				}
-				else
-					f << "fn=" << &methods[i] << " " << i << endl;
-				f << "1 " << methods[i].profTime << endl;
-				auto it=methods[i].profCalls.begin();
-				for(;it!=methods[i].profCalls.end();it++)
-				{
-					if(it->first->name)
-					{
-						const multiname* m=getMultiname(it->first->name,NULL);
-						f << "cfn=" << *m << endl;
-					}
-					else
-						f << "cfn=" << it->first << endl;
-					f << "calls=1 1" << endl;
-					f << "1 " << it->second << endl;
-				}
-			}
-		}
-		f.close();
-	}
+	sys->contextes.push_back(this);
 #endif
 }
+
+#ifdef PROFILING_SUPPORT
+void ABCContext::dumpProfilingData(ostream& f) const
+{
+	for(uint32_t i=0;i<methods.size();i++)
+	{
+		if(!methods[i].profTime.empty()) //The function was executed at least once
+		{
+			if(methods[i].validProfName)
+				f << "fn=" << methods[i].profName << endl;
+			else
+				f << "fn=" << &methods[i] << endl;
+			for(uint32_t j=0;j<methods[i].profTime.size();j++)
+			{
+				//Only output instructions that have been actually executed
+				if(methods[i].profTime[j]!=0)
+					f << j << ' ' << methods[i].profTime[j] << endl;
+			}
+			auto it=methods[i].profCalls.begin();
+			for(;it!=methods[i].profCalls.end();it++)
+			{
+				if(it->first->validProfName)
+					f << "cfn=" << it->first->profName << endl;
+				else
+					f << "cfn=" << it->first << endl;
+				f << "calls=1 1" << endl;
+				f << "1 " << it->second << endl;
+			}
+		}
+	}
+}
+#endif
 
 ABCVm::ABCVm(SystemState* s):m_sys(s),status(CREATED),shuttingdown(false)
 {
@@ -1195,28 +1176,17 @@ void ABCVm::handleEvent(std::pair<EventDispatcher*, Event*> e)
 				ev->context->exec();
 				break;
 			}
-			case CONSTRUCT_OBJECT:
-			{
-				ConstructObjectEvent* ev=static_cast<ConstructObjectEvent*>(e.second);
-				LOG(LOG_CALLS,_("Building instance traits"));
-				try
-				{
-					ev->_class->handleConstruction(ev->_obj,NULL,0,true);
-				}
-				catch(LightsparkException& e)
-				{
-					//Sync anyway and rethrow
-					ev->sync();
-					throw;
-				}
-				ev->sync();
-				break;
-			}
 			case CHANGE_FRAME:
 			{
 				FrameChangeEvent* ev=static_cast<FrameChangeEvent*>(e.second);
 				ev->movieClip->state.next_FP=ev->frame;
 				ev->movieClip->state.explicit_FP=true;
+				break;
+			}
+			case CONSTRUCT_FRAME:
+			{
+				ConstructFrameEvent* ev=static_cast<ConstructFrameEvent*>(e.second);
+				ev->frame.construct(ev->parent);
 				break;
 			}
 			default:
@@ -1236,7 +1206,7 @@ bool ABCVm::addEvent(EventDispatcher* obj ,Event* ev)
 		return false;
 	//If the event is a synchronization and we are running in the VM context
 	//we should handle it immidiately to avoid deadlock
-	if(isVmThread && (ev->getEventType()==SYNC || ev->getEventType()==CONSTRUCT_OBJECT))
+	if(isVmThread && (ev->getEventType()==SYNC))
 	{
 		assert(obj==NULL);
 		ev->incRef();
@@ -1807,18 +1777,19 @@ void ABCContext::buildTrait(ASObject* obj, const traits_info* t, bool isBorrowed
 			LOG(LOG_CALLS,_("Getter trait: ") << mname << _(" #") << t->method);
 			//syntetize method and create a new LLVM function object
 			method_info* m=&methods[t->method];
-			if(m->name==0)
-			{
-				//Use this name as the method name
-				m->name=t->name;
-			}
 			SyntheticFunction* f=Class<IFunction>::getSyntheticFunction(m);
 
 			//We have to override if there is a method with the same name,
 			//even if the namespace are different, if both are protected
 			assert_and_throw(obj->getObjectType()==T_CLASS);
 			Class_inherit* prot=static_cast<Class_inherit*>(obj);
-			assert(prot);
+#ifdef PROFILING_SUPPORT
+			if(!m->validProfName)
+			{
+				m->profName=prot->class_name.name+"::"+mname.qualifiedString();
+				m->validProfName=true;
+			}
+#endif
 			if(t->kind&0x20 && prot->use_protected && mname.ns[0]==prot->protected_ns)
 			{
 				//Walk the super chain and find variables to override
@@ -1851,11 +1822,6 @@ void ABCContext::buildTrait(ASObject* obj, const traits_info* t, bool isBorrowed
 			LOG(LOG_CALLS,_("Setter trait: ") << mname << _(" #") << t->method);
 			//syntetize method and create a new LLVM function object
 			method_info* m=&methods[t->method];
-			if(m->name==0)
-			{
-				//Use this name as the method name
-				m->name=t->name;
-			}
 
 			IFunction* f=Class<IFunction>::getSyntheticFunction(m);
 
@@ -1863,7 +1829,13 @@ void ABCContext::buildTrait(ASObject* obj, const traits_info* t, bool isBorrowed
 			//even if the namespace are different, if both are protected
 			assert_and_throw(obj->getObjectType()==T_CLASS);
 			Class_base* prot=static_cast<Class_base*>(obj);
-			assert(prot);
+#ifdef PROFILING_SUPPORT
+			if(!m->validProfName)
+			{
+				m->profName=prot->class_name.name+"::"+mname.qualifiedString();
+				m->validProfName=true;
+			}
+#endif
 			if(t->kind&0x20 && prot->use_protected && mname.ns[0]==prot->protected_ns)
 			{
 				//Walk the super chain and find variables to override
@@ -1896,11 +1868,6 @@ void ABCContext::buildTrait(ASObject* obj, const traits_info* t, bool isBorrowed
 			LOG(LOG_CALLS,_("Method trait: ") << mname << _(" #") << t->method);
 			//syntetize method and create a new LLVM function object
 			method_info* m=&methods[t->method];
-			if(m->name==0)
-			{
-				//Use this name as the method name
-				m->name=t->name;
-			}
 			SyntheticFunction* f=Class<IFunction>::getSyntheticFunction(m);
 
 			if(obj->getObjectType()==T_CLASS)
@@ -1910,7 +1877,13 @@ void ABCContext::buildTrait(ASObject* obj, const traits_info* t, bool isBorrowed
 				//We have to override if there is a method with the same name,
 				//even if the namespace are different, if both are protected
 				Class_inherit* prot=static_cast<Class_inherit*>(obj);
-				assert(prot);
+#ifdef PROFILING_SUPPORT
+				if(!m->validProfName)
+				{
+					m->profName=prot->class_name.name+"::"+mname.qualifiedString();
+					m->validProfName=true;
+				}
+#endif
 				if(t->kind&0x20 && prot->use_protected && mname.ns[0]==prot->protected_ns)
 				{
 					//Walk the super chain and find variables to override
@@ -1938,6 +1911,13 @@ void ABCContext::buildTrait(ASObject* obj, const traits_info* t, bool isBorrowed
 			{
 				//Script method
 				f->addToScope(obj);
+#ifdef PROFILING_SUPPORT
+				if(!m->validProfName)
+				{
+					m->profName=mname.qualifiedString();
+					m->validProfName=true;
+				}
+#endif
 			}
 			else //TODO: transform in a simple assert
 				assert_and_throw(obj->getObjectType()==T_CLASS || deferred_initialization);

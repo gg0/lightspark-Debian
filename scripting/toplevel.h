@@ -351,6 +351,8 @@ public:
 		return val ? 1.0 : 0.0;
 	}
 	static void buildTraits(ASObject* o){};
+	static void sinit(Class_base*);
+	ASFUNCTION(_toString);
 	ASFUNCTION(generator);
 };
 
@@ -683,11 +685,16 @@ public:
 	ASFUNCTION(appendChild);
 	ASFUNCTION(localName);
 	ASFUNCTION(generator);
+	ASFUNCTION(_hasSimpleContent);
+	ASFUNCTION(_hasComplexContent);
 	static void buildTraits(ASObject* o){};
 	static void sinit(Class_base* c);
 	void getDescendantsByQName(const tiny_string& name, const tiny_string& ns, std::vector<XML*>& ret);
 	ASObject* getVariableByMultiname(const multiname& name, bool skip_impl, ASObject* base=NULL);
 	tiny_string toString(bool debugMsg=false);
+	bool hasSimpleContent() const;
+	bool hasComplexContent() const;
+        xmlElementType getNodeKind() const;
 };
 
 class XMLList: public ASObject
@@ -704,8 +711,12 @@ public:
 	ASFUNCTION(_constructor);
 	ASFUNCTION(_getLength);
 	ASFUNCTION(appendChild);
+	ASFUNCTION(_hasSimpleContent);
+	ASFUNCTION(_hasComplexContent);
 	ASObject* getVariableByMultiname(const multiname& name, bool skip_impl, ASObject* base=NULL);
 	XML* convertToXML() const;
+	bool hasSimpleContent() const;
+	bool hasComplexContent() const;
 };
 
 class Date: public ASObject
@@ -825,6 +836,7 @@ public:
 	ASFUNCTION(_setMessage);
 	ASFUNCTION(_getMessage);
 	ASFUNCTION(_getErrorID);
+	ASFUNCTION(_toString);
 	tiny_string toString(bool debugMsg=false);
 	static void sinit(Class_base* c);
 	static void buildTraits(ASObject* o);

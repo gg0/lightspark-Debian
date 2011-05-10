@@ -28,7 +28,7 @@ Build-Depends: debhelper (>= 7.0.50),
   libsdl-dev,
   libxml++2.6-dev (>= 2.33.1),
   gnash-common
-Standards-Version: 3.9.1
+Standards-Version: 3.9.2
 Homepage: http://lightspark.sf.net
 Vcs-Git: git://git.debian.org/pkg-flash/lightspark.git
 Vcs-Browser: http://git.debian.org/?p=pkg-flash/lightspark.git

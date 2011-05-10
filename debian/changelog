@@ -1,3 +1,11 @@
+lightspark (0.4.7.1-1) experimental; urgency=low
+
+  * New 0.4.7.1 upstream release. 
+  * Refresh patches.
+  * Bump Standards-Version to 3.9.2 without changes needed.
+
+ -- Didier Raboud <odyx@debian.org>  Tue, 10 May 2011 14:29:40 +0200
+
 lightspark (0.4.6.1-2) experimental; urgency=low
 
   * Drop architecture restrictions by patching the buildsystem

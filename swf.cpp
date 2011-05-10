@@ -137,7 +137,6 @@ void SystemState::unregisterEnterFrameListener(DisplayObject* obj)
 void SystemState::registerTag(Tag* t)
 {
 	SpinlockLocker l(tagsStorageLock);
-	cout << "Tag " << t << " has type " << t->getType() << endl;
 	tagsStorage.push_back(t);
 }
 
@@ -318,8 +317,7 @@ void SystemState::stopEngines()
 {
 	if(threadPool)
 		threadPool->forceStop();
-	if(timerThread)
-		timerThread->wait();
+	timerThread->wait();
 	delete downloadManager;
 	downloadManager=NULL;
 	delete securityManager;
@@ -328,8 +326,6 @@ void SystemState::stopEngines()
 	config=NULL;
 	if(currentVm)
 		currentVm->shutdown();
-	delete timerThread;
-	timerThread=NULL;
 	delete threadPool;
 	threadPool=NULL;
 	//Now stop the managers
@@ -404,6 +400,10 @@ SystemState::~SystemState()
 	}
 	//The Vm must be destroyed this late to clean all managed integers and numbers
 	delete currentVm;
+
+	//Some objects needs to remove the jobs when destroyed so keep the timerThread until now
+	delete timerThread;
+	timerThread=NULL;
 
 	//Also destroy all tags
 	for(unsigned int i=0;i<tagsStorage.size();i++)

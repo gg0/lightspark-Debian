@@ -169,6 +169,7 @@ void ABCVm::registerClasses()
 	builtin->setVariableByQName("Function","",Class<IFunction>::getClass());
 	builtin->setVariableByQName("undefined","",new Undefined);
 	builtin->setVariableByQName("Math","",Class<Math>::getClass());
+	builtin->setVariableByQName("Namespace","",Class<Namespace>::getClass());
 	builtin->setVariableByQName("Date","",Class<Date>::getClass());
 	builtin->setVariableByQName("RegExp","",Class<RegExp>::getClass());
 	builtin->setVariableByQName("QName","",Class<ASQName>::getClass());
@@ -215,6 +216,7 @@ void ABCVm::registerClasses()
 	builtin->setVariableByQName("Stage","flash.display",Class<Stage>::getClass());
 	builtin->setVariableByQName("Graphics","flash.display",Class<Graphics>::getClass());
 	builtin->setVariableByQName("GradientType","flash.display",Class<GradientType>::getClass());
+	builtin->setVariableByQName("BlendMode","flash.display",Class<BlendMode>::getClass());
 	builtin->setVariableByQName("LineScaleMode","flash.display",Class<LineScaleMode>::getClass());
 	builtin->setVariableByQName("StageScaleMode","flash.display",Class<StageScaleMode>::getClass());
 	builtin->setVariableByQName("StageAlign","flash.display",Class<StageAlign>::getClass());
@@ -265,6 +267,8 @@ void ABCVm::registerClasses()
 	builtin->setVariableByQName("Matrix","flash.geom",Class<Matrix>::getClass());
 	builtin->setVariableByQName("Transform","flash.geom",Class<Transform>::getClass());
 	builtin->setVariableByQName("Point","flash.geom",Class<Point>::getClass());
+	builtin->setVariableByQName("Vector3D","flash.geom",Class<Vector3D>::getClass());
+	builtin->setVariableByQName("Matrix3D","flash.geom",Class<ASObject>::getClass(QName("Matrix3D", "flash.geom")));
 
 	builtin->setVariableByQName("EventDispatcher","flash.events",Class<EventDispatcher>::getClass());
 	builtin->setVariableByQName("Event","flash.events",Class<Event>::getClass());
@@ -695,15 +699,15 @@ multiname* ABCContext::getMultiname(unsigned int n, call_context* th)
 	{
 		m->cached=new multiname;
 		ret=m->cached;
-		ret->isAttribute=m->isAttributeName();
-
 		if(n==0)
 		{
 			ret->name_s="any";
 			ret->name_type=multiname::NAME_STRING;
 			ret->ns.emplace_back("",NAMESPACE);
+			ret->isAttribute=false;
 			return ret;
 		}
+		ret->isAttribute=m->isAttributeName();
 		switch(m->kind)
 		{
 			case 0x07:
@@ -1226,16 +1230,6 @@ bool ABCVm::addEvent(EventDispatcher* obj ,Event* ev)
 
 void ABCVm::buildClassAndInjectBase(const string& s, ASObject* base, ASObject* const* args, const unsigned int argslen, bool isRoot)
 {
-	//It seems to be acceptable for the same base to be binded multiple times,
-	//We refuse to do it, as it's an undocumented behaviour, but we warn the user
-	//I've seen this behaviour only for youtube
-	DictionaryTag* t=dynamic_cast<DictionaryTag*>(base);
-	if(t && t->bindedTo && !isRoot)
-	{
-		LOG(LOG_NOT_IMPLEMENTED,_("Multiple binding on ") << s << _(". Not binding"));
-		return;
-	}
-
 	LOG(LOG_CALLS,_("Setting class name to ") << s);
 	ASObject* target;
 	ASObject* derived_class=Global->getVariableByString(s,target);
@@ -1279,10 +1273,17 @@ void ABCVm::buildClassAndInjectBase(const string& s, ASObject* base, ASObject* c
 	}
 	else
 	{
+		DictionaryTag* t=dynamic_cast<DictionaryTag*>(base);
 		//If this is not a root movie clip, then the base has to be a DictionaryTag
-		assert_and_throw(t);
+		assert(t);
 
-		t->bindedTo=derived_class_tmp;
+		//It seems to be acceptable for the same base to be binded multiple times.
+		//In such cases the first binding is bidirectional (instances created using PlaceObject
+		//use the binded class and instances created using 'new' use the binded tag). Any other
+		//bindings will be unidirectional (only instances created using new will use the binded tag)
+		if(t->bindedTo==NULL)
+			t->bindedTo=derived_class_tmp;
+
 		derived_class_tmp->bindToTag(t);
 	}
 }

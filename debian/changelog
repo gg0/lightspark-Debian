@@ -1,3 +1,10 @@
+lightspark (0.4.7.1-2) experimental; urgency=low
+
+  * Brown-paper bag upload: previous one went to unstable by mistake: upload
+    to experimental for real now.
+
+ -- Didier Raboud <odyx@debian.org>  Tue, 10 May 2011 16:41:23 +0200
+
 lightspark (0.4.7.1-1) experimental; urgency=low
 
   * New 0.4.7.1 upstream release. 

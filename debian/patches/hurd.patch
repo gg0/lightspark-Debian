@@ -3,7 +3,7 @@ Last-Update: 2010-12-17
 
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -84,6 +84,14 @@
+@@ -89,6 +89,14 @@
  	IF(CMAKE_COMPILER_IS_GNUCC)
  	   ENABLE_LANGUAGE(ASM-NASM)        
  	ENDIF(CMAKE_COMPILER_IS_GNUCC)

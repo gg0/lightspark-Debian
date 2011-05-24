@@ -1,0 +1,379 @@
+/**************************************************************************
+    Lightspark, a free flash player implementation
+
+    Copyright (C) 2009-2011  Alessandro Pignotti (a.pignotti@sssup.it)
+
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU Lesser General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU Lesser General Public License for more details.
+
+    You should have received a copy of the GNU Lesser General Public License
+    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+**************************************************************************/
+
+#ifndef SWF_H
+#define SWF_H
+
+#include "compat.h"
+#include <iostream>
+#include <fstream>
+#include <list>
+#include <map>
+#include <semaphore.h>
+#include <string>
+#include "swftypes.h"
+#include "scripting/flashdisplay.h"
+#include "scripting/flashnet.h"
+#include "scripting/flashsystem.h"
+#include "timer.h"
+#include "backends/audio.h"
+#include "backends/config.h"
+#include "backends/graphics.h"
+#include "backends/pluginmanager.h"
+#include "backends/security.h"
+#include "backends/urlutils.h"
+#include "backends/extscriptobject.h"
+
+#include "platforms/pluginutils.h"
+
+#ifndef WIN32
+#include <GL/glx.h>
+#else
+//#include <windows.h>
+#endif
+
+namespace lightspark
+{
+
+class DownloadManager;
+class DisplayListTag;
+class DictionaryTag;
+class ABCVm;
+class InputThread;
+class RenderThread;
+class ParseThread;
+class Tag;
+
+//RootMovieClip is used as a ThreadJob for timed rendering purpose
+class RootMovieClip: public MovieClip, public ITickJob
+{
+friend class ParseThread;
+protected:
+	Mutex mutex;
+	bool initialized;
+	URLInfo origin;
+	void tick();
+private:
+	//Semaphore to wait for new frames to be available
+	sem_t new_frame;
+	bool parsingIsFailed;
+	RGB Background;
+	Spinlock dictSpinlock;
+	std::list < DictionaryTag* > dictionary;
+	//frameSize and frameRate are valid only after the header has been parsed
+	RECT frameSize;
+	float frameRate;
+	bool toBind;
+	tiny_string bindName;
+	Mutex mutexChildrenClips;
+	std::set<MovieClip*> childrenClips;
+public:
+	RootMovieClip(LoaderInfo* li, bool isSys=false);
+	~RootMovieClip();
+	uint32_t version;
+	uint32_t fileLength;
+	RGB getBackground();
+	void setBackground(const RGB& bg);
+	void setFrameSize(const RECT& f);
+	RECT getFrameSize() const;
+	float getFrameRate() const;
+	void setFrameRate(float f);
+	void setOnStage(bool staged);
+	void addToDictionary(DictionaryTag* r);
+	DictionaryTag* dictionaryLookup(int id);
+	void labelCurrentFrame(const STRING& name);
+	void commitFrame(bool another);
+	void revertFrame();
+	void Render(bool maskEnabled);
+	void parsingFailed();
+	bool getBounds(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const;
+	void bindToName(const tiny_string& n);
+	void initialize();
+	void DLL_PUBLIC setOrigin(const tiny_string& u, const tiny_string& filename="");
+	URLInfo& getOrigin() DLL_PUBLIC { return origin; };
+/*	ASObject* getVariableByQName(const tiny_string& name, const tiny_string& ns);
+	void setVariableByQName(const tiny_string& name, const tiny_string& ns, ASObject* o);
+	void setVariableByMultiname(multiname& name, ASObject* o);
+	void setVariableByString(const std::string& s, ASObject* o);*/
+	void registerChildClip(MovieClip* clip);
+	void unregisterChildClip(MovieClip* clip);
+	static RootMovieClip* getInstance(LoaderInfo* li);
+	//DisplayObject interface
+	_NR<RootMovieClip> getRoot();
+};
+
+class ThreadProfile
+{
+private:
+	Mutex mutex;
+	class ProfilingData
+	{
+	public:
+		uint32_t index;
+		uint32_t timing;
+		std::string tag;
+ 		ProfilingData(uint32_t i, uint32_t t):index(i),timing(t){}
+	};
+	std::deque<ProfilingData> data;
+	RGB color;
+	int32_t len;
+	uint32_t tickCount;
+public:
+	ThreadProfile(const RGB& c,uint32_t l):mutex("ThreadProfile"),color(c),len(l),tickCount(0){}
+	void accountTime(uint32_t time);
+	void setTag(const std::string& tag);
+	void tick();
+	void plot(uint32_t max, FTFont* font);
+};
+
+class SystemState: public RootMovieClip
+{
+private:
+	class EngineCreator: public IThreadJob
+	{
+	public:
+		EngineCreator()
+		{
+			destroyMe=true;
+		}
+		void execute();
+		void threadAbort();
+		void jobFence(){}
+	};
+	friend class SystemState::EngineCreator;
+	ThreadPool* threadPool;
+	TimerThread* timerThread;
+	sem_t terminated;
+	float renderRate;
+	bool error;
+	bool shutdown;
+	RenderThread* renderThread;
+	InputThread* inputThread;
+	NPAPI_params npapiParams;
+	ENGINE engine;
+	void startRenderTicks();
+	/**
+		Create the rendering and input engines
+
+		@pre engine and useAVM2 are known
+	*/
+	void createEngines();
+	/**
+	  	Destroys all the engines used in lightspark: timer, thread pool, vm...
+	*/
+#ifdef COMPILE_PLUGIN
+	static void delayedCreation(SystemState* th);
+	static void delayedStopping(SystemState* th);
+#endif
+	void stopEngines();
+	//Useful to wait for complete download of the SWF
+	Semaphore fileDumpAvailable;
+	tiny_string dumpedSWFPath;
+	bool waitingForDump;
+	//Data for handling Gnash fallback
+	enum VMVERSION { VMNONE=0, AVM1, AVM2 };
+	VMVERSION vmVersion;
+	pid_t childPid;
+	bool useGnashFallback;
+
+	//Parameters/FlashVars
+	_NR<ASObject> parameters;
+	void setParameters(_R<ASObject> p);
+	/*
+	   	Used to keep a copy of the FlashVars, it's useful when gnash fallback is used
+	*/
+	std::string rawParameters;
+
+	//Cookies for Gnash fallback
+	std::string rawCookies;
+	char cookiesFileName[32]; // "/tmp/lightsparkcookiesXXXXXX"
+
+	URLInfo url;
+	Spinlock profileDataSpinlock;
+
+	Mutex mutexEnterFrameListeners;
+	std::set<DisplayObject*> enterFrameListeners;
+	/*
+	   The head of the invalidate queue
+	*/
+	_NR<DisplayObject> invalidateQueueHead;
+	/*
+	   The tail of the invalidate queue
+	*/
+	_NR<DisplayObject> invalidateQueueTail;
+	/*
+	   The lock for the invalidate queue
+	*/
+	Spinlock invalidateQueueLock;
+	/*
+	   Vector to keep track of the created tags
+	*/
+	std::vector<Tag*> tagsStorage;
+	/*
+	   The lock for the tags storage
+	*/
+	Spinlock tagsStorageLock;
+#ifdef PROFILING_SUPPORT
+	/*
+	   Output file for the profiling data
+	*/
+	tiny_string profOut;
+#endif
+public:
+	void setURL(const tiny_string& url) DLL_PUBLIC;
+	ENGINE getEngine() DLL_PUBLIC { return engine; };
+
+	//Interative analysis flags
+	bool showProfilingData;
+	
+	std::string errorCause;
+	void setError(const std::string& c);
+	bool hasError() { return error; }
+	std::string& getErrorCause() { return errorCause; }
+	bool shouldTerminate() const;
+	bool isShuttingDown() const DLL_PUBLIC;
+	bool isOnError() const;
+	void setShutdownFlag() DLL_PUBLIC;
+	void tick();
+	void wait() DLL_PUBLIC;
+	RenderThread* getRenderThread() const { return renderThread; }
+	InputThread* getInputThread() const { return inputThread; }
+	void setParamsAndEngine(ENGINE e, NPAPI_params* p) DLL_PUBLIC;
+	void setDownloadedPath(const tiny_string& p) DLL_PUBLIC;
+	void enableGnashFallback() DLL_PUBLIC;
+	void needsAVM2(bool n);
+	//DisplayObject interface
+	_NR<Stage> getStage() const;
+
+	//Be careful, SystemState constructor does some global initialization that must be done
+	//before any other thread gets started
+	SystemState(ParseThread* p, uint32_t fileSize) DLL_PUBLIC;
+	void finalize();
+	~SystemState();
+	
+	//Performance profiling
+	ThreadProfile* allocateProfiler(const RGB& color);
+	std::list<ThreadProfile> profilingData;
+	
+	Stage* stage;
+	ABCVm* currentVm;
+
+	Config* config;
+	PluginManager* pluginManager;
+	AudioManager* audioManager;
+
+	//Application starting time in milliseconds
+	uint64_t startTime;
+
+	//Class map
+	std::map<QName, Class_base*> classes;
+
+	//Flags for command line options
+	bool useInterpreter;
+	bool useJit;
+
+	//Parameters/FlashVars
+	void parseParametersFromFile(const char* f) DLL_PUBLIC;
+	void parseParametersFromFlashvars(const char* vars) DLL_PUBLIC;
+	_NR<ASObject> getParameters() const;
+
+	//Cookies management for Gnash fallback
+	void setCookies(const char* c) DLL_PUBLIC;
+
+	//Interfaces to the internal thread pool and timer thread
+	void addJob(IThreadJob* j) DLL_PUBLIC;
+	void addTick(uint32_t tickTime, ITickJob* job);
+	void addWait(uint32_t waitTime, ITickJob* job);
+	bool removeJob(ITickJob* job);
+
+	void setRenderRate(float rate);
+	float getRenderRate();
+	/*
+	   This is not supposed to be used in the VM, it's only useful to create the Downloader when plugin is being used
+	   So don't create a smart reference
+	*/
+	LoaderInfo* getLoaderInfo() const { return loaderInfo.getPtr(); }
+
+	//Stuff to be done once for process and not for plugin instance
+	static void staticInit() DLL_PUBLIC;
+	static void staticDeinit() DLL_PUBLIC;
+
+	DownloadManager* downloadManager;
+	IntervalManager* intervalManager;
+	SecurityManager* securityManager;
+	ExtScriptObject* extScriptObject;
+
+	enum SCALE_MODE { EXACT_FIT=0, NO_BORDER=1, NO_SCALE=2, SHOW_ALL=3 };
+	SCALE_MODE scaleMode;
+	
+	//Static AS class properties
+	//NAMING: static$CLASSNAME$$PROPERTYNAME$
+	//	NetConnection
+	ObjectEncoding::ENCODING staticNetConnectionDefaultObjectEncoding;
+	ObjectEncoding::ENCODING staticByteArrayDefaultObjectEncoding;
+	
+	//enterFrame event management
+	void registerEnterFrameListener(DisplayObject* clip);
+	void unregisterEnterFrameListener(DisplayObject* clip);
+
+	//tags management
+	void registerTag(Tag* t);
+
+	//Invalidation queue management
+	void addToInvalidateQueue(_R<DisplayObject> d);
+	void flushInvalidationQueue();
+
+#ifdef PROFILING_SUPPORT
+	void setProfilingOutput(const tiny_string& t) DLL_PUBLIC;
+	const tiny_string& getProfilingOutput() const;
+	std::vector<ABCContext*> contextes;
+	void saveProfilingInformation();
+#endif
+};
+
+class ParseThread: public IThreadJob
+{
+public:
+	RootMovieClip* root;
+	int version;
+	bool useAVM2;
+	ParseThread(RootMovieClip* r,std::istream& in) DLL_PUBLIC;
+	~ParseThread();
+	enum FILE_TYPE { NONE=0, SWF, COMPRESSED_SWF, PNG, JPEG, GIF };
+	FILE_TYPE getFileType() const { return fileType; }
+private:
+	std::istream& f;
+	std::streambuf* zlibFilter;
+	std::streambuf* backend;
+	sem_t ended;
+	bool isEnded;
+	void execute();
+	void threadAbort();
+	void jobFence() {};
+	/*
+	   parseHeader takes the first four characters as argument
+	*/
+	void parseSWFHeader();
+	void checkType(uint8_t c1, uint8_t c2, uint8_t c3, uint8_t c4);
+	FILE_TYPE fileType;
+};
+
+};
+extern TLSDATA lightspark::SystemState* sys DLL_PUBLIC;
+#endif

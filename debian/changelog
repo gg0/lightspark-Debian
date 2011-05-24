@@ -1,3 +1,11 @@
+lightspark (0.4.8~rc1-1) experimental; urgency=low
+
+  * 0.4.8 first Release Candidate:
+    - Add libavformat-dev Build-Dependency.
+  * Update debian/watch.
+
+ -- Didier Raboud <odyx@debian.org>  Tue, 24 May 2011 15:28:40 +0200
+
 lightspark (0.4.7.1-2) experimental; urgency=low
 
   * Brown-paper bag upload: previous one went to unstable by mistake: upload

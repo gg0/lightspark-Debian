@@ -1,8 +1,8 @@
 #**************************************************************************
 #    Lightspark, a free flash player implementation
 #
+#    Copyright (C) 2010-2011  Alessandro Pignotti <a.pignotti@sssup.it>
 #    Copyright (C) 2010  Giacomo Spigler <g.spigler@sssup.it>
-#    Copyright (C) 2010  Alessandro Pignotti <a.pignotti@sssup.it>
 #
 #    This program is free software: you can redistribute it and/or modify
 #    it under the terms of the GNU Lesser General Public License as published by
@@ -25,8 +25,8 @@ CMAKE_MINIMUM_REQUIRED(VERSION 2.6)
 PROJECT(LIGHTSPARK)
 SET(MAJOR_VERSION "0")
 SET(MINOR_VERSION "4")
-SET(PATCH_VERSION "7")
-SET(SUBPATCH_VERSION "1")
+SET(PATCH_VERSION "8")
+SET(SUBPATCH_VERSION "0")
 
 IF(EXISTS "${CMAKE_SOURCE_DIR}/.git/")
 	SET(GIT_VERSION "-git")
@@ -150,6 +150,7 @@ INCLUDE(FindOpenGL REQUIRED)
 INCLUDE(FindPCRE REQUIRED)
 INCLUDE(FindFTGL REQUIRED)
 INCLUDE(FindGLEW REQUIRED)
+INCLUDE(FindJPEG REQUIRED)
 IF(UNIX)
   INCLUDE(FindPkgConfig REQUIRED)
 	pkg_check_modules(XMLPP REQUIRED libxml++-2.6>=2.33.1)
@@ -183,7 +184,7 @@ IF(UNIX)
 ENDIF(UNIX)
 
 IF(ENABLE_LIBAVCODEC)
-	pkg_check_modules(FFMPEG libavcodec libavutil)
+	pkg_check_modules(FFMPEG libavcodec libavutil libavformat)
 	IF(NOT(FFMPEG_FOUND))
 		INCLUDE(FindFFMpeg REQUIRED)
 	ENDIF(NOT(FFMPEG_FOUND))
@@ -215,6 +216,7 @@ INCLUDE_DIRECTORIES(${OPENGL_INCLUDE_DIR})
 INCLUDE_DIRECTORIES(${PCRE_INCLUDE_DIR})
 INCLUDE_DIRECTORIES(${FTGL_INCLUDE_DIR})
 INCLUDE_DIRECTORIES(${GLEW_INCLUDE_DIR})
+INCLUDE_DIRECTORIES(${JPEG_INCLUDE_DIR})
 INCLUDE_DIRECTORIES(${XMLPP_INCLUDE_DIRS})
 INCLUDE_DIRECTORIES(${EXTRA_LIBS_INCLUDE_DIRS})
 
@@ -287,135 +289,6 @@ IF(CMAKE_COMPILER_IS_GNUCC)
   #SET(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}/objs/${CMAKE_SYSTEM_PROCESSOR}/${CMAKE_BUILD_TYPE}/lib${LIB_SUFFIX}" CACHE PATH "Static libraries output directory")
 ENDIF(CMAKE_COMPILER_IS_GNUCC)
 
-# liblightspark.so sources
-SET(LIBSPARK_SOURCES 
-  asobject.cpp
-  compat.cpp
-  frame.cpp
-  logger.cpp
-  swf.cpp
-  swftypes.cpp
-  thread_pool.cpp
-  threading.cpp
-  timer.cpp
-  backends/audio.cpp
-  backends/config.cpp
-  backends/decoder.cpp
-  backends/extscriptobject.cpp
-  backends/geometry.cpp
-  backends/graphics.cpp
-  backends/input.cpp
-  backends/netutils.cpp
-  backends/pluginmanager.cpp
-  backends/rendering.cpp
-  backends/rtmputils.cpp
-  backends/security.cpp
-  backends/urlutils.cpp
-  parsing/amf3_generator.cpp
-  parsing/amf3_parser.cpp
-  parsing/config.cpp
-  parsing/crossdomainpolicy.cpp
-  parsing/flv.cpp
-  parsing/streams.cpp
-  parsing/tags.cpp
-  parsing/tags_stub.cpp
-  parsing/textfile.cpp
-  scripting/abc.cpp
-  scripting/abc_codesynt.cpp
-  scripting/abc_interpreter.cpp
-  scripting/abc_opcodes.cpp
-  scripting/actions.cpp
-  scripting/class.cpp
-  scripting/flashdisplay.cpp
-  scripting/flashevents.cpp
-  scripting/flashexternal.cpp
-  scripting/flashgeom.cpp
-  scripting/flashmedia.cpp
-  scripting/flashnet.cpp
-  scripting/flashsystem.cpp
-  scripting/flashtext.cpp
-  scripting/flashutils.cpp
-  scripting/flashxml.cpp
-  scripting/toplevel.cpp
-  scripting/vm.cpp)
-IF(${i386})
-  SET(LIBSPARK_SOURCES ${LIBSPARK_SOURCES} platforms/fastpaths_x86.cpp)
-  IF(CMAKE_COMPILER_IS_GNUCC)
-    SET(LIBSPARK_SOURCES ${LIBSPARK_SOURCES} platforms/fastpaths_i686.asm)
-  ELSE (CMAKE_COMPILER_IS_GNUCC)
-    SET(LIBSPARK_SOURCES ${LIBSPARK_SOURCES} platforms/fastpaths_32vc.cpp)
-  ENDIF(CMAKE_COMPILER_IS_GNUCC)
-ELSEIF(${x86_64})
-  SET(LIBSPARK_SOURCES ${LIBSPARK_SOURCES} platforms/fastpaths_x86.cpp)
-  #Why is there a particular faspaths_32vc but none for 64 bit?
-  SET(LIBSPARK_SOURCES ${LIBSPARK_SOURCES} platforms/fastpaths_amd64.asm)
-ELSE()
-  SET(LIBSPARK_SOURCES ${LIBSPARK_SOURCES} platforms/slowpaths_generic.cpp)
-ENDIF(${i386})
-
-INCLUDE_DIRECTORIES(${PROJECT_SOURCE_DIR})
-
-# liblightspark.so target
-IF(CMAKE_COMPILER_IS_GNUCC)
-  ADD_LIBRARY(spark SHARED ${LIBSPARK_SOURCES})
-  SET_TARGET_PROPERTIES(spark PROPERTIES OUTPUT_NAME lightspark)
-  SET_TARGET_PROPERTIES(spark PROPERTIES LINK_FLAGS "${LLVM_LDFLAGS} -Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/lightspark.expmap")
-  SET_TARGET_PROPERTIES(spark PROPERTIES LINK_INTERFACE_LIBRARIES "")
-ELSE (CMAKE_COMPILER_IS_GNUCC)
-  ADD_LIBRARY(spark STATIC ${LIBSPARK_SOURCES})
-ENDIF (CMAKE_COMPILER_IS_GNUCC)
-
-TARGET_LINK_LIBRARIES(spark ${EXTRA_LIBS_LIBRARIES} ${ZLIB_LIBRARIES}
-	${Boost_LIBRARIES} ${LLVM_LIBS_CORE} ${LLVM_LIBS_JIT} ${SDL_LIBRARY}
-	${OPTIONAL_LIBRARIES} ${GTK_LIBRARIES} ${FREETYPE_LIBRARIES}
-	${OPENGL_LIBRARIES} ${FTGL_LIBRARIES} ${GLEW_LIBRARIES} ${PCRE_LIBRARIES}
-	${Threads_LIBRARIES} ${XMLPP_LIBRARIES} ${CMAKE_DL_LIBS})
-SET_TARGET_PROPERTIES(spark PROPERTIES VERSION "${MAJOR_VERSION}.${MINOR_VERSION}.${PATCH_VERSION}")
-SET_TARGET_PROPERTIES(spark PROPERTIES SOVERSION "${MAJOR_VERSION}.${MINOR_VERSION}")
-
-IF(UNIX)
-  INSTALL(TARGETS spark LIBRARY DESTINATION ${PRIVATELIBDIR})
-ENDIF(UNIX)
-
-# lightspark executable target
-IF(COMPILE_LIGHTSPARK)
-  ADD_EXECUTABLE(lightspark main.cpp)
-  TARGET_LINK_LIBRARIES(lightspark spark)
-  TARGET_LINK_LIBRARIES(lightspark ${SDL_LIBRARY} ${Boost_LIBRARIES})
-
-  IF(UNIX)
-    INSTALL(FILES ${CMAKE_CURRENT_SOURCE_DIR}/lightspark.frag DESTINATION ${DATADIR}/lightspark)
-    INSTALL(FILES ${CMAKE_CURRENT_SOURCE_DIR}/lightspark.vert DESTINATION ${DATADIR}/lightspark)
-    INSTALL(FILES ${CMAKE_CURRENT_SOURCE_DIR}/lightspark-blitter.vert DESTINATION ${DATADIR}/lightspark)
-    INSTALL(FILES ${CMAKE_CURRENT_SOURCE_DIR}/docs/man/lightspark.1 DESTINATION share/man/man1)
-    INSTALL(TARGETS lightspark RUNTIME DESTINATION ${BINDIR})
-  ENDIF(UNIX)
-ENDIF(COMPILE_LIGHTSPARK)
-
-# tightspark executable target
-IF(COMPILE_TIGHTSPARK)
-  ADD_EXECUTABLE(tightspark tightspark.cpp)
-  TARGET_LINK_LIBRARIES(tightspark spark)
-  TARGET_LINK_LIBRARIES(tightspark ${Boost_LIBRARIES})
-
-  IF(UNIX)
-    INSTALL(TARGETS tightspark RUNTIME DESTINATION ${BINDIR})
-  ENDIF(UNIX)
-ENDIF(COMPILE_TIGHTSPARK)
-
-# Browser plugin
-IF(COMPILE_PLUGIN)
-  ADD_SUBDIRECTORY(plugin)
-ENDIF(COMPILE_PLUGIN)
-
-# generate locales for gettext
-GETTEXT_CREATE_TRANSLATIONS(i18n/lightspark.pot ALL i18n/pl.po i18n/fr.po
-        i18n/zh_CN.po)
-
-ADD_SUBDIRECTORY(backends/interfaces/audio/pulse)
-#ADD_SUBDIRECTORY(backends/interfaces/audio/alsa)
-#ADD_SUBDIRECTORY(backends/interfaces/audio/openal)
-
 #Install icons and desktop file
 if(UNIX)
   FOREACH(i 16 20 22 24 32 36 48 64 72 96 128 192 256 )
@@ -431,7 +304,13 @@ if(UNIX)
   INSTALL(FILES media/lightspark.desktop DESTINATION ${DATADIR}/applications )
 endif(UNIX)
 
+# generate locales for gettext
+GETTEXT_CREATE_TRANSLATIONS(i18n/lightspark.pot ALL i18n/pl.po i18n/fr.po
+        i18n/zh_CN.po)
+
 if(UNIX)
 	INSTALL(FILES etc/xdg/lightspark.conf
 		      DESTINATION ${ETCDIR}/xdg/)
 endif(UNIX)
+
+SUBDIRS(src)

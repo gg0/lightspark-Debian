@@ -1,3 +1,9 @@
+lightspark (0.4.8.1-1) experimental; urgency=low
+
+  * New 0.4.8.1 upstream release.
+
+ -- Didier Raboud <odyx@debian.org>  Fri, 27 May 2011 14:44:45 +0200
+
 lightspark (0.4.8~rc1-1) experimental; urgency=low
 
   * 0.4.8 first Release Candidate:

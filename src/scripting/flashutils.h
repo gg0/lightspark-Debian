@@ -42,8 +42,14 @@ protected:
 	uint32_t position;
 	ByteArray(const ByteArray& b);
 public:
-	ByteArray();
+	ByteArray(uint8_t* b = NULL, uint32_t l = 0);
 	~ByteArray();
+	//Helper interface for serialization
+	bool readByte(uint8_t& b);
+	bool readU29(int32_t& ret);
+	void writeByte(uint8_t b);
+	void writeStringVR(std::map<tiny_string, uint32_t>& stringMap, const tiny_string& s);
+	void writeU29(int32_t val);
 	ASFUNCTION(_getBytesAvailable);
 	ASFUNCTION(_getLength);
 	ASFUNCTION(_setLength);
@@ -51,11 +57,14 @@ public:
 	ASFUNCTION(_setPosition);
 	ASFUNCTION(_getDefaultObjectEncoding);
 	ASFUNCTION(_setDefaultObjectEncoding);
+	ASFUNCTION(readByte);
 	ASFUNCTION(readBytes);
+	ASFUNCTION(readInt);
 	ASFUNCTION(readObject);
 	ASFUNCTION(writeByte);
-	ASFUNCTION(readByte);
 	ASFUNCTION(writeBytes);
+	ASFUNCTION(writeInt);
+	ASFUNCTION(writeObject);
 	ASFUNCTION(writeUTFBytes);
 	ASFUNCTION(_toString);
 
@@ -71,10 +80,11 @@ public:
 
 	static void sinit(Class_base* c);
 	static void buildTraits(ASObject* o);
-	ASObject* getVariableByMultiname(const multiname& name, bool skip_impl=false, ASObject* base=NULL);
+	ASObject* getVariableByMultiname(const multiname& name, bool skip_impl=false);
 	intptr_t getVariableByMultiname_i(const multiname& name);
-	void setVariableByMultiname(const multiname& name, ASObject* o, ASObject* base=NULL);
+	void setVariableByMultiname(const multiname& name, ASObject* o);
 	void setVariableByMultiname_i(const multiname& name, intptr_t value);
+	bool hasPropertyByMultiname(const multiname& name, bool considerDynamic);
 	bool isEqual(ASObject* r);
 };
 
@@ -113,21 +123,17 @@ public:
 	static void sinit(Class_base*);
 	static void buildTraits(ASObject* o);
 	ASFUNCTION(_constructor);
-	ASObject* getVariableByMultiname(const multiname& name, bool skip_impl=false, ASObject* base=NULL);
+	ASObject* getVariableByMultiname(const multiname& name, bool skip_impl=false);
 	intptr_t getVariableByMultiname_i(const multiname& name)
 	{
 		assert_and_throw(implEnable);
 		throw UnsupportedException("getVariableByMultiName_i not supported for Dictionary");
 	}
-	void setVariableByMultiname(const multiname& name, ASObject* o, ASObject* base=NULL);
+	void setVariableByMultiname(const multiname& name, ASObject* o);
 	void setVariableByMultiname_i(const multiname& name, intptr_t value);
 	void deleteVariableByMultiname(const multiname& name);
+	bool hasPropertyByMultiname(const multiname& name, bool considerDynamic);
 	tiny_string toString(bool debugMsg=false);
-	bool isEqual(ASObject* r)
-	{
-		assert_and_throw(implEnable);
-		throw UnsupportedException("isEqual not supported for Dictionary");
-	}
 	uint32_t nextNameIndex(uint32_t cur_index);
 	_R<ASObject> nextName(uint32_t index);
 	_R<ASObject> nextValue(uint32_t index);
@@ -140,13 +146,13 @@ public:
 	static void sinit(Class_base*);
 	static void buildTraits(ASObject* o);
 //	ASFUNCTION(_constructor);
-	ASObject* getVariableByMultiname(const multiname& name, bool skip_impl=false, ASObject* base=NULL);
+	ASObject* getVariableByMultiname(const multiname& name, bool skip_impl=false);
 	intptr_t getVariableByMultiname_i(const multiname& name)
 	{
 		assert_and_throw(implEnable);
 		throw UnsupportedException("getVariableByMultiName_i not supported for Proxy");
 	}
-	void setVariableByMultiname(const multiname& name, ASObject* o, ASObject* base=NULL);
+	void setVariableByMultiname(const multiname& name, ASObject* o);
 	void setVariableByMultiname_i(const multiname& name, intptr_t value)
 	{
 		assert_and_throw(implEnable);
@@ -157,6 +163,7 @@ public:
 		assert_and_throw(implEnable);
 		throw UnsupportedException("deleteVariableByMultiName not supported for Proxy");
 	}
+	bool hasPropertyByMultiname(const multiname& name, bool considerDynamic);
 	tiny_string toString(bool debugMsg=false)
 	{
 		if(debugMsg)
@@ -182,6 +189,7 @@ ASObject* setInterval(ASObject* obj,ASObject* const* args, const unsigned int ar
 ASObject* setTimeout(ASObject* obj,ASObject* const* args, const unsigned int argslen);
 ASObject* clearInterval(ASObject* obj,ASObject* const* args, const unsigned int argslen);
 ASObject* clearTimeout(ASObject* obj,ASObject* const* args, const unsigned int argslen);
+ASObject* describeType(ASObject* obj,ASObject* const* args, const unsigned int argslen);
 
 class IntervalRunner : public ITickJob, public EventDispatcher
 {

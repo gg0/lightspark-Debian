@@ -35,7 +35,15 @@ namespace lightspark
 {
 
 class Downloader;
-class LoaderInfo;
+
+class ILoadable
+{
+protected:
+	~ILoadable(){}
+public:
+	virtual void setBytesTotal(uint32_t b) = 0;
+	virtual void setBytesLoaded(uint32_t b) = 0;
+};
 
 class DLL_PUBLIC DownloadManager
 {
@@ -48,11 +56,11 @@ protected:
 	bool removeDownloader(Downloader* downloader);
 	void cleanUp();
 public:
-	virtual ~DownloadManager() {};
-	virtual Downloader* download(const tiny_string& url, bool cached=false, LoaderInfo* owner=NULL)=0;
-	virtual Downloader* download(const URLInfo& url, bool cached=false, LoaderInfo* owner=NULL)=0;
-	virtual Downloader* downloadWithData(const URLInfo& url, const std::vector<uint8_t>& data, LoaderInfo* owner=NULL)=0;
+	virtual ~DownloadManager();
+	virtual Downloader* download(const URLInfo& url, bool cached, ILoadable* owner)=0;
+	virtual Downloader* downloadWithData(const URLInfo& url, const std::vector<uint8_t>& data, ILoadable* owner)=0;
 	virtual void destroy(Downloader* downloader)=0;
+	void stopAll();
 
 	enum MANAGERTYPE { NPAPI, STANDALONE };
 	MANAGERTYPE type;
@@ -63,9 +71,8 @@ class DLL_PUBLIC StandaloneDownloadManager:public DownloadManager
 public:
 	StandaloneDownloadManager();
 	~StandaloneDownloadManager();
-	Downloader* download(const tiny_string& url, bool cached=false, LoaderInfo* owner=NULL);
-	Downloader* download(const URLInfo& url, bool cached=false, LoaderInfo* owner=NULL);
-	Downloader* downloadWithData(const URLInfo& url, const std::vector<uint8_t>& data, LoaderInfo* owner=NULL);
+	Downloader* download(const URLInfo& url, bool cached, ILoadable* owner);
+	Downloader* downloadWithData(const URLInfo& url, const std::vector<uint8_t>& data, ILoadable* owner);
 	void destroy(Downloader* downloader);
 };
 
@@ -82,8 +89,8 @@ private:
 	pos_type getOffset() const;
 protected:
 	//Abstract base class, can't be constructed
-	Downloader(const tiny_string& _url, bool _cached);
-	Downloader(const tiny_string& _url, const std::vector<uint8_t>& data);
+	Downloader(const tiny_string& _url, bool _cached, ILoadable* o);
+	Downloader(const tiny_string& _url, const std::vector<uint8_t>& data, ILoadable* o);
 	//-- LOCKING
 	//Provides internal mutual exclusing
 	sem_t mutex;
@@ -178,7 +185,7 @@ protected:
 	const std::vector<uint8_t> data;
 
 	//-- PROGRESS MONITORING
-	LoaderInfo* owner;
+	ILoadable* owner;
 	void notifyOwnerAboutBytesTotal() const;
 	void notifyOwnerAboutBytesLoaded() const;
 public:
@@ -221,7 +228,6 @@ public:
 	const tiny_string& getOriginalURL() { return originalURL; }
 	uint16_t getRequestStatus() { return requestStatus; }
 
-	void setOwner(LoaderInfo* li) { owner=li; }
 };
 
 class ThreadedDownloader : public Downloader, public IThreadJob
@@ -234,8 +240,8 @@ public:
 	void waitFencing();
 protected:
 	//Abstract base class, can not be constructed
-	ThreadedDownloader(const tiny_string& url, bool cached);
-	ThreadedDownloader(const tiny_string& url, const std::vector<uint8_t>& data);
+	ThreadedDownloader(const tiny_string& url, bool cached, ILoadable* o);
+	ThreadedDownloader(const tiny_string& url, const std::vector<uint8_t>& data, ILoadable* o);
 //	//This class can only get destroyed by DownloadManager
 //	virtual ~ThreadedDownloader();
 };
@@ -250,8 +256,8 @@ private:
 	void execute();
 	void threadAbort();
 public:
-	CurlDownloader(const tiny_string& _url, bool _cached);
-	CurlDownloader(const tiny_string& _url, const std::vector<uint8_t>& data);
+	CurlDownloader(const tiny_string& _url, bool _cached, ILoadable* o);
+	CurlDownloader(const tiny_string& _url, const std::vector<uint8_t>& data, ILoadable* o);
 };
 
 //LocalDownloader can be used as a thread job, standalone or as a streambuf
@@ -267,7 +273,7 @@ private:
 	//Size of the reading buffer
 	static const size_t bufSize = 8192;
 public:
-	LocalDownloader(const tiny_string& _url, bool _cached);
+	LocalDownloader(const tiny_string& _url, bool _cached, ILoadable* o);
 };
 
 };

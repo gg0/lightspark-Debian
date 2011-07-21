@@ -35,7 +35,7 @@ REGISTER_CLASS_NAME(Timer);
 REGISTER_CLASS_NAME(Dictionary);
 REGISTER_CLASS_NAME(Proxy);
 
-ByteArray::ByteArray():bytes(NULL),len(0),position(0)
+ByteArray::ByteArray(uint8_t* b, uint32_t l):bytes(b),len(l),position(0)
 {
 }
 
@@ -53,22 +53,25 @@ ByteArray::~ByteArray()
 
 void ByteArray::sinit(Class_base* c)
 {
-	c->setGetterByQName("length","",Class<IFunction>::getFunction(_getLength),true);
-	c->setSetterByQName("length","",Class<IFunction>::getFunction(_setLength),true);
-	c->setGetterByQName("bytesAvailable","",Class<IFunction>::getFunction(_getBytesAvailable),true);
-	c->setGetterByQName("position","",Class<IFunction>::getFunction(_getPosition),true);
-	c->setSetterByQName("position","",Class<IFunction>::getFunction(_setPosition),true);
-	c->setGetterByQName("defaultObjectEncoding","",Class<IFunction>::getFunction(_getDefaultObjectEncoding),false);
-	c->setSetterByQName("defaultObjectEncoding","",Class<IFunction>::getFunction(_setDefaultObjectEncoding),false);
+	c->setDeclaredMethodByQName("length","",Class<IFunction>::getFunction(_getLength),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("length","",Class<IFunction>::getFunction(_setLength),SETTER_METHOD,true);
+	c->setDeclaredMethodByQName("bytesAvailable","",Class<IFunction>::getFunction(_getBytesAvailable),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("position","",Class<IFunction>::getFunction(_getPosition),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("position","",Class<IFunction>::getFunction(_setPosition),SETTER_METHOD,true);
+	c->setDeclaredMethodByQName("defaultObjectEncoding","",Class<IFunction>::getFunction(_getDefaultObjectEncoding),GETTER_METHOD,false);
+	c->setDeclaredMethodByQName("defaultObjectEncoding","",Class<IFunction>::getFunction(_setDefaultObjectEncoding),SETTER_METHOD,false);
 	sys->staticByteArrayDefaultObjectEncoding = ObjectEncoding::DEFAULT;
-	c->setMethodByQName("readBytes","",Class<IFunction>::getFunction(readBytes),true);
-	c->setMethodByQName("readByte","",Class<IFunction>::getFunction(readByte),true);
-	c->setMethodByQName("readObject","",Class<IFunction>::getFunction(readObject),true);
-	c->setMethodByQName("writeUTFBytes","",Class<IFunction>::getFunction(writeUTFBytes),true);
-	c->setMethodByQName("writeBytes","",Class<IFunction>::getFunction(writeBytes),true);
-	c->setMethodByQName("writeByte","",Class<IFunction>::getFunction(writeByte),true);
-//	c->setMethodByQName("toString",AS3,Class<IFunction>::getFunction(ByteArray::_toString),true);
-	c->setMethodByQName("toString","",Class<IFunction>::getFunction(ByteArray::_toString),true);
+	c->setDeclaredMethodByQName("readBytes","",Class<IFunction>::getFunction(readBytes),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("readByte","",Class<IFunction>::getFunction(readByte),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("readInt","",Class<IFunction>::getFunction(readInt),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("readObject","",Class<IFunction>::getFunction(readObject),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("writeUTFBytes","",Class<IFunction>::getFunction(writeUTFBytes),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("writeBytes","",Class<IFunction>::getFunction(writeBytes),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("writeByte","",Class<IFunction>::getFunction(writeByte),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("writeInt","",Class<IFunction>::getFunction(writeInt),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("writeObject","",Class<IFunction>::getFunction(writeObject),NORMAL_METHOD,true);
+//	c->setDeclaredMethodByQName("toString",AS3,Class<IFunction>::getFunction(ByteArray::_toString),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("toString","",Class<IFunction>::getFunction(ByteArray::_toString),NORMAL_METHOD,true);
 }
 
 void ByteArray::buildTraits(ASObject* o)
@@ -90,8 +93,8 @@ uint8_t* ByteArray::getBuffer(unsigned int size, bool enableResize)
 	{
 		//Resize the buffer
 		uint8_t* bytes2=new uint8_t[size];
-		len=size;
 		memcpy(bytes2,bytes,len);
+		len=size;
 		delete[] bytes;
 		bytes=bytes2;
 	}
@@ -214,6 +217,20 @@ ASFUNCTIONBODY(ByteArray,writeUTFBytes)
 	return NULL;
 }
 
+ASFUNCTIONBODY(ByteArray,writeObject)
+{
+	ByteArray* th=static_cast<ByteArray*>(obj);
+	//Validate parameters
+	assert_and_throw(argslen==1);
+	//TODO: support AMF0
+	//TODO: support custom serialization
+	map<tiny_string, uint32_t> stringMap;
+	map<const ASObject*, uint32_t> objMap;
+	args[0]->serialize(th, stringMap, objMap);
+
+	return NULL;
+}
+
 ASFUNCTIONBODY(ByteArray,writeBytes)
 {
 	ByteArray* th=static_cast<ByteArray*>(obj);
@@ -245,6 +262,12 @@ ASFUNCTIONBODY(ByteArray,writeBytes)
 	return NULL;
 }
 
+void ByteArray::writeByte(uint8_t b)
+{
+	getBuffer(position+1,true);
+	bytes[position++] = b;
+}
+
 ASFUNCTIONBODY(ByteArray,writeByte)
 {
 	ByteArray* th=static_cast<ByteArray*>(obj);
@@ -252,10 +275,58 @@ ASFUNCTIONBODY(ByteArray,writeByte)
 
 	int32_t value=args[0]->toInt();
 
-	th->getBuffer(th->position+1,true);
-	th->bytes[th->position++] = value & 0xFF;
+	th->writeByte(value&0xff);
 
 	return NULL;
+}
+
+ASFUNCTIONBODY(ByteArray,writeInt)
+{
+	ByteArray* th=static_cast<ByteArray*>(obj);
+	assert_and_throw(argslen==1);
+
+	int32_t value=args[0]->toInt();
+
+	th->getBuffer(th->position+4,true);
+	memcpy(th->bytes+th->position,&value,4);
+	th->position+=4;
+
+	return NULL;
+}
+
+bool ByteArray::readByte(uint8_t& b)
+{
+	if (len <= position)
+		return false;
+
+	b=bytes[position++];
+	return true;
+}
+
+bool ByteArray::readU29(int32_t& ret)
+{
+	ret=0;
+	for(uint32_t i=0;i<4;i++)
+	{
+		if (len <= position)
+			return false;
+
+		uint8_t tmp=bytes[position++];
+		if(i<3)
+		{
+			ret|=((tmp&0x7f) << i*7);
+			if((tmp&0x80)==0)
+				break;
+		}
+		else
+		{
+			ret|=(tmp << 21);
+			//Sign extend
+			if(tmp&0x80)
+				ret|=0xe0000000;
+		}
+	}
+	return true;
 }
 
 ASFUNCTIONBODY(ByteArray, readByte)
@@ -263,12 +334,33 @@ ASFUNCTIONBODY(ByteArray, readByte)
 	ByteArray* th=static_cast<ByteArray*>(obj);
 	assert_and_throw(argslen==0);
 
-	if (th->len <= th->position) {
+	uint8_t ret;
+	if(!th->readByte(ret))
+	{
 		LOG(LOG_ERROR,"ByteArray::readByte not enough data");
 		//TODO: throw AS exceptions
 		return NULL;
 	}
-	return abstract_i(th->bytes[th->position++]);
+	return abstract_i(ret);
+}
+
+ASFUNCTIONBODY(ByteArray,readInt)
+{
+	ByteArray* th=static_cast<ByteArray*>(obj);
+	assert_and_throw(argslen==0);
+
+	if(th->len < th->position+4)
+	{
+		LOG(LOG_ERROR,"ByteArray::readInt not enough data");
+		//TODO: throw AS exceptions
+		return NULL;
+	}
+
+	int32_t ret;
+	memcpy(&ret,th->bytes+th->position,4);
+	th->position+=4;
+
+	return abstract_i(ret);
 }
 
 ASFUNCTIONBODY(ByteArray,readObject)
@@ -281,16 +373,14 @@ ASFUNCTIONBODY(ByteArray,readObject)
 		return NULL;
 	}
 	std::vector<ASObject*> ret;
-	char* start=(char*)th->bytes;
-	char* end=(char*)th->bytes+th->len;
-	Amf3Deserializer d(start,end);
+	Amf3Deserializer d(th);
 	try
 	{
 		d.generateObjects(ret);
 	}
 	catch(LightsparkException& e)
 	{
-		LOG(LOG_ERROR,"Exception caught while parsing AMF3");
+		LOG(LOG_ERROR,"Exception caught while parsing AMF3: " << e.cause);
 		//TODO: throw AS exception
 	}
 
@@ -315,12 +405,24 @@ ASFUNCTIONBODY(ByteArray,_toString)
 	return Class<ASString>::getInstanceS((char*)th->bytes,th->len);
 }
 
-ASObject* ByteArray::getVariableByMultiname(const multiname& name, bool skip_impl, ASObject* base)
+bool ByteArray::hasPropertyByMultiname(const multiname& name, bool considerDynamic)
+{
+	if(considerDynamic==false)
+		return ASObject::hasPropertyByMultiname(name, considerDynamic);
+
+	unsigned int index=0;
+	if(!Array::isValidMultiname(name,index))
+		return ASObject::hasPropertyByMultiname(name, considerDynamic);
+
+	return index<len;
+}
+
+ASObject* ByteArray::getVariableByMultiname(const multiname& name, bool skip_impl)
 {
 	assert_and_throw(implEnable);
 	unsigned int index=0;
 	if(skip_impl || !Array::isValidMultiname(name,index))
-		return ASObject::getVariableByMultiname(name,skip_impl,base);
+		return ASObject::getVariableByMultiname(name,skip_impl);
 
 	assert_and_throw(index<len);
 	ASObject* ret=abstract_i(bytes[index]);
@@ -339,12 +441,12 @@ intptr_t ByteArray::getVariableByMultiname_i(const multiname& name)
 	return bytes[index];
 }
 
-void ByteArray::setVariableByMultiname(const multiname& name, ASObject* o, ASObject* base)
+void ByteArray::setVariableByMultiname(const multiname& name, ASObject* o)
 {
 	assert_and_throw(implEnable);
 	unsigned int index=0;
 	if(!Array::isValidMultiname(name,index))
-		return ASObject::setVariableByMultiname(name,o,base);
+		return ASObject::setVariableByMultiname(name,o);
 
 	if(index>=len)
 	{
@@ -394,6 +496,47 @@ void ByteArray::acquireBuffer(uint8_t* buf, int bufLen)
 	position=0;
 }
 
+void ByteArray::writeU29(int32_t val)
+{
+	if(val>=0x40000000 || val<=(int32_t)0xbfffffff)
+		throw AssertionException("Range exception in writeU29");
+
+	for(uint32_t i=0;i<4;i++)
+	{
+		uint8_t b;
+		if(i<3)
+		{
+			b=val&0x7f;
+			val>>=7;
+			if(val)
+				b|=0x80;
+		}
+		else
+			b=val&0xff;
+
+		writeByte(b);
+		if(val==0)
+			break;
+	}
+}
+
+void ByteArray::writeStringVR(map<tiny_string, uint32_t>& stringMap, const tiny_string& s)
+{
+	//TODO: use U29 format
+	const uint32_t len=s.len();
+	assert_and_throw(len<0x40);
+
+	if(len!=0)
+		assert_and_throw(stringMap.find(s)==stringMap.end());
+
+	//A new string
+	writeByte((len<<1)|1);
+	
+	getBuffer(position+len,true);
+	memcpy(bytes+position,s.raw_buf(),len);
+	position+=len;
+}
+
 void Timer::tick()
 {
 	//This will be executed once if repeatCount was originally 1
@@ -419,21 +562,21 @@ void Timer::sinit(Class_base* c)
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
 	c->super=Class<EventDispatcher>::getClass();
 	c->max_level=c->super->max_level+1;
-	c->setGetterByQName("currentCount","",Class<IFunction>::getFunction(_getCurrentCount),true);
-	c->setGetterByQName("repeatCount","",Class<IFunction>::getFunction(_getRepeatCount),true);
-	c->setSetterByQName("repeatCount","",Class<IFunction>::getFunction(_setRepeatCount),true);
-	c->setGetterByQName("running","",Class<IFunction>::getFunction(_getRunning),true);
-	c->setGetterByQName("delay","",Class<IFunction>::getFunction(_getDelay),true);
-	c->setSetterByQName("delay","",Class<IFunction>::getFunction(_setDelay),true);
+	c->setDeclaredMethodByQName("currentCount","",Class<IFunction>::getFunction(_getCurrentCount),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("repeatCount","",Class<IFunction>::getFunction(_getRepeatCount),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("repeatCount","",Class<IFunction>::getFunction(_setRepeatCount),SETTER_METHOD,true);
+	c->setDeclaredMethodByQName("running","",Class<IFunction>::getFunction(_getRunning),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("delay","",Class<IFunction>::getFunction(_getDelay),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("delay","",Class<IFunction>::getFunction(_setDelay),SETTER_METHOD,true);
+	c->setDeclaredMethodByQName("start","",Class<IFunction>::getFunction(start),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("reset","",Class<IFunction>::getFunction(reset),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("stop","",Class<IFunction>::getFunction(stop),NORMAL_METHOD,true);
 }
 
 ASFUNCTIONBODY(Timer,_constructor)
 {
 	EventDispatcher::_constructor(obj,NULL,0);
 	Timer* th=static_cast<Timer*>(obj);
-	obj->setVariableByQName("start","",Class<IFunction>::getFunction(start));
-	obj->setVariableByQName("reset","",Class<IFunction>::getFunction(reset));
-	obj->setVariableByQName("stop","",Class<IFunction>::getFunction(stop));
 
 	th->delay=args[0]->toInt();
 	if(argslen>=2)
@@ -543,7 +686,7 @@ ASFUNCTIONBODY(Timer,stop)
 
 ASFUNCTIONBODY(lightspark,getQualifiedClassName)
 {
-	//CHECK: what to do is ns is empty
+	//CHECK: what to do if ns is empty
 	ASObject* target=args[0];
 	Class_base* c;
 	if(target->getObjectType()!=T_CLASS)
@@ -612,6 +755,70 @@ ASFUNCTIONBODY(lightspark,getDefinitionByName)
 	return o;
 }
 
+ASFUNCTIONBODY(lightspark,describeType)
+{
+	assert_and_throw(argslen==1);
+
+	if(args[0]->getObjectType()==T_FUNCTION)
+	{
+		LOG(LOG_NOT_IMPLEMENTED,"Functions not supported in describeType");
+		return new Undefined;
+	}
+
+	if(args[0]->getObjectType()==T_UNDEFINED)
+		return new Undefined;
+
+	bool isStatic=(args[0]->getObjectType()==T_CLASS);
+
+	//TODO: add support in type for base, isDynamic, isFinal
+	string ret = "<type name=\"";
+	Class_base* type=NULL;
+	if(isStatic)
+		type=static_cast<Class_base*>(args[0]);
+	else
+		type=args[0]->getPrototype();
+
+	assert_and_throw(type);
+	ret+=type->class_name.getQualifiedName().raw_buf();
+	ret+="\" isStatic=";
+	ret+=(isStatic)?"\"true\"":"\"false\"";
+	ret+=">";
+	//TODO: add support for extendsClass and implementsInterface and factory
+	auto it=args[0]->Variables.Variables.begin();
+	for(;it!=args[0]->Variables.Variables.end();it++)
+	{
+		if(isStatic && it->second.kind==BORROWED_TRAIT)
+			continue;
+
+		//TODO: add support for constant, method, parameter
+		if(it->second.var.getter)
+		{
+			//Output an accessor
+			//TODO: add support in accessor for access,type,declaredBy
+			ret+="<accessor name=\"";
+			ret+=it->first.raw_buf();
+			ret+="\"/>";
+		}
+		else if(it->second.var.var)
+		{
+			//Output a variable
+			ret+="<variable name=\"";
+			ret+=it->first.raw_buf();
+			ret+="\"";
+			if(it->second.var.type)
+			{
+				ret+=" type=\"";
+				ret+=it->second.var.type->class_name.getQualifiedName().raw_buf();
+				ret+="\"";
+			}
+			ret+="/>";
+		}
+	}
+	ret+="</type>";
+
+	return Class<XML>::getInstanceS(ret);;
+}
+
 ASFUNCTIONBODY(lightspark,getTimer)
 {
 	uint64_t ret=compat_msectiming() - sys->startTime;
@@ -646,7 +853,7 @@ void Dictionary::setVariableByMultiname_i(const multiname& name, intptr_t value)
 	Dictionary::setVariableByMultiname(name,abstract_i(value));
 }
 
-void Dictionary::setVariableByMultiname(const multiname& name, ASObject* o, ASObject* base)
+void Dictionary::setVariableByMultiname(const multiname& name, ASObject* o)
 {
 	assert_and_throw(implEnable);
 	if(name.name_type==multiname::NAME_OBJECT)
@@ -669,7 +876,7 @@ void Dictionary::setVariableByMultiname(const multiname& name, ASObject* o, ASOb
 		assert(name.name_type==multiname::NAME_STRING ||
 			name.name_type==multiname::NAME_INT ||
 			name.name_type==multiname::NAME_NUMBER);
-		ASObject::setVariableByMultiname(name, o, base);
+		ASObject::setVariableByMultiname(name, o);
 	}
 }
 
@@ -699,7 +906,7 @@ void Dictionary::deleteVariableByMultiname(const multiname& name)
 	}
 }
 
-ASObject* Dictionary::getVariableByMultiname(const multiname& name, bool skip_impl, ASObject* base)
+ASObject* Dictionary::getVariableByMultiname(const multiname& name, bool skip_impl)
 {
 	if(!skip_impl && implEnable)
 	{
@@ -720,6 +927,7 @@ ASObject* Dictionary::getVariableByMultiname(const multiname& name, bool skip_im
 			{
 				//Make sure name_o gets not destroyed, it's still owned by name
 				name_o->incRef();
+				return NULL;
 			}
 		}
 		else
@@ -729,11 +937,34 @@ ASObject* Dictionary::getVariableByMultiname(const multiname& name, bool skip_im
 			assert(name.name_type==multiname::NAME_STRING ||
 				name.name_type==multiname::NAME_INT ||
 				name.name_type==multiname::NAME_NUMBER);
-			return ASObject::getVariableByMultiname(name, skip_impl, base);
+			return ASObject::getVariableByMultiname(name, skip_impl);
 		}
 	}
 	//Try with the base implementation
-	return ASObject::getVariableByMultiname(name, skip_impl, base);
+	return ASObject::getVariableByMultiname(name, skip_impl);
+}
+
+bool Dictionary::hasPropertyByMultiname(const multiname& name, bool considerDynamic)
+{
+	if(considerDynamic==false)
+		return ASObject::hasPropertyByMultiname(name, considerDynamic);
+
+	if(name.name_type==multiname::NAME_OBJECT)
+	{
+		_R<ASObject> name_o(name.name_o);
+
+		map<_R<ASObject>, _R<ASObject> >::iterator it=data.find(name_o);
+		return it != data.end();
+	}
+	else
+	{
+		//Primitive types _must_ be handled by the normal ASObject path
+		//REFERENCE: Dictionary Object on AS3 reference
+		assert(name.name_type==multiname::NAME_STRING ||
+			name.name_type==multiname::NAME_INT ||
+			name.name_type==multiname::NAME_NUMBER);
+		return ASObject::hasPropertyByMultiname(name, considerDynamic);
+	}
 }
 
 uint32_t Dictionary::nextNameIndex(uint32_t cur_index)
@@ -785,7 +1016,7 @@ _R<ASObject> Dictionary::nextValue(uint32_t index)
 	else
 	{
 		//Fall back on object properties
-		return ASObject::nextName(index-data.size());
+		return ASObject::nextValue(index-data.size());
 	}
 }
 
@@ -819,12 +1050,12 @@ void Proxy::buildTraits(ASObject* o)
 {
 }
 
-void Proxy::setVariableByMultiname(const multiname& name, ASObject* o, ASObject* base)
+void Proxy::setVariableByMultiname(const multiname& name, ASObject* o)
 {
-	//If a variable named like this already exist, return that
-	if(hasPropertyByMultiname(name) || !implEnable)
+	//If a variable named like this already exist, use that
+	if(ASObject::hasPropertyByMultiname(name, true) || !implEnable)
 	{
-		ASObject::setVariableByMultiname(name,o,base);
+		ASObject::setVariableByMultiname(name,o);
 		return;
 	}
 
@@ -858,12 +1089,12 @@ void Proxy::setVariableByMultiname(const multiname& name, ASObject* o, ASObject*
 	implEnable=true;
 }
 
-ASObject* Proxy::getVariableByMultiname(const multiname& name, bool skip_impl, ASObject* base)
+ASObject* Proxy::getVariableByMultiname(const multiname& name, bool skip_impl)
 {
 	//It seems that various kind of implementation works only with the empty namespace
 	assert_and_throw(name.ns.size()>0);
-	if(name.ns[0].name!="" || hasPropertyByMultiname(name) || !implEnable || skip_impl)
-		return ASObject::getVariableByMultiname(name,skip_impl,base);
+	if(name.ns[0].name!="" || ASObject::hasPropertyByMultiname(name, true) || !implEnable || skip_impl)
+		return ASObject::getVariableByMultiname(name,skip_impl);
 
 	//Check if there is a custom getter defined, skipping implementation to avoid recursive calls
 	multiname getPropertyName;
@@ -873,7 +1104,7 @@ ASObject* Proxy::getVariableByMultiname(const multiname& name, bool skip_impl, A
 	ASObject* o=getVariableByMultiname(getPropertyName,true);
 
 	if(o==NULL)
-		return ASObject::getVariableByMultiname(name,skip_impl,base);
+		return ASObject::getVariableByMultiname(name,skip_impl);
 
 	assert_and_throw(o->getObjectType()==T_FUNCTION);
 
@@ -888,6 +1119,14 @@ ASObject* Proxy::getVariableByMultiname(const multiname& name, bool skip_impl, A
 	ASObject* ret=f->call(this,&arg,1);
 	implEnable=true;
 	return ret;
+}
+
+bool Proxy::hasPropertyByMultiname(const multiname& name, bool considerDynamic)
+{
+	if(considerDynamic==false)
+		return ASObject::hasPropertyByMultiname(name, considerDynamic);
+
+	throw UnsupportedException("Proxy::hasProperty");
 }
 
 uint32_t Proxy::nextNameIndex(uint32_t cur_index)

@@ -21,11 +21,14 @@
 #define INPUT_H
 
 #include "compat.h"
+#include "geometry.h"
 #include "threading.h"
-#include "platforms/pluginutils.h"
+#include "platforms/engineutils.h"
 #include "swftypes.h"
 #include "smartrefs.h"
 #include <vector>
+
+#include <gtk/gtk.h>
 
 namespace lightspark
 {
@@ -42,20 +45,17 @@ private:
 	pthread_t t;
 	bool terminated;
 	bool threaded;
-	static void* sdl_worker(InputThread*);
-#ifdef COMPILE_PLUGIN
-	NPAPI_params* npapi_params;
-	static gboolean gtkplug_worker(GtkWidget *widget, GdkEvent *event, InputThread* th);
+	static gboolean worker(GtkWidget *widget, GdkEvent *event, InputThread* th);
 	static void delayedCreation(InputThread* th);
-#endif
 
 	std::vector<InteractiveObject* > listeners;
 	Mutex mutexListeners;
 	Mutex mutexDragged;
 
-	Sprite* curDragged;
+	_NR<Sprite> curDragged;
 	_NR<InteractiveObject> lastMouseDownTarget;
-	RECT dragLimit;
+	const RECT* dragLimit;
+	Vector2f dragOffset;
 	class MaskData
 	{
 	public:
@@ -69,17 +69,16 @@ private:
 	void handleMouseMove(uint32_t x, uint32_t y);
 
 	Spinlock inputDataSpinlock;
-	number_t mouseX;
-	number_t mouseY;
+	Vector2 mousePos;
 public:
 	InputThread(SystemState* s);
 	~InputThread();
 	void wait();
-	void start(ENGINE e, void* param);
+	void start(const EngineData* data);
 	void addListener(InteractiveObject* ob);
 	void removeListener(InteractiveObject* ob);
-	void enableDrag(Sprite* s, const RECT& limit);
-	void disableDrag();
+	void startDrag(_R<Sprite> s, const RECT* limit, Vector2f dragOffset);
+	void stopDrag(Sprite* s);
 	/**
 	  	Add a mask to the stack mask
 		@param d The DisplayObject used as a mask
@@ -106,16 +105,10 @@ public:
 	*/
 	bool isMasked(number_t x, number_t y) const;
 
-	number_t getMouseX()
+	Vector2 getMousePos()
 	{
 		SpinlockLocker locker(inputDataSpinlock);
-		return mouseX;
-	}
-
-	number_t getMouseY()
-	{
-		SpinlockLocker locker(inputDataSpinlock);
-		return mouseY;
+		return mousePos;
 	}
 };
 

@@ -34,15 +34,14 @@ namespace lightspark
 
 class URLRequest: public ASObject
 {
-friend class Loader;
-friend class URLLoader;
-friend ASObject* sendToURL(ASObject* obj,ASObject* const* args, const unsigned int argslen);
 private:
 	tiny_string url;
-public:
+	_NR<ASObject> data;
 	enum METHOD { GET=0, POST };
 	METHOD method;
+public:
 	URLRequest();
+	void finalize();
 	static void sinit(Class_base*);
 	static void buildTraits(ASObject* o);
 	ASFUNCTION(_constructor);
@@ -50,6 +49,10 @@ public:
 	ASFUNCTION(_setURL);
 	ASFUNCTION(_getMethod);
 	ASFUNCTION(_setMethod);
+	ASFUNCTION(_setData);
+	ASFUNCTION(_getData);
+	URLInfo getRequestURL() const;
+	void getPostData(std::vector<uint8_t>& data) const;
 };
 
 class URLRequestMethod: public ASObject
@@ -101,6 +104,7 @@ private:
 	_NR<ASObject> data;
 	Spinlock downloaderLock;
 	Downloader* downloader;
+	std::vector<uint8_t> postData;
 	void execute();
 	void threadAbort();
 	void jobFence();
@@ -141,6 +145,7 @@ public:
 	ASFUNCTION(_getURI);
 };
 
+class SoundTransform;
 class NetStream: public EventDispatcher, public IThreadJob, public ITickJob
 {
 private:
@@ -175,6 +180,8 @@ private:
 	_NR<ASObject> client;
 	bool checkPolicyFile;
 	bool rawAccessAllowed;
+	number_t oldVolume;
+	ASPROPERTY_GETTER_SETTER(NullableRef<SoundTransform>,soundTransform);
 public:
 	NetStream();
 	~NetStream();

@@ -32,7 +32,9 @@
 #include "backends/rendering.h"
 #include "backends/geometry.h"
 #include "backends/image.h"
+#include "backends/glmatrices.h"
 #include "compat.h"
+#include "flashaccessibility.h"
 
 #include <GL/glew.h>
 #include <fstream>
@@ -69,19 +71,27 @@ REGISTER_CLASS_NAME(SimpleButton);
 REGISTER_CLASS_NAME(FrameLabel);
 REGISTER_CLASS_NAME(Scene);
 
+std::ostream& lightspark::operator<<(std::ostream& s, const DisplayObject& r)
+{
+	s << "[" << r.getPrototype()->class_name << "]";
+	if(r.name.len() > 0)
+		s << " name: " << r.name;
+	return s;
+}
+
 void LoaderInfo::sinit(Class_base* c)
 {
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
 	c->super=Class<EventDispatcher>::getClass();
 	c->max_level=c->super->max_level+1;
-	c->setGetterByQName("loaderURL","",Class<IFunction>::getFunction(_getLoaderURL),true);
-	c->setGetterByQName("loader","",Class<IFunction>::getFunction(_getLoader),true);
-	c->setGetterByQName("content","",Class<IFunction>::getFunction(_getContent),true);
-	c->setGetterByQName("url","",Class<IFunction>::getFunction(_getURL),true);
-	c->setGetterByQName("bytesLoaded","",Class<IFunction>::getFunction(_getBytesLoaded),true);
-	c->setGetterByQName("bytesTotal","",Class<IFunction>::getFunction(_getBytesTotal),true);
-	c->setGetterByQName("applicationDomain","",Class<IFunction>::getFunction(_getApplicationDomain),true);
-	c->setGetterByQName("sharedEvents","",Class<IFunction>::getFunction(_getSharedEvents),true);
+	c->setDeclaredMethodByQName("loaderURL","",Class<IFunction>::getFunction(_getLoaderURL),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("loader","",Class<IFunction>::getFunction(_getLoader),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("content","",Class<IFunction>::getFunction(_getContent),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("url","",Class<IFunction>::getFunction(_getURL),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("bytesLoaded","",Class<IFunction>::getFunction(_getBytesLoaded),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("bytesTotal","",Class<IFunction>::getFunction(_getBytesTotal),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("applicationDomain","",Class<IFunction>::getFunction(_getApplicationDomain),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("sharedEvents","",Class<IFunction>::getFunction(_getSharedEvents),GETTER_METHOD,true);
 }
 
 void LoaderInfo::buildTraits(ASObject* o)
@@ -209,7 +219,7 @@ ASFUNCTIONBODY(Loader,_constructor)
 	if(!p.isNull())
 	{
 		p->incRef();
-		th->contentLoaderInfo->setVariableByQName("parameters","",p.getPtr());
+		th->contentLoaderInfo->setVariableByQName("parameters","",p.getPtr(),DECLARED_TRAIT);
 	}
 	return NULL;
 }
@@ -240,10 +250,11 @@ ASFUNCTIONBODY(Loader,load)
 		return NULL;
 	th->loading=true;
 	assert_and_throw(argslen > 0 && args[0] && argslen <= 2);
-	assert_and_throw(args[0]->getPrototype()->isSubClass(Class<URLRequest>::getClass()));
-	URLRequest* r=static_cast<URLRequest*>(args[0]);
-	assert_and_throw(r->method==URLRequest::GET);
-	th->url=r->url;
+	URLRequest* r=Class<URLRequest>::dyncast(args[0]);
+	if(r==NULL)
+		throw Class<ArgumentError>::getInstanceS("Wrong argument in Loader::load");
+	th->url=r->getRequestURL();
+	r->getPostData(th->postData);
 	th->source=URL;
 	//To be decreffed in jobFence
 	th->incRef();
@@ -295,10 +306,10 @@ void Loader::sinit(Class_base* c)
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
 	c->super=Class<DisplayObjectContainer>::getClass();
 	c->max_level=c->super->max_level+1;
-	c->setGetterByQName("contentLoaderInfo","",Class<IFunction>::getFunction(_getContentLoaderInfo),true);
-	c->setGetterByQName("content","",Class<IFunction>::getFunction(_getContent),true);
-	c->setMethodByQName("loadBytes","",Class<IFunction>::getFunction(loadBytes),true);
-	c->setMethodByQName("load","",Class<IFunction>::getFunction(load),true);
+	c->setDeclaredMethodByQName("contentLoaderInfo","",Class<IFunction>::getFunction(_getContentLoaderInfo),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("content","",Class<IFunction>::getFunction(_getContent),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("loadBytes","",Class<IFunction>::getFunction(loadBytes),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("load","",Class<IFunction>::getFunction(load),NORMAL_METHOD,true);
 }
 
 void Loader::buildTraits(ASObject* o)
@@ -312,12 +323,14 @@ void Loader::execute()
 	contentLoaderInfo->incRef();
 	//Use a local variable to store the new root, as the localRoot member may change
 	_R<RootMovieClip> newRoot=_MR(RootMovieClip::getInstance(contentLoaderInfo.getPtr()));
-	if(isOnStage())
-		newRoot->setOnStage(true);
+
+	_addChildAt(newRoot,0);
+
 	if(source==URL)
 	{
 		//TODO: add security checks
 		LOG(LOG_CALLS,_("Loader async execution ") << url);
+		assert_and_throw(postData.empty());
 		downloader=sys->downloadManager->download(url, false, contentLoaderInfo.getPtr());
 		downloader->waitForData(); //Wait for some data, making sure our check for failure is working
 		if(downloader->hasFailed()) //Check to see if the download failed for some reason
@@ -337,7 +350,7 @@ void Loader::execute()
 			sys->downloadManager->destroy(downloader);
 			downloader=NULL;
 		}
-		if(local_pt->getFileType()==ParseThread::SWF)
+		if(local_pt->getFileType()==ParseThread::SWF || local_pt->getFileType()==ParseThread::COMPRESSED_SWF)
 		{
 			SpinlockLocker l(localRootSpinlock);
 			localRoot=newRoot;
@@ -380,40 +393,6 @@ void Loader::threadAbort()
 	}
 }
 
-void Loader::Render(bool maskEnabled)
-{
-	SpinlockLocker l(localRootSpinlock);
-	if(!loaded || skipRender(maskEnabled) || localRoot.isNull())
-		return;
-
-	renderPrologue();
-
-	localRoot->Render(maskEnabled);
-
-	renderEpilogue();
-}
-
-bool Loader::getBounds(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const
-{
-	SpinlockLocker l(localRootSpinlock);
-	if(!localRoot.isNull() && localRoot->getBounds(xmin,xmax,ymin,ymax))
-	{
-		getMatrix().multiply2D(xmin,ymin,xmin,ymin);
-		getMatrix().multiply2D(xmax,ymax,xmax,ymax);
-		return true;
-	}
-	else
-		return false;
-}
-
-void Loader::setOnStage(bool staged)
-{
-	DisplayObjectContainer::setOnStage(staged);
-	SpinlockLocker l(localRootSpinlock);
-	if(!localRoot.isNull())
-		localRoot->setOnStage(staged);
-}
-
 Sprite::Sprite():TokenContainer(this),graphics(NULL)
 {
 }
@@ -429,48 +408,87 @@ void Sprite::sinit(Class_base* c)
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
 	c->super=Class<DisplayObjectContainer>::getClass();
 	c->max_level=c->super->max_level+1;
-	c->setGetterByQName("graphics","",Class<IFunction>::getFunction(_getGraphics),true);
+	c->setDeclaredMethodByQName("graphics","",Class<IFunction>::getFunction(_getGraphics),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("startDrag","",Class<IFunction>::getFunction(_startDrag),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("stopDrag","",Class<IFunction>::getFunction(_stopDrag),NORMAL_METHOD,true);
 }
 
 void Sprite::buildTraits(ASObject* o)
 {
 }
 
-bool Sprite::boundsRect(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const
+ASFUNCTIONBODY(Sprite,_startDrag)
 {
-	bool ret=false;
+	Sprite* th=Class<Sprite>::cast(obj);
+	bool lockCenter = false;
+	const RECT* bounds = NULL;
+	if(argslen > 0)
+		lockCenter = ArgumentConversion<bool>::toConcrete(args[0]);
+	if(argslen > 1)
 	{
-		Locker l(mutexDisplayList);
-		if(dynamicDisplayList.empty() && tokensEmpty())
-			return false;
+		Rectangle* rect = Class<Rectangle>::cast(args[1]);
+		if(!rect)
+			throw ArgumentError("Wrong type");
+		bounds = new RECT(rect->getRect());
+	}
 
-		//TODO: Check bounds calculation
-		list<_R<DisplayObject>>::const_iterator it=dynamicDisplayList.begin();
-		for(;it!=dynamicDisplayList.end();++it)
+	Vector2f offset;
+	if(!lockCenter)
+		offset = -th->getLocalMousePos();
+
+	th->incRef();
+	sys->getInputThread()->startDrag(_MR(th), bounds, offset);
+	return NULL;
+}
+
+ASFUNCTIONBODY(Sprite,_stopDrag)
+{
+	Sprite* th=Class<Sprite>::cast(obj);
+	sys->getInputThread()->stopDrag(th);
+	return NULL;
+}
+
+bool DisplayObjectContainer::boundsRect(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const
+{
+	bool ret = false;
+
+	if(dynamicDisplayList.empty())
+		return false;
+
+	Locker l(mutexDisplayList);
+	//TODO: Check bounds calculation
+	list<_R<DisplayObject>>::const_iterator it=dynamicDisplayList.begin();
+	for(;it!=dynamicDisplayList.end();++it)
+	{
+		number_t txmin,txmax,tymin,tymax;
+		if((*it)->getBounds(txmin,txmax,tymin,tymax))
 		{
-			number_t txmin,txmax,tymin,tymax;
-			if((*it)->getBounds(txmin,txmax,tymin,tymax))
+			if(ret==true)
 			{
-				if(ret==true)
-				{
-					xmin = imin(xmin,txmin);
-					xmax = imax(xmax,txmax);
-					ymin = imin(ymin,txmin);
-					ymax = imax(ymax,tymax);
-				}
-				else
-				{
-					xmin=txmin;
-					xmax=txmax;
-					ymin=tymin;
-					ymax=tymax;
-					ret=true;
-				}
+				xmin = imin(xmin,txmin);
+				xmax = imax(xmax,txmax);
+				ymin = imin(ymin,txmin);
+				ymax = imax(ymax,tymax);
+			}
+			else
+			{
+				xmin=txmin;
+				xmax=txmax;
+				ymin=tymin;
+				ymax=tymax;
+				ret=true;
 			}
 		}
 	}
+	return ret;
+}
+
+bool Sprite::boundsRect(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const
+{
+	bool ret;
+	ret = DisplayObjectContainer::boundsRect(xmin,xmax,ymin,ymax);
 	number_t txmin,txmax,tymin,tymax;
-	if(TokenContainer::getBounds(txmin,txmax,tymin,tymax))
+	if(TokenContainer::boundsRect(txmin,txmax,tymin,tymax))
 	{
 		if(ret==true)
 		{
@@ -491,8 +509,11 @@ bool Sprite::boundsRect(number_t& xmin, number_t& xmax, number_t& ymin, number_t
 	return ret;
 }
 
-bool Sprite::getBounds(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const
+bool DisplayObject::getBounds(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const
 {
+	if(!isConstructed())
+		return false;
+
 	bool ret=boundsRect(xmin,xmax,ymin,ymax);
 	if(ret)
 	{
@@ -526,6 +547,15 @@ void DisplayObject::renderEpilogue() const
 		rt->popMask();
 }
 
+void DisplayObjectContainer::renderImpl(bool maskEnabled, number_t t1,number_t t2,number_t t3,number_t t4) const
+{
+	Locker l(mutexDisplayList);
+	//Now draw also the display list
+	list<_R<DisplayObject>>::const_iterator it=dynamicDisplayList.begin();
+	for(;it!=dynamicDisplayList.end();++it)
+		(*it)->Render(maskEnabled);
+}
+
 void Sprite::renderImpl(bool maskEnabled, number_t t1,number_t t2,number_t t3,number_t t4) const
 {
 	//Draw the dynamically added graphics, if any
@@ -533,18 +563,12 @@ void Sprite::renderImpl(bool maskEnabled, number_t t1,number_t t2,number_t t3,nu
 	if(!tokensEmpty())
 		defaultRender(maskEnabled);
 
-	{
-		Locker l(mutexDisplayList);
-		//Now draw also the display list
-		list<_R<DisplayObject>>::const_iterator it=dynamicDisplayList.begin();
-		for(;it!=dynamicDisplayList.end();++it)
-			(*it)->Render(maskEnabled);
-	}
+	DisplayObjectContainer::renderImpl(maskEnabled, t1, t2, t3, t4);
 }
 
-void Sprite::Render(bool maskEnabled)
+void DisplayObject::Render(bool maskEnabled)
 {
-	if(skipRender(maskEnabled))
+	if(!isConstructed() || skipRender(maskEnabled))
 		return;
 
 	number_t t1,t2,t3,t4;
@@ -571,61 +595,44 @@ void DisplayObject::hitTestEpilogue() const
 		sys->getInputThread()->popMask();
 }
 
-_NR<InteractiveObject> Sprite::hitTestImpl(number_t x, number_t y)
+_NR<InteractiveObject> DisplayObjectContainer::hitTestImpl(_NR<InteractiveObject> last, number_t x, number_t y)
 {
 	_NR<InteractiveObject> ret = NullRef;
+	//Test objects added at runtime, in reverse order
+	Locker l(mutexDisplayList);
+	list<_R<DisplayObject>>::const_reverse_iterator j=dynamicDisplayList.rbegin();
+	for(;j!=dynamicDisplayList.rend();++j)
 	{
-		//Test objects added at runtime, in reverse order
-		Locker l(mutexDisplayList);
-		list<_R<DisplayObject>>::const_reverse_iterator j=dynamicDisplayList.rbegin();
-		for(;j!=dynamicDisplayList.rend();++j)
-		{
-			number_t localX, localY;
-			(*j)->getMatrix().getInverted().multiply2D(x,y,localX,localY);
-			this->incRef();
-			ret=(*j)->hitTest(_MR(this), localX,localY);
-			if(!ret.isNull())
-				break;
-		}
-	}
+		if(!(*j)->getMatrix().isInvertible())
+			continue; /* The object is shrunk to zero size */
 
-	if(ret==NULL && !tokensEmpty() && mouseEnabled)
+		number_t localX, localY;
+		(*j)->getMatrix().getInverted().multiply2D(x,y,localX,localY);
+		this->incRef();
+		ret=(*j)->hitTest(_MR(this), localX,localY);
+		if(!ret.isNull())
+			break;
+	}
+	/* When mouseChildren is false, we should get all events of our children */
+	if(ret != NULL && !mouseChildren)
 	{
-		//The coordinates are locals
-		if(TokenContainer::hitTest(x,y))
-		{
-			this->incRef();
-			ret=_MR(this);
-			//Also test if the we are under the mask (if any)
-			if(sys->getInputThread()->isMaskPresent())
-			{
-				number_t globalX, globalY;
-				getConcatenatedMatrix().multiply2D(x,y,globalX,globalY);
-				if(!sys->getInputThread()->isMasked(globalX, globalY))
-					ret=NullRef;
-			}
-		}
+		this->incRef();
+		ret = _MNR(this);
 	}
 	return ret;
 }
 
-_NR<InteractiveObject> Sprite::hitTest(_NR<InteractiveObject>, number_t x, number_t y)
+_NR<InteractiveObject> Sprite::hitTestImpl(_NR<InteractiveObject>, number_t x, number_t y)
 {
-	//NOTE: in hitTest the stuff must be rendered in the opposite order of Rendering
-	//TODO: TOLOCK
-	//First of all filter using the BBOX
-	number_t t1,t2,t3,t4;
-	bool notEmpty=boundsRect(t1,t2,t3,t4);
-	if(!notEmpty)
-		return NullRef;
-	if(x<t1 || x>t2 || y<t3 || y>t4)
-		return NullRef;
-
-	hitTestPrologue();
-
-	_NR<InteractiveObject> ret=hitTestImpl(x, y);
-
-	hitTestEpilogue();
+	_NR<InteractiveObject> ret = NullRef;
+	this->incRef();
+	ret = DisplayObjectContainer::hitTestImpl(_MR(this),x,y);
+	if(ret==NULL && mouseEnabled)
+	{
+		//The coordinates are locals
+		this->incRef();
+		return TokenContainer::hitTestImpl(_MR(this),x,y);
+	}
 	return ret;
 }
 
@@ -652,8 +659,8 @@ void FrameLabel::sinit(Class_base* c)
 	c->setConstructor(NULL);
 	c->super=Class<ASObject>::getClass();
 	c->max_level=c->super->max_level+1;
-	c->setGetterByQName("frame","",Class<IFunction>::getFunction(_getFrame),true);
-	c->setGetterByQName("name","",Class<IFunction>::getFunction(_getName),true);
+	c->setDeclaredMethodByQName("frame","",Class<IFunction>::getFunction(_getFrame),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("name","",Class<IFunction>::getFunction(_getName),GETTER_METHOD,true);
 }
 
 ASFUNCTIONBODY(FrameLabel,_getFrame)
@@ -698,9 +705,9 @@ void Scene::sinit(Class_base* c)
 	c->setConstructor(NULL);
 	c->super=Class<ASObject>::getClass();
 	c->max_level=c->super->max_level+1;
-	c->setGetterByQName("labels","",Class<IFunction>::getFunction(_getLabels),true);
-	c->setGetterByQName("name","",Class<IFunction>::getFunction(_getName),true);
-	c->setGetterByQName("numFrames","",Class<IFunction>::getFunction(_getNumFrames),true);
+	c->setDeclaredMethodByQName("labels","",Class<IFunction>::getFunction(_getLabels),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("name","",Class<IFunction>::getFunction(_getName),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("numFrames","",Class<IFunction>::getFunction(_getNumFrames),GETTER_METHOD,true);
 }
 
 ASFUNCTIONBODY(Scene,_getLabels)
@@ -729,7 +736,7 @@ ASFUNCTIONBODY(Scene,_getNumFrames)
 
 void Frame::execute(_R<DisplayObjectContainer> displayList)
 {
-	std::list<DisplayListTag*>::iterator it=blueprint.begin();
+	auto it=blueprint.begin();
 	for(;it!=blueprint.end();++it)
 		(*it)->execute(displayList.getPtr());
 }
@@ -739,36 +746,36 @@ void MovieClip::sinit(Class_base* c)
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
 	c->super=Class<Sprite>::getClass();
 	c->max_level=c->super->max_level+1;
-	c->setGetterByQName("currentFrame","",Class<IFunction>::getFunction(_getCurrentFrame),true);
-	c->setGetterByQName("totalFrames","",Class<IFunction>::getFunction(_getTotalFrames),true);
-	c->setGetterByQName("framesLoaded","",Class<IFunction>::getFunction(_getFramesLoaded),true);
-	c->setGetterByQName("currentFrameLabel","",Class<IFunction>::getFunction(_getCurrentFrameLabel),true);
-	c->setGetterByQName("currentLabel","",Class<IFunction>::getFunction(_getCurrentLabel),true);
-	c->setGetterByQName("scenes","",Class<IFunction>::getFunction(_getScenes),true);
-	c->setGetterByQName("currentScene","",Class<IFunction>::getFunction(_getCurrentScene),true);
-	c->setMethodByQName("stop","",Class<IFunction>::getFunction(stop),true);
-	c->setMethodByQName("gotoAndStop","",Class<IFunction>::getFunction(gotoAndStop),true);
-	c->setMethodByQName("gotoAndPlay","",Class<IFunction>::getFunction(gotoAndPlay),true);
-	c->setMethodByQName("nextFrame","",Class<IFunction>::getFunction(nextFrame),true);
-	c->setMethodByQName("addFrameScript","",Class<IFunction>::getFunction(addFrameScript),true);
+	c->setDeclaredMethodByQName("currentFrame","",Class<IFunction>::getFunction(_getCurrentFrame),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("totalFrames","",Class<IFunction>::getFunction(_getTotalFrames),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("framesLoaded","",Class<IFunction>::getFunction(_getFramesLoaded),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("currentFrameLabel","",Class<IFunction>::getFunction(_getCurrentFrameLabel),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("currentLabel","",Class<IFunction>::getFunction(_getCurrentLabel),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("currentLabels","",Class<IFunction>::getFunction(_getCurrentLabels),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("scenes","",Class<IFunction>::getFunction(_getScenes),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("currentScene","",Class<IFunction>::getFunction(_getCurrentScene),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("stop","",Class<IFunction>::getFunction(stop),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("gotoAndStop","",Class<IFunction>::getFunction(gotoAndStop),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("gotoAndPlay","",Class<IFunction>::getFunction(gotoAndPlay),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("nextFrame","",Class<IFunction>::getFunction(nextFrame),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("addFrameScript","",Class<IFunction>::getFunction(addFrameScript),NORMAL_METHOD,true);
 }
 
 void MovieClip::buildTraits(ASObject* o)
 {
 }
 
-MovieClip::MovieClip():constructed(false),totalFrames_unreliable(1),framesLoaded(0)
+MovieClip::MovieClip():totalFrames_unreliable(1),framesLoaded(0)
 {
 	frames.emplace_back();
 	scenes.resize(1);
 }
 
-MovieClip::MovieClip(const MovieClip& r):constructed(false),frames(r.frames),
+MovieClip::MovieClip(const MovieClip& r):frames(r.frames),
 	totalFrames_unreliable(r.totalFrames_unreliable),framesLoaded(r.framesLoaded),
 	frameScripts(r.frameScripts),scenes(r.scenes),
 	state(r.state)
 {
-	assert(!r.isConstructed());
 }
 
 void MovieClip::finalize()
@@ -790,7 +797,7 @@ void MovieClip::setTotalFrames(uint32_t t)
 /* This runs in vm's thread context,
  * but no locking is needed here as it only accesses the last frame.
  * See comment on the 'frames' member. */
-void MovieClip::addToFrame(DisplayListTag* t)
+void MovieClip::addToFrame(_R<DisplayListTag> t)
 {
 	frames.back().blueprint.push_back(t);
 }
@@ -915,8 +922,8 @@ ASFUNCTIONBODY(MovieClip,nextFrame)
 {
 	MovieClip* th=static_cast<MovieClip*>(obj);
 	assert_and_throw(th->state.FP<th->getFramesLoaded());
-	th->incRef();
-	sys->currentVm->addEvent(NullRef,_MR(new FrameChangeEvent(th->state.FP+1,_MR(th))));
+	th->state.next_FP = th->state.FP+1;
+	th->state.explicit_FP=true;
 	return NULL;
 }
 
@@ -1014,103 +1021,26 @@ ASFUNCTIONBODY(MovieClip,_getCurrentLabel)
 		return Class<ASString>::getInstanceS(label);
 }
 
+ASFUNCTIONBODY(MovieClip,_getCurrentLabels)
+{
+	MovieClip* th=static_cast<MovieClip*>(obj);
+	Scene_data& sc = th->scenes[th->getCurrentScene()];
+
+	Array* ret = Class<Array>::getInstanceS();
+	ret->resize(sc.labels.size());
+	for(size_t i=0; i<sc.labels.size(); ++i)
+	{
+		ret->set(i, Class<FrameLabel>::getInstanceS(sc.labels[i]));
+	}
+	return ret;
+}
+
 ASFUNCTIONBODY(MovieClip,_constructor)
 {
-	//MovieClip* th=Class<MovieClip>::cast(obj);
 	Sprite::_constructor(obj,NULL,0);
 /*	th->setVariableByQName("swapDepths","",Class<IFunction>::getFunction(swapDepths));
 	th->setVariableByQName("createEmptyMovieClip","",Class<IFunction>::getFunction(createEmptyMovieClip));*/
 	return NULL;
-}
-
-void MovieClip::advanceFrame()
-{
-	if(!isConstructed()) //The constructor has not been run yet for this clip
-		return;
-	if((!state.stop_FP || state.explicit_FP) && getFramesLoaded()!=0 && getPrototype()->isSubClass(Class<MovieClip>::getClass()))
-	{
-		//If we have not yet loaded enough frames delay advancement
-		if(state.next_FP>=getFramesLoaded())
-		{
-			LOG(LOG_NOT_IMPLEMENTED,_("Not enough frames loaded"));
-			return;
-		}
-
-		/* Go through the list of frames.
-		 * If our next_FP is after our current,
-		 * we construct all frames from current
-		 * to next_FP.
-		 * If our next_FP is before our current,
-		 * we purge all objects on the 0th frame
-		 * and then construct all frames from
-		 * the 0th to the next_FP.
-		 */
-		bool purge;
-		std::list<Frame>::iterator iter=frames.begin();
-		for(uint32_t i=0;i<=state.next_FP;i++)
-		{
-			if(state.next_FP < state.FP || i > state.FP)
-			{
-				purge = (i==0);
-				if(sys->currentVm)
-				{
-					this->incRef();
-					_R<ConstructFrameEvent> ce(new ConstructFrameEvent(&(*iter), _MR(this), purge));
-					sys->currentVm->addEvent(NullRef, ce);
-				}
-			}
-			++iter;
-		}
-
-		bool frameChanging=(state.FP!=state.next_FP);
-		state.FP=state.next_FP;
-		if(!state.stop_FP && getFramesLoaded()>0)
-			state.next_FP=imin(state.FP+1,getFramesLoaded()-1);
-		state.explicit_FP=false;
-
-		if(frameChanging && frameScripts.count(state.FP))
-			getVm()->addEvent(NullRef, _MR(new FunctionEvent(frameScripts[state.FP])));
-
-		/*
-		 Frame& curFrame=frames[state.FP];
-		//Set the object on stage
-		if(isOnStage())
-		{
-			DisplayListType::const_iterator it=curFrame.displayList.begin();
-			for(;it!=curFrame.displayList.end();it++)
-				it->second->setOnStage(true);
-		}
-
-		//Invalidate the current frame if needed
-		if(curFrame.isInvalid())
-		{
-			DisplayListType::const_iterator it=curFrame.displayList.begin();
-			for(;it!=curFrame.displayList.end();it++)
-				it->second->requestInvalidation();
-			curFrame.setInvalid(false);
-		}*/
-	}
-
-}
-
-void MovieClip::bootstrap()
-{
-	assert_and_throw(getFramesLoaded()>0);
-	if(sys->currentVm)
-	{
-		this->incRef();
-		_R<ConstructFrameEvent> ce(new ConstructFrameEvent(&frames.front(), _MR(this), false));
-		sys->currentVm->addEvent(NullRef, ce);
-	}
-}
-
-void MovieClip::setParent(_NR<DisplayObjectContainer> p)
-{
-	if(!getParent().isNull() && !getParent()->getRoot().isNull())
-		getParent()->getRoot()->unregisterChildClip(this);
-	Sprite::setParent(p);
-	if(!getParent().isNull() && !getParent()->getRoot().isNull())
-		getParent()->getRoot()->registerChildClip(this);
 }
 
 void MovieClip::addScene(uint32_t sceneNo, uint32_t startframe, const tiny_string& name)
@@ -1147,18 +1077,6 @@ void MovieClip::addFrameLabel(uint32_t frame, const tiny_string& label)
 	scenes.back().addFrameLabel(frame,label);
 }
 
-void MovieClip::constructionComplete()
-{
-	RELEASE_WRITE(constructed,true);
-	//Execute the event registered for the first frame, if any
-	if(sys->currentVm && frameScripts.count(0))
-	{
-		_R<FunctionEvent> funcEvent(new FunctionEvent(_MR(frameScripts[0])));
-		getVm()->addEvent(NullRef, funcEvent);
-	}
-
-}
-
 DisplayObject::DisplayObject():useMatrix(true),tx(0),ty(0),rotation(0),sx(1),sy(1),maskOf(NULL),parent(NULL),mask(NULL),onStage(false),
 	loaderInfo(NULL),alpha(1.0),visible(true),invalidateQueueNext(NULL)
 {
@@ -1167,7 +1085,10 @@ DisplayObject::DisplayObject():useMatrix(true),tx(0),ty(0),rotation(0),sx(1),sy(
 DisplayObject::DisplayObject(const DisplayObject& d):useMatrix(true),tx(d.tx),ty(d.ty),rotation(d.rotation),sx(d.sx),sy(d.sy),maskOf(NULL),
 	parent(NULL),mask(NULL),onStage(false),loaderInfo(NULL),alpha(d.alpha),visible(d.visible),invalidateQueueNext(NULL)
 {
+	assert(!d.isConstructed());
 }
+
+DisplayObject::~DisplayObject() {}
 
 void DisplayObject::finalize()
 {
@@ -1177,6 +1098,7 @@ void DisplayObject::finalize()
 	mask.reset();
 	loaderInfo.reset();
 	invalidateQueueNext.reset();
+	accessibilityProperties.reset();
 }
 
 void DisplayObject::sinit(Class_base* c)
@@ -1184,45 +1106,48 @@ void DisplayObject::sinit(Class_base* c)
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
 	c->super=Class<EventDispatcher>::getClass();
 	c->max_level=c->super->max_level+1;
-	c->setGetterByQName("loaderInfo","",Class<IFunction>::getFunction(_getLoaderInfo),true);
-	c->setGetterByQName("width","",Class<IFunction>::getFunction(_getWidth),true);
-	c->setSetterByQName("width","",Class<IFunction>::getFunction(_setWidth),true);
-	c->setGetterByQName("scaleX","",Class<IFunction>::getFunction(_getScaleX),true);
-	c->setSetterByQName("scaleX","",Class<IFunction>::getFunction(_setScaleX),true);
-	c->setGetterByQName("scaleY","",Class<IFunction>::getFunction(_getScaleY),true);
-	c->setSetterByQName("scaleY","",Class<IFunction>::getFunction(_setScaleY),true);
-	c->setGetterByQName("x","",Class<IFunction>::getFunction(_getX),true);
-	c->setSetterByQName("x","",Class<IFunction>::getFunction(_setX),true);
-	c->setGetterByQName("y","",Class<IFunction>::getFunction(_getY),true);
-	c->setSetterByQName("y","",Class<IFunction>::getFunction(_setY),true);
-	c->setGetterByQName("height","",Class<IFunction>::getFunction(_getHeight),true);
-	c->setSetterByQName("height","",Class<IFunction>::getFunction(_setHeight),true);
-	c->setGetterByQName("visible","",Class<IFunction>::getFunction(_getVisible),true);
-	c->setSetterByQName("visible","",Class<IFunction>::getFunction(_setVisible),true);
-	c->setGetterByQName("rotation","",Class<IFunction>::getFunction(_getRotation),true);
-	c->setSetterByQName("rotation","",Class<IFunction>::getFunction(_setRotation),true);
-	c->setGetterByQName("name","",Class<IFunction>::getFunction(_getName),true);
-	c->setSetterByQName("name","",Class<IFunction>::getFunction(_setName),true);
-	c->setGetterByQName("parent","",Class<IFunction>::getFunction(_getParent),true);
-	c->setGetterByQName("root","",Class<IFunction>::getFunction(_getRoot),true);
-	c->setGetterByQName("blendMode","",Class<IFunction>::getFunction(_getBlendMode),true);
-	c->setSetterByQName("blendMode","",Class<IFunction>::getFunction(undefinedFunction),true);
-	c->setGetterByQName("scale9Grid","",Class<IFunction>::getFunction(_getScale9Grid),true);
-	c->setSetterByQName("scale9Grid","",Class<IFunction>::getFunction(undefinedFunction),true);
-	c->setGetterByQName("stage","",Class<IFunction>::getFunction(_getStage),true);
-	c->setGetterByQName("mask","",Class<IFunction>::getFunction(_getMask),true);
-	c->setSetterByQName("mask","",Class<IFunction>::getFunction(_setMask),true);
-	c->setGetterByQName("alpha","",Class<IFunction>::getFunction(_getAlpha),true);
-	c->setSetterByQName("alpha","",Class<IFunction>::getFunction(_setAlpha),true);
-	c->setGetterByQName("cacheAsBitmap","",Class<IFunction>::getFunction(undefinedFunction),true);
-	c->setSetterByQName("cacheAsBitmap","",Class<IFunction>::getFunction(undefinedFunction),true);
-	c->setGetterByQName("opaqueBackground","",Class<IFunction>::getFunction(undefinedFunction),true);
-	c->setSetterByQName("opaqueBackground","",Class<IFunction>::getFunction(undefinedFunction),true);
-	c->setMethodByQName("getBounds","",Class<IFunction>::getFunction(_getBounds),true);
-	c->setGetterByQName("mouseX","",Class<IFunction>::getFunction(_getMouseX),true);
-	c->setGetterByQName("mouseY","",Class<IFunction>::getFunction(_getMouseY),true);
-	c->setMethodByQName("localToGlobal","",Class<IFunction>::getFunction(localToGlobal),true);
+	c->setDeclaredMethodByQName("loaderInfo","",Class<IFunction>::getFunction(_getLoaderInfo),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("width","",Class<IFunction>::getFunction(_getWidth),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("width","",Class<IFunction>::getFunction(_setWidth),SETTER_METHOD,true);
+	c->setDeclaredMethodByQName("scaleX","",Class<IFunction>::getFunction(_getScaleX),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("scaleX","",Class<IFunction>::getFunction(_setScaleX),SETTER_METHOD,true);
+	c->setDeclaredMethodByQName("scaleY","",Class<IFunction>::getFunction(_getScaleY),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("scaleY","",Class<IFunction>::getFunction(_setScaleY),SETTER_METHOD,true);
+	c->setDeclaredMethodByQName("x","",Class<IFunction>::getFunction(_getX),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("x","",Class<IFunction>::getFunction(_setX),SETTER_METHOD,true);
+	c->setDeclaredMethodByQName("y","",Class<IFunction>::getFunction(_getY),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("y","",Class<IFunction>::getFunction(_setY),SETTER_METHOD,true);
+	c->setDeclaredMethodByQName("height","",Class<IFunction>::getFunction(_getHeight),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("height","",Class<IFunction>::getFunction(_setHeight),SETTER_METHOD,true);
+	c->setDeclaredMethodByQName("visible","",Class<IFunction>::getFunction(_getVisible),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("visible","",Class<IFunction>::getFunction(_setVisible),SETTER_METHOD,true);
+	c->setDeclaredMethodByQName("rotation","",Class<IFunction>::getFunction(_getRotation),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("rotation","",Class<IFunction>::getFunction(_setRotation),SETTER_METHOD,true);
+	c->setDeclaredMethodByQName("name","",Class<IFunction>::getFunction(_getName),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("name","",Class<IFunction>::getFunction(_setName),SETTER_METHOD,true);
+	c->setDeclaredMethodByQName("parent","",Class<IFunction>::getFunction(_getParent),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("root","",Class<IFunction>::getFunction(_getRoot),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("blendMode","",Class<IFunction>::getFunction(_getBlendMode),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("blendMode","",Class<IFunction>::getFunction(undefinedFunction),SETTER_METHOD,true);
+	c->setDeclaredMethodByQName("scale9Grid","",Class<IFunction>::getFunction(_getScale9Grid),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("scale9Grid","",Class<IFunction>::getFunction(undefinedFunction),SETTER_METHOD,true);
+	c->setDeclaredMethodByQName("stage","",Class<IFunction>::getFunction(_getStage),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("mask","",Class<IFunction>::getFunction(_getMask),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("mask","",Class<IFunction>::getFunction(_setMask),SETTER_METHOD,true);
+	c->setDeclaredMethodByQName("alpha","",Class<IFunction>::getFunction(_getAlpha),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("alpha","",Class<IFunction>::getFunction(_setAlpha),SETTER_METHOD,true);
+	c->setDeclaredMethodByQName("cacheAsBitmap","",Class<IFunction>::getFunction(undefinedFunction),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("cacheAsBitmap","",Class<IFunction>::getFunction(undefinedFunction),SETTER_METHOD,true);
+	c->setDeclaredMethodByQName("opaqueBackground","",Class<IFunction>::getFunction(undefinedFunction),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("opaqueBackground","",Class<IFunction>::getFunction(undefinedFunction),SETTER_METHOD,true);
+	c->setDeclaredMethodByQName("getBounds","",Class<IFunction>::getFunction(_getBounds),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("mouseX","",Class<IFunction>::getFunction(_getMouseX),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("mouseY","",Class<IFunction>::getFunction(_getMouseY),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("localToGlobal","",Class<IFunction>::getFunction(localToGlobal),NORMAL_METHOD,true);
+	REGISTER_GETTER_SETTER(c,accessibilityProperties);
 }
+
+ASFUNCTIONBODY_GETTER_SETTER(DisplayObject,accessibilityProperties);
 
 void DisplayObject::buildTraits(ASObject* o)
 {
@@ -1249,10 +1174,6 @@ void DisplayObject::setMatrix(const lightspark::MATRIX& m)
 void DisplayObject::becomeMaskOf(_NR<DisplayObject> m)
 {
 	maskOf=m;
-/*	_NR<DisplayObject> tmp=maskOf;
-	maskOf.reset();
-	if(!tmp.isNull())
-		tmp->setMask(NullRef);*/
 }
 
 void DisplayObject::setMask(_NR<DisplayObject> m)
@@ -1283,6 +1204,14 @@ MATRIX DisplayObject::getConcatenatedMatrix() const
 		return getMatrix();
 	else
 		return parent->getConcatenatedMatrix().multiplyMatrix(getMatrix());
+}
+
+float DisplayObject::getConcatenatedAlpha() const
+{
+	if(parent.isNull())
+		return alpha;
+	else
+		return parent->getConcatenatedAlpha()*alpha;
 }
 
 MATRIX DisplayObject::getMatrix() const
@@ -1337,23 +1266,20 @@ void DisplayObject::defaultRender(bool maskEnabled) const
 	{
 		rt->renderMaskToTmpBuffer();
 		enableMaskLookup=1.0f;
-		glColor4f(1,0,0,0);
-		glBegin(GL_QUADS);
-			glVertex2i(-1000,-1000);
-			glVertex2i(1000,-1000);
-			glVertex2i(1000,1000);
-			glVertex2i(-1000,1000);
-		glEnd();
 	}
-	glPushMatrix();
-	glLoadIdentity();
-	glColor4f(enableMaskLookup,0,1,0);
+	lsglPushMatrix();
+	lsglLoadIdentity();
+	rt->setMatrixUniform(LSGL_MODELVIEW);
+	glUniform1f(rt->maskUniform, enableMaskLookup);
+	glUniform1f(rt->yuvUniform, 0);
+	glUniform1f(rt->alphaUniform, cachedSurface.alpha);
 	rt->renderTextured(cachedSurface.tex, cachedSurface.xOffset, cachedSurface.yOffset, cachedSurface.tex.width, cachedSurface.tex.height);
-	glPopMatrix();
+	lsglPopMatrix();
+	rt->setMatrixUniform(LSGL_MODELVIEW);
 }
 
 void DisplayObject::computeDeviceBoundsForRect(number_t xmin, number_t xmax, number_t ymin, number_t ymax,
-		uint32_t& outXMin, uint32_t& outYMin, uint32_t& outWidth, uint32_t& outHeight) const
+		int32_t& outXMin, int32_t& outYMin, uint32_t& outWidth, uint32_t& outHeight) const
 {
 	//As the transformation is arbitrary we have to check all the four vertices
 	number_t coords[8];
@@ -1414,7 +1340,7 @@ void DisplayObject::setOnStage(bool staged)
 			requestInvalidation();
 		if(getVm()==NULL)
 			return;
-		if(onStage==true && hasEventListener("addedToStage"))
+		if(onStage==true && isConstructed() && hasEventListener("addedToStage"))
 		{
 			this->incRef();
 			getVm()->addEvent(_MR(this),_MR(Class<Event>::getInstanceS("addedToStage")));
@@ -1436,6 +1362,8 @@ ASFUNCTIONBODY(DisplayObject,_setAlpha)
 	val=dmax(0,val);
 	val=dmin(val,1);
 	th->alpha=val;
+	if(th->onStage)
+		th->requestInvalidation();
 	return NULL;
 }
 
@@ -1531,19 +1459,36 @@ ASFUNCTIONBODY(DisplayObject,_getX)
 		return abstract_d(th->tx);
 }
 
+void DisplayObject::setX(number_t val)
+{
+	if(ACQUIRE_READ(useMatrix))
+	{
+		valFromMatrix();
+		RELEASE_WRITE(useMatrix,false);
+	}
+	tx=val;
+	if(onStage)
+		requestInvalidation();
+}
+
+void DisplayObject::setY(number_t val)
+{
+	if(ACQUIRE_READ(useMatrix))
+	{
+		valFromMatrix();
+		RELEASE_WRITE(useMatrix,false);
+	}
+	ty=val;
+	if(onStage)
+		requestInvalidation();
+}
+
 ASFUNCTIONBODY(DisplayObject,_setX)
 {
 	DisplayObject* th=static_cast<DisplayObject*>(obj);
 	assert_and_throw(argslen==1);
 	number_t val=args[0]->toNumber();
-	if(ACQUIRE_READ(th->useMatrix))
-	{
-		th->valFromMatrix();
-		RELEASE_WRITE(th->useMatrix,false);
-	}
-	th->tx=val;
-	if(th->onStage)
-		th->requestInvalidation();
+	th->setX(val);
 	return NULL;
 }
 
@@ -1561,14 +1506,7 @@ ASFUNCTIONBODY(DisplayObject,_setY)
 	DisplayObject* th=static_cast<DisplayObject*>(obj);
 	assert_and_throw(argslen==1);
 	number_t val=args[0]->toNumber();
-	if(ACQUIRE_READ(th->useMatrix))
-	{
-		th->valFromMatrix();
-		RELEASE_WRITE(th->useMatrix,false);
-	}
-	th->ty=val;
-	if(th->onStage)
-		th->requestInvalidation();
+	th->setY(val);
 	return NULL;
 }
 
@@ -1741,7 +1679,7 @@ ASFUNCTIONBODY(DisplayObject,_getVisible)
 	return abstract_b(th->visible);
 }
 
-int DisplayObject::computeHeight()
+number_t DisplayObject::computeHeight()
 {
 	number_t x1,x2,y1,y2;
 	bool ret=getBounds(x1,x2,y1,y2);
@@ -1749,7 +1687,7 @@ int DisplayObject::computeHeight()
 	return (ret)?(y2-y1):0;
 }
 
-int DisplayObject::computeWidth()
+number_t DisplayObject::computeWidth()
 {
 	number_t x1,x2,y1,y2;
 	bool ret=getBounds(x1,x2,y1,y2);
@@ -1776,81 +1714,84 @@ _NR<Stage> DisplayObject::getStage() const
 ASFUNCTIONBODY(DisplayObject,_getWidth)
 {
 	DisplayObject* th=static_cast<DisplayObject*>(obj);
-	int ret=th->computeWidth();
-	return abstract_i(ret);
+	return abstract_d(th->computeWidth());
 }
 
 ASFUNCTIONBODY(DisplayObject,_setWidth)
 {
 	DisplayObject* th=static_cast<DisplayObject*>(obj);
-	int newwidth=args[0]->toInt();
-	//Should actually scale the object
-	int computed=th->computeWidth();
-	if(computed==0) //Cannot scale, nothing to do (See Reference)
+	number_t newwidth=args[0]->toNumber();
+
+	number_t xmin,xmax,y1,y2;
+	if(!th->boundsRect(xmin,xmax,y1,y2))
+		return NULL;
+
+	number_t width=xmax-xmin;
+	if(width==0) //Cannot scale, nothing to do (See Reference)
 		return NULL;
 	
-	if(computed!=newwidth) //If the width is changing, calculate new scale
+	if(width*th->sx!=newwidth) //If the width is changing, calculate new scale
 	{
-		number_t newscale=newwidth;
-		newscale/=computed;
 		if(ACQUIRE_READ(th->useMatrix))
 		{
 			th->valFromMatrix();
 			RELEASE_WRITE(th->useMatrix,false);
 		}
-		th->sx=newscale;
+		th->sx = newwidth/width;
+		if(th->onStage)
+			th->requestInvalidation();
 	}
-	if(th->onStage)
-		th->requestInvalidation();
 	return NULL;
 }
 
 ASFUNCTIONBODY(DisplayObject,_getHeight)
 {
 	DisplayObject* th=static_cast<DisplayObject*>(obj);
-	int ret=th->computeHeight();;
-	return abstract_i(ret);
+	return abstract_d(th->computeHeight());
 }
 
 ASFUNCTIONBODY(DisplayObject,_setHeight)
 {
 	DisplayObject* th=static_cast<DisplayObject*>(obj);
-	int newheight=args[0]->toInt();
-	//Should actually scale the object
-	int computed=th->computeHeight();
-	if(computed==0) //Cannot scale, nothing to do (See Reference)
+	number_t newheight=args[0]->toNumber();
+
+	number_t x1,x2,ymin,ymax;
+	if(!th->boundsRect(x1,x2,ymin,ymax))
+		return NULL;
+
+	number_t height=ymax-ymin;
+	if(height==0) //Cannot scale, nothing to do (See Reference)
 		return NULL;
 	
-	if(computed!=newheight) //If the height is changing, calculate new scale
+	if(height*th->sy!=newheight) //If the height is changing, calculate new scale
 	{
-		number_t newscale=newheight;
-		newscale/=computed;
 		if(ACQUIRE_READ(th->useMatrix))
 		{
 			th->valFromMatrix();
 			RELEASE_WRITE(th->useMatrix,false);
 		}
-		th->sy=newscale;
+		th->sy=newheight/height;
+		if(th->onStage)
+			th->requestInvalidation();
 	}
-	if(th->onStage)
-		th->requestInvalidation();
 	return NULL;
+}
+
+Vector2f DisplayObject::getLocalMousePos()
+{
+	return getConcatenatedMatrix().getInverted().multiply2D(sys->getInputThread()->getMousePos());
 }
 
 ASFUNCTIONBODY(DisplayObject,_getMouseX)
 {
 	DisplayObject* th=static_cast<DisplayObject*>(obj);
-	number_t temp, outX;
-	th->getConcatenatedMatrix().getInverted().multiply2D(sys->getInputThread()->getMouseX(), temp, outX, temp);
-	return abstract_d(outX);
+	return abstract_d(th->getLocalMousePos().x);
 }
 
 ASFUNCTIONBODY(DisplayObject,_getMouseY)
 {
 	DisplayObject* th=static_cast<DisplayObject*>(obj);
-	number_t temp, outY;
-	th->getConcatenatedMatrix().getInverted().multiply2D(temp, sys->getInputThread()->getMouseY(), temp, outY);
-	return abstract_d(outY);
+	return abstract_d(th->getLocalMousePos().y);
 }
 
 void DisplayObjectContainer::sinit(Class_base* c)
@@ -1858,24 +1799,24 @@ void DisplayObjectContainer::sinit(Class_base* c)
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
 	c->super=Class<InteractiveObject>::getClass();
 	c->max_level=c->super->max_level+1;
-	c->setGetterByQName("numChildren","",Class<IFunction>::getFunction(_getNumChildren),true);
-	c->setMethodByQName("getChildIndex","",Class<IFunction>::getFunction(getChildIndex),true);
-	c->setMethodByQName("getChildAt","",Class<IFunction>::getFunction(getChildAt),true);
-	c->setMethodByQName("getChildByName","",Class<IFunction>::getFunction(getChildByName),true);
-	c->setMethodByQName("addChild","",Class<IFunction>::getFunction(addChild),true);
-	c->setMethodByQName("removeChild","",Class<IFunction>::getFunction(removeChild),true);
-	c->setMethodByQName("removeChildAt","",Class<IFunction>::getFunction(removeChildAt),true);
-	c->setMethodByQName("addChildAt","",Class<IFunction>::getFunction(addChildAt),true);
-	c->setMethodByQName("contains","",Class<IFunction>::getFunction(contains),true);
-	//c->setSetterByQName("mouseChildren","",Class<IFunction>::getFunction(undefinedFunction));
-	//c->setGetterByQName("mouseChildren","",Class<IFunction>::getFunction(undefinedFunction));
+	c->setDeclaredMethodByQName("numChildren","",Class<IFunction>::getFunction(_getNumChildren),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("getChildIndex","",Class<IFunction>::getFunction(getChildIndex),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("getChildAt","",Class<IFunction>::getFunction(getChildAt),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("getChildByName","",Class<IFunction>::getFunction(getChildByName),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("addChild","",Class<IFunction>::getFunction(addChild),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("removeChild","",Class<IFunction>::getFunction(removeChild),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("removeChildAt","",Class<IFunction>::getFunction(removeChildAt),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("addChildAt","",Class<IFunction>::getFunction(addChildAt),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("contains","",Class<IFunction>::getFunction(contains),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("mouseChildren","",Class<IFunction>::getFunction(_setMouseChildren),SETTER_METHOD,true);
+	c->setDeclaredMethodByQName("mouseChildren","",Class<IFunction>::getFunction(_getMouseChildren),GETTER_METHOD,true);
 }
 
 void DisplayObjectContainer::buildTraits(ASObject* o)
 {
 }
 
-DisplayObjectContainer::DisplayObjectContainer():mutexDisplayList("mutexDisplayList")
+DisplayObjectContainer::DisplayObjectContainer():mouseChildren(true),mutexDisplayList("mutexDisplayList")
 {
 }
 
@@ -1920,7 +1861,11 @@ void DisplayObjectContainer::insertLegacyChildAt(uint32_t depth, DisplayObject* 
 	if(obj->name.len() > 0)
 	{
 		obj->incRef();
-		setVariableByQName(obj->name,"",obj);
+		multiname objName;
+		objName.name_type=multiname::NAME_STRING;
+		objName.name_s=obj->name;
+		objName.ns.push_back(nsNameAndKind("",NAMESPACE));
+		setVariableByMultiname(objName,obj);
 	}
 
 	depthToLegacyChild[depth] = obj;
@@ -1963,6 +1908,24 @@ InteractiveObject::~InteractiveObject()
 		sys->getInputThread()->removeListener(this);
 }
 
+_NR<InteractiveObject> DisplayObject::hitTest(_NR<InteractiveObject> last, number_t x, number_t y)
+{
+	/*number_t t1,t2,t3,t4;
+	bool notEmpty=boundsRect(t1,t2,t3,t4);
+	if(!notEmpty)
+		return NullRef;
+	if(x<t1 || x>t2 || y<t3 || y>t4)
+		return NullRef;
+	 */
+	if(!visible || !isConstructed())
+		return NullRef;
+
+	hitTestPrologue();
+	_NR<InteractiveObject> ret = hitTestImpl(last, x,y);
+	hitTestEpilogue();
+	return ret;
+}
+
 ASFUNCTIONBODY(InteractiveObject,_constructor)
 {
 	InteractiveObject* th=static_cast<InteractiveObject*>(obj);
@@ -1997,8 +1960,8 @@ void InteractiveObject::sinit(Class_base* c)
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
 	c->super=Class<DisplayObject>::getClass();
 	c->max_level=c->super->max_level+1;
-	c->setSetterByQName("mouseEnabled","",Class<IFunction>::getFunction(_setMouseEnabled),true);
-	c->setGetterByQName("mouseEnabled","",Class<IFunction>::getFunction(_getMouseEnabled),true);
+	c->setDeclaredMethodByQName("mouseEnabled","",Class<IFunction>::getFunction(_setMouseEnabled),SETTER_METHOD,true);
+	c->setDeclaredMethodByQName("mouseEnabled","",Class<IFunction>::getFunction(_getMouseEnabled),GETTER_METHOD,true);
 }
 
 void DisplayObjectContainer::dumpDisplayList()
@@ -2032,6 +1995,20 @@ ASFUNCTIONBODY(DisplayObjectContainer,_getNumChildren)
 {
 	DisplayObjectContainer* th=static_cast<DisplayObjectContainer*>(obj);
 	return abstract_i(th->dynamicDisplayList.size());
+}
+
+ASFUNCTIONBODY(DisplayObjectContainer,_getMouseChildren)
+{
+	DisplayObjectContainer* th=static_cast<DisplayObjectContainer*>(obj);
+	return abstract_b(th->mouseChildren);
+}
+
+ASFUNCTIONBODY(DisplayObjectContainer,_setMouseChildren)
+{
+	DisplayObjectContainer* th=static_cast<DisplayObjectContainer*>(obj);
+	assert_and_throw(argslen==1);
+	th->mouseChildren=Boolean_concrete(args[0]);
+	return NULL;
 }
 
 void DisplayObjectContainer::requestInvalidation()
@@ -2310,76 +2287,27 @@ void Shape::sinit(Class_base* c)
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
 	c->super=Class<DisplayObject>::getClass();
 	c->max_level=c->super->max_level+1;
-	c->setGetterByQName("graphics","",Class<IFunction>::getFunction(_getGraphics),true);
+	c->setDeclaredMethodByQName("graphics","",Class<IFunction>::getFunction(_getGraphics),GETTER_METHOD,true);
 }
 
 void Shape::buildTraits(ASObject* o)
 {
 }
 
-bool Shape::getBounds(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const
-{
-	bool ret=TokenContainer::getBounds(xmin,xmax,ymin,ymax);
-	if(ret)
-	{
-		getMatrix().multiply2D(xmin,ymin,xmin,ymin);
-		getMatrix().multiply2D(xmax,ymax,xmax,ymax);
-		return true;
-	}
-	return false;
-}
-
-
 bool Shape::isOpaque(number_t x, number_t y) const
 {
-	LOG(LOG_NOT_IMPLEMENTED,"Shape::isOpaque not really implemented");
-	return false;
-}
-
-_NR<InteractiveObject> Shape::hitTest(_NR<InteractiveObject> last, number_t x, number_t y)
-{
-	//NOTE: in hitTest the stuff must be rendered in the opposite order of Rendering
-	assert_and_throw(!sys->getInputThread()->isMaskPresent());
-	//TODO: TOLOCK
-	if(!mask.isNull())
-		throw UnsupportedException("Support masks in Shape::hitTest");
-
-	//The coordinates are already local
-	if(TokenContainer::hitTest(x,y))
-		return last;
-
-	return NullRef;
+	return TokenContainer::isOpaqueImpl(x, y);
 }
 
 void TokenContainer::renderImpl(bool maskEnabled, number_t t1, number_t t2, number_t t3, number_t t4) const
 {
-	if(!owner->isSimple())
-		rt->glAcquireTempBuffer(t1,t2,t3,t4);
+	//if(!owner->isSimple())
+	//	rt->acquireTempBuffer(t1,t2,t3,t4);
 
 	owner->defaultRender(maskEnabled);
 
-	if(!owner->isSimple())
-		rt->glBlitTempBuffer(t1,t2,t3,t4);
-}
-
-void TokenContainer::Render(bool maskEnabled)
-{
-	if(tokens.empty())
-		return;
-	//If graphics is not yet initialized we have nothing to do
-	if(owner->skipRender(maskEnabled))
-		return;
-
-	number_t t1,t2,t3,t4;
-	bool ret=getBounds(t1,t2,t3,t4);
-	if(!ret)
-		return;
-
-	owner->renderPrologue();
-
-	renderImpl(maskEnabled,t1,t2,t3,t4);
-
-	owner->renderEpilogue();
+	//if(!owner->isSimple())
+	//	rt->blitTempBuffer(t1,t2,t3,t4);
 }
 
 /*! \brief Generate a vector of shapes from a SHAPERECORD list
@@ -2495,13 +2423,13 @@ void Stage::sinit(Class_base* c)
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
 	c->super=Class<DisplayObjectContainer>::getClass();
 	c->max_level=c->super->max_level+1;
-	c->setGetterByQName("stageWidth","",Class<IFunction>::getFunction(_getStageWidth),true);
-	c->setGetterByQName("stageHeight","",Class<IFunction>::getFunction(_getStageHeight),true);
-	c->setGetterByQName("width","",Class<IFunction>::getFunction(_getStageWidth),true);
-	c->setGetterByQName("height","",Class<IFunction>::getFunction(_getStageHeight),true);
-	c->setGetterByQName("scaleMode","",Class<IFunction>::getFunction(_getScaleMode),true);
-	c->setSetterByQName("scaleMode","",Class<IFunction>::getFunction(_setScaleMode),true);
-	c->setGetterByQName("loaderInfo","",Class<IFunction>::getFunction(_getLoaderInfo),true);
+	c->setDeclaredMethodByQName("stageWidth","",Class<IFunction>::getFunction(_getStageWidth),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("stageHeight","",Class<IFunction>::getFunction(_getStageHeight),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("width","",Class<IFunction>::getFunction(_getStageWidth),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("height","",Class<IFunction>::getFunction(_getStageHeight),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("scaleMode","",Class<IFunction>::getFunction(_getScaleMode),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("scaleMode","",Class<IFunction>::getFunction(_setScaleMode),SETTER_METHOD,true);
+	c->setDeclaredMethodByQName("loaderInfo","",Class<IFunction>::getFunction(_getLoaderInfo),GETTER_METHOD,true);
 }
 
 void Stage::buildTraits(ASObject* o)
@@ -2510,11 +2438,25 @@ void Stage::buildTraits(ASObject* o)
 
 Stage::Stage()
 {
+	onStage = true;
 }
 
 ASFUNCTIONBODY(Stage,_constructor)
 {
 	return NULL;
+}
+
+_NR<InteractiveObject> Stage::hitTestImpl(_NR<InteractiveObject> last, number_t x, number_t y)
+{
+	_NR<InteractiveObject> ret;
+	ret = DisplayObjectContainer::hitTestImpl(last, x, y);
+	if(ret == NULL)
+	{
+		/* If nothing else is hit, we hit the stage */
+		this->incRef();
+		ret = _MNR(this);
+	}
+	return ret;
 }
 
 uint32_t Stage::internalGetWidth() const
@@ -2605,9 +2547,10 @@ void TokenContainer::requestInvalidation()
 
 void TokenContainer::invalidate()
 {
-	uint32_t x,y,width,height;
+	int32_t x,y;
+	uint32_t width,height;
 	number_t bxmin,bxmax,bymin,bymax;
-	if(getBounds(bxmin,bxmax,bymin,bymax)==false)
+	if(boundsRect(bxmin,bxmax,bymin,bymax)==false)
 	{
 		//No contents, nothing to do
 		return;
@@ -2616,17 +2559,35 @@ void TokenContainer::invalidate()
 	owner->computeDeviceBoundsForRect(bxmin,bxmax,bymin,bymax,x,y,width,height);
 	if(width==0 || height==0)
 		return;
-	CairoRenderer* r=new CairoRenderer(owner, owner->cachedSurface, tokens,
-				owner->getConcatenatedMatrix(), x, y, width, height, scaling);
+	CairoRenderer* r=new CairoTokenRenderer(owner, owner->cachedSurface, tokens,
+				owner->getConcatenatedMatrix(), x, y, width, height, scaling,
+				owner->getConcatenatedAlpha());
 	sys->addJob(r);
 }
 
-bool TokenContainer::hitTest(number_t x, number_t y) const
+bool TokenContainer::isOpaqueImpl(number_t x, number_t y) const
 {
-	return CairoRenderer::hitTest(tokens, 1, x, y);
+	return CairoTokenRenderer::isOpaque(tokens, scaling, x, y);
 }
 
-bool TokenContainer::getBounds(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const
+_NR<InteractiveObject> TokenContainer::hitTestImpl(_NR<InteractiveObject> last, number_t x, number_t y) const
+{
+	//TODO: test against the CachedSurface
+	if(CairoTokenRenderer::hitTest(tokens, scaling, x, y))
+	{
+		if(sys->getInputThread()->isMaskPresent())
+		{
+			number_t globalX, globalY;
+			owner->getConcatenatedMatrix().multiply2D(x,y,globalX,globalY);
+			if(!sys->getInputThread()->isMasked(globalX, globalY))
+				return NullRef;
+		}
+		return last;
+	}
+	return NullRef;
+}
+
+bool TokenContainer::boundsRect(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const
 {
 
 	#define VECTOR_BOUNDS(v) \
@@ -2701,18 +2662,18 @@ bool TokenContainer::getBounds(number_t& xmin, number_t& xmax, number_t& ymin, n
 void Graphics::sinit(Class_base* c)
 {
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
-	c->setMethodByQName("clear","",Class<IFunction>::getFunction(clear),true);
-	c->setMethodByQName("drawRect","",Class<IFunction>::getFunction(drawRect),true);
-	c->setMethodByQName("drawRoundRect","",Class<IFunction>::getFunction(drawRoundRect),true);
-	c->setMethodByQName("drawCircle","",Class<IFunction>::getFunction(drawCircle),true);
-	c->setMethodByQName("moveTo","",Class<IFunction>::getFunction(moveTo),true);
-	c->setMethodByQName("curveTo","",Class<IFunction>::getFunction(curveTo),true);
-	c->setMethodByQName("cubicCurveTo","",Class<IFunction>::getFunction(cubicCurveTo),true);
-	c->setMethodByQName("lineTo","",Class<IFunction>::getFunction(lineTo),true);
-	c->setMethodByQName("lineStyle","",Class<IFunction>::getFunction(lineStyle),true);
-	c->setMethodByQName("beginFill","",Class<IFunction>::getFunction(beginFill),true);
-	c->setMethodByQName("beginGradientFill","",Class<IFunction>::getFunction(beginGradientFill),true);
-	c->setMethodByQName("endFill","",Class<IFunction>::getFunction(endFill),true);
+	c->setDeclaredMethodByQName("clear","",Class<IFunction>::getFunction(clear),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("drawRect","",Class<IFunction>::getFunction(drawRect),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("drawRoundRect","",Class<IFunction>::getFunction(drawRoundRect),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("drawCircle","",Class<IFunction>::getFunction(drawCircle),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("moveTo","",Class<IFunction>::getFunction(moveTo),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("curveTo","",Class<IFunction>::getFunction(curveTo),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("cubicCurveTo","",Class<IFunction>::getFunction(cubicCurveTo),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("lineTo","",Class<IFunction>::getFunction(lineTo),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("lineStyle","",Class<IFunction>::getFunction(lineStyle),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("beginFill","",Class<IFunction>::getFunction(beginFill),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("beginGradientFill","",Class<IFunction>::getFunction(beginGradientFill),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("endFill","",Class<IFunction>::getFunction(endFill),NORMAL_METHOD,true);
 }
 
 void Graphics::buildTraits(ASObject* o)
@@ -3110,41 +3071,41 @@ ASFUNCTIONBODY(Graphics,endFill)
 void LineScaleMode::sinit(Class_base* c)
 {
 	c->setConstructor(NULL);
-	c->setVariableByQName("HORIZONTAL","",Class<ASString>::getInstanceS("horizontal"));
-	c->setVariableByQName("NONE","",Class<ASString>::getInstanceS("none"));
-	c->setVariableByQName("NORMAL","",Class<ASString>::getInstanceS("normal"));
-	c->setVariableByQName("VERTICAL","",Class<ASString>::getInstanceS("vertical"));
+	c->setVariableByQName("HORIZONTAL","",Class<ASString>::getInstanceS("horizontal"),DECLARED_TRAIT);
+	c->setVariableByQName("NONE","",Class<ASString>::getInstanceS("none"),DECLARED_TRAIT);
+	c->setVariableByQName("NORMAL","",Class<ASString>::getInstanceS("normal"),DECLARED_TRAIT);
+	c->setVariableByQName("VERTICAL","",Class<ASString>::getInstanceS("vertical"),DECLARED_TRAIT);
 }
 
 void StageScaleMode::sinit(Class_base* c)
 {
 	c->setConstructor(NULL);
-	c->setVariableByQName("EXACT_FIT","",Class<ASString>::getInstanceS("exactFit"));
-	c->setVariableByQName("NO_BORDER","",Class<ASString>::getInstanceS("noBorder"));
-	c->setVariableByQName("NO_SCALE","",Class<ASString>::getInstanceS("noScale"));
-	c->setVariableByQName("SHOW_ALL","",Class<ASString>::getInstanceS("showAll"));
+	c->setVariableByQName("EXACT_FIT","",Class<ASString>::getInstanceS("exactFit"),DECLARED_TRAIT);
+	c->setVariableByQName("NO_BORDER","",Class<ASString>::getInstanceS("noBorder"),DECLARED_TRAIT);
+	c->setVariableByQName("NO_SCALE","",Class<ASString>::getInstanceS("noScale"),DECLARED_TRAIT);
+	c->setVariableByQName("SHOW_ALL","",Class<ASString>::getInstanceS("showAll"),DECLARED_TRAIT);
 }
 
 void StageAlign::sinit(Class_base* c)
 {
 	c->setConstructor(NULL);
-	c->setVariableByQName("TOP_LEFT","",Class<ASString>::getInstanceS("TL"));
+	c->setVariableByQName("TOP_LEFT","",Class<ASString>::getInstanceS("TL"),DECLARED_TRAIT);
 }
 
 void StageQuality::sinit(Class_base* c)
 {
 	c->setConstructor(NULL);
-	c->setVariableByQName("BEST","",Class<ASString>::getInstanceS("best"));
-	c->setVariableByQName("HIGH","",Class<ASString>::getInstanceS("high"));
-	c->setVariableByQName("LOW","",Class<ASString>::getInstanceS("low"));
-	c->setVariableByQName("MEDIUM","",Class<ASString>::getInstanceS("medium"));
+	c->setVariableByQName("BEST","",Class<ASString>::getInstanceS("best"),DECLARED_TRAIT);
+	c->setVariableByQName("HIGH","",Class<ASString>::getInstanceS("high"),DECLARED_TRAIT);
+	c->setVariableByQName("LOW","",Class<ASString>::getInstanceS("low"),DECLARED_TRAIT);
+	c->setVariableByQName("MEDIUM","",Class<ASString>::getInstanceS("medium"),DECLARED_TRAIT);
 }
 
 void StageDisplayState::sinit(Class_base* c)
 {
 	c->setConstructor(NULL);
-	c->setVariableByQName("FULL_SCREEN","",Class<ASString>::getInstanceS("fullScreen"));
-	c->setVariableByQName("NORMAL","",Class<ASString>::getInstanceS("normal"));
+	c->setVariableByQName("FULL_SCREEN","",Class<ASString>::getInstanceS("fullScreen"),DECLARED_TRAIT);
+	c->setVariableByQName("NORMAL","",Class<ASString>::getInstanceS("normal"),DECLARED_TRAIT);
 }
 
 void Bitmap::sinit(Class_base* c)
@@ -3155,9 +3116,14 @@ void Bitmap::sinit(Class_base* c)
 	c->max_level=c->super->max_level+1;
 }
 
-bool Bitmap::getBounds(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const
+bool Bitmap::boundsRect(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const
 {
 	return false;
+}
+
+_NR<InteractiveObject> Bitmap::hitTestImpl(_NR<InteractiveObject> last, number_t x, number_t y)
+{
+	return NullRef;
 }
 
 IntSize Bitmap::getBitmapSize() const
@@ -3184,57 +3150,119 @@ void SimpleButton::sinit(Class_base* c)
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
 	c->super=Class<InteractiveObject>::getClass();
 	c->max_level=c->super->max_level+1;
-	c->setGetterByQName("upState","",Class<IFunction>::getFunction(_getUpState),true);
-	c->setSetterByQName("upState","",Class<IFunction>::getFunction(_setUpState),true);
-	c->setGetterByQName("downState","",Class<IFunction>::getFunction(_getDownState),true);
-	c->setSetterByQName("downState","",Class<IFunction>::getFunction(_setDownState),true);
-	c->setGetterByQName("overState","",Class<IFunction>::getFunction(_getOverState),true);
-	c->setSetterByQName("overState","",Class<IFunction>::getFunction(_setOverState),true);
-	c->setGetterByQName("hitTestState","",Class<IFunction>::getFunction(_getHitTestState),true);
-	c->setSetterByQName("hitTestState","",Class<IFunction>::getFunction(_setHitTestState),true);
-	c->setGetterByQName("enabled","",Class<IFunction>::getFunction(_getEnabled),true);
-	c->setSetterByQName("enabled","",Class<IFunction>::getFunction(_setEnabled),true);
+	c->setDeclaredMethodByQName("upState","",Class<IFunction>::getFunction(_getUpState),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("upState","",Class<IFunction>::getFunction(_setUpState),SETTER_METHOD,true);
+	c->setDeclaredMethodByQName("downState","",Class<IFunction>::getFunction(_getDownState),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("downState","",Class<IFunction>::getFunction(_setDownState),SETTER_METHOD,true);
+	c->setDeclaredMethodByQName("overState","",Class<IFunction>::getFunction(_getOverState),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("overState","",Class<IFunction>::getFunction(_setOverState),SETTER_METHOD,true);
+	c->setDeclaredMethodByQName("hitTestState","",Class<IFunction>::getFunction(_getHitTestState),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("hitTestState","",Class<IFunction>::getFunction(_setHitTestState),SETTER_METHOD,true);
+	c->setDeclaredMethodByQName("enabled","",Class<IFunction>::getFunction(_getEnabled),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("enabled","",Class<IFunction>::getFunction(_setEnabled),SETTER_METHOD,true);
 }
 
 void SimpleButton::buildTraits(ASObject* o)
 {
 }
 
-_NR<InteractiveObject> SimpleButton::hitTest(_NR<InteractiveObject> last, number_t x, number_t y)
+_NR<InteractiveObject> SimpleButton::hitTestImpl(_NR<InteractiveObject> last, number_t x, number_t y)
 {
 	_NR<InteractiveObject> ret = NullRef;
-	if (hitTestState)
+	if(hitTestState != NULL)
 	{
 		number_t localX, localY;
 		hitTestState->getMatrix().getInverted().multiply2D(x,y,localX,localY);
-		ret = hitTestState->hitTest(last, localX, localY);
+		this->incRef();
+		ret = hitTestState->hitTest(_MR(this), localX, localY);
+	}
+	/* mouseDown events, for example, are never dispatched to the hitTestState,
+	 * but directly to this button (and with event.target = this). This has been
+	 * tested with the official flash player. It cannot work otherwise, as
+	 * hitTestState->parent == NULL. (This has also been verified)
+	 */
+	if(ret != NULL)
+	{
+		this->incRef();
+		ret = _MR(this);
 	}
 	return ret;
 }
 
+void SimpleButton::defaultEventBehavior(_R<Event> e)
+{
+	if(e->type == "mouseDown")
+	{
+		currentState = DOWN;
+		reflectState();
+	}
+	else if(e->type == "mouseUp")
+	{
+		currentState = UP;
+		reflectState();
+	}
+}
+
+SimpleButton::SimpleButton(DisplayObject *dS, DisplayObject *hTS,
+						   DisplayObject *oS, DisplayObject *uS)
+	: downState(dS), hitTestState(hTS), overState(oS), upState(uS),
+	  currentState(UP)
+{
+	/* When called from DefineButton2Tag::instance, they are not constructed yet
+	 * TODO: construct them here for once, or each time they become visible?
+	 */
+	if(dS) dS->initFrame();
+	if(hTS) hTS->initFrame();
+	if(oS) oS->initFrame();
+	if(uS) uS->initFrame();
+}
+
 ASFUNCTIONBODY(SimpleButton,_constructor)
 {
+	/* This _must_ not call the DisplayObjectContainer
+	 * see note at the class declaration.
+	 */
 	InteractiveObject::_constructor(obj,NULL,0);
 	SimpleButton* th=static_cast<SimpleButton*>(obj);
-	th->upState = NULL;
-	th->downState = NULL;
-	th->hitTestState = NULL;
-	th->overState = NULL;
 
 	if (argslen >= 1)
-		th->upState = static_cast<DisplayObject*>(args[0]);
-	if (argslen >= 2)
-		th->overState = static_cast<DisplayObject*>(args[1]);
-	if (argslen >= 3)
-		th->downState = static_cast<DisplayObject*>(args[2]);
-	if (argslen == 4)
-		th->hitTestState = static_cast<DisplayObject*>(args[3]);
-
-	if (th->upState) {
-		th->upState->setOnStage(true);
-		th->upState->requestInvalidation();
+	{
+		th->upState = _MNR(static_cast<DisplayObject*>(args[0]));
+		th->upState->incRef();
 	}
+	if (argslen >= 2)
+	{
+		th->overState = _MNR(static_cast<DisplayObject*>(args[1]));
+		th->overState->incRef();
+	}
+	if (argslen >= 3)
+	{
+		th->downState = _MNR(static_cast<DisplayObject*>(args[2]));
+		th->downState->incRef();
+	}
+	if (argslen == 4)
+	{
+		th->hitTestState = _MNR(static_cast<DisplayObject*>(args[3]));
+		th->hitTestState->incRef();
+	}
+
+	th->reflectState();
+
 	return NULL;
+}
+
+void SimpleButton::reflectState()
+{
+	assert(dynamicDisplayList.empty() || dynamicDisplayList.size() == 1);
+	if(!dynamicDisplayList.empty())
+		_removeChild(dynamicDisplayList.front());
+
+	if(currentState == UP && !upState.isNull())
+		_addChildAt(upState,0);
+	else if(currentState == DOWN && !downState.isNull())
+		_addChildAt(downState,0);
+	else if(currentState == OVER && !overState.isNull())
+		_addChildAt(overState,0);
 }
 
 ASFUNCTIONBODY(SimpleButton,_getUpState)
@@ -3244,17 +3272,16 @@ ASFUNCTIONBODY(SimpleButton,_getUpState)
 		return new Null;
 
 	th->upState->incRef();
-
-	return th->upState;
+	return th->upState.getPtr();
 }
 
 ASFUNCTIONBODY(SimpleButton,_setUpState)
 {
 	assert_and_throw(argslen == 1);
 	SimpleButton* th=static_cast<SimpleButton*>(obj);
-	th->upState =Class<DisplayObject>::cast(args[0]);
-	th->upState->setOnStage(true);
-	th->upState->requestInvalidation();
+	th->upState = _MNR(Class<DisplayObject>::cast(args[0]));
+	th->upState->incRef();
+	th->reflectState();
 	return NULL;
 }
 
@@ -3265,15 +3292,15 @@ ASFUNCTIONBODY(SimpleButton,_getHitTestState)
 		return new Null;
 
 	th->hitTestState->incRef();
-
-	return th->hitTestState;
+	return th->hitTestState.getPtr();
 }
 
 ASFUNCTIONBODY(SimpleButton,_setHitTestState)
 {
 	assert_and_throw(argslen == 1);
 	SimpleButton* th=static_cast<SimpleButton*>(obj);
-	th->hitTestState =Class<DisplayObject>::cast(args[0]);
+	th->hitTestState = _MNR(Class<DisplayObject>::cast(args[0]));
+	th->hitTestState->incRef();
 	return NULL;
 }
 
@@ -3284,15 +3311,16 @@ ASFUNCTIONBODY(SimpleButton,_getOverState)
 		return new Null;
 
 	th->overState->incRef();
-
-	return th->overState;
+	return th->overState.getPtr();
 }
 
 ASFUNCTIONBODY(SimpleButton,_setOverState)
 {
 	assert_and_throw(argslen == 1);
 	SimpleButton* th=static_cast<SimpleButton*>(obj);
-	th->overState =Class<DisplayObject>::cast(args[0]);
+	th->overState = _MNR(Class<DisplayObject>::cast(args[0]));
+	th->overState->incRef();
+	th->reflectState();
 	return NULL;
 }
 
@@ -3303,15 +3331,16 @@ ASFUNCTIONBODY(SimpleButton,_getDownState)
 		return new Null;
 
 	th->downState->incRef();
-
-	return th->downState;
+	return th->downState.getPtr();
 }
 
 ASFUNCTIONBODY(SimpleButton,_setDownState)
 {
 	assert_and_throw(argslen == 1);
 	SimpleButton* th=static_cast<SimpleButton*>(obj);
-	th->downState =Class<DisplayObject>::cast(args[0]);
+	th->downState = _MNR(Class<DisplayObject>::cast(args[0]));
+	th->downState->incRef();
+	th->reflectState();
 	return NULL;
 }
 
@@ -3343,59 +3372,183 @@ ASFUNCTIONBODY(SimpleButton,_getUseHandCursor)
 	return abstract_b(th->useHandCursor);
 }
 
-bool SimpleButton::getBounds(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const
-{
-	//FIXME: handle mouse down and over states too
-	if (upState)
-		return upState->getBounds(xmin, xmax, ymin, ymax);
-
-	return false;
-}
-
-void SimpleButton::Render(bool maskEnabled)
-{
-	//FIXME: handle mouse down and over states too
-	if (upState)
-		upState->Render(maskEnabled);
-}
-
 void GradientType::sinit(Class_base* c)
 {
 	c->setConstructor(NULL);
-	c->setVariableByQName("LINEAR","",Class<ASString>::getInstanceS("linear"));
-	c->setVariableByQName("RADIAL","",Class<ASString>::getInstanceS("radial"));
+	c->setVariableByQName("LINEAR","",Class<ASString>::getInstanceS("linear"),DECLARED_TRAIT);
+	c->setVariableByQName("RADIAL","",Class<ASString>::getInstanceS("radial"),DECLARED_TRAIT);
 }
 
 void BlendMode::sinit(Class_base* c)
 {
 	c->setConstructor(NULL);
-	c->setVariableByQName("ADD","",Class<ASString>::getInstanceS("add"));
-	c->setVariableByQName("ALPHA","",Class<ASString>::getInstanceS("alpha"));
-	c->setVariableByQName("DARKEN","",Class<ASString>::getInstanceS("darken"));
-	c->setVariableByQName("DIFFERENCE","",Class<ASString>::getInstanceS("difference"));
-	c->setVariableByQName("ERASE","",Class<ASString>::getInstanceS("erase"));
-	c->setVariableByQName("HARDLIGHT","",Class<ASString>::getInstanceS("hardlight"));
-	c->setVariableByQName("INVERT","",Class<ASString>::getInstanceS("invert"));
-	c->setVariableByQName("LAYER","",Class<ASString>::getInstanceS("layer"));
-	c->setVariableByQName("LIGHTEN","",Class<ASString>::getInstanceS("lighten"));
-	c->setVariableByQName("MULTIPLY","",Class<ASString>::getInstanceS("multiply"));
-	c->setVariableByQName("NORMAL","",Class<ASString>::getInstanceS("normal"));
-	c->setVariableByQName("OVERLAY","",Class<ASString>::getInstanceS("overlay"));
-	c->setVariableByQName("SCREEN","",Class<ASString>::getInstanceS("screen"));
-	c->setVariableByQName("SUBSTRACT","",Class<ASString>::getInstanceS("substract"));
+	c->setVariableByQName("ADD","",Class<ASString>::getInstanceS("add"),DECLARED_TRAIT);
+	c->setVariableByQName("ALPHA","",Class<ASString>::getInstanceS("alpha"),DECLARED_TRAIT);
+	c->setVariableByQName("DARKEN","",Class<ASString>::getInstanceS("darken"),DECLARED_TRAIT);
+	c->setVariableByQName("DIFFERENCE","",Class<ASString>::getInstanceS("difference"),DECLARED_TRAIT);
+	c->setVariableByQName("ERASE","",Class<ASString>::getInstanceS("erase"),DECLARED_TRAIT);
+	c->setVariableByQName("HARDLIGHT","",Class<ASString>::getInstanceS("hardlight"),DECLARED_TRAIT);
+	c->setVariableByQName("INVERT","",Class<ASString>::getInstanceS("invert"),DECLARED_TRAIT);
+	c->setVariableByQName("LAYER","",Class<ASString>::getInstanceS("layer"),DECLARED_TRAIT);
+	c->setVariableByQName("LIGHTEN","",Class<ASString>::getInstanceS("lighten"),DECLARED_TRAIT);
+	c->setVariableByQName("MULTIPLY","",Class<ASString>::getInstanceS("multiply"),DECLARED_TRAIT);
+	c->setVariableByQName("NORMAL","",Class<ASString>::getInstanceS("normal"),DECLARED_TRAIT);
+	c->setVariableByQName("OVERLAY","",Class<ASString>::getInstanceS("overlay"),DECLARED_TRAIT);
+	c->setVariableByQName("SCREEN","",Class<ASString>::getInstanceS("screen"),DECLARED_TRAIT);
+	c->setVariableByQName("SUBSTRACT","",Class<ASString>::getInstanceS("substract"),DECLARED_TRAIT);
 }
 
 void SpreadMethod::sinit(Class_base* c)
 {
 	c->setConstructor(NULL);
-	c->setVariableByQName("PAD","",Class<ASString>::getInstanceS("pad"));
-	c->setVariableByQName("REFLECT","",Class<ASString>::getInstanceS("reflect"));
-	c->setVariableByQName("REPEAT","",Class<ASString>::getInstanceS("repeat"));
+	c->setVariableByQName("PAD","",Class<ASString>::getInstanceS("pad"),DECLARED_TRAIT);
+	c->setVariableByQName("REFLECT","",Class<ASString>::getInstanceS("reflect"),DECLARED_TRAIT);
+	c->setVariableByQName("REPEAT","",Class<ASString>::getInstanceS("repeat"),DECLARED_TRAIT);
 }
 
 void InterpolationMethod::sinit(Class_base* c)
 {
 	c->setConstructor(NULL);
-	c->setVariableByQName("RGB","",Class<ASString>::getInstanceS("rgb"));
-	c->setVariableByQName("LINEAR_RGB","",Class<ASString>::getInstanceS("linearRGB"));
+	c->setVariableByQName("RGB","",Class<ASString>::getInstanceS("rgb"),DECLARED_TRAIT);
+	c->setVariableByQName("LINEAR_RGB","",Class<ASString>::getInstanceS("linearRGB"),DECLARED_TRAIT);
+}
+
+/* Display objects have no children in general,
+ * so we skip to calling the constructor, if necessary.
+ * This is called in vm's thread context */
+void DisplayObject::initFrame()
+{
+	if(!isConstructed() && getPrototype())
+	{
+		getPrototype()->handleConstruction(this,NULL,0,true);
+		/* addChild has already been called for this object,
+		 * but addedToStage is delayed until after construction.
+		 * This is from "Order of Operations".
+		 */
+		/* TODO: also dispatch event "added" */
+		/* TODO: should we directly call handleEventPublic? */
+		this->incRef();
+		getVm()->addEvent(_MR(this),_MR(Class<Event>::getInstanceS("addedToStage")));
+	}
+}
+
+/* Go through the hierarchy and add all
+ * legacy objects which are new in the current
+ * frame top-down. At the same time, call their
+ * constructors in reverse order (bottom-up).
+ * This is called in vm's thread context */
+void DisplayObjectContainer::initFrame()
+{
+	/* init the frames and call constructors of our children first */
+	auto it=dynamicDisplayList.begin();
+	for(;it!=dynamicDisplayList.end();it++)
+		(*it)->initFrame();
+	/* call our own constructor, if necassary */
+	DisplayObject::initFrame();
+}
+
+/* Go through the hierarchy and add all
+ * legacy objects which are new in the current
+ * frame top-down. At the same time, call their
+ * constructors in reverse order (bottom-up).
+ * This is called in vm's thread context */
+void MovieClip::initFrame()
+{
+	/* Go through the list of frames.
+	 * If our next_FP is after our current,
+	 * we construct all frames from current
+	 * to next_FP.
+	 * If our next_FP is before our current,
+	 * we purge all objects on the 0th frame
+	 * and then construct all frames from
+	 * the 0th to the next_FP.
+	 * TODO: do not purge legacy objects that were also there at state.FP,
+	 * we saw that their constructor is not run again.
+	 * We also will run the constructor on objects that got placed and deleted
+	 * before state.FP (which may get us an segfault).
+	 *
+	 */
+	if((int)state.FP < state.last_FP)
+		purgeLegacyChildren();
+
+	if(framesLoaded)
+	{
+		std::list<Frame>::iterator iter=frames.begin();
+		for(uint32_t i=0;i<=state.FP;i++)
+		{
+			if((int)state.FP < state.last_FP || (int)i > state.last_FP)
+			{
+				this->incRef(); //TODO kill ref from execute's declaration
+				iter->execute(_MR(this));
+			}
+			++iter;
+		}
+	}
+
+	/* Now the new legacy display objects are there, so we can also init their
+	 * first frame (top-down) and call their constructors (bottom-up) */
+	auto it=dynamicDisplayList.begin();
+	for(;it!=dynamicDisplayList.end();it++)
+		(*it)->initFrame();
+
+	/* Set last_FP to reflect the frame that we have initialized currently.
+	 * This must be set before the constructor of this MovieClip is run,
+	 * or it will call initFrame(). */
+	bool newFrame = (int)state.FP != state.last_FP;
+	state.last_FP=state.FP;
+
+	/* call our own constructor, if necassary */
+	DisplayObject::initFrame();
+
+	/* Run framescripts if this is a new frame. We do it at the end because our constructor
+	 * may just have registered one. */
+	//TODO: check order: child or parent first?
+	if(newFrame && frameScripts.count(state.FP))
+		frameScripts[state.FP]->call(NULL,NULL,0,false);
+
+}
+
+/* This is run in vm's thread context */
+void DisplayObjectContainer::advanceFrame()
+{
+	list<_R<DisplayObject>>::const_iterator it=dynamicDisplayList.begin();
+	for(;it!=dynamicDisplayList.end();it++)
+		(*it)->advanceFrame();
+}
+
+/* Update state.last_FP. If enough frames
+ * are available, set state.FP to state.next_FP.
+ * This is run in vm's thread context.
+ */
+void MovieClip::advanceFrame()
+{
+	//TODO check order: child or parent first?
+	DisplayObjectContainer::advanceFrame();
+
+	/* DefineSpriteTag may be exported as Sprite, so we should not
+	 * advance the frame.
+	 */
+	if(!getPrototype()->isSubClass(Class<MovieClip>::getClass()))
+		return;
+
+	//If we have not yet loaded enough frames delay advancement
+	if(state.next_FP>=(uint32_t)getFramesLoaded())
+	{
+		LOG(LOG_NOT_IMPLEMENTED,_("Not enough frames loaded"));
+		return;
+	}
+
+	state.FP=state.next_FP;
+	state.explicit_FP=false;
+	if(!state.stop_FP && getFramesLoaded()>0)
+		state.next_FP=imin(state.FP+1,getFramesLoaded()-1);
+}
+
+void MovieClip::constructionComplete()
+{
+	/* If this object was 'new'ed from AS code, the first
+	 * frame has not been initalized yet, so init the frame
+	 * now */
+	if(state.last_FP == -1)
+		initFrame();
 }

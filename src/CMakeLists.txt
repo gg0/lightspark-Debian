@@ -34,6 +34,7 @@ SET(LIBSPARK_SOURCES
   backends/decoder.cpp
   backends/extscriptobject.cpp
   backends/geometry.cpp
+  backends/glmatrices.cpp
   backends/graphics.cpp
   backends/image.cpp
   backends/input.cpp
@@ -44,7 +45,6 @@ SET(LIBSPARK_SOURCES
   backends/security.cpp
   backends/urlutils.cpp
   parsing/amf3_generator.cpp
-  parsing/amf3_parser.cpp
   parsing/config.cpp
   parsing/crossdomainpolicy.cpp
   parsing/flv.cpp
@@ -58,6 +58,7 @@ SET(LIBSPARK_SOURCES
   scripting/abc_opcodes.cpp
   scripting/actions.cpp
   scripting/class.cpp
+  scripting/flashaccessibility.cpp
   scripting/flashdisplay.cpp
   scripting/flashevents.cpp
   scripting/flashexternal.cpp
@@ -98,9 +99,9 @@ ELSE (CMAKE_COMPILER_IS_GNUCC)
 ENDIF (CMAKE_COMPILER_IS_GNUCC)
 
 TARGET_LINK_LIBRARIES(spark ${EXTRA_LIBS_LIBRARIES} ${ZLIB_LIBRARIES}
-	${Boost_LIBRARIES} ${LLVM_LIBS_CORE} ${LLVM_LIBS_JIT} ${SDL_LIBRARY}
+	${Boost_LIBRARIES} ${LLVM_LIBS_CORE} ${LLVM_LIBS_JIT}
 	${OPTIONAL_LIBRARIES} ${GTK_LIBRARIES} ${FREETYPE_LIBRARIES} ${JPEG_LIBRARIES}
-	${OPENGL_LIBRARIES} ${FTGL_LIBRARIES} ${GLEW_LIBRARIES} ${PCRE_LIBRARIES}
+	${OPENGL_LIBRARIES} ${GLEW_LIBRARIES} ${PCRE_LIBRARIES}
 	${Threads_LIBRARIES} ${XMLPP_LIBRARIES} ${CMAKE_DL_LIBS})
 SET_TARGET_PROPERTIES(spark PROPERTIES VERSION "${MAJOR_VERSION}.${MINOR_VERSION}.${PATCH_VERSION}")
 SET_TARGET_PROPERTIES(spark PROPERTIES SOVERSION "${MAJOR_VERSION}.${MINOR_VERSION}")
@@ -113,7 +114,7 @@ ENDIF(UNIX)
 IF(COMPILE_LIGHTSPARK)
   ADD_EXECUTABLE(lightspark main.cpp)
   TARGET_LINK_LIBRARIES(lightspark spark)
-  TARGET_LINK_LIBRARIES(lightspark ${SDL_LIBRARY} ${Boost_LIBRARIES})
+  TARGET_LINK_LIBRARIES(lightspark ${Boost_LIBRARIES} ${GTK_LIBRARIES} -lX11)
 
   IF(UNIX)
     INSTALL(FILES ${PROJECT_SOURCE_DIR}/src/lightspark.frag DESTINATION ${DATADIR}/lightspark)
@@ -140,6 +141,4 @@ IF(COMPILE_PLUGIN)
   ADD_SUBDIRECTORY(plugin)
 ENDIF(COMPILE_PLUGIN)
 
-ADD_SUBDIRECTORY(backends/interfaces/audio/pulse)
-#ADD_SUBDIRECTORY(backends/interfaces/audio/alsa)
-#ADD_SUBDIRECTORY(backends/interfaces/audio/openal)
+ADD_SUBDIRECTORY(backends/interfaces)

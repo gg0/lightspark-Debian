@@ -17,37 +17,20 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
-#ifndef PLUGINUTILS_H
-#define PLUGINUTILS_H
+#ifndef GLMATRICES_H
+#define GLMATRICES_H
 
-#ifdef COMPILE_PLUGIN
-#include <X11/Xlib.h>
-#include <gtk/gtk.h>
-#endif
+#define LSGL_MATRIX_SIZE (16*sizeof(GLfloat))
 
-namespace lightspark
-{
+extern GLfloat lsIdentityMatrix[16];
+extern GLfloat lsMVPMatrix[16];
+void lsglLoadMatrixf(const GLfloat *m);
+void lsglLoadIdentity();
+void lsglPushMatrix();
+void lsglPopMatrix();
+void lsglMultMatrixf(const GLfloat *m);
+void lsglScalef(GLfloat scaleX, GLfloat scaleY, GLfloat scaleZ);
+void lsglTranslatef(GLfloat translateX, GLfloat translateY, GLfloat translateZ);
+void lsglOrtho(GLfloat l, GLfloat r, GLfloat b, GLfloat t, GLfloat n, GLfloat f);
 
-enum ENGINE { NONE=0, SDL, GTKPLUG};
-typedef void(*helper_t)(void*);
-#ifdef COMPILE_PLUGIN
-struct NPAPI_params
-{
-	Display* display;
-	GtkWidget* container;
-	VisualID visual;
-	Window window;
-	int width;
-	int height;
-	void (*helper)(void* th, helper_t func, void* privArg);
-	void* helperArg;
-	void (*stopDownloaderHelper)(void* th);
-};
-#else
-struct NPAPI_params
-{
-};
-#endif
-
-};
 #endif

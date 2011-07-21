@@ -21,7 +21,6 @@
 #define _FLASH_DISPLAY_H
 
 #include "compat.h"
-#include <FTGL/ftgl.h>
 
 #include "swftypes.h"
 #include "flashevents.h"
@@ -29,6 +28,7 @@
 #include "thread_pool.h"
 #include "backends/geometry.h"
 #include "backends/graphics.h"
+#include "backends/netutils.h"
 
 namespace lightspark
 {
@@ -40,11 +40,14 @@ class LoaderInfo;
 class DisplayObjectContainer;
 class InteractiveObject;
 class Downloader;
+class AccessibilityProperties;
 
 class DisplayObject: public EventDispatcher
 {
 friend class TokenContainer;
+friend std::ostream& operator<<(std::ostream& s, const DisplayObject& r);
 private:
+	ASPROPERTY_GETTER_SETTER(_NR<AccessibilityProperties>,accessibilityProperties);
 	MATRIX Matrix;
 	ACQUIRE_RELEASE_FLAG(useMatrix);
 	number_t tx,ty;
@@ -59,18 +62,19 @@ private:
 	void setMask(_NR<DisplayObject> m);
 	_NR<DisplayObjectContainer> parent;
 protected:
+	~DisplayObject();
 	/**
 	  	The object that masks us, if any
 	*/
 	_NR<DisplayObject> mask;
 	mutable Spinlock spinlock;
 	void computeDeviceBoundsForRect(number_t xmin, number_t xmax, number_t ymin, number_t ymax,
-			uint32_t& outXMin, uint32_t& outYMin, uint32_t& outWidth, uint32_t& outHeight) const;
+			int32_t& outXMin, int32_t& outYMin, uint32_t& outWidth, uint32_t& outHeight) const;
 	void valFromMatrix();
 	bool onStage;
 	_NR<LoaderInfo> loaderInfo;
-	int computeWidth();
-	int computeHeight();
+	number_t computeWidth();
+	number_t computeHeight();
 	bool isSimple() const;
 	bool skipRender(bool maskEnabled) const;
 	float alpha;
@@ -84,6 +88,18 @@ protected:
 	void renderEpilogue() const;
 	void hitTestPrologue() const;
 	void hitTestEpilogue() const;
+	virtual bool boundsRect(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const
+	{
+		throw RunTimeException("DisplayObject::boundsRect: Derived class must implement this!");
+	}
+	virtual void renderImpl(bool maskEnabled, number_t t1,number_t t2,number_t t3,number_t t4) const
+	{
+		throw RunTimeException("DisplayObject::renderImpl: Derived class must implement this!");
+	}
+	virtual _NR<InteractiveObject> hitTestImpl(_NR<InteractiveObject> last, number_t x, number_t y)
+	{
+		throw RunTimeException("DisplayObject::hitTestImpl: Derived class must implement this!");
+	}
 public:
 	tiny_string name;
 	UI16_SWF CharacterId;
@@ -92,7 +108,7 @@ public:
 	UI16_SWF ClipDepth;
 	CLIPACTIONS ClipActions;
 	_NR<DisplayObjectContainer> getParent() const { return parent; }
-	virtual void setParent(_NR<DisplayObjectContainer> p);
+	void setParent(_NR<DisplayObjectContainer> p);
 	/*
 	   Used to link DisplayObjects the invalidation queue
 	*/
@@ -103,22 +119,14 @@ public:
 	virtual void invalidate();
 	virtual void requestInvalidation();
 	MATRIX getConcatenatedMatrix() const;
+	float getConcatenatedAlpha() const;
 	virtual float getScaleFactor() const
 	{
 		throw RunTimeException("DisplayObject::getScaleFactor");
 	}
-	virtual void Render(bool maskEnabled)
-	{
-		throw RunTimeException("DisplayObject::Render");
-	}
-	virtual bool getBounds(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const
-	{
-		throw RunTimeException("DisplayObject::getBounds");
-	}
-	virtual _NR<InteractiveObject> hitTest(_NR<InteractiveObject> last, number_t x, number_t y)
-	{
-		throw RunTimeException("DisplayObject::hitTest");
-	}
+	void Render(bool maskEnabled);
+	bool getBounds(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const;
+	_NR<InteractiveObject> hitTest(_NR<InteractiveObject> last, number_t x, number_t y);
 	//API to handle mask support in hit testing
 	virtual bool isOpaque(number_t x, number_t y) const
 	{
@@ -129,6 +137,11 @@ public:
 	virtual _NR<RootMovieClip> getRoot();
 	virtual _NR<Stage> getStage() const;
 	void setMatrix(const MATRIX& m);
+	virtual void advanceFrame() {}
+	virtual void initFrame();
+	Vector2f getLocalMousePos();
+	void setX(number_t x);
+	void setY(number_t y);
 	static void sinit(Class_base* c);
 	static void buildTraits(ASObject* o);
 	ASFUNCTION(_constructor);
@@ -180,22 +193,83 @@ public:
 	static void buildTraits(ASObject* o);
 };
 
-class SimpleButton: public InteractiveObject
+class DisplayObjectContainer: public InteractiveObject
 {
 private:
-	DisplayObject *downState;
-	DisplayObject *hitTestState;
-	DisplayObject *overState;
-	DisplayObject *upState;
-	bool enabled;
-	bool useHandCursor;
+	std::map<uint32_t,DisplayObject*> depthToLegacyChild;
+	bool _contains(_R<DisplayObject> child);
+	bool mouseChildren;
+protected:
+	void requestInvalidation();
+	//This is shared between RenderThread and VM
+	std::list < _R<DisplayObject> > dynamicDisplayList;
+	//The lock should only be taken when doing write operations
+	//As the RenderThread only reads, it's safe to read without the lock
+	mutable Mutex mutexDisplayList;
+	void setOnStage(bool staged);
+	_NR<InteractiveObject> hitTestImpl(_NR<InteractiveObject> last, number_t x, number_t y);
+	bool boundsRect(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const;
+	void renderImpl(bool maskEnabled, number_t t1,number_t t2,number_t t3,number_t t4) const;
 public:
-	SimpleButton(){}
-	void Render(bool maskEnabled);
+	void _addChildAt(_R<DisplayObject> child, unsigned int index);
+	void dumpDisplayList();
+	bool _removeChild(_R<DisplayObject> child);
+	DisplayObjectContainer();
+	void finalize();
+	bool hasLegacyChildAt(uint32_t depth);
+	void deleteLegacyChildAt(uint32_t depth);
+	void insertLegacyChildAt(uint32_t depth, DisplayObject* obj);
+	void transformLegacyChildAt(uint32_t depth, const MATRIX& mat);
+	void purgeLegacyChildren();
+	void advanceFrame();
+	void initFrame();
 	static void sinit(Class_base* c);
 	static void buildTraits(ASObject* o);
-	bool getBounds(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const;
-	_NR<InteractiveObject> hitTest(_NR<InteractiveObject> last, number_t x, number_t y);
+	ASFUNCTION(_constructor);
+	ASFUNCTION(_getNumChildren);
+	ASFUNCTION(addChild);
+	ASFUNCTION(removeChild);
+	ASFUNCTION(removeChildAt);
+	ASFUNCTION(addChildAt);
+	ASFUNCTION(getChildIndex);
+	ASFUNCTION(getChildAt);
+	ASFUNCTION(getChildByName);
+	ASFUNCTION(contains);
+	ASFUNCTION(_getMouseChildren);
+	ASFUNCTION(_setMouseChildren);
+};
+
+/* This is really ugly, but the parent of the current
+ * active state (e.g. upState) is set to the owning SimpleButton,
+ * which is not a DisplayObjectContainer per spec.
+ * We let it derive from DisplayObjectContainer, but
+ * call only the InteractiveObject::_constructor
+ * to make it look like an InteractiveObject to AS.
+ */
+class SimpleButton: public DisplayObjectContainer
+{
+private:
+	_NR<DisplayObject> downState;
+	_NR<DisplayObject> hitTestState;
+	_NR<DisplayObject> overState;
+	_NR<DisplayObject> upState;
+	bool enabled;
+	bool useHandCursor;
+	enum
+	{
+		UP,
+		OVER,
+		DOWN
+	} currentState;
+	void reflectState();
+	_NR<InteractiveObject> hitTestImpl(_NR<InteractiveObject> last, number_t x, number_t y);
+	/* This is called by when an event is dispatched */
+	void defaultEventBehavior(_R<Event> e);
+public:
+	SimpleButton(DisplayObject *dS = NULL, DisplayObject *hTS = NULL,
+				 DisplayObject *oS = NULL, DisplayObject *uS = NULL);
+	static void sinit(Class_base* c);
+	static void buildTraits(ASObject* o);
 	ASFUNCTION(_constructor);
 	ASFUNCTION(_getUpState);
 	ASFUNCTION(_setUpState);
@@ -211,48 +285,10 @@ public:
 	ASFUNCTION(_setUseHandCursor);
 };
 
-class DisplayObjectContainer: public InteractiveObject
-{
-private:
-	std::map<uint32_t,DisplayObject*> depthToLegacyChild;
-	bool _contains(_R<DisplayObject> child);
-protected:
-	void requestInvalidation();
-	//This is shared between RenderThread and VM
-	std::list < _R<DisplayObject> > dynamicDisplayList;
-	//The lock should only be taken when doing write operations
-	//As the RenderThread only reads, it's safe to read without the lock
-	mutable Mutex mutexDisplayList;
-	void setOnStage(bool staged);
-public:
-	void _addChildAt(_R<DisplayObject> child, unsigned int index);
-	void dumpDisplayList();
-	bool _removeChild(_R<DisplayObject> child);
-	DisplayObjectContainer();
-	void finalize();
-	bool hasLegacyChildAt(uint32_t depth);
-	void deleteLegacyChildAt(uint32_t depth);
-	void insertLegacyChildAt(uint32_t depth, DisplayObject* obj);
-	void transformLegacyChildAt(uint32_t depth, const MATRIX& mat);
-	void purgeLegacyChildren();
-	static void sinit(Class_base* c);
-	static void buildTraits(ASObject* o);
-	ASFUNCTION(_constructor);
-	ASFUNCTION(_getNumChildren);
-	ASFUNCTION(addChild);
-	ASFUNCTION(removeChild);
-	ASFUNCTION(removeChildAt);
-	ASFUNCTION(addChildAt);
-	ASFUNCTION(getChildIndex);
-	ASFUNCTION(getChildAt);
-	ASFUNCTION(getChildByName);
-	ASFUNCTION(contains);
-};
-
 class TokenContainer
 {
 	friend class Graphics;
-private:
+public:
 	DisplayObject* owner;
 	/* multiply shapes' coordinates by this
 	 * value to get pixel.
@@ -265,6 +301,9 @@ private:
 	 */
 	float scaling;
 	std::vector<GeomToken> tokens;
+	static void FromShaperecordListToShapeVector(const std::vector<SHAPERECORD>& shapeRecords,
+					 std::vector<GeomToken>& tokens, const std::list<FILLSTYLE>& fillStyles,
+					 const Vector2& offset = Vector2(), int scaling = 1);
 protected:
 	TokenContainer(DisplayObject* _o) : owner(_o), scaling(1.0f) {}
 	TokenContainer(DisplayObject* _o, const std::vector<GeomToken>& _tokens, float _scaling)
@@ -272,15 +311,11 @@ protected:
 
 	void invalidate();
 	void requestInvalidation();
-	bool getBounds(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const;
-	bool hitTest(number_t x, number_t y) const;
+	bool boundsRect(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const;
+	_NR<InteractiveObject> hitTestImpl(_NR<InteractiveObject> last, number_t x, number_t y) const;
 	void renderImpl(bool maskEnabled, number_t t1, number_t t2, number_t t3, number_t t4) const;
-	void Render(bool maskEnabled);
 	bool tokensEmpty() const { return tokens.empty(); }
-public:
-	static void FromShaperecordListToShapeVector(const std::vector<SHAPERECORD>& shapeRecords,
-												 std::vector<GeomToken>& tokens, const std::list<FILLSTYLE>& fillStyles,
-												 const Vector2& offset = Vector2(), int scaling = 1);
+	bool isOpaqueImpl(number_t x, number_t y) const;
 };
 
 /* This objects paints to its owners tokens */
@@ -328,6 +363,12 @@ class Shape: public DisplayObject, public TokenContainer
 {
 protected:
 	_NR<Graphics> graphics;
+	bool boundsRect(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const
+		{ return TokenContainer::boundsRect(xmin,xmax,ymin,ymax); }
+	void renderImpl(bool maskEnabled, number_t t1, number_t t2, number_t t3, number_t t4) const
+		{ TokenContainer::renderImpl(maskEnabled,t1,t2,t3,t4); }
+	_NR<InteractiveObject> hitTestImpl(_NR<InteractiveObject> last, number_t x, number_t y)
+		{ return TokenContainer::hitTestImpl(last,x,y); }
 public:
 	Shape():TokenContainer(this), graphics(NULL) {}
 	Shape(const std::vector<GeomToken>& tokens, float scaling)
@@ -337,9 +378,6 @@ public:
 	static void buildTraits(ASObject* o);
 	ASFUNCTION(_constructor);
 	ASFUNCTION(_getGraphics);
-	bool getBounds(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const;
-	void Render(bool maskEnabled) { TokenContainer::Render(maskEnabled); }
-	_NR<InteractiveObject> hitTest(_NR<InteractiveObject> last, number_t x, number_t y);
 	bool isOpaque(number_t x, number_t y) const;
 	void requestInvalidation() { TokenContainer::requestInvalidation(); }
 	void invalidate() { TokenContainer::invalidate(); }
@@ -351,13 +389,11 @@ public:
 	static void sinit(Class_base* c);
 	static void buildTraits(ASObject* o);
 	ASFUNCTION(_constructor);
-	//bool getBounds(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const;
-	//void Render();
 };
 
 class Loader;
 
-class LoaderInfo: public EventDispatcher
+class LoaderInfo: public EventDispatcher, public ILoadable
 {
 friend class RootMovieClip;
 private:
@@ -386,12 +422,13 @@ public:
 	ASFUNCTION(_getLoader);
 	ASFUNCTION(_getContent);
 	ASFUNCTION(_getSharedEvents);
+	void sendInit();
+	//ILoadable interface
 	void setBytesTotal(uint32_t b)
 	{
 		bytesTotal=b;
 	}
 	void setBytesLoaded(uint32_t b);
-	void sendInit();
 };
 
 class Loader: public IThreadJob, public DisplayObjectContainer
@@ -403,7 +440,8 @@ private:
 	bool loading;
 	bool loaded;
 	SOURCE source;
-	tiny_string url;
+	URLInfo url;
+	std::vector<uint8_t> postData;
 	_NR<ByteArray> bytes;
 	_NR<LoaderInfo> contentLoaderInfo;
 	Spinlock downloaderLock;
@@ -428,9 +466,6 @@ public:
 	{
 		return 0;
 	}
-	void Render(bool maskEnabled);
-	bool getBounds(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const;
-	void setOnStage(bool staged);
 };
 
 class Sprite: public DisplayObjectContainer, public TokenContainer
@@ -441,7 +476,7 @@ private:
 protected:
 	bool boundsRect(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const;
 	void renderImpl(bool maskEnabled, number_t t1,number_t t2,number_t t3,number_t t4) const;
-	_NR<InteractiveObject> hitTestImpl(number_t x, number_t y);
+	_NR<InteractiveObject> hitTestImpl(_NR<InteractiveObject> last, number_t x, number_t y);
 public:
 	Sprite();
 	void finalize();
@@ -449,13 +484,12 @@ public:
 	static void buildTraits(ASObject* o);
 	ASFUNCTION(_constructor);
 	ASFUNCTION(_getGraphics);
+	ASFUNCTION(_startDrag);
+	ASFUNCTION(_stopDrag);
 	int getDepth() const
 	{
 		return 0;
 	}
-	bool getBounds(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const;
-	void Render(bool maskEnabled);
-	_NR<InteractiveObject> hitTest(_NR<InteractiveObject> last, number_t x, number_t y);
 	void invalidate() { TokenContainer::invalidate(); }
 	void requestInvalidation();
 };
@@ -504,7 +538,7 @@ public:
 class Frame
 {
 public:
-	std::list<DisplayListTag*> blueprint;
+	std::list<_R<DisplayListTag>> blueprint;
 	void execute(_R<DisplayObjectContainer> displayList);
 };
 
@@ -513,8 +547,6 @@ class MovieClip: public Sprite
 friend class ParserThread;
 private:
 	uint32_t getCurrentScene();
-	ACQUIRE_RELEASE_FLAG(constructed);
-	bool isConstructed() const { return ACQUIRE_READ(constructed); }
 	/* This list is accessed by both the vm thread and the parsing thread,
 	 * but the parsing thread only accesses frames.back(), while
 	 * the vm thread only accesses the frames before that frame (until
@@ -535,7 +567,7 @@ protected:
 	uint32_t totalFrames_unreliable;
 	uint32_t getFramesLoaded() { SpinlockLocker l(framesLoadedLock); return framesLoaded; }
 	void setFramesLoaded(uint32_t fl) { SpinlockLocker l(framesLoadedLock); framesLoaded = fl; }
-	void bootstrap();
+	void constructionComplete();
 private:
 	Spinlock framesLoadedLock;
 	uint32_t framesLoaded;
@@ -560,19 +592,18 @@ public:
 	ASFUNCTION(_getCurrentFrame);
 	ASFUNCTION(_getCurrentFrameLabel);
 	ASFUNCTION(_getCurrentLabel);
+	ASFUNCTION(_getCurrentLabels);
 	ASFUNCTION(_getTotalFrames);
 	ASFUNCTION(_getFramesLoaded);
 	ASFUNCTION(_getScenes);
 	ASFUNCTION(_getCurrentScene);
 
-	virtual void addToFrame(DisplayListTag* r);
+	virtual void addToFrame(_R<DisplayListTag> r);
 
 	void advanceFrame();
+	void initFrame();
 	uint32_t getFrameIdByLabel(const tiny_string& l) const;
 	void setTotalFrames(uint32_t t);
-
-	//DisplayObject interface
-	void setParent(_NR<DisplayObjectContainer> p);
 
 	void check() const
 	{
@@ -580,8 +611,6 @@ public:
 	}
 	void addScene(uint32_t sceneNo, uint32_t startframe, const tiny_string& name);
 	void addFrameLabel(uint32_t frame, const tiny_string& label);
-
-	void constructionComplete();
 };
 
 class Stage: public DisplayObjectContainer
@@ -590,6 +619,8 @@ private:
 	uint32_t internalGetHeight() const;
 	uint32_t internalGetWidth() const;
 public:
+	_NR<InteractiveObject> hitTestImpl(_NR<InteractiveObject> last, number_t x, number_t y);
+	void setOnStage(bool staged) { assert(false); /* we are the stage */}
 	Stage();
 	static void sinit(Class_base* c);
 	static void buildTraits(ASObject* o);
@@ -671,7 +702,7 @@ public:
 
 class Bitmap: public DisplayObject
 {
-friend class CairoRenderer;
+friend class CairoTokenRenderer;
 protected:
 	bool fromJPEG( uint8_t* data, int len);
 	IntSize size;
@@ -680,7 +711,8 @@ protected:
 public:
 	Bitmap() : size(0,0), data(NULL) {}
 	static void sinit(Class_base* c);
-	bool getBounds(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const;
+	bool boundsRect(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const;
+	_NR<InteractiveObject> hitTestImpl(_NR<InteractiveObject> last, number_t x, number_t y);
 	virtual IntSize getBitmapSize() const;
 };
 

@@ -46,8 +46,11 @@ void XMLNode::sinit(Class_base* c)
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
 	c->super=Class<ASObject>::getClass();
 	c->max_level=c->super->max_level+1;
-	c->setGetterByQName("firstChild","",Class<IFunction>::getFunction(XMLNode::firstChild),true);
-	c->setGetterByQName("attributes","",Class<IFunction>::getFunction(attributes),true);
+	c->setDeclaredMethodByQName("firstChild","",Class<IFunction>::getFunction(XMLNode::firstChild),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("childNodes","",Class<IFunction>::getFunction(XMLNode::childNodes),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("attributes","",Class<IFunction>::getFunction(attributes),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("nodeType","",Class<IFunction>::getFunction(_getNodeType),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("nodeName","",Class<IFunction>::getFunction(_getNodeName),GETTER_METHOD,true);
 }
 
 void XMLNode::buildTraits(ASObject* o)
@@ -76,6 +79,26 @@ ASFUNCTIONBODY(XMLNode,firstChild)
 	return Class<XMLNode>::getInstanceS(th->root,newNode);
 }
 
+ASFUNCTIONBODY(XMLNode,childNodes)
+{
+	XMLNode* th=Class<XMLNode>::cast(obj);
+	Array* ret = Class<Array>::getInstanceS();
+	assert_and_throw(argslen==0);
+	if(th->node==NULL) //We assume NULL node is like empty node
+		return ret;
+	assert_and_throw(!th->root.isNull());
+	const xmlpp::Node::NodeList& children=th->node->get_children();
+	xmlpp::Node::NodeList::const_iterator it = children.begin();
+	for(;it!=children.end();it++)
+	{
+		if((*it)->cobj()->type!=XML_TEXT_NODE) {
+			ret->push(Class<XMLNode>::getInstanceS(th->root, *it));
+		}
+	}
+	return ret;
+}
+
+
 ASFUNCTIONBODY(XMLNode,attributes)
 {
 	XMLNode* th=Class<XMLNode>::cast(obj);
@@ -96,9 +119,21 @@ ASFUNCTIONBODY(XMLNode,attributes)
 		if(nsName!="")
 			attrName=nsName+":"+attrName;
 		ASString* attrValue=Class<ASString>::getInstanceS((*it)->get_value().c_str());
-		ret->setVariableByQName(attrName,"",attrValue);
+		ret->setVariableByQName(attrName,"",attrValue,DYNAMIC_TRAIT);
 	}
 	return ret;
+}
+
+ASFUNCTIONBODY(XMLNode,_getNodeType)
+{
+	XMLNode* th=Class<XMLNode>::cast(obj);
+	return abstract_i(th->node->cobj()->type);
+}
+
+ASFUNCTIONBODY(XMLNode,_getNodeName)
+{
+	XMLNode* th=Class<XMLNode>::cast(obj);
+	return Class<ASString>::getInstanceS((const char*)th->node->cobj()->name);
 }
 
 void XMLDocument::sinit(Class_base* c)
@@ -106,8 +141,8 @@ void XMLDocument::sinit(Class_base* c)
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
 	c->super=Class<XMLNode>::getClass();
 	c->max_level=c->super->max_level+1;
-	c->setMethodByQName("parseXML","",Class<IFunction>::getFunction(parseXML),true);
-	c->setGetterByQName("firstChild","",Class<IFunction>::getFunction(XMLDocument::firstChild),true);
+	c->setDeclaredMethodByQName("parseXML","",Class<IFunction>::getFunction(parseXML),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("firstChild","",Class<IFunction>::getFunction(XMLDocument::firstChild),GETTER_METHOD,true);
 }
 
 void XMLDocument::buildTraits(ASObject* o)
@@ -128,6 +163,12 @@ void XMLDocument::clear()
 		delete document;
 		ownsDocument=false;
 	}
+}
+
+void XMLDocument::serialize(ByteArray* out, std::map<tiny_string, uint32_t>& stringMap,
+				std::map<const ASObject*, uint32_t>& objMap) const
+{
+	throw UnsupportedException("XMLDocument::serialize not implemented");
 }
 
 ASFUNCTIONBODY(XMLDocument,parseXML)

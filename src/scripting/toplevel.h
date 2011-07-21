@@ -27,12 +27,14 @@
 #include "threading.h"
 #include <libxml/tree.h>
 #include <libxml++/parsers/domparser.h>
+#include "abcutils.h"
 
 namespace lightspark
 {
 const tiny_string AS3="http://adobe.com/AS3/2006/builtin";
 
 class Event;
+class ABCContext;
 class method_info;
 struct call_context;
 
@@ -75,35 +77,6 @@ public:
 	~Class_base();
 	void finalize();
 	virtual ASObject* getInstance(bool construct, ASObject* const* args, const unsigned int argslen)=0;
-	ASObject* getBorrowedVariableByMultiname(const multiname& name, bool skip_impl, ASObject* base);
-	ASObject* getVariableByMultiname(const multiname& name, bool skip_impl, ASObject* base=NULL)
-	{
-		ASObject* ret=ASObject::getVariableByMultiname(name, skip_impl, base);
-		if(ret==NULL && super)
-			ret=super->getVariableByMultiname(name, skip_impl, base);
-		return ret;
-	}
-	intptr_t getVariableByMultiname_i(const multiname& name)
-	{
-		throw UnsupportedException("Class_base::getVariableByMultiname_i");
-		return 0;
-/*		intptr_t ret=ASObject::getVariableByMultiname(name);
-		if(==NULL && super)
-			ret=super->getVariableByMultiname(name);
-		return ret;*/
-	}
-/*	void setVariableByMultiname_i(const multiname& name, intptr_t value)
-	{
-		abort();
-	}
-	void setVariableByMultiname(const multiname& name, ASObject* o)
-	{
-		abort();
-	}
-	void setVariableByQName(const tiny_string& name, const tiny_string& ns, ASObject* o, bool find_back=true)
-	{
-		abort();
-	}*/
 	void addImplementedInterface(const multiname& i);
 	void addImplementedInterface(Class_base* i);
 	virtual void buildInstanceTraits(ASObject* o) const=0;
@@ -155,30 +128,27 @@ private:
 	}
 public:
 	Class_function(IFunction* _f, ASObject* _p);
-	ASObject* getVariableByMultiname(const multiname& name, bool skip_impl=false, ASObject* base=NULL)
+	ASObject* getVariableByMultiname(const multiname& name, bool skip_impl=false)
 	{
-		ASObject* ret=Class_base::getVariableByMultiname(name,skip_impl, base);
+		ASObject* ret=Class_base::getVariableByMultiname(name,skip_impl);
 		if(ret==NULL && asprototype)
-			ret=asprototype->getVariableByMultiname(name,skip_impl, base);
+			ret=asprototype->getVariableByMultiname(name,skip_impl);
 		return ret;
 	}
 	intptr_t getVariableByMultiname_i(const multiname& name)
 	{
 		throw UnsupportedException("Class_function::getVariableByMultiname_i");
 		return 0;
-/*		intptr_t ret=ASObject::getVariableByMultiname(name);
-		if(ret==NULL && super)
-			ret=super->getVariableByMultiname(name);
-		return ret;*/
 	}
 	void setVariableByMultiname_i(const multiname& name, intptr_t value)
 	{
 		throw UnsupportedException("Class_function::setVariableByMultiname_i");
 	}
-	void setVariableByMultiname(const multiname& name, ASObject* o, ASObject* base=NULL)
+	void setVariableByMultiname(const multiname& name, ASObject* o)
 	{
 		throw UnsupportedException("Class_function::setVariableByMultiname");
 	}
+	bool hasPropertyByMultiname(const multiname& name, bool considerDynamic);
 };
 
 class IFunction: public ASObject
@@ -277,7 +247,7 @@ public:
 	void finalize();
 	ASObject* call(ASObject* obj, ASObject* const* args, uint32_t num_args, bool thisOverride=false);
 	IFunction* toFunction();
-	std::vector<_R<ASObject>> func_scope;
+	std::vector<scope_entry> func_scope;
 	bool isEqual(ASObject* r)
 	{
 		SyntheticFunction* sf=dynamic_cast<SyntheticFunction*>(r);
@@ -285,14 +255,14 @@ public:
 			return false;
 		return mi==sf->mi;
 	}
-	void acquireScope(const std::vector<_R<ASObject>>& scope)
+	void acquireScope(const std::vector<scope_entry>& scope)
 	{
 		assert_and_throw(func_scope.empty());
 		func_scope=scope;
 	}
-	void addToScope(_R<ASObject> s)
+	void addToScope(const scope_entry& s)
 	{
-		func_scope.push_back(s);
+		func_scope.emplace_back(s);
 	}
 };
 
@@ -349,6 +319,9 @@ public:
 	static void sinit(Class_base*);
 	ASFUNCTION(_toString);
 	ASFUNCTION(generator);
+	//Serialization interface
+	void serialize(ByteArray* out, std::map<tiny_string, uint32_t>& stringMap,
+			std::map<const ASObject*, uint32_t>& objMap) const;
 };
 
 class Undefined : public ASObject
@@ -361,6 +334,9 @@ public:
 	double toNumber();
 	bool isEqual(ASObject* r);
 	TRISTATE isLess(ASObject* r);
+	//Serialization interface
+	void serialize(ByteArray* out, std::map<tiny_string, uint32_t>& stringMap,
+			std::map<const ASObject*, uint32_t>& objMap) const;
 };
 
 class ASString: public ASObject
@@ -400,6 +376,10 @@ public:
 	tiny_string toString(bool debugMsg=false);
 	double toNumber();
 	int32_t toInt();
+	ASFUNCTION(generator);
+	//Serialization interface
+	void serialize(ByteArray* out, std::map<tiny_string, uint32_t>& stringMap,
+			std::map<const ASObject*, uint32_t>& objMap) const;
 };
 
 class Null: public ASObject
@@ -411,6 +391,9 @@ public:
 	TRISTATE isLess(ASObject* r);
 	int32_t toInt();
 	double toNumber();
+	//Serialization interface
+	void serialize(ByteArray* out, std::map<tiny_string, uint32_t>& stringMap,
+			std::map<const ASObject*, uint32_t>& objMap) const;
 };
 
 class ASQName: public ASObject
@@ -478,8 +461,9 @@ private:
 	{
 	private:
 		bool isNumeric;
+		bool isCaseInsensitive;
 	public:
-		sortComparatorDefault(bool n):isNumeric(n){}
+		sortComparatorDefault(bool n, bool ci):isNumeric(n),isCaseInsensitive(ci){}
 		bool operator()(const data_slot& d1, const data_slot& d2);
 	};
 	class sortComparatorWrapper
@@ -519,19 +503,7 @@ public:
 	ASFUNCTION(_map);
 	ASFUNCTION(_toString);
 
-	ASObject* at(unsigned int index) const
-	{
-		if(index<data.size())
-		{
-			assert_and_throw(data[index].data);
-			return data[index].data;
-		}
-		else
-		{
-			outofbounds();
-			return NULL;
-		}
-	}
+	ASObject* at(unsigned int index) const;
 	void set(unsigned int index, ASObject* o)
 	{
 		if(index<data.size())
@@ -555,15 +527,19 @@ public:
 	{
 		data.resize(n);
 	}
-	ASObject* getVariableByMultiname(const multiname& name, bool skip_impl, ASObject* base=NULL);
+	ASObject* getVariableByMultiname(const multiname& name, bool skip_impl);
 	intptr_t getVariableByMultiname_i(const multiname& name);
-	void setVariableByMultiname(const multiname& name, ASObject* o, ASObject* base=NULL);
+	void setVariableByMultiname(const multiname& name, ASObject* o);
 	void setVariableByMultiname_i(const multiname& name, intptr_t value);
+	bool hasPropertyByMultiname(const multiname& name, bool considerDynamic);
 	tiny_string toString(bool debugMsg=false);
 	bool isEqual(ASObject* r);
 	uint32_t nextNameIndex(uint32_t cur_index);
 	_R<ASObject> nextName(uint32_t index);
 	_R<ASObject> nextValue(uint32_t index);
+	//Serialization interface
+	void serialize(ByteArray* out, std::map<tiny_string, uint32_t>& stringMap,
+			std::map<const ASObject*, uint32_t>& objMap) const;
 };
 
 class Integer : public ASObject
@@ -594,12 +570,18 @@ public:
 	TRISTATE isLess(ASObject* r);
 	bool isEqual(ASObject* o);
 	ASFUNCTION(generator);
+	//Serialization interface
+	void serialize(ByteArray* out, std::map<tiny_string, uint32_t>& stringMap,
+			std::map<const ASObject*, uint32_t>& objMap) const;
 };
 
 class UInteger: public ASObject
 {
+friend ASObject* abstract_ui(uint32_t i);
+CLASSBUILDABLE(UInteger);
 private:
 	uint32_t val;
+	UInteger(Manager* m):ASObject(m),val(0){type=T_UINTEGER;}
 public:
 	UInteger(uint32_t v=0):val(v){type=T_UINTEGER;}
 
@@ -619,6 +601,7 @@ public:
 	}
 	TRISTATE isLess(ASObject* r);
 	bool isEqual(ASObject* o);
+	//CHECK: should this have a special serialization?
 };
 
 class Number : public ASObject
@@ -632,6 +615,7 @@ private:
 	Number(){}
 	Number(double v):val(v){type=T_NUMBER;}
 	Number(Manager* m):ASObject(m),val(0){type=T_NUMBER;}
+	static void purgeTrailingZeroes(char* buf, int bufLen);
 public:
 	ASFUNCTION(_toString);
 	tiny_string toString(bool debugMsg);
@@ -658,6 +642,9 @@ public:
 	static void buildTraits(ASObject* o){};
 	static void sinit(Class_base* c);
 	ASFUNCTION(generator);
+	//Serialization interface
+	void serialize(ByteArray* out, std::map<tiny_string, uint32_t>& stringMap,
+			std::map<const ASObject*, uint32_t>& objMap) const;
 };
 
 class XML: public ASObject
@@ -672,7 +659,6 @@ private:
 	static void recursiveGetDescendantsByQName(_R<XML> root, xmlpp::Node* node, const tiny_string& name, const tiny_string& ns, 
 			std::vector<_R<XML>>& ret);
 	tiny_string toString_priv();
-	void toXMLString_priv(xmlBufferPtr buf);
 	void buildFromString(const std::string& str);
 	bool constructed;
 	bool nodesEqual(xmlpp::Node *a, xmlpp::Node *b) const;
@@ -690,18 +676,28 @@ public:
 	ASFUNCTION(attributes);
 	ASFUNCTION(appendChild);
 	ASFUNCTION(localName);
+	ASFUNCTION(name);
+	ASFUNCTION(descendants);
 	ASFUNCTION(generator);
 	ASFUNCTION(_hasSimpleContent);
 	ASFUNCTION(_hasComplexContent);
 	static void buildTraits(ASObject* o){};
 	static void sinit(Class_base* c);
 	void getDescendantsByQName(const tiny_string& name, const tiny_string& ns, std::vector<_R<XML> >& ret);
-	ASObject* getVariableByMultiname(const multiname& name, bool skip_impl, ASObject* base=NULL);
+	ASObject* getVariableByMultiname(const multiname& name, bool skip_impl);
+	bool hasPropertyByMultiname(const multiname& name, bool considerDynamic);
 	tiny_string toString(bool debugMsg=false);
+	void toXMLString_priv(xmlBufferPtr buf);
 	bool hasSimpleContent() const;
 	bool hasComplexContent() const;
         xmlElementType getNodeKind() const;
 	bool isEqual(ASObject* r);
+	uint32_t nextNameIndex(uint32_t cur_index);
+	_R<ASObject> nextName(uint32_t index);
+	_R<ASObject> nextValue(uint32_t index);
+	//Serialization interface
+	void serialize(ByteArray* out, std::map<tiny_string, uint32_t>& stringMap,
+			std::map<const ASObject*, uint32_t>& objMap) const;
 };
 
 class XMLList: public ASObject
@@ -711,6 +707,7 @@ private:
 	bool constructed;
 	tiny_string toString_priv() const;
 	void buildFromString(const std::string& str);
+	void toXMLString_priv(xmlBufferPtr buf) const;
 public:
 	XMLList():constructed(false){}
 	/*
@@ -728,8 +725,11 @@ public:
 	ASFUNCTION(_hasSimpleContent);
 	ASFUNCTION(_hasComplexContent);
 	ASFUNCTION(_toString);
+	ASFUNCTION(toXMLString);
 	ASFUNCTION(generator);
-	ASObject* getVariableByMultiname(const multiname& name, bool skip_impl, ASObject* base=NULL);
+	ASObject* getVariableByMultiname(const multiname& name, bool skip_impl);
+	void setVariableByMultiname(const multiname& name, ASObject* o);
+	bool hasPropertyByMultiname(const multiname& name, bool considerDynamic);
 	_NR<XML> convertToXML() const;
 	bool hasSimpleContent() const;
 	bool hasComplexContent() const;
@@ -737,6 +737,9 @@ public:
 	void append(_R<XMLList> x);
 	tiny_string toString(bool debugMsg=false);
 	bool isEqual(ASObject* r);
+	uint32_t nextNameIndex(uint32_t cur_index);
+	_R<ASObject> nextName(uint32_t index);
+	_R<ASObject> nextValue(uint32_t index);
 };
 
 class Date: public ASObject
@@ -763,6 +766,7 @@ public:
 	ASFUNCTION(getFullYear);
 	ASFUNCTION(getHours);
 	ASFUNCTION(getMinutes);
+	ASFUNCTION(getMilliseconds);
 	ASFUNCTION(getUTCFullYear);
 	ASFUNCTION(getUTCMonth);
 	ASFUNCTION(getUTCDate);
@@ -771,6 +775,9 @@ public:
 	ASFUNCTION(valueOf);
 	tiny_string toString(bool debugMsg=false);
 	tiny_string toString_priv() const;
+	//Serialization interface
+	void serialize(ByteArray* out, std::map<tiny_string, uint32_t>& stringMap,
+			std::map<const ASObject*, uint32_t>& objMap) const;
 };
 
 //Internal objects used to store traits declared in scripts and object placed, but not yet valid
@@ -972,6 +979,78 @@ public:
 };
 
 bool Boolean_concrete(ASObject* obj);
+
+
+template<class T>
+class ArgumentConversion
+{
+public:
+	static T toConcrete(ASObject* obj);
+	static ASObject* toAbstract(const T& val);
+};
+
+template<class T>
+class ArgumentConversion<Ref<T>>
+{
+public:
+	static Ref<T> toConcrete(ASObject* obj)
+	{
+		T* o = dynamic_cast<T*>(obj);
+		if(!o)
+			throw ArgumentError("Wrong type");
+		o->incRef();
+		return _MR(o);
+	}
+	static ASObject* toAbstract(const Ref<T>& val)
+	{
+		val->incRef();
+		return val.getPtr();
+	}
+};
+
+template<class T>
+class ArgumentConversion<NullableRef<T>>
+{
+public:
+	static NullableRef<T> toConcrete(ASObject* obj)
+	{
+		T* o = dynamic_cast<T*>(obj);
+		if(!o)
+			throw ArgumentError("Wrong type");
+		o->incRef();
+		return _MNR(o);
+	}
+	static ASObject* toAbstract(const NullableRef<T>& val)
+	{
+		if(val.isNull())
+			return new Null();
+		val->incRef();
+		return val.getPtr();
+	}
+};
+
+template<>
+number_t ArgumentConversion<number_t>::toConcrete(ASObject* obj);
+template<>
+bool ArgumentConversion<bool>::toConcrete(ASObject* obj);
+template<>
+uint32_t ArgumentConversion<uint32_t>::toConcrete(ASObject* obj);
+template<>
+int32_t ArgumentConversion<int32_t>::toConcrete(ASObject* obj);
+template<>
+tiny_string ArgumentConversion<tiny_string>::toConcrete(ASObject* obj);
+
+template<>
+ASObject* ArgumentConversion<int32_t>::toAbstract(const int32_t& val);
+template<>
+ASObject* ArgumentConversion<uint32_t>::toAbstract(const uint32_t& val);
+template<>
+ASObject* ArgumentConversion<number_t>::toAbstract(const number_t& val);
+template<>
+ASObject* ArgumentConversion<bool>::toAbstract(const bool& val);
+template<>
+ASObject* ArgumentConversion<tiny_string>::toAbstract(const tiny_string& val);
+
 ASObject* parseInt(ASObject* obj,ASObject* const* args, const unsigned int argslen);
 ASObject* parseFloat(ASObject* obj,ASObject* const* args, const unsigned int argslen);
 ASObject* isNaN(ASObject* obj,ASObject* const* args, const unsigned int argslen);

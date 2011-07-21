@@ -95,6 +95,7 @@ tiny_string tiny_string::substr(uint32_t start, uint32_t end) const
 		ret.createBuffer(subSize);
 	strncpy(ret.buf,buf+start,end-start);
 	ret.buf[end-start]=0;
+	ret.stringSize = subSize;
 	return ret;
 }
 
@@ -223,7 +224,8 @@ std::ostream& lightspark::operator<<(std::ostream& s, const RGB& r)
 MATRIX MATRIX::getInverted() const
 {
 	MATRIX ret;
-	const number_t den=ScaleX*ScaleY+RotateSkew0*RotateSkew1;
+	assert(isInvertible());
+	const number_t den=ScaleX*ScaleY-RotateSkew0*RotateSkew1;
 	ret.ScaleX=ScaleY/den;
 	ret.RotateSkew1=-RotateSkew1/den;
 	ret.RotateSkew0=-RotateSkew0/den;
@@ -231,6 +233,12 @@ MATRIX MATRIX::getInverted() const
 	ret.TranslateX=(RotateSkew1*TranslateY-ScaleY*TranslateX)/den;
 	ret.TranslateY=(RotateSkew0*TranslateX-ScaleX*TranslateY)/den;
 	return ret;
+}
+
+bool MATRIX::isInvertible() const
+{
+	const number_t den=ScaleX*ScaleY-RotateSkew0*RotateSkew1;
+	return (fabs(den) > 1e-6);
 }
 
 void MATRIX::get4DMatrix(float matrix[16]) const
@@ -247,6 +255,13 @@ void MATRIX::get4DMatrix(float matrix[16]) const
 	matrix[12]=TranslateX;
 	matrix[13]=TranslateY;
 	matrix[15]=1;
+}
+
+Vector2f MATRIX::multiply2D(const Vector2f& in) const
+{
+	Vector2f out;
+	multiply2D(in.x,in.y,out.x,out.y);
+	return out;
 }
 
 void MATRIX::multiply2D(number_t xin, number_t yin, number_t& xout, number_t& yout) const
@@ -630,8 +645,8 @@ std::istream& lightspark::operator>>(std::istream& s, FILLSTYLE& v)
 		{
 			try
 			{
-				DictionaryTag* dict=pt->root->dictionaryLookup(bitmapId);
-				v.bitmap=dynamic_cast<Bitmap*>(dict);
+				_R<DictionaryTag> dict=pt->root->dictionaryLookup(bitmapId);
+				v.bitmap=dynamic_cast<Bitmap*>(dict.getPtr());
 				if(v.bitmap==NULL)
 				{
 					LOG(LOG_ERROR,"Invalid bitmap ID " << bitmapId);
@@ -1118,6 +1133,13 @@ ASObject* lightspark::abstract_i(intptr_t i)
 	return ret;
 }
 
+ASObject* lightspark::abstract_ui(uint32_t i)
+{
+	UInteger* ret=getVm()->uint_manager->get<UInteger>();
+	ret->val=i;
+	return ret;
+}
+
 void lightspark::stringToQName(const tiny_string& tmp, tiny_string& name, tiny_string& ns)
 {
 	//Ok, let's split our string into namespace and name part
@@ -1146,7 +1168,18 @@ void lightspark::stringToQName(const tiny_string& tmp, tiny_string& name, tiny_s
 	ns="";
 }
 
-RunState::RunState():FP(0),next_FP(0),stop_FP(0),explicit_FP(false)
+RunState::RunState():last_FP(-1),FP(0),next_FP(0),stop_FP(0),explicit_FP(false)
 {
 }
 
+tiny_string QName::getQualifiedName() const
+{
+	tiny_string ret;
+	if(ns.len())
+	{
+		ret+=ns;
+		ret+="::";
+	}
+	ret+=name;
+	return ret;
+}

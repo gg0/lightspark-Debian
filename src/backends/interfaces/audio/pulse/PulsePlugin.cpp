@@ -115,7 +115,15 @@ void PulsePlugin::addDeviceToList ( vector< string* >* devicesList, string *devi
 void PulsePlugin::streamStatusCB ( pa_stream *stream, PulseAudioStream *th )
 {
 	if ( pa_stream_get_state ( stream ) == PA_STREAM_READY )
+	{
 		th->streamStatus = PulseAudioStream::STREAM_READY;
+		if ( th->decoder->hasDecodedFrames() )
+		{
+			//Now that the stream is ready fill it
+			size_t availableSize = pa_stream_writable_size ( th->stream );
+			th->fillStream( availableSize );
+		}
+	}
 	else if ( pa_stream_get_state ( stream ) == PA_STREAM_TERMINATED ||
 		pa_stream_get_state ( stream ) == PA_STREAM_FAILED )
 	{
@@ -126,53 +134,7 @@ void PulsePlugin::streamStatusCB ( pa_stream *stream, PulseAudioStream *th )
 
 void PulsePlugin::streamWriteCB ( pa_stream *stream, size_t askedData, PulseAudioStream *th )
 {
-	//If paused, don't do anything
-	if(th->paused())
-	{
-	  return;
-	}
-	
-	int16_t *dest;
-	//Get buffer size
-	size_t frameSize = askedData;
-	//Write data until we have space on the server and we have data available
-	uint32_t totalWritten = 0;
-	pa_stream_begin_write ( stream, ( void** ) &dest, &frameSize );
-	if ( frameSize == 0 ) //The server can't accept any data now
-		return;
-	do
-	{
-		uint32_t retSize = th->decoder->copyFrame ( dest + ( totalWritten / 2 ), frameSize );
-		if ( retSize == 0 ) //There is no more data
-			break;
-		totalWritten += retSize;
-		frameSize -= retSize;
-	}
-	while ( frameSize );
-
-	if ( totalWritten )
-		pa_stream_write ( stream, dest, totalWritten, NULL, 0, PA_SEEK_RELATIVE );
-	else
-		pa_stream_cancel_write ( stream );
-	//If the server asked for more data we have to sent it the inefficient way
-	if ( totalWritten < askedData )
-	{
-		uint32_t restBytes = askedData - totalWritten;
-		totalWritten = 0;
-		dest = new int16_t[restBytes/2];
-		do
-		{
-			uint32_t retSize = th->decoder->copyFrame ( dest + ( totalWritten / 2 ), restBytes );
-			if ( retSize == 0 ) //There is no more data
-				break;
-			totalWritten += retSize;
-			restBytes -= retSize;
-		}
-		while ( restBytes );
-		pa_stream_write ( stream, dest, totalWritten, NULL, 0, PA_SEEK_RELATIVE );
-		delete[] dest;
-	}
-	pa_stream_cork ( stream, 0, NULL, NULL ); //Start the stream, just in case it's still stopped
+	th->fillStream(askedData);
 }
 
 bool PulsePlugin::isTimingAvailable() const
@@ -205,19 +167,19 @@ void PulsePlugin::freeStream ( AudioStream *audioStream )
 	delete s;
 }
 
-void overflow_notify()
+void PulsePlugin::streamOverflowCB( pa_stream *p, void *userdata )
 {
-	LOG(LOG_NO_INFO, "AUDIO BACKEND: ____overflow!!!!");
+	LOG(LOG_NO_INFO, "AUDIO BACKEND: Stream overflow");
 }
 
-void underflow_notify()
+void PulsePlugin::streamUnderflowCB( pa_stream *p, void *userdata )
 {
-	LOG(LOG_NO_INFO, "AUDIO BACKEND: ____underflow!!!!");
+	LOG(LOG_NO_INFO, "AUDIO BACKEND: Stream underflow");
 }
 
-void started_notify()
+void PulsePlugin::streamStartedCB( pa_stream *p, void *userdata )
 {
-	LOG(LOG_NO_INFO, "AUDIO BACKEND: ____started!!!!");
+	LOG(LOG_NO_INFO, "AUDIO BACKEND: Stream started");
 }
 
 AudioStream *PulsePlugin::createStream ( AudioDecoder *decoder )
@@ -244,9 +206,9 @@ AudioStream *PulsePlugin::createStream ( AudioDecoder *decoder )
 		audioStream->stream = pa_stream_new ( context, "AudioStream", &ss, NULL );
 		pa_stream_set_state_callback ( audioStream->stream, ( pa_stream_notify_cb_t ) streamStatusCB, audioStream );
 		pa_stream_set_write_callback ( audioStream->stream, ( pa_stream_request_cb_t ) streamWriteCB, audioStream );
-		pa_stream_set_underflow_callback ( audioStream->stream, ( pa_stream_notify_cb_t ) underflow_notify, NULL );
-		pa_stream_set_overflow_callback ( audioStream->stream, ( pa_stream_notify_cb_t ) overflow_notify, NULL );
-		pa_stream_set_started_callback ( audioStream->stream, ( pa_stream_notify_cb_t ) started_notify, NULL );
+		pa_stream_set_underflow_callback ( audioStream->stream, ( pa_stream_notify_cb_t ) streamUnderflowCB, NULL );
+		pa_stream_set_overflow_callback ( audioStream->stream, ( pa_stream_notify_cb_t ) streamUnderflowCB, NULL );
+		pa_stream_set_started_callback ( audioStream->stream, ( pa_stream_notify_cb_t ) streamStartedCB, NULL );
 		pa_stream_flags flags = (pa_stream_flags) PA_STREAM_START_CORKED;
 		if(muteAllStreams)
 			flags = (pa_stream_flags) (flags | PA_STREAM_START_MUTED);
@@ -400,36 +362,8 @@ void PulseAudioStream::fill ()
 		if ( !decoder->hasDecodedFrames() ) //No decoded data available yet, delay upload
 			return;
 		manager->pulseLock();
-		int16_t *dest;
-		//Get buffer size
 		size_t frameSize = pa_stream_writable_size ( stream );
-		if ( frameSize == 0 ) //The server can't accept any data now
-		{
-			manager->pulseUnlock();
-			return;
-		}
-		//Write data until we have space on the server and we have data available
-		uint32_t totalWritten = 0;
-		pa_stream_begin_write ( stream, ( void** ) &dest, &frameSize );
-		do
-		{
-			uint32_t retSize = decoder->copyFrame ( dest + ( totalWritten / 2 ), frameSize );
-			if ( retSize == 0 ) //There is no more data
-				break;
-			totalWritten += retSize;
-			frameSize -= retSize;
-		}
-		while ( frameSize );
-
-		cout << "Filled " << totalWritten << endl;
-		if ( totalWritten )
-		{
-			pa_stream_write ( stream, dest, totalWritten, NULL, 0, PA_SEEK_RELATIVE );
-			pa_stream_cork ( stream, 0, NULL, NULL ); //Start the stream, just in case it's still stopped
-		}
-		else
-			pa_stream_cancel_write ( stream );
-
+		fillStream(frameSize);
 		manager->pulseUnlock();
 	}
 	else   //No sound server available
@@ -437,6 +371,34 @@ void PulseAudioStream::fill ()
 		//Just skip all the contents
 		decoder->skipAll();
 	}
+}
+
+void PulseAudioStream::fillStream(size_t frameSize)
+{
+	int16_t *dest;
+	if ( frameSize == 0 ) //The server can't accept any data now
+		return;
+	//Write data until we have space on the server and we have data available
+	uint32_t totalWritten = 0;
+	pa_stream_begin_write ( stream, ( void** ) &dest, &frameSize );
+	do
+	{
+		uint32_t retSize = decoder->copyFrame ( dest + ( totalWritten / 2 ), frameSize );
+		if ( retSize == 0 ) //There is no more data
+			break;
+		totalWritten += retSize;
+		frameSize -= retSize;
+	}
+	while ( frameSize );
+
+	if ( totalWritten )
+	{
+		pa_stream_write ( stream, dest, totalWritten, NULL, 0, PA_SEEK_RELATIVE );
+		if(!pause)
+			pa_stream_cork ( stream, 0, NULL, NULL ); //Start the stream, just in case it's still stopped
+	}
+	else
+		pa_stream_cancel_write ( stream );
 }
 
 bool PulseAudioStream::paused()
@@ -471,6 +433,19 @@ void PulseAudioStream::unmute()
 			);
 }
 
+void PulseAudioStream::setVolume(double vol)
+{
+	struct pa_cvolume volume;
+	pa_cvolume_set(&volume, pa_stream_get_sample_spec(stream)->channels,
+					pa_sw_volume_from_linear(vol));
+	pa_context_set_sink_input_volume(
+			pa_stream_get_context(stream),
+			pa_stream_get_index(stream),
+			&volume,
+			NULL,
+			NULL
+			);
+}
 
 // Plugin factory function
 extern "C" DLL_PUBLIC IPlugin *create()

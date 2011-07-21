@@ -31,8 +31,8 @@
 namespace lightspark
 {
 
-enum EVENT_TYPE { EVENT=0, BIND_CLASS, SHUTDOWN, SYNC, MOUSE_EVENT, FUNCTION, CONTEXT_INIT, CONSTRUCT_TAG, CHANGE_FRAME, CONSTRUCT_FRAME,
-			SYS_ON_STAGE, FLUSH_INVALIDATION_QUEUE };
+enum EVENT_TYPE { EVENT=0, BIND_CLASS, SHUTDOWN, SYNC, MOUSE_EVENT, FUNCTION, CONTEXT_INIT, INIT_FRAME,
+			FLUSH_INVALIDATION_QUEUE, ADVANCE_FRAME };
 
 class ABCContext;
 class DictionaryTag;
@@ -42,23 +42,39 @@ class MovieClip;
 class Event: public ASObject
 {
 public:
-	Event():type("Event"),target(NULL),currentTarget(NULL),bubbles(false){}
-	Event(const tiny_string& t, bool b=false);
+	Event(const tiny_string& t = "Event", bool b=false, bool c=false)
+		: type(t),target(NULL),currentTarget(NULL),bubbles(b),cancelable(c),
+		  eventPhase(0),defaultPrevented(false) {}
 	void finalize();
 	static void sinit(Class_base*);
 	static void buildTraits(ASObject* o);
 	ASFUNCTION(_constructor);
-	ASFUNCTION(_getType);
-	ASFUNCTION(_getTarget);
-	ASFUNCTION(_getCurrentTarget);
+	ASFUNCTION(_preventDefault);
+	ASFUNCTION(_isDefaultPrevented);
 	ASFUNCTION(formatToString);
 	virtual EVENT_TYPE getEventType() const {return EVENT;}
-	tiny_string type;
 	//Altough events may be recycled and sent to more than a handler, the target property is set before sending
 	//and the handling is serialized
-	_NR<ASObject> target;
-	_NR<ASObject> currentTarget;
-	bool bubbles;
+	ASPROPERTY_GETTER(tiny_string,type);
+	ASPROPERTY_GETTER(_NR<ASObject>,target);
+	ASPROPERTY_GETTER(_NR<ASObject>,currentTarget);
+	ASPROPERTY_GETTER(bool,bubbles);
+	ASPROPERTY_GETTER(bool,cancelable);
+	ASPROPERTY_GETTER(uint32_t,eventPhase);
+	bool defaultPrevented;
+};
+
+class EventPhase: public ASObject
+{
+public:
+	enum
+	{
+		CAPTURING_PHASE = 1,
+		AT_TARGET = 2,
+		BUBBLING_PHASE = 3
+	};
+	static void sinit(Class_base*);
+	static void buildTraits(ASObject* o) {}
 };
 
 class KeyboardEvent: public Event
@@ -131,8 +147,11 @@ public:
 
 class ErrorEvent: public TextEvent
 {
+private:
+	std::string errorMsg;
 public:
-	ErrorEvent();
+	ErrorEvent() {};
+	ErrorEvent(const std::string& e);
 	static void sinit(Class_base*);
 	static void buildTraits(ASObject* o)
 	{
@@ -153,7 +172,8 @@ public:
 class SecurityErrorEvent: public ErrorEvent
 {
 public:
-	SecurityErrorEvent();
+	SecurityErrorEvent() {};
+	SecurityErrorEvent(const std::string& e);
 	static void sinit(Class_base*);
 	static void buildTraits(ASObject* o)
 	{
@@ -214,11 +234,19 @@ friend class EventDispatcher;
 private:
 	_R<IFunction> f;
 	uint32_t priority;
+	/* true: get events in the capture phase
+	 * false: get events in the bubble phase
+	 */
+	bool use_capture;
 public:
-	explicit listener(_R<IFunction> _f, uint32_t _p):f(_f),priority(_p){};
-	bool operator==(IFunction* r)
+	explicit listener(_R<IFunction> _f, uint32_t _p, bool _c)
+		:f(_f),priority(_p),use_capture(_c){};
+	bool operator==(std::pair<IFunction*,bool> r)
 	{
-		return f->isEqual(r);
+		/* One can register the same handle for the same event with
+		 * different values of use_capture
+		 */
+		return (use_capture == r.second) && f->isEqual(r.first);
 	}
 	bool operator<(const listener& r) const
 	{
@@ -246,7 +274,7 @@ public:
 	void handleEvent(_R<Event> e);
 	void dumpHandlers();
 	bool hasEventListener(const tiny_string& eventName);
-
+	virtual void defaultEventBehavior(_R<Event> e) {};
 	ASFUNCTION(_constructor);
 	ASFUNCTION(addEventListener);
 	ASFUNCTION(removeEventListener);
@@ -254,18 +282,18 @@ public:
 	ASFUNCTION(_hasEventListener);
 };
 
+class RootMovieClip;
 //Internal events from now on, used to pass data to the execution thread
 class BindClassEvent: public Event
 {
 friend class ABCVm;
 private:
-	_R<ASObject> base;
+	_NR<RootMovieClip> base;
+	_NR<DictionaryTag> tag;
 	tiny_string class_name;
-	bool isRoot;
 public:
-	enum { NONROOT=0, ISROOT=1 };
-	BindClassEvent(_R<ASObject> b, const tiny_string& c, bool i):
-		Event("bindClass"),base(b),class_name(c),isRoot(i){}
+	BindClassEvent(_R<RootMovieClip> b, const tiny_string& c);
+	BindClassEvent(_R<DictionaryTag> t, const tiny_string& c);
 	static void sinit(Class_base*);
 	EVENT_TYPE getEventType() const { return BIND_CLASS;}
 };
@@ -332,40 +360,22 @@ public:
 	EVENT_TYPE getEventType() const { return CONTEXT_INIT; }
 };
 
-//Event to change the current frame
-class FrameChangeEvent: public Event
-{
-friend class ABCVm;
-private:
-	int frame;
-	_R<MovieClip> movieClip;
-	static void sinit(Class_base*);
-public:
-	FrameChangeEvent(int f, _R<MovieClip> m):Event("FrameChangeEvent"),frame(f),movieClip(m){}
-	EVENT_TYPE getEventType() const { return CHANGE_FRAME; }
-};
-
 class Frame;
+
 //Event to construct a Frame in the VM context
-class ConstructFrameEvent: public Event
+class InitFrameEvent: public Event
 {
 friend class ABCVm;
-private:
-	Frame* frame;
-	_R<MovieClip> parent;
-	bool purge;
 public:
-	ConstructFrameEvent(Frame* f, _R<MovieClip> p, bool _purge)
-		: Event("ConstructFrameEvent"),frame(f),parent(p),purge(_purge){}
-	EVENT_TYPE getEventType() const { return CONSTRUCT_FRAME; }
+	InitFrameEvent() : Event("InitFrameEvent") {}
+	EVENT_TYPE getEventType() const { return INIT_FRAME; }
 };
 
-//Event to put the SystemState on stage
-class SysOnStageEvent: public Event
+class AdvanceFrameEvent: public Event
 {
 public:
-	SysOnStageEvent():Event("SysOnStageEvent"){};
-	EVENT_TYPE getEventType() const { return SYS_ON_STAGE; };
+	AdvanceFrameEvent(): Event("AdvanceFrameEvent") {}
+	EVENT_TYPE getEventType() const { return ADVANCE_FRAME; }
 };
 
 //Event to flush the invalidation queue

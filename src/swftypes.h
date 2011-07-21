@@ -128,6 +128,13 @@ public:
 	}
 	tiny_string(const tiny_string& r):buf(_buf_static),stringSize(r.stringSize),type(STATIC)
 	{
+		//Fast path for static read-only strings
+		if(r.type==READONLY)
+		{
+			type=READONLY;
+			buf=r.buf;
+			return;
+		}
 		if(stringSize > STATIC_SIZE)
 			createBuffer(stringSize);
 		strcpy(buf,r.buf);
@@ -154,9 +161,18 @@ public:
 	{
 		resetToStatic();
 		stringSize=s.stringSize;
-		if(stringSize > STATIC_SIZE)
-			createBuffer(stringSize);
-		strcpy(buf,s.buf);
+		//Fast path for static read-only strings
+		if(s.type==READONLY)
+		{
+			type=READONLY;
+			buf=s.buf;
+		}
+		else
+		{
+			if(stringSize > STATIC_SIZE)
+				createBuffer(stringSize);
+			strcpy(buf,s.buf);
+		}
 		return *this;
 	}
 	tiny_string& operator=(const std::string& s)
@@ -232,6 +248,7 @@ public:
 		else
 			return ns<r.ns;
 	}
+	tiny_string getQualifiedName() const;
 };
 
 class UI8 
@@ -505,6 +522,7 @@ class RGB
 public:
 	RGB(){};
 	RGB(int r,int g, int b):Red(r),Green(g),Blue(b){};
+	RGB(uint color):Red((color>>16)&0xFF),Green((color>>8)&0xFF),Blue(color&0xFF){}
 	UI8 Red;
 	UI8 Green;
 	UI8 Blue;
@@ -831,6 +849,9 @@ public:
 	RECT(int xmin, int xmax, int ymin, int ymax);
 };
 
+template<class T> class Vector2Tmpl;
+typedef Vector2Tmpl<double> Vector2f;
+
 class MATRIX
 {
 	friend std::istream& operator>>(std::istream& stream, MATRIX& v);
@@ -846,9 +867,11 @@ public:
 	MATRIX():ScaleX(1),ScaleY(1),RotateSkew0(0),RotateSkew1(0),TranslateX(0),TranslateY(0){}
 	void get4DMatrix(float matrix[16]) const;
 	void multiply2D(number_t xin, number_t yin, number_t& xout, number_t& yout) const;
+	Vector2f multiply2D(const Vector2f& in) const;
 	MATRIX multiplyMatrix(const MATRIX& r) const;
 	const bool operator!=(const MATRIX& r) const;
 	MATRIX getInverted() const;
+	bool isInvertible() const;
 };
 
 class GRADRECORD
@@ -1292,15 +1315,16 @@ public:
 class RunState
 {
 public:
+	int last_FP;
 	unsigned int FP;
 	unsigned int next_FP;
 	bool stop_FP;
 	bool explicit_FP;
 	RunState();
-	void prepareNextFP();
 };
 
 ASObject* abstract_i(intptr_t i);
+ASObject* abstract_ui(uint32_t i);
 ASObject* abstract_b(bool i);
 ASObject* abstract_d(number_t i);
 

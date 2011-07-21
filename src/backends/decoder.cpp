@@ -26,6 +26,11 @@
 #include "graphics.h"
 #include "backends/rendering.h"
 
+#if LIBAVUTIL_VERSION_MAJOR < 52
+#define AVMEDIA_TYPE_VIDEO CODEC_TYPE_VIDEO
+#define AVMEDIA_TYPE_AUDIO CODEC_TYPE_AUDIO
+#endif
+
 using namespace lightspark;
 using namespace std;
 
@@ -203,7 +208,7 @@ void FFMpegVideoDecoder::setSize(uint32_t w, uint32_t h)
 		while(discardFrame());
 
 		//As the size chaged, reset the buffer
-		uint32_t bufferSize=frameWidth*frameHeight;
+		uint32_t bufferSize=frameWidth*frameHeight/**4*/;
 		buffers.regen(YUVBufferGenerator(bufferSize));
 	}
 }
@@ -270,7 +275,13 @@ bool FFMpegVideoDecoder::decodeData(uint8_t* data, uint32_t datalen, uint32_t ti
 bool FFMpegVideoDecoder::decodePacket(AVPacket* pkt, uint32_t time)
 {
 	int frameOk=0;
+
+#if HAVE_AVCODEC_DECODE_VIDEO2
 	int ret=avcodec_decode_video2(codecContext, frameIn, &frameOk, pkt);
+#else
+	int ret=avcodec_decode_video(codecContext, frameIn, &frameOk, pkt->data, pkt->size);
+#endif
+
 	assert_and_throw(ret==(int)pkt->size);
 	if(frameOk)
 	{
@@ -511,6 +522,14 @@ bool FFMpegAudioDecoder::fillDataAndCheckValidity()
 	else
 		return false;
 
+	if(initialTime==(uint32_t)-1 && !samplesBuffer.isEmpty())
+	{
+		initialTime=getFrontTime();
+		LOG(LOG_NO_INFO,_("AUDIO DEC: Initial timestamp ") << initialTime);
+	}
+	else
+		return false;
+
 	return true;
 }
 
@@ -545,7 +564,24 @@ uint32_t FFMpegAudioDecoder::decodePacket(AVPacket* pkt, uint32_t time)
 {
 	FrameSamples& curTail=samplesBuffer.acquireLast();
 	int maxLen=AVCODEC_MAX_AUDIO_FRAME_SIZE;
-	uint32_t ret=avcodec_decode_audio3(codecContext, curTail.samples, &maxLen, pkt);
+
+#if HAVE_AVCODEC_DECODE_AUDIO3
+	int ret=avcodec_decode_audio3(codecContext, curTail.samples, &maxLen, pkt);
+#else
+	int ret=avcodec_decode_audio2(codecContext, curTail.samples, &maxLen, pkt->data, pkt->size);
+#endif
+
+	if(ret==-1)
+	{
+		//A decoding error occurred, create an empty sample buffer
+		LOG(LOG_ERROR,_("Malformed audio packet"));
+		curTail.len=0;
+		curTail.current=curTail.samples;
+		curTail.time=time;
+		samplesBuffer.commitLast();
+		return maxLen;
+	}
+
 	assert_and_throw(ret==pkt->size);
 
 	if(status==INIT && fillDataAndCheckValidity())
@@ -580,11 +616,11 @@ FFMpegStreamDecoder::FFMpegStreamDecoder(std::istream& s):stream(s),formatCtx(NU
 	//NOTE: in FFMpeg 0.7 there is av_probe_input_buffer
 	AVProbeData probeData;
 	probeData.filename="lightspark_stream";
-	probeData.buf=new uint8_t[64+AVPROBE_PADDING_SIZE];
-	memset(probeData.buf,0,64+AVPROBE_PADDING_SIZE);
-	stream.read((char*)probeData.buf,64);
+	probeData.buf=new uint8_t[8192+AVPROBE_PADDING_SIZE];
+	memset(probeData.buf,0,8192+AVPROBE_PADDING_SIZE);
+	stream.read((char*)probeData.buf,8192);
 	int read=stream.gcount();
-	if(read!=64)
+	if(read!=8192)
 		LOG(LOG_ERROR,_("Not sufficient data is available from the stream"));
 	probeData.buf_size=read;
 
@@ -596,7 +632,7 @@ FFMpegStreamDecoder::FFMpegStreamDecoder(std::istream& s):stream(s),formatCtx(NU
 		return;
 
 	int ret=av_open_input_stream(&formatCtx, avioContext, "lightspark_stream", fmt, NULL);
-	if(ret!=0)
+	if(ret<0)
 		return;
 	
 	ret=av_find_stream_info(formatCtx);
@@ -637,6 +673,11 @@ FFMpegStreamDecoder::FFMpegStreamDecoder(std::istream& s):stream(s),formatCtx(NU
 
 FFMpegStreamDecoder::~FFMpegStreamDecoder()
 {
+	//Delete the decoders before deleting the input stream to avoid a crash in ffmpeg code
+	delete audioDecoder;
+	delete videoDecoder;
+	audioDecoder=NULL;
+	videoDecoder=NULL;
 	if(formatCtx)
 		av_close_input_stream(formatCtx);
 	if(avioContext)
@@ -668,6 +709,11 @@ bool FFMpegStreamDecoder::getMetadataInteger(const char* name, uint32_t& ret) co
 
 bool FFMpegStreamDecoder::getMetadataDouble(const char* name, double& ret) const
 {
+	if( string(name) == "duration" )
+	{
+		ret = double(formatCtx->duration) / double(AV_TIME_BASE);
+		return true;
+	}
 	return false;
 }
 

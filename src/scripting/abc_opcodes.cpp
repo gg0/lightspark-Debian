@@ -147,7 +147,12 @@ void ABCVm::coerce_a()
 
 ASObject* ABCVm::checkfilter(ASObject* o)
 {
-	LOG(LOG_NOT_IMPLEMENTED,"checkfilter");
+	Class_base* xmlClass=Class<XML>::getClass();
+	Class_base* xmlListClass=Class<XMLList>::getClass();
+
+	if (o->getPrototype()!=xmlClass && o->getPrototype()!=xmlListClass)
+		throw Class<TypeError>::getInstanceS();
+
 	return o;
 }
 
@@ -483,19 +488,19 @@ void ABCVm::pushWith(call_context* th)
 {
 	ASObject* t=th->runtime_stack_pop();
 	LOG(LOG_CALLS, _("pushWith ") << t );
-	th->scope_stack.push_back(_MR(t));
+	th->scope_stack.emplace_back(scope_entry(_MR(t), true));
 }
 
 void ABCVm::pushScope(call_context* th)
 {
 	ASObject* t=th->runtime_stack_pop();
 	LOG(LOG_CALLS, _("pushScope ") << t );
-	th->scope_stack.push_back(_MR(t));
+	th->scope_stack.emplace_back(scope_entry(_MR(t), false));
 }
 
 ASObject* ABCVm::getGlobalScope(call_context* th)
 {
-	ASObject* ret=th->scope_stack[0].getPtr();
+	ASObject* ret=th->scope_stack[0].object.getPtr();
 	LOG(LOG_CALLS,_("getGlobalScope: ") << ret);
 	ret->incRef();
 	return ret;
@@ -1100,6 +1105,22 @@ ASObject* ABCVm::add(ASObject* val2, ASObject* val1)
 		val2->decRef();
 		return abstract_i(num1+num2);
 	}
+	else if (val1->getObjectType()==T_INTEGER && val2->getObjectType()==T_UNDEFINED)
+	{
+		intptr_t num1=val1->toInt();
+		LOG(LOG_CALLS,"add " << num1 << "+ undefined");
+		val1->decRef();
+		val2->decRef();
+		return abstract_i(num1);
+	}
+	else if (val1->getObjectType()==T_UNDEFINED && val2->getObjectType()==T_INTEGER)
+	{
+		intptr_t num2=val2->toInt();
+		LOG(LOG_CALLS,"add undefined + " << num2);
+		val1->decRef();
+		val2->decRef();
+		return abstract_i(num2);
+	}
 	else if(val1->getObjectType()==T_ARRAY)
 	{
 		//Array concatenation
@@ -1134,7 +1155,6 @@ ASObject* ABCVm::add(ASObject* val2, ASObject* val1)
 		if((val1->getPrototype()==xmlClass || val1->getPrototype()==xmlListClass) &&
 			(val2->getPrototype()==xmlClass || val2->getPrototype()==xmlListClass))
 		{
-			cout << "XMLADD" << endl;
 			XMLList* newList=Class<XMLList>::getInstanceS(true);
 			if(val1->getPrototype()==xmlClass)
 				newList->append(_MR(static_cast<XML*>(val1)));
@@ -1540,7 +1560,7 @@ void ABCVm::getLex(call_context* th, int n)
 {
 	multiname* name=th->context->getMultiname(n,th);
 	LOG(LOG_CALLS, _("getLex: ") << *name );
-	vector<_R<ASObject> >::reverse_iterator it=th->scope_stack.rbegin();
+	vector<scope_entry>::reverse_iterator it=th->scope_stack.rbegin();
 	ASObject* o = NULL;
 
 	//Find out the current 'this', when looking up over it, we have to consider all of it
@@ -1548,19 +1568,18 @@ void ABCVm::getLex(call_context* th, int n)
 	ASObject* target;
 	for(;it!=th->scope_stack.rend();++it)
 	{
-		if(*it==tl.cur_this)
+		if(it->object==tl.cur_this)
 			tl.cur_this->resetLevel();
 
 		//Skip implementation
-		ASObject* tmpo=(*it)->getVariableByMultiname(*name, true);
-		if(*it==tl.cur_this)
+		ASObject* tmpo=it->object->getVariableByMultiname(*name, !it->considerDynamic);
+		if(it->object==tl.cur_this)
 			tl.cur_this->setLevel(tl.cur_level);
 
 		o=tmpo;
 		if(o)
 		{
-			(*it)->incRef();
-			target=(*it).getPtr();
+			target=it->object.getPtr();
 			break;
 		}
 	}
@@ -1580,6 +1599,7 @@ void ABCVm::getLex(call_context* th, int n)
 	if(o->getObjectType()==T_FUNCTION)
 	{
 		LOG(LOG_CALLS,_("Attaching this to function ") << name);
+		target->incRef();
 		IFunction* f=static_cast<IFunction*>(o)->bind(_MR(target),-1);
 		o=f;
 	}
@@ -1630,33 +1650,33 @@ ASObject* ABCVm::findProperty(call_context* th, int n)
 	multiname* name=th->context->getMultiname(n,th);
 	LOG(LOG_CALLS, _("findProperty ") << *name );
 
-	vector<_R<ASObject>>::reverse_iterator it=th->scope_stack.rbegin();
-	ASObject* o=NULL;
+	vector<scope_entry>::reverse_iterator it=th->scope_stack.rbegin();
+	bool found=false;
 	ASObject* ret=NULL;
 	thisAndLevel tl=getVm()->getCurObjAndLevel();
 	for(;it!=th->scope_stack.rend();++it)
 	{
-		if(*it==tl.cur_this)
+		if(it->object==tl.cur_this)
 			tl.cur_this->resetLevel();
 
-		//Skip implementation
-		o=(*it)->getVariableByMultiname(*name, true);
-		if(*it==tl.cur_this)
+		found=it->object->hasPropertyByMultiname(*name, it->considerDynamic);
+		if(it->object==tl.cur_this)
 			tl.cur_this->setLevel(tl.cur_level);
 
-		if(o)
+		if(found)
 		{
 			//We have to return the object, not the property
-			ret=(*it).getPtr();
+			ret=it->object.getPtr();
 			break;
 		}
 	}
-	if(o==NULL)
+	if(!found)
 	{
 		LOG(LOG_CALLS, _("NOT found, pushing global") );
-		ret=th->scope_stack[0].getPtr();
+		ret=th->scope_stack[0].object.getPtr();
 	}
 
+	//TODO: make this a regular assert
 	assert_and_throw(ret);
 	ret->incRef();
 	return ret;
@@ -1667,34 +1687,34 @@ ASObject* ABCVm::findPropStrict(call_context* th, int n)
 	multiname* name=th->context->getMultiname(n,th);
 	LOG(LOG_CALLS, _("findPropStrict ") << *name );
 
-	vector<_R<ASObject>>::reverse_iterator it=th->scope_stack.rbegin();
-	ASObject* o=NULL;
+	vector<scope_entry>::reverse_iterator it=th->scope_stack.rbegin();
+	bool found=false;
 	ASObject* ret=NULL;
 	thisAndLevel tl=getVm()->getCurObjAndLevel();
 
 	for(;it!=th->scope_stack.rend();++it)
 	{
-		if(*it==tl.cur_this)
+		if(it->object==tl.cur_this)
 			tl.cur_this->resetLevel();
-		//Skip special behaviour
-		o=(*it)->getVariableByMultiname(*name, true);
-		if(*it==tl.cur_this)
+
+		found=it->object->hasPropertyByMultiname(*name, it->considerDynamic);
+		if(it->object==tl.cur_this)
 			tl.cur_this->setLevel(tl.cur_level);
-		if(o)
+		if(found)
 		{
 			//We have to return the object, not the property
-			ret=(*it).getPtr();
+			ret=it->object.getPtr();
 			break;
 		}
 	}
-	if(o==NULL)
+	if(!found)
 	{
 		LOG(LOG_CALLS, _("NOT found, trying Global") );
 		ASObject* target;
-		o=getGlobal()->getVariableAndTargetByMultiname(*name, target);
+		ASObject* o=getGlobal()->getVariableAndTargetByMultiname(*name, target);
 		if(o)
 			ret=target;
-		if(o==NULL)
+		else
 		{
 			LOG(LOG_NOT_IMPLEMENTED, _("NOT found, pushing Undefined"));
 			ret=new Undefined;
@@ -2096,7 +2116,7 @@ bool ABCVm::in(ASObject* val2, ASObject* val1)
 	name.name_type=multiname::NAME_STRING;
 	name.name_s=val1->toString();
 	name.ns.push_back(nsNameAndKind("",NAMESPACE));
-	bool ret=val2->hasPropertyByMultiname(name);
+	bool ret=val2->hasPropertyByMultiname(name, true);
 	val1->decRef();
 	val2->decRef();
 	return ret;
@@ -2227,12 +2247,17 @@ void ABCVm::newObject(call_context* th, int n)
 {
 	LOG(LOG_CALLS,_("newObject ") << n);
 	ASObject* ret=Class<ASObject>::getInstanceS();
+	//Duplicated keys overwrite the previous value
+	multiname propertyName;
+	propertyName.name_type=multiname::NAME_STRING;
+	propertyName.ns.push_back(nsNameAndKind("",NAMESPACE));
 	for(int i=0;i<n;i++)
 	{
 		ASObject* value=th->runtime_stack_pop();
 		ASObject* name=th->runtime_stack_pop();
-		ret->setVariableByQName(name->toString(),"",value);
+		propertyName.name_s=name->toString();
 		name->decRef();
+		ret->setVariableByMultiname(propertyName, value);
 	}
 
 	th->runtime_stack_push(ret);
@@ -2241,15 +2266,8 @@ void ABCVm::newObject(call_context* th, int n)
 void ABCVm::getDescendants(call_context* th, int n)
 {
 	multiname* name=th->context->getMultiname(n,th);
-	LOG(LOG_NOT_IMPLEMENTED,"getDescendants " << *name);
+	LOG(LOG_CALLS,"getDescendants " << *name);
 	ASObject* obj=th->runtime_stack_pop();
-	//HACK: to be removed when describeType is implemented
-	if(obj->getObjectType()==T_UNDEFINED)
-	{
-		obj->decRef();
-		th->runtime_stack_push(new Undefined);
-		return;
-	}
 	assert_and_throw(obj->getPrototype()==Class<XML>::getClass());
 	XML* xmlObj=Class<XML>::cast(obj);
 	//The name must be a QName
@@ -2351,6 +2369,8 @@ void ABCVm::newClass(call_context* th, int n)
 	}
 #endif
 	ret->class_scope=th->scope_stack;
+	ret->incRef();
+	ret->class_scope.emplace_back(_MR(ret),false);
 
 	assert_and_throw(th->context);
 	ret->context=th->context;
@@ -2368,9 +2388,6 @@ void ABCVm::newClass(call_context* th, int n)
 	SyntheticFunction* cinit=Class<IFunction>::getSyntheticFunction(m);
 	//cinit must inherit the current scope
 	cinit->acquireScope(th->scope_stack);
-	//and the created class
-	ret->incRef();
-	cinit->addToScope(_MR(ret));
 
 	LOG(LOG_CALLS,_("Building class traits"));
 	for(unsigned int i=0;i<th->context->classes[n].trait_count;i++)
@@ -2396,15 +2413,14 @@ void ABCVm::newClass(call_context* th, int n)
 	}
 
 	SyntheticFunction* constructorFunc=Class<IFunction>::getSyntheticFunction(constructor);
-	//Also the constructor should have the script as the global object
-	constructorFunc->addToScope(th->scope_stack[0]);
+	constructorFunc->acquireScope(ret->class_scope);
 	//add Constructor the the class methods
 	ret->constructor=constructorFunc;
 	ret->class_index=n;
 
 	//Set the constructor variable to the class itself (this is accessed by object using the protoype)
 	ret->incRef();
-	ret->setVariableByQName("constructor","",ret);
+	ret->setVariableByQName("constructor","",ret, DECLARED_TRAIT);
 
 	//add implemented interfaces
 	for(unsigned int i=0;i<th->context->instances[n].interface_count;i++)
@@ -2559,7 +2575,7 @@ ASObject* ABCVm::newFunction(call_context* th, int n)
 
 ASObject* ABCVm::getScopeObject(call_context* th, int n)
 {
-	ASObject* ret=th->scope_stack[n+th->initialScopeStack].getPtr();
+	ASObject* ret=th->scope_stack[n+th->initialScopeStack].object.getPtr();
 	ret->incRef();
 	LOG(LOG_CALLS, _("getScopeObject: ") << ret );
 	return ret;

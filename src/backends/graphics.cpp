@@ -24,6 +24,7 @@
 #include "logger.h"
 #include "exceptions.h"
 #include "backends/rendering.h"
+#include "glmatrices.h"
 #include "compat.h"
 
 #include <iostream>
@@ -33,23 +34,23 @@ using namespace lightspark;
 void lightspark::cleanGLErrors()
 {
 #ifdef EXPENSIVE_DEBUG
-	int glErrorCount = 0;
+	int errorCount = 0;
 	GLenum err;
 	while(1)
 	{
 		err=glGetError();
 		if(err!=GL_NO_ERROR)
 		{
-			glErrorCount++;
+			errorCount++;
 			LOG(LOG_ERROR,_("GL error ")<< err);
 		}
 		else
 			break;
 	}
 
-	if(glErrorCount)
+	if(errorCount)
 	{
-		LOG(LOG_ERROR,_("Ignoring ") << glErrorCount << _(" openGL errors"));
+		LOG(LOG_ERROR,_("Ignoring ") << errorCount << _(" openGL errors"));
 	}
 #else
 	while(glGetError()!=GL_NO_ERROR);
@@ -98,45 +99,7 @@ TextureBuffer::TextureBuffer(bool initNow, uint32_t w, uint32_t h, GLenum f):tex
 	width(w),height(h),horizontalAlignment(1),verticalAlignment(1),inited(false)
 {
 	if(initNow)
-		init();
-}
-
-void TextureBuffer::init()
-{
-	assert(!inited);
-	inited=true;
-	cleanGLErrors();
-	
-	setAllocSize(width,height);
-	assert(texId==0);
-	glGenTextures(1,&texId);
-	assert(texId!=0);
-	assert(glGetError()!=GL_INVALID_OPERATION);
-	
-	assert(filtering==GL_NEAREST || filtering==GL_LINEAR);
-	
-	//If the previous call has not failed these should not fail (in specs, we trust)
-	glBindTexture(GL_TEXTURE_2D,texId);
-	glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,filtering);
-	glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,filtering);
-	//Wrapping should not be very useful, we use textures carefully
-	//glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,GL_CLAMP);
-	
-	//Allocate the texture
-	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, allocWidth, allocHeight, 0, GL_BGRA, GL_UNSIGNED_BYTE, 0);
-	GLenum err=glGetError();
-	assert(err!=GL_INVALID_OPERATION);
-	if(err==GL_INVALID_VALUE)
-	{
-		LOG(LOG_ERROR,_("GL_INVALID_VALUE after glTexImage2D, width=") << allocWidth << _(" height=") << allocHeight);
-		throw RunTimeException("GL_INVALID_VALUE in TextureBuffer::init");
-	}
-	
-	glBindTexture(GL_TEXTURE_2D,0);
-	
-#ifdef EXPENSIVE_DEBUG
-	cleanGLErrors();
-#endif
+		init(w, h, f);
 }
 
 void TextureBuffer::init(uint32_t w, uint32_t h, GLenum f)
@@ -208,23 +171,6 @@ void TextureBuffer::resize(uint32_t w, uint32_t h)
 	}
 }
 
-void TextureBuffer::setBGRAData(uint8_t* bgraData, uint32_t w, uint32_t h)
-{
-	cleanGLErrors();
-
-	//First of all resize the texture (if needed)
-	resize(w, h);
-
-	glBindTexture(GL_TEXTURE_2D,texId);
-
-	glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, width, height, GL_BGRA, GL_UNSIGNED_BYTE, bgraData);
-	assert(glGetError()==GL_NO_ERROR);
-	
-#ifdef EXPENSIVE_DEBUG
-	cleanGLErrors();
-#endif
-}
-
 void TextureBuffer::setRequestedAlignment(uint32_t w, uint32_t h)
 {
 	assert(w && h);
@@ -276,9 +222,7 @@ TextureBuffer::~TextureBuffer()
 MatrixApplier::MatrixApplier()
 {
 	//First of all try to preserve current matrix
-	glPushMatrix();
-	if(glGetError()==GL_STACK_OVERFLOW)
-		throw RunTimeException("GL matrix stack exceeded");
+	lsglPushMatrix();
 
 	//TODO: implement smart stack flush
 	//Save all the current stack, compute using SSE the final matrix and push that one
@@ -289,27 +233,26 @@ MatrixApplier::MatrixApplier()
 MatrixApplier::MatrixApplier(const MATRIX& m)
 {
 	//First of all try to preserve current matrix
-	glPushMatrix();
-	if(glGetError()==GL_STACK_OVERFLOW)
-	{
-		::abort();
-	}
+	lsglPushMatrix();
 
 	float matrix[16];
 	m.get4DMatrix(matrix);
-	glMultMatrixf(matrix);
+	lsglMultMatrixf(matrix);
+	rt->setMatrixUniform(LSGL_MODELVIEW);
 }
 
 void MatrixApplier::concat(const MATRIX& m)
 {
 	float matrix[16];
 	m.get4DMatrix(matrix);
-	glMultMatrixf(matrix);
+	lsglMultMatrixf(matrix);
+	rt->setMatrixUniform(LSGL_MODELVIEW);
 }
 
 void MatrixApplier::unapply()
 {
-	glPopMatrix();
+	lsglPopMatrix();
+	rt->setMatrixUniform(LSGL_MODELVIEW);
 }
 
 TextureChunk::TextureChunk(uint32_t w, uint32_t h)
@@ -394,10 +337,10 @@ bool TextureChunk::resizeIfLargeEnough(uint32_t w, uint32_t h)
 	return false;
 }
 
-CairoRenderer::CairoRenderer(ASObject* _o, CachedSurface& _t, const std::vector<GeomToken>& _g, const MATRIX& _m,
-		int32_t _x, int32_t _y, int32_t _w, int32_t _h, float _s)
-	: owner(_o),surface(_t),matrix(_m),xOffset(_x),yOffset(_y),width(_w),height(_h),
-	surfaceBytes(NULL),tokens(_g),scaleFactor(_s),uploadNeeded(true)
+CairoRenderer::CairoRenderer(ASObject* _o, CachedSurface& _t, const MATRIX& _m,
+		int32_t _x, int32_t _y, int32_t _w, int32_t _h, float _s, float _a)
+	: owner(_o),surface(_t),matrix(_m),xOffset(_x),yOffset(_y),alpha(_a),width(_w),height(_h),
+	surfaceBytes(NULL),scaleFactor(_s),uploadNeeded(true)
 {
 	owner->incRef();
 }
@@ -427,6 +370,7 @@ const TextureChunk& CairoRenderer::getTexture()
 		surface.tex=sys->getRenderThread()->allocateTexture(width, height,false);
 	surface.xOffset=xOffset;
 	surface.yOffset=yOffset;
+	surface.alpha=alpha;
 	return surface.tex;
 }
 
@@ -462,7 +406,7 @@ void CairoRenderer::jobFence()
 		delete this;
 }
 
-void CairoRenderer::quadraticBezier(cairo_t* cr, double control_x, double control_y, double end_x, double end_y)
+void CairoTokenRenderer::quadraticBezier(cairo_t* cr, double control_x, double control_y, double end_x, double end_y)
 {
 	double start_x, start_y;
 	cairo_get_current_point(cr, &start_x, &start_y);
@@ -476,7 +420,7 @@ void CairoRenderer::quadraticBezier(cairo_t* cr, double control_x, double contro
 	               end_x, end_y);
 }
 
-cairo_pattern_t* CairoRenderer::FILLSTYLEToCairo(const FILLSTYLE& style, double scaleCorrection)
+cairo_pattern_t* CairoTokenRenderer::FILLSTYLEToCairo(const FILLSTYLE& style, double scaleCorrection)
 {
 	cairo_pattern_t* pattern = NULL;
 
@@ -560,10 +504,7 @@ cairo_pattern_t* CairoRenderer::FILLSTYLEToCairo(const FILLSTYLE& style, double 
 			cairo_surface_destroy(surface);
 
 			cairo_matrix_t mat = MATRIXToCairo(style.Matrix);
-			#ifndef NDEBUG
-			cairo_status_t st =
-			#endif
-			cairo_matrix_invert(&mat);
+			cairo_status_t st = cairo_matrix_invert(&mat);
 			assert(st == CAIRO_STATUS_SUCCESS);
 			mat.x0 /= scaleCorrection;
 			mat.y0 /= scaleCorrection;
@@ -592,7 +533,7 @@ cairo_pattern_t* CairoRenderer::FILLSTYLEToCairo(const FILLSTYLE& style, double 
 	return pattern;
 }
 
-bool CairoRenderer::cairoPathFromTokens(cairo_t* cr, const std::vector<GeomToken>& tokens, double scaleCorrection, bool skipPaint)
+bool CairoTokenRenderer::cairoPathFromTokens(cairo_t* cr, const std::vector<GeomToken>& tokens, double scaleCorrection, bool skipPaint)
 {
 	cairo_scale(cr, scaleCorrection, scaleCorrection);
 
@@ -706,22 +647,24 @@ bool CairoRenderer::cairoPathFromTokens(cairo_t* cr, const std::vector<GeomToken
 				cairo_set_operator(stroke_cr, CAIRO_OPERATOR_DEST);
 				break;
 			default:
-				::abort();
+				assert(false);
 		}
 	}
 
 	#undef PATH
 
-	if(skipPaint)
-		return empty;
-
-	cairo_fill(cr);
-	cairo_stroke(stroke_cr);
+	if(!skipPaint)
+	{
+		cairo_fill(cr);
+		cairo_stroke(stroke_cr);
+	}
 
 	cairo_pattern_t *stroke_pattern = cairo_pop_group(stroke_cr);
 	cairo_set_source(cr, stroke_pattern);
 	cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
-	cairo_paint(cr);
+
+	if(!skipPaint)
+		cairo_paint(cr);
 
 	cairo_pattern_destroy(stroke_pattern);
 	cairo_destroy(stroke_cr);
@@ -729,7 +672,7 @@ bool CairoRenderer::cairoPathFromTokens(cairo_t* cr, const std::vector<GeomToken
 	return empty;
 }
 
-void CairoRenderer::cairoClean(cairo_t* cr) const
+void CairoRenderer::cairoClean(cairo_t* cr)
 {
 	cairo_set_source_rgba(cr, 0, 0, 0, 0);
 	cairo_set_operator (cr, CAIRO_OPERATOR_SOURCE);
@@ -745,22 +688,31 @@ cairo_surface_t* CairoRenderer::allocateSurface()
 	return cairo_image_surface_create_for_data(surfaceBytes, CAIRO_FORMAT_ARGB32, width, height, cairoWidthStride);
 }
 
+void CairoTokenRenderer::executeDraw(cairo_t* cr)
+{
+	cairo_set_operator (cr, CAIRO_OPERATOR_OVER);
+	cairo_set_fill_rule(cr, CAIRO_FILL_RULE_EVEN_ODD);
+
+	cairoPathFromTokens(cr, tokens, scaleFactor, false);
+}
+
 void CairoRenderer::execute()
 {
 	if(width==0 || height==0)
 	{
-		//Nothing to do, move on
-		uploadNeeded=false;
+		uploadNeeded = false;
 		return;
 	}
+
 	int32_t windowWidth=sys->getRenderThread()->windowWidth;
 	int32_t windowHeight=sys->getRenderThread()->windowHeight;
 	//Discard stuff that it's outside the visible part
 	if(xOffset >= windowWidth || yOffset >= windowHeight)
 	{
-		uploadNeeded=false;
+		uploadNeeded = false;
 		return;
 	}
+
 	//Clip the size to the screen borders
 	if((width+xOffset) > windowWidth)
 		width=windowWidth-xOffset;
@@ -769,6 +721,7 @@ void CairoRenderer::execute()
 	cairo_surface_t* cairoSurface=allocateSurface();
 
 	cairo_t* cr=cairo_create(cairoSurface);
+	cairo_surface_destroy(cairoSurface); /* cr has an reference to it */
 	cairoClean(cr);
 
 	//Make sure the rendering starts at 0,0 in surface coordinates
@@ -778,16 +731,12 @@ void CairoRenderer::execute()
 	const cairo_matrix_t& mat=MATRIXToCairo(matrix);
 	cairo_transform(cr, &mat);
 
-	cairo_set_operator (cr, CAIRO_OPERATOR_OVER);
-	cairo_set_fill_rule(cr, CAIRO_FILL_RULE_EVEN_ODD);
-
-	cairoPathFromTokens(cr, tokens, scaleFactor, false);
+	executeDraw(cr);
 
 	cairo_destroy(cr);
-	cairo_surface_destroy(cairoSurface);
 }
 
-bool CairoRenderer::hitTest(const std::vector<GeomToken>& tokens, float scaleFactor, number_t x, number_t y)
+bool CairoTokenRenderer::hitTest(const std::vector<GeomToken>& tokens, float scaleFactor, number_t x, number_t y)
 {
 	cairo_surface_t* cairoSurface=cairo_image_surface_create_for_data(NULL, CAIRO_FORMAT_ARGB32, 0, 0, 0);
 
@@ -795,10 +744,40 @@ bool CairoRenderer::hitTest(const std::vector<GeomToken>& tokens, float scaleFac
 	bool empty=cairoPathFromTokens(cr, tokens, scaleFactor, true);
 	bool ret=false;
 	if(!empty)
+	{
+		/* reset the matrix so x and y are not scaled
+		 * by the current cairo transformation
+		 */
+		cairo_identity_matrix(cr);
 		ret=cairo_in_fill(cr, x, y);
+	}
 	cairo_destroy(cr);
 	cairo_surface_destroy(cairoSurface);
 	return ret;
+}
+
+bool CairoTokenRenderer::isOpaque(const std::vector<GeomToken>& tokens, float scaleFactor, number_t x, number_t y)
+{
+	//We render the alpha value of a single pixel, hopefully this is not too slow
+	int32_t cairoWidthStride=cairo_format_stride_for_width(CAIRO_FORMAT_A8, 1);
+	uint8_t* pixelBytes=new uint8_t[cairoWidthStride];
+	cairo_surface_t* cairoSurface=cairo_image_surface_create_for_data(pixelBytes, CAIRO_FORMAT_A8, 1, 1, cairoWidthStride);
+
+	cairo_t* cr=cairo_create(cairoSurface);
+	cairoClean(cr);
+
+	//Make sure the rendering starts at 0,0 in surface coordinates
+	cairo_translate(cr, -x, -y);
+
+	cairo_set_operator (cr, CAIRO_OPERATOR_OVER);
+	cairo_set_fill_rule(cr, CAIRO_FILL_RULE_EVEN_ODD);
+
+	cairoPathFromTokens(cr, tokens, scaleFactor, false);
+
+	cairo_destroy(cr);
+	cairo_surface_destroy(cairoSurface);
+	//CHECK: the condition is alpha > 0x00 or alpha==0xff
+	return pixelBytes[0]!=0x00;
 }
 
 uint8_t* CairoRenderer::convertBitmapToCairo(uint8_t* inData, uint32_t width, uint32_t height)
@@ -820,4 +799,37 @@ uint8_t* CairoRenderer::convertBitmapToCairo(uint8_t* inData, uint32_t width, ui
 		}
 	}
 	return outData;
+}
+
+Mutex CairoPangoRenderer::pangoMutex("pangoMutex");
+
+void CairoPangoRenderer::executeDraw(cairo_t* cr)
+{
+	/* TODO: pango is not fully thread-safe,
+	 * but we may be able to use finer grained locking.
+	 */
+	Locker l(pangoMutex);
+	PangoLayout* layout;
+	PangoFontDescription* desc;
+
+	layout = pango_cairo_create_layout(cr);
+	pango_layout_set_text(layout, textData.text.raw_buf(), -1);
+
+	/* setup font description */
+	desc = pango_font_description_new();
+	pango_font_description_set_family(desc, textData.format.font.raw_buf());
+	pango_font_description_set_size(desc, PANGO_SCALE*textData.format.size);
+	pango_layout_set_font_description(layout, desc);
+	pango_font_description_free(desc);
+
+	if(textData.background)
+	{
+		cairo_set_source_rgb (cr, textData.backgroundColor.Red, textData.backgroundColor.Green, textData.backgroundColor.Blue);
+		cairo_paint(cr);
+	}
+	cairo_set_source_rgb (cr, textData.textColor.Red, textData.textColor.Green, textData.textColor.Blue);
+	/* draw the text */
+	pango_cairo_show_layout(cr, layout);
+
+	g_object_unref(layout);
 }

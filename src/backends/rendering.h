@@ -21,10 +21,12 @@
 #define RENDERING_H
 
 #include "timer.h"
-#include <FTGL/ftgl.h>
 
 namespace lightspark
 {
+
+enum VertexAttrib { VERTEX_ATTRIB=0, COLOR_ATTRIB, TEXCOORD_ATTRIB};
+enum LSGL_MATRIX {LSGL_PROJECTION=0, LSGL_MODELVIEW};
 
 class RenderThread: public ITickJob
 {
@@ -34,11 +36,10 @@ private:
 	pthread_t t;
 	enum STATUS { CREATED=0, STARTED, TERMINATED };
 	STATUS status;
-	static void* sdl_worker(RenderThread*);
-#ifdef COMPILE_PLUGIN
-	NPAPI_params* npapi_params;
-	static void* gtkplug_worker(RenderThread*);
-#endif
+
+	const EngineData* engineData;
+	static void* worker(RenderThread*);
+
 	void commonGLInit(int width, int height);
 	void commonGLResize();
 	void commonGLDeinit();
@@ -104,7 +105,8 @@ private:
 	/*
 		Common code to handle the core of the rendering
 	*/
-	void coreRendering(FTFont& font);
+	void coreRendering();
+	void plotProfilingData();
 	Semaphore initialized;
 	class MaskData
 	{
@@ -114,19 +116,26 @@ private:
 		MaskData(DisplayObject* _d, const MATRIX& _m):d(_d),m(_m){}
 	};
 	std::vector<MaskData> maskStack;
+
+	static void SizeAllocateCallback(GtkWidget* widget, GdkRectangle* allocation, gpointer data);
 public:
 	RenderThread(SystemState* s);
 	~RenderThread();
-	void start(ENGINE e,void* param);
+	/**
+	   The EngineData object must survive for the whole life of this RenderThread
+	*/
+	void start(const EngineData* data);
 	/*
 	   The stop function should be call on exit even if the thread is not started
 	*/
 	void stop();
 	void wait();
 	void draw(bool force);
+
 	//The calling context MUST call this function with the transformation matrix ready
-	void glAcquireTempBuffer(number_t xmin, number_t xmax, number_t ymin, number_t ymax);
-	void glBlitTempBuffer(number_t xmin, number_t xmax, number_t ymin, number_t ymax);
+	//void acquireTempBuffer(number_t xmin, number_t xmax, number_t ymin, number_t ymax);
+	//void blitTempBuffer(number_t xmin, number_t xmax, number_t ymin, number_t ymax);
+
 	/**
 		Allocates a chunk from the shared texture
 	*/
@@ -138,7 +147,7 @@ public:
 	/**
 		Render a quad of given size using the given chunk
 	*/
-	void renderTextured(const TextureChunk& chunk, uint32_t x, uint32_t y, uint32_t w, uint32_t h);
+	void renderTextured(const TextureChunk& chunk, int32_t x, int32_t y, uint32_t w, uint32_t h);
 	/**
 		Load the given data in the given texture chunk
 	*/
@@ -187,7 +196,23 @@ public:
 	uint32_t windowWidth;
 	uint32_t windowHeight;
 	bool hasNPOTTextures;
-	int fragmentTexScaleUniform;
+	GLint fragmentTexScaleUniform;
+	GLint yuvUniform;
+	GLint maskUniform;
+	GLint alphaUniform;
+	GLint projectionMatrixUniform;
+	GLint modelviewMatrixUniform;
+
+	void renderErrorPage(RenderThread *rt, bool standalone);
+
+	cairo_t *cairoTextureContext;
+	cairo_surface_t *cairoTextureSurface;
+	uint8_t *cairoTextureData;
+	GLuint cairoTextureID;
+	cairo_t* getCairoContext(int w, int h);
+	void mapCairoTexture(int w, int h);
+	void renderText(cairo_t *cr, const char *text, int x, int y);
+	void setMatrixUniform(LSGL_MATRIX m) const;
 };
 
 };

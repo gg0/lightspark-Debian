@@ -21,7 +21,6 @@
 #define _DECODER_H
 
 #include "compat.h"
-#include <GL/glew.h>
 #include <inttypes.h>
 #include "threading.h"
 #include "graphics.h"
@@ -153,7 +152,6 @@ private:
 		YUVBufferGenerator(uint32_t b):bufferSize(b){}
 		void init(YUVBuffer& buf) const;
 	};
-	GLuint videoBuffers[2];
 	uint32_t curBuffer;
 	uint32_t curBufferOffset;
 	AVCodecContext* codecContext;
@@ -224,7 +222,7 @@ public:
 	*/
 	void* operator new(size_t);
 	void operator delete(void*);
-	AudioDecoder():sampleRate(0){}
+	AudioDecoder():sampleRate(0),channelCount(0),initialTime(-1){}
 	virtual ~AudioDecoder(){};
 	virtual uint32_t decodeData(uint8_t* data, uint32_t datalen, uint32_t time)=0;
 	bool hasDecodedFrames() const DLL_PUBLIC
@@ -260,6 +258,8 @@ public:
 	}
 	uint32_t sampleRate;
 	uint32_t channelCount;
+	//Saves the timestamp of the first decoded frame
+	uint32_t initialTime;
 };
 
 class NullAudioDecoder: public AudioDecoder
@@ -328,7 +328,11 @@ private:
 	uint8_t avioBuffer[4096];
 	static int avioReadPacket(void* t, uint8_t* buf, int buf_size);
 	//NOTE: this will become AVIOContext in FFMpeg 0.7
+#if LIBAVUTIL_VERSION_MAJOR < 51
 	ByteIOContext* avioContext;
+#else
+	AVIOContext* avioContext;
+#endif
 public:
 	FFMpegStreamDecoder(std::istream& s);
 	~FFMpegStreamDecoder();

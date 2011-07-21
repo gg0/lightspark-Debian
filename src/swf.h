@@ -21,7 +21,6 @@
 #define SWF_H
 
 #include "compat.h"
-#include <iostream>
 #include <fstream>
 #include <list>
 #include <map>
@@ -30,17 +29,9 @@
 #include "swftypes.h"
 #include "scripting/flashdisplay.h"
 #include "scripting/flashnet.h"
-#include "scripting/flashsystem.h"
 #include "timer.h"
-#include "backends/audio.h"
-#include "backends/config.h"
-#include "backends/graphics.h"
-#include "backends/pluginmanager.h"
-#include "backends/security.h"
-#include "backends/urlutils.h"
-#include "backends/extscriptobject.h"
 
-#include "platforms/pluginutils.h"
+#include "platforms/engineutils.h"
 
 #ifndef WIN32
 #include <GL/glx.h>
@@ -51,38 +42,46 @@
 namespace lightspark
 {
 
+class ABCVm;
+class AudioManager;
+class Config;
 class DownloadManager;
 class DisplayListTag;
 class DictionaryTag;
-class ABCVm;
+class ExtScriptObject;
 class InputThread;
-class RenderThread;
 class ParseThread;
+class PluginManager;
+class RenderThread;
+class SecurityManager;
 class Tag;
 
 //RootMovieClip is used as a ThreadJob for timed rendering purpose
-class RootMovieClip: public MovieClip, public ITickJob
+class RootMovieClip: public MovieClip
 {
 friend class ParseThread;
 protected:
 	Mutex mutex;
-	bool initialized;
 	URLInfo origin;
-	void tick();
 private:
 	//Semaphore to wait for new frames to be available
 	sem_t new_frame;
 	bool parsingIsFailed;
 	RGB Background;
 	Spinlock dictSpinlock;
-	std::list < DictionaryTag* > dictionary;
+	std::list < _R<DictionaryTag> > dictionary;
 	//frameSize and frameRate are valid only after the header has been parsed
 	RECT frameSize;
 	float frameRate;
 	bool toBind;
 	tiny_string bindName;
-	Mutex mutexChildrenClips;
-	std::set<MovieClip*> childrenClips;
+	void constructionComplete();
+	/* those are private because you shouldn't call sys->*,
+	 * but sys->getStage()->* instead.
+	 */
+	void initFrame();
+	void advanceFrame();
+	void setOnStage(bool staged);
 public:
 	RootMovieClip(LoaderInfo* li, bool isSys=false);
 	~RootMovieClip();
@@ -94,25 +93,20 @@ public:
 	RECT getFrameSize() const;
 	float getFrameRate() const;
 	void setFrameRate(float f);
-	void setOnStage(bool staged);
-	void addToDictionary(DictionaryTag* r);
-	DictionaryTag* dictionaryLookup(int id);
+	void addToDictionary(_R<DictionaryTag> r);
+	_R<DictionaryTag> dictionaryLookup(int id);
 	void labelCurrentFrame(const STRING& name);
 	void commitFrame(bool another);
 	void revertFrame();
-	void Render(bool maskEnabled);
 	void parsingFailed();
-	bool getBounds(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const;
+	bool boundsRect(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const;
 	void bindToName(const tiny_string& n);
-	void initialize();
 	void DLL_PUBLIC setOrigin(const tiny_string& u, const tiny_string& filename="");
 	URLInfo& getOrigin() DLL_PUBLIC { return origin; };
 /*	ASObject* getVariableByQName(const tiny_string& name, const tiny_string& ns);
 	void setVariableByQName(const tiny_string& name, const tiny_string& ns, ASObject* o);
 	void setVariableByMultiname(multiname& name, ASObject* o);
 	void setVariableByString(const std::string& s, ASObject* o);*/
-	void registerChildClip(MovieClip* clip);
-	void unregisterChildClip(MovieClip* clip);
 	static RootMovieClip* getInstance(LoaderInfo* li);
 	//DisplayObject interface
 	_NR<RootMovieClip> getRoot();
@@ -139,10 +133,10 @@ public:
 	void accountTime(uint32_t time);
 	void setTag(const std::string& tag);
 	void tick();
-	void plot(uint32_t max, FTFont* font);
+	void plot(uint32_t max, cairo_t* cr);
 };
 
-class SystemState: public RootMovieClip
+class SystemState: public RootMovieClip, public ITickJob
 {
 private:
 	class EngineCreator: public IThreadJob
@@ -165,8 +159,7 @@ private:
 	bool shutdown;
 	RenderThread* renderThread;
 	InputThread* inputThread;
-	NPAPI_params npapiParams;
-	ENGINE engine;
+	EngineData* engineData;
 	void startRenderTicks();
 	/**
 		Create the rendering and input engines
@@ -177,11 +170,10 @@ private:
 	/**
 	  	Destroys all the engines used in lightspark: timer, thread pool, vm...
 	*/
-#ifdef COMPILE_PLUGIN
+	void stopEngines();
+
 	static void delayedCreation(SystemState* th);
 	static void delayedStopping(SystemState* th);
-#endif
-	void stopEngines();
 	//Useful to wait for complete download of the SWF
 	Semaphore fileDumpAvailable;
 	tiny_string dumpedSWFPath;
@@ -221,14 +213,6 @@ private:
 	   The lock for the invalidate queue
 	*/
 	Spinlock invalidateQueueLock;
-	/*
-	   Vector to keep track of the created tags
-	*/
-	std::vector<Tag*> tagsStorage;
-	/*
-	   The lock for the tags storage
-	*/
-	Spinlock tagsStorageLock;
 #ifdef PROFILING_SUPPORT
 	/*
 	   Output file for the profiling data
@@ -237,10 +221,10 @@ private:
 #endif
 public:
 	void setURL(const tiny_string& url) DLL_PUBLIC;
-	ENGINE getEngine() DLL_PUBLIC { return engine; };
 
 	//Interative analysis flags
 	bool showProfilingData;
+	bool standalone;
 	
 	std::string errorCause;
 	void setError(const std::string& c);
@@ -254,7 +238,7 @@ public:
 	void wait() DLL_PUBLIC;
 	RenderThread* getRenderThread() const { return renderThread; }
 	InputThread* getInputThread() const { return inputThread; }
-	void setParamsAndEngine(ENGINE e, NPAPI_params* p) DLL_PUBLIC;
+	void setParamsAndEngine(EngineData* e, bool s) DLL_PUBLIC;
 	void setDownloadedPath(const tiny_string& p) DLL_PUBLIC;
 	void enableGnashFallback() DLL_PUBLIC;
 	void needsAVM2(bool n);
@@ -339,6 +323,9 @@ public:
 	void addToInvalidateQueue(_R<DisplayObject> d);
 	void flushInvalidationQueue();
 
+	//Resize support
+	void resizeCompleted() const;
+
 #ifdef PROFILING_SUPPORT
 	void setProfilingOutput(const tiny_string& t) DLL_PUBLIC;
 	const tiny_string& getProfilingOutput() const;
@@ -353,6 +340,7 @@ public:
 	RootMovieClip* root;
 	int version;
 	bool useAVM2;
+	bool useNetwork;
 	ParseThread(RootMovieClip* r,std::istream& in) DLL_PUBLIC;
 	~ParseThread();
 	enum FILE_TYPE { NONE=0, SWF, COMPRESSED_SWF, PNG, JPEG, GIF };

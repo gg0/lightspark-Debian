@@ -616,6 +616,8 @@ bool NPScriptObject::invoke(NPIdentifier id, const NPVariant* args, uint32_t arg
 	if(it == methods.end())
 		return false;
 
+	LOG(LOG_CALLS,"Plugin callback from the browser: " << objId.getString());
+
 	// Convert raw arguments to objects
 	const lightspark::ExtVariant* objArgs[argc];
 	for(uint32_t i = 0; i < argc; i++)
@@ -748,7 +750,7 @@ bool NPScriptObject::enumerate(lightspark::ExtIdentifier*** ids, uint32_t* count
 
 // ExtScriptObject interface: calling external methods
 bool NPScriptObject::callExternal(const lightspark::ExtIdentifier& id,
-		const lightspark::ExtVariant** args, uint32_t argc, lightspark::ExtVariant** result)
+		const lightspark::ExtVariant** args, uint32_t argc, lightspark::ASObject** result)
 {
 	// Make sure we are the only external call being executed
 	sem_wait(&mutex);
@@ -771,13 +773,30 @@ bool NPScriptObject::callExternal(const lightspark::ExtIdentifier& id,
 	// Used to signal completion of asynchronous external call
 	sem_t callStatus;
 	sem_init(&callStatus, 0, 0);
-	// Add this callStatus semaphore to the list of running call statusses to be cleaned up on shutdown
+	// Add this callStatus semaphore to the list of running call statuses to be cleaned up on shutdown
 	callStatusses.push(&callStatus);
-	std::string scriptString = "(" + id.getString() + ")";
+	//We forge an anonymous function with the right number of arguments
+	std::string argsString;
+	for(uint32_t i=0;i<argc;i++)
+	{
+		char buf[20];
+		if((i+1)==argc)
+			snprintf(buf,20,"a%u",i);
+		else
+			snprintf(buf,20,"a%u,",i);
+		argsString += buf;
+	}
+
+	std::string scriptString = "(function(";
+	scriptString += argsString;
+	scriptString += ") { return (" + id.getString();
+	scriptString += ")(" + argsString + "); })";
+
+	LOG(LOG_CALLS,"Invoking " << scriptString << " in the browser ");
+
 	EXT_CALL_DATA data = {
 		&mainThread,
 		instance,
-		NPIdentifierObject(id).getNPIdentifier(),
 		scriptString.c_str(),
 		args,
 		argc,
@@ -825,9 +844,14 @@ bool NPScriptObject::callExternal(const lightspark::ExtIdentifier& id,
 	sem_post(&mutex);
 	return success;
 }
+
 void NPScriptObject::callExternal(void* d)
 {
 	EXT_CALL_DATA* data = static_cast<EXT_CALL_DATA*>(d);
+	nsPluginInstance* plugin = (nsPluginInstance*)data->instance->pdata;
+	lightspark::SystemState* prevSys = sys;
+	sys=plugin->m_sys;
+
 
 	// Assert we are in the main plugin thread
 	assert(pthread_equal(pthread_self(), *data->mainThread));
@@ -835,69 +859,55 @@ void NPScriptObject::callExternal(void* d)
 	// This will hold the result from our NPN_Invoke(Default) call
 	NPVariant resultVariant;
 
-	// These will get passed as arguments to NPN_Invoke(Default)
-	NPVariant variantArgs[data->argc];
-	for(uint32_t i = 0; i < data->argc; i++)
-		NPVariantObject(data->instance, *(data->args[i])).copy(variantArgs[i]);
-
 	NPObject* windowObject;
 	NPN_GetValue(data->instance, NPNVWindowNPObject, &windowObject);
 
-	// Lets try to invoke the identifier as if it is a function name
-	*(data->success) = NPN_Invoke(data->instance, windowObject, data->id,
-				variantArgs, data->argc, &resultVariant);
-	if(!*(data->success))
-	{
-		// Simple invoke failed, now try to evaluate the "identifier" as a script
-		NPString script;
-		script.UTF8Characters = data->scriptString;
-		script.UTF8Length = strlen(data->scriptString);
-		*(data->success) = NPN_Evaluate(data->instance, windowObject, &script, &resultVariant);
+	NPString script;
+	script.UTF8Characters = data->scriptString;
+	script.UTF8Length = strlen(data->scriptString);
+	*(data->success) = NPN_Evaluate(data->instance, windowObject, &script, &resultVariant);
 
-		if(*(data->success) && NPVARIANT_IS_OBJECT(resultVariant))
+	//Evaluate should have returned a function object, if not bail out
+	if(*(data->success))
+	{
+		//SUCCESS
+		if(!NPVARIANT_IS_OBJECT(resultVariant))
 		{
-			// Evaluate didn't fail AND returned an object, lets try to invoke this object.
-			// An edge case which we can't handle is when the evaluation itself ran a function
-			// which returned another function.
-			// In this case both the first function and the second function will be called.
-			// Example:
-			// Identifier:          test()
-			// Definition of test:  function test() { alert('I meant to display this.'); return test2; }
-			// Definition of test2: function test2() { alert('I didnt mean to display this.'); }
-			// Running will result in both alerts popping up, while only  the first was meant to pop up.
+			//Something very wrong happended, our forged function is not a function!
+			LOG(LOG_ERROR,"Could not evaluate wrapper function in external interface");
+		}
+		else
+		{
+			// These will get passed as arguments to NPN_Invoke(Default)
+			NPVariant variantArgs[data->argc];
+			for(uint32_t i = 0; i < data->argc; i++)
+				NPVariantObject(data->instance, *(data->args[i])).copy(variantArgs[i]);
+
 			NPVariant evalResult = resultVariant;
 			NPObject* evalObj = NPVARIANT_TO_OBJECT(resultVariant);
-			bool evalSuccess = *(data->success);
 			// Lets try to invoke the default function on the object returned by the evaluation
 			*(data->success) = NPN_InvokeDefault(data->instance, evalObj,
 						variantArgs, data->argc, &resultVariant);
-			if(!*(data->success))
+
+			//Release the result fo the evaluation
+			NPN_ReleaseVariantValue(&evalResult);
+
+			// Release the converted arguments
+			for(uint32_t i = 0; i < data->argc; i++)
+				NPN_ReleaseVariantValue(&(variantArgs[i]));
+
+			if(*(data->success))
 			{
-				// Invocation of default function failed, it seems the evaluation didn't return a function.
-				// Restore previous results.
-				resultVariant = evalResult;
-				*(data->success) = evalSuccess;
+				NPVariantObject tmp(data->instance, resultVariant);
+				*(data->result) = tmp.getASObject();
+				NPN_ReleaseVariantValue(&resultVariant);
 			}
-			else
-			{
-				// Invocation of the default function succeeded, lets release the intermediate object.
-				NPN_ReleaseVariantValue(&evalResult);
-			}
+
 		}
 	}
 
-	// If NPN_Invoke(Default) succeeded, convert & copy its result and release it.
-	if(*(data->success))
-	{
-		*(data->result) = new NPVariantObject(data->instance, resultVariant);
-		NPN_ReleaseVariantValue(&resultVariant);
-	}
-
-	// Release the converted arguments
-	for(uint32_t i = 0; i < data->argc; i++)
-		NPN_ReleaseVariantValue(&(variantArgs[i]));
-
 	sem_post(data->callStatus);
+	sys=prevSys;
 }
 
 void NPScriptObject::setException(const std::string& message) const

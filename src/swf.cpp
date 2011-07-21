@@ -29,9 +29,12 @@
 #include "parsing/streams.h"
 #include "asobject.h"
 #include "scripting/class.h"
+#include "backends/audio.h"
+#include "backends/config.h"
+#include "backends/pluginmanager.h"
 #include "backends/rendering.h"
+#include "backends/security.h"
 
-#include "SDL.h"
 #include <GL/glew.h>
 #ifdef ENABLE_CURL
 #include <curl/curl.h>
@@ -45,17 +48,15 @@ extern "C" {
 }
 #endif
 
-#ifdef COMPILE_PLUGIN
 #include <gdk/gdkx.h>
-#endif
 
 using namespace std;
 using namespace lightspark;
 
 extern TLSDATA ParseThread* pt;
 
-RootMovieClip::RootMovieClip(LoaderInfo* li, bool isSys):mutex("mutexRoot"),initialized(false),parsingIsFailed(false),frameRate(0),
-	toBind(false),mutexChildrenClips("mutexChildrenClips")
+RootMovieClip::RootMovieClip(LoaderInfo* li, bool isSys):mutex("mutexRoot"),parsingIsFailed(false),frameRate(0),
+	toBind(false)
 {
 	this->incRef();
 	sem_init(&new_frame,0,0);
@@ -70,8 +71,6 @@ RootMovieClip::RootMovieClip(LoaderInfo* li, bool isSys):mutex("mutexRoot"),init
 
 RootMovieClip::~RootMovieClip()
 {
-	if(this!=sys)
-		sys->removeJob(this);
 	sem_destroy(&new_frame);
 }
 
@@ -106,20 +105,6 @@ void RootMovieClip::setOrigin(const tiny_string& u, const tiny_string& filename)
 	}
 }
 
-void RootMovieClip::registerChildClip(MovieClip* clip)
-{
-	Locker l(mutexChildrenClips);
-	clip->incRef();
-	childrenClips.insert(clip);
-}
-
-void RootMovieClip::unregisterChildClip(MovieClip* clip)
-{
-	Locker l(mutexChildrenClips);
-	if(childrenClips.erase(clip))
-		clip->decRef();
-}
-
 void SystemState::registerEnterFrameListener(DisplayObject* obj)
 {
 	Locker l(mutexEnterFrameListeners);
@@ -133,13 +118,6 @@ void SystemState::unregisterEnterFrameListener(DisplayObject* obj)
 	if(enterFrameListeners.erase(obj))
 		obj->decRef();
 }
-
-void SystemState::registerTag(Tag* t)
-{
-	SpinlockLocker l(tagsStorageLock);
-	tagsStorage.push_back(t);
-}
-
 void RootMovieClip::setOnStage(bool staged)
 {
 	MovieClip::setOnStage(staged);
@@ -176,7 +154,7 @@ void SystemState::staticDeinit()
 
 SystemState::SystemState(ParseThread* parseThread, uint32_t fileSize):
 	RootMovieClip(NULL,true),renderRate(0),error(false),shutdown(false),
-	renderThread(NULL),inputThread(NULL),engine(NONE),fileDumpAvailable(0),
+	renderThread(NULL),inputThread(NULL),engineData(NULL),fileDumpAvailable(0),
 	waitingForDump(false),vmVersion(VMNONE),childPid(0),useGnashFallback(false),
 	parameters(NullRef),mutexEnterFrameListeners("mutexEnterFrameListeners"),
 	invalidateQueueHead(NullRef),invalidateQueueTail(NullRef),showProfilingData(false),
@@ -204,14 +182,14 @@ SystemState::SystemState(ParseThread* parseThread, uint32_t fileSize):
 	loaderInfo->setBytesLoaded(fileSize);
 	loaderInfo->setBytesTotal(fileSize);
 	stage=Class<Stage>::getInstanceS();
-	stage->incRef();
-	setParent(_MR(stage));
+	this->incRef();
+	stage->_addChildAt(_MR(this),0);
 	startTime=compat_msectiming();
 	
 	setPrototype(Class<MovieClip>::getClass());
 
 	//Override getStage as for SystemState that can't be null
-	setGetterByQName("stage","",Class<IFunction>::getFunction(_getStage),false);
+	setDeclaredMethodByQName("stage","",Class<IFunction>::getFunction(_getStage),GETTER_METHOD,false);
 
 	renderThread=new RenderThread(this);
 	inputThread=new InputThread(this);
@@ -283,8 +261,8 @@ void SystemState::parseParametersFromFlashvars(const char* v)
 		if(ok)
 		{
 			//cout << varName << ' ' << varValue << endl;
-			params->setVariableByQName(varName.c_str(),"",
-					lightspark::Class<lightspark::ASString>::getInstanceS(varValue));
+			params->setVariableByQName(varName,"",
+					lightspark::Class<lightspark::ASString>::getInstanceS(varValue),DYNAMIC_TRAIT);
 		}
 		cur=n2+1;
 	}
@@ -306,7 +284,7 @@ void SystemState::parseParametersFromFile(const char* f)
 		getline(i,name);
 		getline(i,value);
 
-		ret->setVariableByQName(name,"",Class<ASString>::getInstanceS(value));
+		ret->setVariableByQName(name,"",Class<ASString>::getInstanceS(value),DYNAMIC_TRAIT);
 	}
 	setParameters(ret);
 	i.close();
@@ -316,7 +294,7 @@ void SystemState::setParameters(_R<ASObject> p)
 {
 	parameters=p;
 	p->incRef();
-	loaderInfo->setVariableByQName("parameters","",p.getPtr());
+	loaderInfo->setVariableByQName("parameters","",p.getPtr(), DECLARED_TRAIT);
 }
 
 _NR<ASObject> SystemState::getParameters() const
@@ -386,6 +364,13 @@ SystemState::~SystemState()
 	assert(shutdown);
 
 	renderThread->stop();
+	/*
+	   Stop the downloads so that the thread pool does not keep waiting for data.
+	   Standalone downloader does not really need this as the downloading threads will
+	   be stopped with the whole thread pool, but in plugin mode this is necessary.
+	*/
+	if(downloadManager)
+		downloadManager->stopAll();
 	//The thread pool should be stopped before everything
 	if(threadPool)
 		threadPool->forceStop();
@@ -416,6 +401,10 @@ SystemState::~SystemState()
 		it->second->cleanUp();
 	}
 
+	//Here we clean the events queue
+	if(currentVm)
+		currentVm->finalize();
+
 	//Destroy all registered classes
 	it=classes.begin();
 	for(;it!=classes.end();++it)
@@ -431,14 +420,11 @@ SystemState::~SystemState()
 	delete timerThread;
 	timerThread=NULL;
 
-	//Also destroy all tags
-	for(unsigned int i=0;i<tagsStorage.size();i++)
-		delete tagsStorage[i];
-
 	delete renderThread;
 	renderThread=NULL;
 	delete inputThread;
 	inputThread=NULL;
+	delete engineData;
 	sem_destroy(&terminated);
 }
 
@@ -487,15 +473,6 @@ void SystemState::setShutdownFlag()
 void SystemState::wait()
 {
 	sem_wait(&terminated);
-	if(engine==SDL)
-	{
-		SDL_Event event;
-		event.type = SDL_USEREVENT;
-		event.user.code = SHUTDOWN;
-		event.user.data1 = 0;
-		event.user.data1 = 0;
-		SDL_PushEvent(&event);
-	}
 	//Acquire the mutex to sure that the engines are not being started right now
 	Locker l(mutex);
 	renderThread->wait();
@@ -541,26 +518,39 @@ void SystemState::enableGnashFallback()
 	f.close();
 }
 
-#ifdef COMPILE_PLUGIN
-
 void SystemState::delayedCreation(SystemState* th)
 {
-	NPAPI_params& p=th->npapiParams;
+	EngineData* d=th->engineData;
 	//Create a plug in the XEmbed window
-	p.container=gtk_plug_new((GdkNativeWindow)p.window);
+	GtkWidget* plug=gtk_plug_new(d->window);
+	if(d->isSizable())
+	{
+		int32_t reqWidth=th->getFrameSize().Xmax/20;
+		int32_t reqHeight=th->getFrameSize().Ymax/20;
+		if(th->standalone)
+			gtk_widget_set_size_request(plug, reqWidth, reqHeight);
+		d->width=reqWidth;
+		d->height=reqHeight;
+	}
+	d->container = plug;
 	//Realize the widget now, as we need the X window
-	gtk_widget_realize(p.container);
+	gtk_widget_realize(plug);
 	//Show it now
-	gtk_widget_show(p.container);
-	gtk_widget_map(p.container);
-	p.window=GDK_WINDOW_XWINDOW(p.container->window);
-	XSync(p.display, False);
+	gtk_widget_show(plug);
+	gtk_widget_map(plug);
+	if (th->standalone)
+	{
+		gtk_widget_set_can_focus(plug, true);
+		gtk_widget_grab_focus(plug);
+	}
+	d->window=GDK_WINDOW_XID(gtk_widget_get_window(plug));
+	XSync(d->display, False);
 	//The lock is needed to avoid thread creation/destruction races
 	Locker l(th->mutex);
 	if(th->shutdown)
 		return;
-	th->renderThread->start(th->engine, &th->npapiParams);
-	th->inputThread->start(th->engine, &th->npapiParams);
+	th->renderThread->start(th->engineData);
+	th->inputThread->start(th->engineData);
 	//If the render rate is known start the render ticks
 	if(th->renderRate)
 		th->startRenderTicks();
@@ -570,12 +560,10 @@ void SystemState::delayedStopping(SystemState* th)
 {
 	sys=th;
 	//This is called from the plugin, also kill the stream
-	th->npapiParams.stopDownloaderHelper(th->npapiParams.helperArg);
+	th->engineData->stopMainDownload();
 	th->stopEngines();
 	sys=NULL;
 }
-
-#endif
 
 void SystemState::createEngines()
 {
@@ -585,9 +573,8 @@ void SystemState::createEngines()
 		//A shutdown request has arrived before the creation of engines
 		return;
 	}
-#ifdef COMPILE_PLUGIN
 	//Check if we should fall back on gnash
-	if(useGnashFallback && engine==GTKPLUG && vmVersion!=AVM2)
+	if(useGnashFallback && vmVersion!=AVM2)
 	{
 		if(dumpedSWFPath.len()==0) //The path is not known yet
 		{
@@ -654,9 +641,9 @@ void SystemState::createEngines()
 			char bufXid[32];
 			char bufWidth[32];
 			char bufHeight[32];
-			snprintf(bufXid,32,"%lu",npapiParams.window);
-			snprintf(bufWidth,32,"%u",npapiParams.width);
-			snprintf(bufHeight,32,"%u",npapiParams.height);
+			snprintf(bufXid,32,"%lu",engineData->window);
+			snprintf(bufWidth,32,"%u",engineData->width);
+			snprintf(bufHeight,32,"%u",engineData->height);
 			string params("FlashVars=");
 			params+=rawParameters;
 			char *const args[] =
@@ -739,35 +726,15 @@ void SystemState::createEngines()
 			//Engines should not be started, stop everything
 			l.unlock();
 			//We cannot stop the engines now, as this is inside a ThreadPool job
-			npapiParams.helper(npapiParams.helperArg, (helper_t)delayedStopping, this);
+			engineData->setupMainThreadCallback((ls_callback_t)delayedStopping, this);
 			return;
 		}
 	}
-#else 
-	//COMPILE_PLUGIN not defined
-	if(useGnashFallback && engine==GTKPLUG && vmVersion!=AVM2)
-	{
-		throw new UnsupportedException("GNASH fallback not available when not built with COMPILE_PLUGIN");
-	}
-#endif
 
-	if(engine==GTKPLUG) //The engines must be created in the context of the main thread
-	{
-#ifdef COMPILE_PLUGIN
-		npapiParams.helper(npapiParams.helperArg, (helper_t)delayedCreation, this);
-#else
-		throw new UnsupportedException("Plugin engine not available when not built with COMPILE_PLUGIN");
-#endif
-	}
-	else //SDL engine
-	{
-		renderThread->start(engine, NULL);
-		inputThread->start(engine, NULL);
-		//If the render rate is known start the render ticks
-		if(renderRate)
-			startRenderTicks();
-	}
 	l.unlock();
+	//The engines must be created in the context of the main thread
+	engineData->setupMainThreadCallback((ls_callback_t)delayedCreation, this);
+
 	renderThread->waitForInitialization();
 	l.lock();
 	//As we lost the lock the shutdown procesure might have started
@@ -790,16 +757,16 @@ void SystemState::needsAVM2(bool n)
 	}
 	else
 		vmVersion=AVM1;
-	if(engine)
+
+	if(engineData)
 		addJob(new EngineCreator);
 }
 
-void SystemState::setParamsAndEngine(ENGINE e, NPAPI_params* p)
+void SystemState::setParamsAndEngine(EngineData* e, bool s)
 {
 	Locker l(mutex);
-	if(p)
-		npapiParams=*p;
-	engine=e;
+	engineData=e;
+	standalone=s;
 	if(vmVersion)
 		addJob(new EngineCreator);
 }
@@ -813,38 +780,6 @@ void SystemState::setRenderRate(float rate)
 	//The requested rate is higher, let's reschedule the job
 	renderRate=rate;
 	startRenderTicks();
-}
-
-void SystemState::tick()
-{
-	RootMovieClip::tick();
-	{
-		SpinlockLocker l(profileDataSpinlock);
-		list<ThreadProfile>::iterator it=profilingData.begin();
-		for(;it!=profilingData.end();++it)
-			it->tick();
-	}
-	//Send enterFrame events, if needed
-	{
-		Locker l(mutexEnterFrameListeners);
-		if(!enterFrameListeners.empty())
-		{
-			_R<Event> e(Class<Event>::getInstanceS("enterFrame"));
-			auto it=enterFrameListeners.begin();
-			for(;it!=enterFrameListeners.end();it++)
-			{
-				(*it)->incRef();
-				getVm()->addEvent(_MR(*it),e);
-			}
-		}
-	}
-	//Enter frame should be sent to the stage too
-	if(stage->hasEventListener("enterFrame"))
-	{
-		_R<Event> e(Class<Event>::getInstanceS("enterFrame"));
-		stage->incRef();
-		getVm()->addEvent(_MR(stage),e);
-	}
 }
 
 void SystemState::addJob(IThreadJob* j)
@@ -964,7 +899,7 @@ void ThreadProfile::tick()
 	}
 }
 
-void ThreadProfile::plot(uint32_t maxTime, FTFont* font)
+void ThreadProfile::plot(uint32_t maxTime, cairo_t *cr)
 {
 	if(data.size()<=1)
 		return;
@@ -978,26 +913,28 @@ void ThreadProfile::plot(uint32_t maxTime, FTFont* font)
 	if(int32_t(data[0].index-start)>0)
 		start=data[0].index;
 	
-	glPushAttrib(GL_TEXTURE_BIT | GL_LINE_BIT);
-	glColor3ub(color.Red,color.Green,color.Blue);
-	glDisable(GL_TEXTURE_2D);
-	glLineWidth(2);
+	cairo_set_source_rgb(cr, float(color.Red)/255, float(color.Green)/255, float(color.Blue)/255);
+	cairo_set_line_width(cr, 2);
 
-	glBegin(GL_LINE_STRIP);
-		for(unsigned int i=0;i<data.size();i++)
+	for(unsigned int i=0;i<data.size();i++)
 		{
+
 			int32_t relx=int32_t(data[i].index-start)*width/len;
-			glVertex2i(relx,data[i].timing*height/maxTime);
+			int32_t rely=data[i].timing*height/maxTime;
+			if (i==0)
+				cairo_move_to(cr,relx,rely);
+			else
+				cairo_line_to(cr,relx,rely);
 		}
-	glEnd();
-	glPopAttrib();
-	
+	cairo_stroke(cr);
+
 	//Draw tags
 	string* curTag=NULL;
 	int curTagX=0;
 	int curTagY=maxTime;
 	int curTagLen=0;
 	int curTagH=0;
+	cairo_text_extents_t te;
 	for(unsigned int i=0;i<data.size();i++)
 	{
 		int32_t relx=int32_t(data[i].index-start)*width/len;
@@ -1005,11 +942,11 @@ void ThreadProfile::plot(uint32_t maxTime, FTFont* font)
 		{
 			//New tag, flush the old one if present
 			if(curTag)
-				font->Render(curTag->c_str() ,-1,FTPoint(curTagX,imax(curTagY-curTagH,0)));
+				rt->renderText(cr, curTag->c_str(),curTagX,imax(curTagY-curTagH,0));
 			//Measure tag
-			FTBBox tagBox=font->BBox(data[i].tag.c_str(),-1);
-			curTagLen=(tagBox.Upper()-tagBox.Lower()).X();
-			curTagH=(tagBox.Upper()-tagBox.Lower()).Y();
+			cairo_text_extents (cr, data[i].tag.c_str(), &te);
+			curTagLen=te.width;
+			curTagH=te.height;
 			curTag=&data[i].tag;
 			curTagX=relx;
 			curTagY=maxTime;
@@ -1021,7 +958,7 @@ void ThreadProfile::plot(uint32_t maxTime, FTFont* font)
 			else
 			{
 				//Tag is before this sample
-				font->Render(curTag->c_str() ,-1,FTPoint(curTagX,imax(curTagY-curTagH,0)));
+				rt->renderText(cr, curTag->c_str(), curTagX, imax(curTagY-curTagH,0));
 				curTag=NULL;
 			}
 		}
@@ -1029,8 +966,9 @@ void ThreadProfile::plot(uint32_t maxTime, FTFont* font)
 }
 
 ParseThread::ParseThread(RootMovieClip* r,istream& in):root(NULL),version(0),useAVM2(false),
-	f(in),zlibFilter(NULL),backend(NULL),isEnded(false),fileType(NONE)
+	useNetwork(false),f(in),zlibFilter(NULL),backend(NULL),isEnded(false),fileType(NONE)
 {
+	f.exceptions ( istream::eofbit | istream::failbit | istream::badbit );
 	root=r;
 	sem_init(&ended,0,0);
 }
@@ -1125,9 +1063,7 @@ void ParseThread::execute()
 		bool empty=true;
 		while(!done)
 		{
-			Tag* tag=factory.readTag();
-			if(tag->getType() != CONTROL_TAG && tag->getType() != ABC_TAG)
-				sys->registerTag(tag);
+			_NR<Tag> tag=factory.readTag();
 			switch(tag->getType())
 			{
 				case END_TAG:
@@ -1143,13 +1079,13 @@ void ParseThread::execute()
 				}
 				case DICT_TAG:
 				{
-					DictionaryTag* d=static_cast<DictionaryTag*>(tag);
+					_R<DictionaryTag> d=tag.cast<DictionaryTag>();
 					d->setLoadedFrom(root);
 					root->addToDictionary(d);
 					break;
 				}
 				case DISPLAY_LIST_TAG:
-					root->addToFrame(static_cast<DisplayListTag*>(tag));
+					root->addToFrame(tag.cast<DisplayListTag>());
 					empty=false;
 					break;
 				case SHOW_TAG:
@@ -1169,16 +1105,15 @@ void ParseThread::execute()
 					//fall through
 				case ABC_TAG:
 				{
-					ControlTag* ctag = static_cast<ControlTag*>(tag);
+					_R<ControlTag> ctag = tag.cast<ControlTag>();
 					ctag->execute(root);
-					delete ctag;
 					break;
 				}
 				case FRAMELABEL_TAG:
 					/* No locking required, as the last frames is not
 					 * commited to the vm yet.
 					 */
-					root->addFrameLabel(root->frames.size()-1,static_cast<FrameLabelTag*>(tag)->Name);
+					root->addFrameLabel(root->frames.size()-1,static_cast<FrameLabelTag*>(tag.getPtr())->Name);
 					empty=false;
 					break;
 				case TAG:
@@ -1195,6 +1130,11 @@ void ParseThread::execute()
 		root->parsingFailed();
 		sys->setError(e.cause);
 	}
+	catch(std::exception& e)
+	{
+		LOG(LOG_ERROR,_("Stream exception in ParseThread"));
+		root->parsingFailed();
+	}
 	pt=NULL;
 
 	sem_post(&ended);
@@ -1206,42 +1146,7 @@ void ParseThread::threadAbort()
 	root->parsingFailed();
 }
 
-void RootMovieClip::initialize()
-{
-	//NOTE: No references to frames must be done here!
-	if(!initialized && sys->currentVm)
-	{
-		initialized=true;
-		if(sys->currentVm)
-		{
-			//Let's see if we have to bind the root movie clip itself
-			if(bindName.len())
-			{
-				//The object is constructed after binding
-				this->incRef();
-				sys->currentVm->addEvent(NullRef,_MR(new BindClassEvent(_MR(this),bindName,BindClassEvent::ISROOT)));
-				sys->currentVm->addEvent(NullRef,_MR(new SysOnStageEvent()));
-			}
-			else
-			{
-				//Construction can be consider complete
-				constructionComplete();
-				setOnStage(true);
-			}
-
-			//Now signal the completion for this root
-			loaderInfo->sendInit();
-		}
-		else
-		{
-			//Construction can be consider complete
-			constructionComplete();
-			setOnStage(true);
-		}
-	}
-}
-
-bool RootMovieClip::getBounds(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const
+bool RootMovieClip::boundsRect(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const
 {
 	RECT f=getFrameSize();
 	xmin=0;
@@ -1249,22 +1154,6 @@ bool RootMovieClip::getBounds(number_t& xmin, number_t& xmax, number_t& ymin, nu
 	xmax=f.Xmax/20;
 	ymax=f.Ymax/20;
 	return true;
-}
-
-void RootMovieClip::Render(bool maskEnabled)
-{
-	while(1)
-	{
-		//Check if the next frame we are going to play is available
-		if(state.next_FP<getFramesLoaded())
-			break;
-
-		sem_wait(&new_frame);
-		if(parsingIsFailed)
-			return;
-	}
-
-	MovieClip::Render(maskEnabled);
 }
 
 void RootMovieClip::setFrameSize(const lightspark::RECT& f)
@@ -1295,16 +1184,10 @@ void RootMovieClip::commitFrame(bool another)
 	if(another)
 		frames.emplace_back();
 
-	if(getFramesLoaded()==1)
+	if(getFramesLoaded()==1 && this == sys && frameRate!=0)
 	{
-		//Let's initialize the first frame of this movieclip
-		bootstrap();
-
-		//Root movie clips are initialized now, after the first frame is really ready 
-		initialize();
-
-		//When the first frame is committed the frame rate is known
-		sys->addTick(1000/frameRate,this);
+		/* now the frameRate is available and all SymbolClass tags have created their classes */
+		sys->addTick(1000/frameRate,sys);
 	}
 	sem_post(&new_frame);
 }
@@ -1327,17 +1210,17 @@ void RootMovieClip::setBackground(const RGB& bg)
 }
 
 /* called in parser's thread context */
-void RootMovieClip::addToDictionary(DictionaryTag* r)
+void RootMovieClip::addToDictionary(_R<DictionaryTag> r)
 {
 	SpinlockLocker l(dictSpinlock);
 	dictionary.push_back(r);
 }
 
 /* called in vm's thread context */
-DictionaryTag* RootMovieClip::dictionaryLookup(int id)
+_R<DictionaryTag> RootMovieClip::dictionaryLookup(int id)
 {
 	SpinlockLocker l(dictSpinlock);
-	list< DictionaryTag*>::iterator it = dictionary.begin();
+	auto it = dictionary.begin();
 	for(;it!=dictionary.end();++it)
 	{
 		if((*it)->getId()==id)
@@ -1348,41 +1231,13 @@ DictionaryTag* RootMovieClip::dictionaryLookup(int id)
 		LOG(LOG_ERROR,_("No such Id on dictionary ") << id);
 		throw RunTimeException("Could not find an object on the dictionary");
 	}
-	DictionaryTag* ret=*it;
-	return ret;
+	return *it;
 }
 
 _NR<RootMovieClip> RootMovieClip::getRoot()
 {
 	this->incRef();
 	return _MR(this);
-}
-
-void RootMovieClip::tick()
-{
-	//Frame advancement may cause exceptions
-	try
-	{
-		advanceFrame();
-		//advanceFrame may be blocking (if Frame init happens)
-		Locker l(mutexChildrenClips);
-		vector<MovieClip*> tmpChildren(childrenClips.begin(),childrenClips.end());
-		for(uint32_t i=0;i<tmpChildren.size();i++)
-			tmpChildren[i]->incRef();
-		l.unlock();
-		//Advance all the children to the next frame using the temporary copy
-		for(uint32_t i=0;i<tmpChildren.size();i++)
-		{
-			tmpChildren[i]->advanceFrame();
-			//Release when done
-			tmpChildren[i]->decRef();
-		}
-	}
-	catch(LightsparkException& e)
-	{
-		LOG(LOG_ERROR,_("Exception in RootMovieClip::tick ") << e.cause);
-		sys->setError(e.cause);
-	}
 }
 
 /*ASObject* RootMovieClip::getVariableByQName(const tiny_string& name, const tiny_string& ns, ASObject*& owner)
@@ -1443,3 +1298,100 @@ void RootMovieClip::setVariableByString(const string& s, ASObject* o)
 }*/
 
 
+void SystemState::tick()
+{
+	{
+		SpinlockLocker l(profileDataSpinlock);
+		list<ThreadProfile>::iterator it=profilingData.begin();
+		for(;it!=profilingData.end();++it)
+			it->tick();
+	}
+	if(sys->currentVm==NULL)
+		return;
+	/* See http://www.senocular.com/flash/tutorials/orderofoperations/
+	 * for the description of steps.
+	 */
+	/* TODO: Step 1: declare new objects */
+
+	/* Step 2: Send enterFrame events, if needed */
+	/* TODO: make this a child of the stage (spec says so)
+	 * so we only need to send this to the stage.
+	 * TODO: This event will be handled much later
+	 * than we send it, so until then there may already
+	 * be an eventListern.
+	 * Example of send vs. handled events:
+	 *  tick() -> initFrame,advanceFrame,initFrame,advanceFrame, enterFrame,initFrame,advanceFrame
+	 *  vm()   ->                                              | handle first initFrame, add event Listener
+	 *  We could make tick() wait for the completion of advanceFrame event.
+	 */
+	{
+		Locker l(mutexEnterFrameListeners);
+		if(!enterFrameListeners.empty())
+		{
+			_R<Event> e(Class<Event>::getInstanceS("enterFrame"));
+			auto it=enterFrameListeners.begin();
+			for(;it!=enterFrameListeners.end();it++)
+			{
+				(*it)->incRef();
+				getVm()->addEvent(_MR(*it),e);
+			}
+		}
+	}
+	//Enter frame should be sent to the stage too
+	if(stage->hasEventListener("enterFrame"))
+	{
+		_R<Event> e(Class<Event>::getInstanceS("enterFrame"));
+		stage->incRef();
+		getVm()->addEvent(_MR(stage),e);
+	}
+
+	/* Step 3: create legacy objects, which are new in this frame (top-down),
+	 * run their constructors (bottom-up)
+	 * and their frameScripts (Step 5) (bottom-up) */
+	sys->currentVm->addEvent(NullRef, _MR(new InitFrameEvent()));
+
+	/* TODO: Step 4: dispatch frameConstructed */
+	/* TODO: Step 6: dispatch exitFrame event */
+	/* TODO: Step 7: dispatch render event (Assuming stage.invalidate() has been called) */
+
+	/* Step 0: Set current frame number to the next frame */
+	sys->currentVm->addEvent(NullRef, _MR(new AdvanceFrameEvent()));
+}
+
+void SystemState::resizeCompleted() const
+{
+	if(currentVm && scaleMode==NO_SCALE)
+	{
+		stage->incRef();
+		currentVm->addEvent(_MR(stage),_MR(Class<Event>::getInstanceS("resize",false)));
+	}
+}
+
+/* This is run in vm's thread context */
+void RootMovieClip::initFrame()
+{
+	LOG(LOG_CALLS,"Root:initFrame " << getFramesLoaded() << " " << state.FP);
+	/* We have to wait for at least one frame
+	 * so our class get the right prototype. Else we will
+	 * call the wrong constructor. */
+	if(getFramesLoaded() == 0)
+		return;
+
+	MovieClip::initFrame();
+}
+
+/* This is run in vm's thread context */
+void RootMovieClip::advanceFrame()
+{
+	/* We have to wait for at least one frame */
+	if(getFramesLoaded() == 0)
+		return;
+
+	MovieClip::advanceFrame();
+}
+
+void RootMovieClip::constructionComplete()
+{
+	MovieClip::constructionComplete();
+	loaderInfo->sendInit();
+}

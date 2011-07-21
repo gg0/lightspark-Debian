@@ -43,7 +43,10 @@ public:
 	static void buildTraits(ASObject* o);
 	ASFUNCTION(_constructor);
 	ASFUNCTION(firstChild);
+	ASFUNCTION(childNodes);
 	ASFUNCTION(attributes);
+	ASFUNCTION(_getNodeType);
+	ASFUNCTION(_getNodeName);
 };
 
 class XMLDocument: public XMLNode
@@ -61,6 +64,9 @@ public:
 	ASFUNCTION(_constructor);
 	ASFUNCTION(parseXML);
 	ASFUNCTION(firstChild);
+	//Serialization interface
+	void serialize(ByteArray* out, std::map<tiny_string, uint32_t>& stringMap,
+			std::map<const ASObject*, uint32_t>& objMap) const;
 };
 
 };

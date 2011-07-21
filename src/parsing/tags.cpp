@@ -29,6 +29,7 @@
 #include "scripting/actions.h"
 #include "backends/geometry.h"
 #include "backends/rendering.h"
+#include "backends/security.h"
 #include "swftypes.h"
 #include "swf.h"
 #include "logger.h"
@@ -41,7 +42,7 @@ using namespace lightspark;
 
 extern TLSDATA ParseThread* pt;
 
-Tag* TagFactory::readTag()
+_NR<Tag> TagFactory::readTag()
 {
 	RECORDHEADER h;
 	f >> h;
@@ -227,7 +228,15 @@ Tag* TagFactory::readTag()
 
 	//Check if this clip is the main clip and if AVM2 has been enabled by a FileAttributes tag
 	if(topLevel && firstTag && pt->root==sys)
+	{
 		sys->needsAVM2(pt->useAVM2);
+		if(pt->useNetwork
+		&& sys->securityManager->getSandboxType() == SecurityManager::LOCAL_WITH_FILE)
+		{
+			sys->securityManager->setSandboxType(SecurityManager::LOCAL_WITH_NETWORK);
+			LOG(LOG_NO_INFO, _("Switched to local-with-networking sandbox by FileAttributesTag"));
+		}
+	}
 	firstTag=false;
 
 	unsigned int end=f.tellg();
@@ -245,7 +254,7 @@ Tag* TagFactory::readTag()
 		throw ParseException("Malformed SWF file");
 	}
 	
-	return ret;
+	return _MNR(ret);
 }
 
 RemoveObject2Tag::RemoveObject2Tag(RECORDHEADER h, std::istream& in):DisplayListTag(h)
@@ -292,6 +301,7 @@ DefineEditTextTag::DefineEditTextTag(RECORDHEADER h, std::istream& in):Dictionar
 		if(HasFontClass)
 			in >> FontClass;
 		in >> FontHeight;
+		textData.format.size = FontHeight;
 	}
 	if(HasTextColor)
 		in >> TextColor;
@@ -304,17 +314,16 @@ DefineEditTextTag::DefineEditTextTag(RECORDHEADER h, std::istream& in):Dictionar
 	in >> VariableName;
 	LOG(LOG_NOT_IMPLEMENTED,_("Sync to variable name ") << VariableName);
 	if(HasText)
+	{
 		in >> InitialText;
-}
-
-void DefineEditTextTag::Render(bool maskEnabled)
-{
-	LOG(LOG_NOT_IMPLEMENTED,_("DefineEditTextTag: Render"));
+		textData.text = (const char*)InitialText;
+	}
+	LOG(LOG_NOT_IMPLEMENTED, "DefineEditTextTag does not parse many attributes");
 }
 
 ASObject* DefineEditTextTag::instance() const
 {
-	DefineEditTextTag* ret=new DefineEditTextTag(*this);
+	TextField* ret=new TextField(textData);
 	//TODO: check
 	assert_and_throw(bindedTo==NULL);
 	ret->setPrototype(Class<TextField>::getClass());
@@ -328,7 +337,7 @@ DefineSpriteTag::DefineSpriteTag(RECORDHEADER h, std::istream& in):DictionaryTag
 	LOG(LOG_TRACE,_("DefineSprite ID: ") << SpriteID);
 	//Create a non top level TagFactory
 	TagFactory factory(in, false);
-	Tag* tag;
+	_NR<Tag> tag;
 	bool done=false;
 	bool empty=true;
 	do
@@ -342,7 +351,7 @@ DefineSpriteTag::DefineSpriteTag(RECORDHEADER h, std::istream& in):DictionaryTag
 			case DICT_TAG:
 				throw ParseException("Dictionary tag inside a sprite. Should not happen.");
 			case DISPLAY_LIST_TAG:
-				addToFrame(static_cast<DisplayListTag*>(tag));
+				addToFrame(tag.cast<DisplayListTag>());
 				empty=false;
 				break;
 			case SHOW_TAG:
@@ -355,7 +364,7 @@ DefineSpriteTag::DefineSpriteTag(RECORDHEADER h, std::istream& in):DictionaryTag
 			case CONTROL_TAG:
 				throw ParseException("Control tag inside a sprite. Should not happen.");
 			case FRAMELABEL_TAG:
-				addFrameLabel(frames.size()-1,static_cast<FrameLabelTag*>(tag)->Name);
+				addFrameLabel(frames.size()-1,static_cast<FrameLabelTag*>(tag.getPtr())->Name);
 				empty=false;
 				break;
 			case TAG:
@@ -392,8 +401,7 @@ ASObject* DefineSpriteTag::instance() const
 	}
 	else
 		ret->setPrototype(Class<MovieClip>::getClass());
-	ret->bootstrap();
-	//TODO: should we call the frameScripts?
+
 	return ret;
 }
 
@@ -549,8 +557,12 @@ DefineFont3Tag::DefineFont3Tag(RECORDHEADER h, std::istream& in):FontTag(h, 1)
 			in >> t;
 			OffsetTable.push_back(t);
 		}
-		in >> t;
-		CodeTableOffset=t;
+		//CodeTableOffset is missing with zero NumGlyphs
+		if(NumGlyphs)
+		{
+			in >> t;
+			CodeTableOffset=t;
+		}
 	}
 	else
 	{
@@ -560,8 +572,12 @@ DefineFont3Tag::DefineFont3Tag(RECORDHEADER h, std::istream& in):FontTag(h, 1)
 			in >> t;
 			OffsetTable.push_back(t);
 		}
-		in >> t;
-		CodeTableOffset=t;
+		//CodeTableOffset is missing with zero NumGlyphs
+		if(NumGlyphs)
+		{
+			in >> t;
+			CodeTableOffset=t;
+		}
 	}
 	GlyphShapeTable.resize(NumGlyphs);
 	for(int i=0;i<NumGlyphs;i++)
@@ -655,11 +671,6 @@ ASObject* DefineBitsLossless2Tag::instance() const
 	return ret;
 }
 
-void DefineBitsLossless2Tag::Render(bool maskEnabled)
-{
-	LOG(LOG_NOT_IMPLEMENTED,"DefineBitsLossless2Tag::Render");
-}
-
 DefineTextTag::DefineTextTag(RECORDHEADER h, istream& in, int v):DictionaryTag(h),version(v)
 {
 	in >> CharacterId >> TextBounds >> TextMatrix >> GlyphBits >> AdvanceBits;
@@ -709,8 +720,8 @@ void DefineTextTag::computeCached() const
 	{
 		if(TextRecords[i].StyleFlagsHasFont)
 		{
-			DictionaryTag* it3=loadedFrom->dictionaryLookup(TextRecords[i].FontID);
-			curFont=dynamic_cast<FontTag*>(it3);
+			_R<DictionaryTag> it3=loadedFrom->dictionaryLookup(TextRecords[i].FontID);
+			curFont=dynamic_cast<FontTag*>(it3.getPtr());
 			assert_and_throw(curFont);
 		}
 		assert_and_throw(curFont);
@@ -797,7 +808,7 @@ ASObject* DefineMorphShapeTag::instance() const
 	return ret;
 }
 
-void DefineMorphShapeTag::Render(bool maskEnabled)
+void DefineMorphShapeTag::renderImpl(bool maskEnabled, number_t t1,number_t t2,number_t t3,number_t t4) const
 {
 	if(alpha==0)
 		return;
@@ -814,24 +825,25 @@ void DefineMorphShapeTag::Render(bool maskEnabled)
 
 	float matrix[16];
 	Matrix.get4DMatrix(matrix);
-	glPushMatrix();
-	glMultMatrixf(matrix);
+	lsglPushMatrix();
+	lsglMultMatrixf(matrix);
+	setMatrixUniform(LSGL_MODELVIEW);
 
-	rt->glAcquireFramebuffer();
+	rt->acquireFramebuffer();
 
 	std::vector < GeomShape >::iterator it=shapes.begin();
 	for(;it!=shapes.end();++it)
 		it->Render();
 
-	rt->glBlitFramebuffer();
-	if(rt->glAcquireIdBuffer())
+	rt->blitFramebuffer();
+	if(rt->acquireIdBuffer())
 	{
 		std::vector < GeomShape >::iterator it=shapes.begin();
 		for(;it!=shapes.end();++it)
 			it->Render();
-		rt->glReleaseIdBuffer();
+		rt->releaseIdBuffer();
 	}
-	glPopMatrix();*/
+	lsglPopMatrix();*/
 }
 
 //void DefineFont3Tag::genGlyphShape(vector<GeomShape>& s, int glyph)
@@ -984,15 +996,14 @@ void PlaceObject2Tag::execute(DisplayObjectContainer* parent)
 			localRoot=parentDict->loadedFrom;
 		else
 			localRoot=parent->getRoot().getPtr();
-		DictionaryTag* dict=localRoot->dictionaryLookup(CharacterId);
+		_R<DictionaryTag> dict=localRoot->dictionaryLookup(CharacterId);
 
 		//We can create the object right away
 		DisplayObject* toAdd=dynamic_cast<DisplayObject*>(dict->instance());
+
 		assert_and_throw(toAdd);
 		//The matrix must be set before invoking the constructor
 		toAdd->setMatrix(Matrix);
-		if(toAdd->getPrototype())
-			toAdd->getPrototype()->handleConstruction(toAdd,NULL,0,true);
 
 		setProperties(toAdd, parent);
 
@@ -1148,9 +1159,8 @@ FrameLabelTag::FrameLabelTag(RECORDHEADER h, std::istream& in):Tag(h)
 	}
 }
 
-DefineButton2Tag::DefineButton2Tag(RECORDHEADER h, std::istream& in):DictionaryTag(h),IdleToOverUp(false)
+DefineButton2Tag::DefineButton2Tag(RECORDHEADER h, std::istream& in):DictionaryTag(h)
 {
-	state=BUTTON_UP;
 	in >> ButtonId;
 	BitStream bs(in);
 	UB(7,bs);
@@ -1162,12 +1172,15 @@ DefineButton2Tag::DefineButton2Tag(RECORDHEADER h, std::istream& in):DictionaryT
 	do
 	{
 		in >> br;
+		if(br.isNull())
+			break;
 		Characters.push_back(br);
 	}
-	while(!br.isNull());
+	while(true);
 
 	if(ActionOffset)
 	{
+		LOG(LOG_NOT_IMPLEMENTED,"DefineButton2Tag: Actions are not supported");
 		BUTTONCONDACTION bca;
 		do
 		{
@@ -1180,60 +1193,61 @@ DefineButton2Tag::DefineButton2Tag(RECORDHEADER h, std::istream& in):DictionaryT
 
 ASObject* DefineButton2Tag::instance() const
 {
-	return new DefineButton2Tag(*this);
-}
+	DisplayObject* states[4] = {NULL, NULL, NULL, NULL};
+	bool isSprite[4] = {false, false, false, false};
+	uint32_t curDepth[4];
 
-void DefineButton2Tag::handleEvent(Event* e)
-{
-	state=BUTTON_OVER;
-	IdleToOverUp=true;
-}
+	/* There maybe multiple DisplayObjects for one state. The official
+	 * implementation seems to create a Sprite in that case with
+	 * all DisplayObjects as children.
+	 */
 
-void DefineButton2Tag::Render(bool maskEnabled)
-{
-	LOG(LOG_NOT_IMPLEMENTED,_("DefineButton2Tag::Render"));
-	if(alpha==0)
-		return;
-	if(!visible)
-		return;
-	/*	for(unsigned int i=0;i<Characters.size();i++)
+	auto i = Characters.begin();
+	for(;i != Characters.end(); ++i)
 	{
-		if(Characters[i].ButtonStateUp && state==BUTTON_UP)
+		for(int j=0;j<4;++j)
 		{
+			if(j==0 && !i->ButtonStateDown)
+				continue;
+			if(j==1 && !i->ButtonStateHitTest)
+				continue;
+			if(j==2 && !i->ButtonStateOver)
+				continue;
+			if(j==3 && !i->ButtonStateUp)
+				continue;
+			_R<DictionaryTag> dict=loadedFrom->dictionaryLookup(i->CharacterID);
+
+			//We can create the object right away
+			DisplayObject* state=dynamic_cast<DisplayObject*>(dict->instance());
+			assert_and_throw(state);
+			//The matrix must be set before invoking the constructor
+			state->setMatrix(i->PlaceMatrix);
+			/*
+			 * TODO: BlendMode, filerList, PlaceDepth, ColorTransfrom
+			 */
+			if(states[j] == NULL)
+			{
+				states[j] = state;
+				curDepth[j] = i->PlaceDepth;
+			}
+			else
+			{
+				if(!isSprite[j])
+				{
+					Sprite* spr = Class<Sprite>::getInstanceS();
+					spr->insertLegacyChildAt(curDepth[j],states[j]);
+					states[j] = spr;
+					spr->name = "Button_spr";
+				}
+				Sprite* spr = Class<Sprite>::cast(states[j]);
+				spr->insertLegacyChildAt(i->PlaceDepth,state);
+			}
 		}
-		else if(Characters[i].ButtonStateOver && state==BUTTON_OVER)
-		{
-		}
-		else
-			continue;
-		DictionaryTag* r=sys->dictionaryLookup(Characters[i].CharacterID);
-		IRenderObject* c=dynamic_cast<IRenderObject*>(r);
-		if(c==NULL)
-			LOG(ERROR,_("Rendering something strange"));
-		float matrix[16];
-		Characters[i].PlaceMatrix.get4DMatrix(matrix);
-		glPushMatrix();
-		glMultMatrixf(matrix);
-		c->Render();
-		glPopMatrix();
 	}
-	for(unsigned int i=0;i<Actions.size();i++)
-	{
-		if(IdleToOverUp && Actions[i].CondIdleToOverUp)
-		{
-			IdleToOverUp=false;
-		}
-		else
-			continue;
 
-		for(unsigned int j=0;j<Actions[i].Actions.size();j++)
-			Actions[i].Actions[j]->Execute();
-	}*/
-}
-
-bool DefineButton2Tag::getBounds(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const
-{
-	return false;
+	SimpleButton* ret=new SimpleButton(states[0], states[1], states[2], states[3]);
+	ret->setPrototype(Class<SimpleButton>::getClass());
+	return ret;
 }
 
 DefineVideoStreamTag::DefineVideoStreamTag(RECORDHEADER h, std::istream& in):DictionaryTag(h)
@@ -1249,7 +1263,7 @@ DefineVideoStreamTag::DefineVideoStreamTag(RECORDHEADER h, std::istream& in):Dic
 
 ASObject* DefineVideoStreamTag::instance() const
 {
-	DefineVideoStreamTag* ret=new DefineVideoStreamTag(*this);
+	Video* ret=new Video(Width, Height);
 	if(bindedTo)
 	{
 		//A class is binded to this tag
@@ -1286,6 +1300,8 @@ FileAttributesTag::FileAttributesTag(RECORDHEADER h, std::istream& in):Tag(h)
 
 	if(ActionScript3)
 		pt->useAVM2=true;
+
+	pt->useNetwork = UseNetwork;
 }
 
 DefineSoundTag::DefineSoundTag(RECORDHEADER h, std::istream& in):DictionaryTag(h)
@@ -1304,16 +1320,8 @@ DefineSoundTag::DefineSoundTag(RECORDHEADER h, std::istream& in):DictionaryTag(h
 
 ASObject* DefineSoundTag::instance() const
 {
-	DefineSoundTag* ret=new DefineSoundTag(*this);
-	//TODO: check
-	if(bindedTo)
-	{
-		//A class is binded to this tag
-		ret->setPrototype(bindedTo);
-	}
-	else
-		ret->setPrototype(Class<Sound>::getClass());
-	return ret;
+	//TODO: use the tag sound data
+	return Class<Sound>::getInstanceS();
 }
 
 ScriptLimitsTag::ScriptLimitsTag(RECORDHEADER h, std::istream& in):Tag(h)

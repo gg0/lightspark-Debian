@@ -23,24 +23,55 @@
 #include "compat.h"
 #include "asobject.h"
 #include "flashdisplay.h"
-#include "flashnet.h"
 #include "timer.h"
 #include "backends/graphics.h"
+#include "backends/netutils.h"
+
+class AudioStream;
 
 namespace lightspark
 {
 
-class Sound: public EventDispatcher
+class AudioDecoder;
+class NetStream;
+
+class Sound: public EventDispatcher, public IThreadJob, public ILoadable
 {
+friend class SoundChannel;
+private:
+	URLInfo url;
+	std::vector<uint8_t> postData;
+	Downloader* downloader;
+	Mutex mutex;
+	ACQUIRE_RELEASE_FLAG(stopped);
+	AudioDecoder* audioDecoder;
+	AudioStream* audioStream;
+	ASPROPERTY_GETTER(uint32_t,bytesLoaded);
+	ASPROPERTY_GETTER(uint32_t,bytesTotal);
+	ASPROPERTY_GETTER(number_t,length);
+	//ILoadable interface
+	void setBytesTotal(uint32_t b);
+	void setBytesLoaded(uint32_t b);
 public:
+	Sound();
+	~Sound();
 	static void sinit(Class_base*);
 	static void buildTraits(ASObject* o);
 	ASFUNCTION(_constructor);
+	ASFUNCTION(load);
+	ASFUNCTION(play);
+
+	//IThreadJob interface
+	void execute();
+	void jobFence();
+	void threadAbort();
 };
 
 class SoundTransform: public ASObject
 {
 public:
+	ASPROPERTY_GETTER_SETTER(number_t,volume);
+	ASPROPERTY_GETTER_SETTER(number_t,pan);
 	static void sinit(Class_base*);
 	ASFUNCTION(_constructor);
 };
@@ -48,12 +79,14 @@ public:
 class Video: public DisplayObject
 {
 private:
-	sem_t mutex;
-	uint32_t width, height, videoWidth, videoHeight;
+	mutable sem_t mutex;
+	uint32_t width, height;
+	mutable uint32_t videoWidth, videoHeight;
 	bool initialized;
 	_NR<NetStream> netStream;
 public:
-	Video():width(320),height(240),videoWidth(0),videoHeight(0),initialized(false),netStream(NULL)
+	Video(uint32_t w=320, uint32_t h=240)
+		: width(w),height(h),videoWidth(0),videoHeight(0),initialized(false),netStream(NULL)
 	{
 		sem_init(&mutex,0,1);
 	}
@@ -69,9 +102,19 @@ public:
 	ASFUNCTION(_getHeight);
 	ASFUNCTION(_setHeight);
 	ASFUNCTION(attachNetStream);
-	void Render(bool maskEnabled);
-	bool getBounds(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const;
-	_NR<InteractiveObject> hitTest(_NR<InteractiveObject> last, number_t x, number_t y);
+	void renderImpl(bool maskEnabled, number_t t1,number_t t2,number_t t3,number_t t4) const;
+	bool boundsRect(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const;
+	_NR<InteractiveObject> hitTestImpl(_NR<InteractiveObject> last, number_t x, number_t y);
+};
+
+class SoundLoaderContext : public ASObject
+{
+private:
+	ASPROPERTY_GETTER_SETTER(number_t,bufferTime);
+	ASPROPERTY_GETTER_SETTER(bool,checkPolicyFile);
+public:
+	static void sinit(Class_base*);
+	ASFUNCTION(_constructor);
 };
 
 };

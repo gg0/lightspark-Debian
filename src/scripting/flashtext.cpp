@@ -20,6 +20,9 @@
 #include "flashtext.h"
 #include "class.h"
 #include "compat.h"
+#include "backends/rendering.h"
+#include "backends/geometry.h"
+#include "backends/graphics.h"
 
 using namespace std;
 using namespace lightspark;
@@ -39,7 +42,7 @@ void lightspark::Font::sinit(Class_base* c)
 {
 //	c->constructor=Class<IFunction>::getFunction(_constructor);
 	c->setConstructor(NULL);
-	c->setMethodByQName("enumerateFonts","",Class<IFunction>::getFunction(enumerateFonts),true);
+	c->setDeclaredMethodByQName("enumerateFonts","",Class<IFunction>::getFunction(enumerateFonts),NORMAL_METHOD,true);
 }
 
 ASFUNCTIONBODY(lightspark::Font,enumerateFonts)
@@ -52,26 +55,37 @@ void TextField::sinit(Class_base* c)
 	c->setConstructor(NULL);
 	c->super=Class<DisplayObject>::getClass();
 	c->max_level=c->super->max_level+1;
-	c->setGetterByQName("width","",Class<IFunction>::getFunction(TextField::_getWidth),true);
-	c->setSetterByQName("width","",Class<IFunction>::getFunction(TextField::_setWidth),true);
-	c->setGetterByQName("height","",Class<IFunction>::getFunction(TextField::_getHeight),true);
-	c->setSetterByQName("height","",Class<IFunction>::getFunction(TextField::_setHeight),true);
-	c->setGetterByQName("text","",Class<IFunction>::getFunction(TextField::_getText),true);
-	c->setSetterByQName("text","",Class<IFunction>::getFunction(TextField::_setText),true);
-	c->setMethodByQName("appendText","",Class<IFunction>::getFunction(TextField:: appendText),true);
+	c->setDeclaredMethodByQName("width","",Class<IFunction>::getFunction(TextField::_getWidth),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("width","",Class<IFunction>::getFunction(TextField::_setWidth),SETTER_METHOD,true);
+	c->setDeclaredMethodByQName("height","",Class<IFunction>::getFunction(TextField::_getHeight),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("height","",Class<IFunction>::getFunction(TextField::_setHeight),SETTER_METHOD,true);
+	c->setDeclaredMethodByQName("text","",Class<IFunction>::getFunction(TextField::_getText),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("text","",Class<IFunction>::getFunction(TextField::_setText),SETTER_METHOD,true);
+	c->setDeclaredMethodByQName("appendText","",Class<IFunction>::getFunction(TextField:: appendText),NORMAL_METHOD,true);
 }
 
 void TextField::buildTraits(ASObject* o)
 {
 }
 
-bool TextField::getBounds(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const
+bool TextField::boundsRect(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const
 {
 	xmin=0;
 	xmax=width;
 	ymin=0;
 	ymax=height;
 	return true;
+}
+
+_NR<InteractiveObject> TextField::hitTestImpl(_NR<InteractiveObject> last, number_t x, number_t y)
+{
+	/* I suppose one does not have to actually hit a character */
+	number_t xmin,xmax,ymin,ymax;
+	boundsRect(xmin,xmax,ymin,ymax);
+	if( xmin <= x && x <= xmax && ymin <= y && y <= ymax )
+		return last;
+	else
+		return NullRef;
 }
 
 ASFUNCTIONBODY(TextField,_getWidth)
@@ -112,7 +126,7 @@ ASFUNCTIONBODY(TextField,_setText)
 {
 	TextField* th=Class<TextField>::cast(obj);
 	assert_and_throw(argslen==1);
-	th->text=args[0]->toString();
+	th->updateText(args[0]->toString());
 	return NULL;
 }
 
@@ -120,36 +134,73 @@ ASFUNCTIONBODY(TextField, appendText)
 {
 	TextField* th=Class<TextField>::cast(obj);
 	assert_and_throw(argslen==1);
-	th->text += args[0]->toString();
+	th->updateText(th->text + args[0]->toString());
 	return NULL;
 }
 
-void TextField::Render(bool maskEnabled)
+void TextField::updateText(const tiny_string& new_text)
 {
-	//TODO: implement
-	LOG(LOG_NOT_IMPLEMENTED,_("TextField::Render ") << text);
+	text = new_text;
+	requestInvalidation();
+}
+
+void TextField::requestInvalidation()
+{
+	incRef();
+	sys->addToInvalidateQueue(_MR(this));
+}
+
+void TextField::invalidate()
+{
+	int32_t x,y;
+	uint32_t width,height;
+	number_t bxmin,bxmax,bymin,bymax;
+	if(boundsRect(bxmin,bxmax,bymin,bymax)==false)
+	{
+		//No contents, nothing to do
+		return;
+	}
+
+	computeDeviceBoundsForRect(bxmin,bxmax,bymin,bymax,x,y,width,height);
+	if(width==0 || height==0)
+		return;
+	CairoPangoRenderer* r=new CairoPangoRenderer(this, cachedSurface, *this,
+				getConcatenatedMatrix(), x, y, width, height, 1.0f,
+				getConcatenatedAlpha());
+	sys->addJob(r);
+}
+
+void TextField::renderImpl(bool maskEnabled, number_t t1, number_t t2, number_t t3, number_t t4) const
+{
+	//if(!isSimple())
+	//	rt->acquireTempBuffer(t1,t2,t3,t4);
+
+	defaultRender(maskEnabled);
+
+	//if(!isSimple())
+	//	rt->blitTempBuffer(t1,t2,t3,t4);
 }
 
 void TextFieldAutoSize ::sinit(Class_base* c)
 {
-	c->setVariableByQName("CENTER","",Class<ASString>::getInstanceS("center"));
-	c->setVariableByQName("LEFT","",Class<ASString>::getInstanceS("left"));
-	c->setVariableByQName("NONE","",Class<ASString>::getInstanceS("none"));
-	c->setVariableByQName("RIGHT","",Class<ASString>::getInstanceS("right"));
+	c->setVariableByQName("CENTER","",Class<ASString>::getInstanceS("center"),DECLARED_TRAIT);
+	c->setVariableByQName("LEFT","",Class<ASString>::getInstanceS("left"),DECLARED_TRAIT);
+	c->setVariableByQName("NONE","",Class<ASString>::getInstanceS("none"),DECLARED_TRAIT);
+	c->setVariableByQName("RIGHT","",Class<ASString>::getInstanceS("right"),DECLARED_TRAIT);
 }
 
-void TextFieldType ::sinit(Class_base* c)
+void TextFieldType::sinit(Class_base* c)
 {
-	c->setVariableByQName("DYNAMIC","",Class<ASString>::getInstanceS("dynamic"));
-	c->setVariableByQName("INPUT","",Class<ASString>::getInstanceS("input"));
+	c->setVariableByQName("DYNAMIC","",Class<ASString>::getInstanceS("dynamic"),DECLARED_TRAIT);
+	c->setVariableByQName("INPUT","",Class<ASString>::getInstanceS("input"),DECLARED_TRAIT);
 }
 
 void TextFormatAlign ::sinit(Class_base* c)
 {
-	c->setVariableByQName("CENTER","",Class<ASString>::getInstanceS("center"));
-	c->setVariableByQName("JUSTIFY","",Class<ASString>::getInstanceS("justify"));
-	c->setVariableByQName("LEFT","",Class<ASString>::getInstanceS("left"));
-	c->setVariableByQName("RIGHT","",Class<ASString>::getInstanceS("right"));
+	c->setVariableByQName("CENTER","",Class<ASString>::getInstanceS("center"),DECLARED_TRAIT);
+	c->setVariableByQName("JUSTIFY","",Class<ASString>::getInstanceS("justify"),DECLARED_TRAIT);
+	c->setVariableByQName("LEFT","",Class<ASString>::getInstanceS("left"),DECLARED_TRAIT);
+	c->setVariableByQName("RIGHT","",Class<ASString>::getInstanceS("right"),DECLARED_TRAIT);
 }
 
 void TextFormat::sinit(Class_base* c)
@@ -174,9 +225,9 @@ void StyleSheet::sinit(Class_base* c)
 	c->setConstructor(NULL);
 	c->super=Class<EventDispatcher>::getClass();
 	c->max_level=c->super->max_level+1;
-	c->setGetterByQName("styleNames","",Class<IFunction>::getFunction(_getStyleNames),true);
-	c->setMethodByQName("setStyle","",Class<IFunction>::getFunction(setStyle),true);
-	c->setMethodByQName("getStyle","",Class<IFunction>::getFunction(getStyle),true);
+	c->setDeclaredMethodByQName("styleNames","",Class<IFunction>::getFunction(_getStyleNames),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("setStyle","",Class<IFunction>::getFunction(setStyle),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("getStyle","",Class<IFunction>::getFunction(getStyle),NORMAL_METHOD,true);
 }
 
 void StyleSheet::buildTraits(ASObject* o)
@@ -232,19 +283,7 @@ void StaticText::sinit(Class_base* c)
 	c->setConstructor(NULL);
 	c->super=Class<InteractiveObject>::getClass();
 	c->max_level=c->super->max_level+1;
-	c->setGetterByQName("text","",Class<IFunction>::getFunction(_getText),true);
-}
-
-bool StaticText::getBounds(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const
-{
-	bool ret=TokenContainer::getBounds(xmin,xmax,ymin,ymax);
-	if(ret)
-	{
-		getMatrix().multiply2D(xmin,ymin,xmin,ymin);
-		getMatrix().multiply2D(xmax,ymax,xmax,ymax);
-		return true;
-	}
-	return false;
+	c->setDeclaredMethodByQName("text","",Class<IFunction>::getFunction(_getText),GETTER_METHOD,true);
 }
 
 ASFUNCTIONBODY(StaticText,_getText)

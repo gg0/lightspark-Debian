@@ -42,6 +42,8 @@ void ignore(std::istream& i, int count);
 
 class Tag
 {
+private:
+	ATOMIC_INT32(ref_count);
 protected:
 	RECORDHEADER Header;
 	void skip(std::istream& in) const
@@ -49,11 +51,25 @@ protected:
 		ignore(in,Header.getLength());
 	}
 public:
-	Tag(RECORDHEADER h):Header(h)
-	{
-	}
+	Tag(const Tag& t):ref_count(1),Header(t.Header) {}
+	Tag(RECORDHEADER h):ref_count(1),Header(h) {}
 	virtual TAGTYPE getType() const{ return TAG; }
 	virtual ~Tag(){}
+	void incRef()
+	{
+		ATOMIC_INCREMENT(ref_count);
+		assert(ref_count>0);
+	}
+	void decRef()
+	{
+		assert(ref_count>0);
+		uint32_t t=ATOMIC_DECREMENT(ref_count);
+		if(t==0)
+		{
+			ref_count=-1024;
+			delete this;
+		}
+	}
 };
 
 class EndTag:public Tag
@@ -165,16 +181,12 @@ private:
 public:
 	DefineMorphShapeTag(RECORDHEADER h, std::istream& in);
 	int getId(){ return CharacterId; }
-	void Render(bool maskEnabled);
-	bool getBounds(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const
-	{
-		return false;
-	}
+	void renderImpl(bool maskEnabled, number_t t1,number_t t2,number_t t3,number_t t4) const;
 	virtual ASObject* instance() const;
 };
 
 
-class DefineEditTextTag: public DictionaryTag, public TextField
+class DefineEditTextTag: public DictionaryTag
 {
 private:
 	UI16_SWF CharacterID;
@@ -207,15 +219,14 @@ private:
 	SI16_SWF Leading;
 	STRING VariableName;
 	STRING InitialText;
-
+	TextData textData;
 public:
 	DefineEditTextTag(RECORDHEADER h, std::istream& s);
 	int getId(){ return CharacterID; }
-	void Render(bool maskEnabled);
 	ASObject* instance() const;
 };
 
-class DefineSoundTag: public DictionaryTag, public Sound
+class DefineSoundTag: public DictionaryTag
 {
 private:
 	UI16_SWF SoundId;
@@ -339,7 +350,7 @@ public:
 
 class BUTTONCONDACTION;
 
-class DefineButton2Tag: public DictionaryTag, public DisplayObject
+class DefineButton2Tag: public DictionaryTag
 {
 private:
 	UI16_SWF ButtonId;
@@ -348,18 +359,9 @@ private:
 	UI16_SWF ActionOffset;
 	std::vector<BUTTONRECORD> Characters;
 	std::vector<BUTTONCONDACTION> Actions;
-	enum BUTTON_STATE { BUTTON_UP=0, BUTTON_OVER};
-	BUTTON_STATE state;
-
-	//Transition flags
-	bool IdleToOverUp;
 public:
 	DefineButton2Tag(RECORDHEADER h, std::istream& in);
 	virtual int getId(){ return ButtonId; }
-	void Render(bool maskEnabled);
-	bool getBounds(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const;
-	virtual void handleEvent(Event*);
-
 	ASObject* instance() const;
 };
 
@@ -367,24 +369,29 @@ class KERNINGRECORD
 {
 };
 
-class DefineBinaryDataTag: public DictionaryTag, public ByteArray
+class DefineBinaryDataTag: public DictionaryTag
 {
 private:
 	UI16_SWF Tag;
 	UI32_SWF Reserved;
+	uint8_t* bytes;
+	uint32_t len;
 public:
 	DefineBinaryDataTag(RECORDHEADER h,std::istream& s);
+	~DefineBinaryDataTag() { delete[] bytes; }
 	virtual int getId(){return Tag;} 
 
 	ASObject* instance() const
 	{
-		DefineBinaryDataTag* ret=new DefineBinaryDataTag(*this);
+		uint8_t* b = new uint8_t[len];
+		memcpy(b,bytes,len);
+		ByteArray* ret=new ByteArray(b, len);
 		ret->setPrototype(Class<ByteArray>::getClass());
 		return ret;
 	}
 };
 
-class FontTag: public DictionaryTag, public Font
+class FontTag: public DictionaryTag
 {
 protected:
 	UI16_SWF FontID;
@@ -593,11 +600,9 @@ public:
 	DefineBitsLossless2Tag(RECORDHEADER h, std::istream& in);
 	int getId(){ return CharacterId; }
 	ASObject* instance() const;
-	bool getBounds(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const
-	{
-		return false;
-	}
-	void Render(bool maskEnabled);
+	void renderImpl(bool maskEnabled, number_t t1,number_t t2,number_t t3,number_t t4) const
+		{ LOG(LOG_NOT_IMPLEMENTED,"DefineBitsLossless2Tag: renderImpl"); }
+
 };
 
 class DefineScalingGridTag: public Tag
@@ -639,7 +644,7 @@ public:
 	DefineFontAlignZonesTag(RECORDHEADER h, std::istream& in);
 };
 
-class DefineVideoStreamTag: public DictionaryTag, public Video
+class DefineVideoStreamTag: public DictionaryTag
 {
 private:
 	UI16_SWF CharacterID;
@@ -744,7 +749,7 @@ private:
 	bool topLevel;
 public:
 	TagFactory(std::istream& in, bool t):f(in),firstTag(true),topLevel(t){}
-	Tag* readTag();
+	_NR<Tag> readTag();
 };
 
 };

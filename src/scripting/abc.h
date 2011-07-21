@@ -34,6 +34,7 @@
 #include <map>
 #include <set>
 #include "swf.h"
+#include "abcutils.h"
 
 namespace lightspark
 {
@@ -154,35 +155,6 @@ struct option_detail
 	u8 kind;
 };
 
-struct method_body_info;
-class method_info;
-class ABCContext;
-class ABCVm;
-
-struct call_context
-{
-#include "packed_begin.h"
-	struct
-	{
-		ASObject** locals;
-		ASObject** stack;
-		uint32_t stack_index;
-	} PACKED;
-#include "packed_end.h"
-	ABCContext* context;
-	int locals_size;
-	std::vector<_R<ASObject>> scope_stack;
-	int initialScopeStack;
-	void runtime_stack_push(ASObject* s);
-	void runtime_stack_clear();
-	ASObject* runtime_stack_pop();
-	ASObject* runtime_stack_peek();
-	method_info* mi;
-	std::istringstream* code;
-	call_context(method_info* th, int l, ASObject* const* args, const unsigned int numArgs);
-	~call_context();
-};
-
 struct block_info
 {
 	llvm::BasicBlock* BB;
@@ -206,6 +178,8 @@ inline stack_entry make_stack_entry(llvm::Value* v, STACK_TYPE t)
 {
 	return std::make_pair(v, t);
 }
+
+class method_body_info;
 
 class method_info
 {
@@ -622,8 +596,9 @@ private:
 	bool shuttingdown;
 	std::deque<std::pair<_NR<EventDispatcher>,_R<Event> > > events_queue;
 	void handleEvent(std::pair<_NR<EventDispatcher>,_R<Event> > e);
-
-	void buildClassAndInjectBase(const std::string& n, ASObject*, ASObject* const* a, const unsigned int argslen, bool isRoot);
+	void buildClassAndBindTag(const std::string& s, _R<DictionaryTag> t);
+	void buildClassAndInjectBase(const std::string& s, _R<RootMovieClip> base);
+	Class_inherit* findClassInherit(const std::string& s);
 
 	//These are used to keep track of the current 'this' for class methods, and relative level
 	//It's sane to have them per-Vm, as anyway the vm is single by specs, single threaded
@@ -634,6 +609,7 @@ private:
 public:
 	GlobalObject* Global;
 	Manager* int_manager;
+	Manager* uint_manager;
 	Manager* number_manager;
 	llvm::ExecutionEngine* ex;
 	llvm::FunctionPassManager* FPM;
@@ -648,7 +624,8 @@ public:
 	/**
 	  	Start the VM thread
 	*/
-	void start();
+	void start() DLL_PUBLIC;
+	void finalize();
 	static void Run(ABCVm* th);
 	static ASObject* executeFunction(SyntheticFunction* function, call_context* context);
 	bool addEvent(_NR<EventDispatcher>,_R<Event> ) DLL_PUBLIC;

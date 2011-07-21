@@ -24,6 +24,7 @@
 #include <string>
 #include <algorithm>
 #include "backends/urlutils.h"
+#include "backends/security.h"
 
 #include "npscriptobject.h"
 
@@ -63,27 +64,13 @@ NPDownloadManager::~NPDownloadManager()
 /**
  * \brief Create a Downloader for an URL.
  *
- * Returns a pointer to a newly created \c Downloader for the given URL.
- * \param[in] url The URL (as a \c tiny_string) the \c Downloader is requested for
- * \param[in] cached Whether or not to disk-cache the download (default=false)
- * \return A pointer to a newly created \c Downloader for the given URL.
- * \see DownloadManager::destroy()
- */
-lightspark::Downloader* NPDownloadManager::download(const lightspark::tiny_string& url, bool cached, lightspark::LoaderInfo* owner)
-{
-	return download(sys->getOrigin().goToURL(url), cached, owner);
-}
-
-/**
- * \brief Create a Downloader for an URL.
- *
  * Returns a pointer to a newly created Downloader for the given URL.
  * \param[in] url The URL (as a \c URLInfo) the \c Downloader is requested for
  * \param[in] cached Whether or not to disk-cache the download (default=false)
  * \return A pointer to a newly created \c Downloader for the given URL.
  * \see DownloadManager::destroy()
  */
-lightspark::Downloader* NPDownloadManager::download(const lightspark::URLInfo& url, bool cached, lightspark::LoaderInfo* owner)
+lightspark::Downloader* NPDownloadManager::download(const lightspark::URLInfo& url, bool cached, lightspark::ILoadable* owner)
 {
 	LOG(LOG_NO_INFO, _("NET: PLUGIN: DownloadManager::download '") << url.getParsedURL() << 
 			"'" << (cached ? _(" - cached") : ""));
@@ -102,7 +89,7 @@ lightspark::Downloader* NPDownloadManager::download(const lightspark::URLInfo& u
  * \see DownloadManager::destroy()
  */
 lightspark::Downloader* NPDownloadManager::downloadWithData(const lightspark::URLInfo& url, const std::vector<uint8_t>& data, 
-		lightspark::LoaderInfo* owner)
+		lightspark::ILoadable* owner)
 {
 	LOG(LOG_NO_INFO, _("NET: PLUGIN: DownloadManager::downloadWithData '") << url.getParsedURL());
 	//Register this download
@@ -113,6 +100,20 @@ lightspark::Downloader* NPDownloadManager::downloadWithData(const lightspark::UR
 
 void NPDownloadManager::destroy(lightspark::Downloader* downloader)
 {
+	//Convert to a dynamic_cast if any other downloader is ever created by NPDownloadManager
+	NPDownloader* d=static_cast<NPDownloader*>(downloader);
+	/*If the NP stream is already destroyed we can surely destroy the Downloader.
+	  Moreover, if ASYNC_DESTROY is already set, destroy is being called for the second time.
+	  This may happen when:
+	  1) destroy is called by any NPP callback the checks the ASYNC_DESTROY flag and destroys the downloader
+	  2) At shutdown destroy is called on every active download
+	  In both cases it's safe to destroy the downloader, no more NPP call for this downloader will be received */
+	if(d->state!=NPDownloader::STREAM_DESTROYED && d->state!=NPDownloader::ASYNC_DESTROY)
+	{
+		//The NP stream is still alive. Flag this downloader for aync destruction
+		d->state=NPDownloader::ASYNC_DESTROY;
+		return;
+	}
 	//If the downloader was still in the active-downloader list, delete it
 	if(removeDownloader(downloader))
 	{
@@ -126,10 +127,9 @@ void NPDownloadManager::destroy(lightspark::Downloader* downloader)
  *
  * \param[in] _url The URL for the Downloader.
  */
-NPDownloader::NPDownloader(const lightspark::tiny_string& _url, lightspark::LoaderInfo* owner):
-	Downloader(_url, false),instance(NULL),started(false)
+NPDownloader::NPDownloader(const lightspark::tiny_string& _url, lightspark::ILoadable* owner):
+	Downloader(_url, false, owner),instance(NULL),state(INIT)
 {
-	setOwner(owner);
 }
 
 /**
@@ -140,10 +140,9 @@ NPDownloader::NPDownloader(const lightspark::tiny_string& _url, lightspark::Load
  * \param[in] _instance The netscape plugin instance
  * \param[in] owner The \c LoaderInfo object that keeps track of this download
  */
-NPDownloader::NPDownloader(const lightspark::tiny_string& _url, bool _cached, NPP _instance, lightspark::LoaderInfo* owner):
-	Downloader(_url, _cached),instance(_instance),started(false)
+NPDownloader::NPDownloader(const lightspark::tiny_string& _url, bool _cached, NPP _instance, lightspark::ILoadable* owner):
+	Downloader(_url, _cached, owner),instance(_instance),state(INIT)
 {
-	setOwner(owner);
 	NPN_PluginThreadAsyncCall(instance, dlStartCallback, this);
 }
 
@@ -155,10 +154,9 @@ NPDownloader::NPDownloader(const lightspark::tiny_string& _url, bool _cached, NP
  * \param[in] _instance The netscape plugin instance
  * \param[in] owner The \c LoaderInfo object that keeps track of this download
  */
-NPDownloader::NPDownloader(const lightspark::tiny_string& _url, const std::vector<uint8_t>& _data, NPP _instance, lightspark::LoaderInfo* owner):
-	Downloader(_url, _data),instance(_instance),started(false)
+NPDownloader::NPDownloader(const lightspark::tiny_string& _url, const std::vector<uint8_t>& _data, NPP _instance, lightspark::ILoadable* owner):
+	Downloader(_url, _data, owner),instance(_instance),state(INIT)
 {
-	setOwner(owner);
 	NPN_PluginThreadAsyncCall(instance, dlStartCallback, this);
 }
 
@@ -171,10 +169,12 @@ NPDownloader::NPDownloader(const lightspark::tiny_string& _url, const std::vecto
 void NPDownloader::dlStartCallback(void* t)
 {
 	NPDownloader* th=static_cast<NPDownloader*>(t);
-	cerr << _("Start download for ") << th->url << endl;
-	th->started=true;
-	assert(th->data.empty());
-	NPError e=NPN_GetURLNotify(th->instance, th->url.raw_buf(), NULL, th);
+	LOG(LOG_NO_INFO,_("Start download for ") << th->url);
+	NPError e=NPERR_NO_ERROR;
+	if(th->data.empty())
+		e=NPN_GetURLNotify(th->instance, th->url.raw_buf(), NULL, th);
+	else
+		e=NPN_PostURLNotify(th->instance, th->url.raw_buf(), NULL, th->data.size(), (const char*)&th->data[0], false, th);
 	if(e!=NPERR_NO_ERROR)
 		th->setFailed(); //No need to crash, we can just mark the download failed
 }
@@ -368,19 +368,6 @@ NPError nsPluginInstance::GetValue(NPPVariable aVariable, void *aValue)
 
 }
 
-void nsPluginInstance::AsyncHelper(void* th_void, helper_t func, void* privArg)
-{
-	nsPluginInstance* th=(nsPluginInstance*)th_void;
-	NPN_PluginThreadAsyncCall(th->mInstance, func, privArg);
-}
-
-void nsPluginInstance::StopDownloaderHelper(void* th_void)
-{
-	nsPluginInstance* th=(nsPluginInstance*)th_void;
-	if(th->mainDownloader)
-		th->mainDownloader->stop();
-}
-
 NPError nsPluginInstance::SetWindow(NPWindow* aWindow)
 {
 	if(aWindow == NULL)
@@ -412,20 +399,10 @@ NPError nsPluginInstance::SetWindow(NPWindow* aWindow)
 		mDepth = ws_info->depth;
 		mColormap = ws_info->colormap;
 
-		lightspark::NPAPI_params p;
-
-		p.visual=XVisualIDFromVisual(mVisual);
-		p.container=NULL;
-		p.display=mDisplay;
-		p.window=mWindow;
-		p.width=mWidth;
-		p.height=mHeight;
-		//TODO: Refactor into virtual interface
-		p.helper=AsyncHelper;
-		p.helperArg=this;
-		p.stopDownloaderHelper=StopDownloaderHelper;
-		LOG(LOG_NO_INFO,"X Window " << hex << p.window << dec << " Width: " << p.width << " Height: " << p.height);
-		m_sys->setParamsAndEngine(lightspark::GTKPLUG,&p);
+		VisualID visual=XVisualIDFromVisual(mVisual);
+		PluginEngineData* e= new PluginEngineData(this, mDisplay, visual, mWindow, mWidth, mHeight);
+		LOG(LOG_NO_INFO,"X Window " << hex << mWindow << dec << " Width: " << mWidth << " Height: " << mHeight);
+		m_sys->setParamsAndEngine(e, false);
 	}
 	//draw();
 	return TRUE;
@@ -480,6 +457,12 @@ string nsPluginInstance::getPageURL() const
 	return ret;
 }
 
+void nsPluginInstance::asyncDownloaderDestruction(NPStream* stream, NPDownloader* dl) const
+{
+	LOG(LOG_NO_INFO,_("Async destructin for ") << stream->url);
+	m_sys->downloadManager->destroy(dl);
+}
+
 NPError nsPluginInstance::NewStream(NPMIMEType type, NPStream* stream, NPBool seekable, uint16_t* stype)
 {
 	NPDownloader* dl=static_cast<NPDownloader*>(stream->notifyData);
@@ -487,7 +470,14 @@ NPError nsPluginInstance::NewStream(NPMIMEType type, NPStream* stream, NPBool se
 	sys=m_sys;
 	if(dl)
 	{
-		cerr << "via NPDownloader" << endl;
+		//Check if async destructin of this downloader has been requested
+		if(dl->state==NPDownloader::ASYNC_DESTROY)
+		{
+			//NPN_DestroyStream will call NPP_DestroyStream
+			NPError e=NPN_DestroyStream(mInstance, stream, NPRES_USER_BREAK);
+			assert(e==NPERR_NO_ERROR);
+			return e;
+		}
 		dl->setLength(stream->end);
 		//TODO: confirm that growing buffers are normal. This does fix a bug I found though. (timonvo)
 		*stype=NP_NORMAL;
@@ -540,7 +530,7 @@ NPError nsPluginInstance::NewStream(NPMIMEType type, NPStream* stream, NPBool se
 void nsPluginInstance::StreamAsFile(NPStream* stream, const char* fname)
 {
 	assert(stream->notifyData==NULL);
-	m_sys->setDownloadedPath(fname);
+	m_sys->setDownloadedPath(lightspark::tiny_string(fname,true));
 }
 
 int32_t nsPluginInstance::WriteReady(NPStream *stream)
@@ -557,6 +547,16 @@ int32_t nsPluginInstance::Write(NPStream *stream, int32_t offset, int32_t len, v
 	{
 		sys=m_sys;
 		NPDownloader* dl=static_cast<NPDownloader*>(stream->pdata);
+
+		//Check if async destructin of this downloader has been requested
+		if(dl->state==NPDownloader::ASYNC_DESTROY)
+		{
+			//NPN_DestroyStream will call NPP_DestroyStream
+			NPError e=NPN_DestroyStream(mInstance, stream, NPRES_USER_BREAK);
+			assert(e==NPERR_NO_ERROR);
+			return -1;
+		}
+
 		if(dl->hasFailed())
 			return -1;
 		dl->append((uint8_t*)buffer,len);
@@ -571,22 +571,63 @@ NPError nsPluginInstance::DestroyStream(NPStream *stream, NPError reason)
 {
 	NPDownloader* dl=static_cast<NPDownloader*>(stream->pdata);
 	assert(dl);
-	//Notify our downloader of what happened
-	switch(reason)
+	//Check if async destructin of this downloader has been requested
+	if(dl->state==NPDownloader::ASYNC_DESTROY)
 	{
-		case NPRES_DONE:
-			cout << "Done" <<endl;
-			dl->setFinished();
-			break;
-		case NPRES_USER_BREAK:
-			cout << "User Break" <<endl;
-			dl->setFailed();
-			break;
-		case NPRES_NETWORK_ERR:
-			cout << "Network Error" <<endl;
-			dl->setFailed();
-			break;
+		dl->setFailed();
+		asyncDownloaderDestruction(stream, dl);
+		return NPERR_NO_ERROR;
 	}
+	dl->state=NPDownloader::STREAM_DESTROYED;
+	if(stream->notifyData)
+	{
+		//URLNotify will be called later
+		return NPERR_NO_ERROR;
+	}
+	//Notify our downloader of what happened
+	URLNotify(stream->url, reason, stream->pdata);
 	return NPERR_NO_ERROR;
 }
 
+void nsPluginInstance::URLNotify(const char* url, NPReason reason, void* notifyData)
+{
+	//If the download was successful, termination is handle in DestroyStream
+	NPDownloader* dl=static_cast<NPDownloader*>(notifyData);
+	assert(dl);
+	switch(reason)
+	{
+		case NPRES_DONE:
+			LOG(LOG_NO_INFO,_("Download complete ") << url);
+			dl->setFinished();
+			break;
+		case NPRES_USER_BREAK:
+			LOG(LOG_ERROR,_("Download stopped ") << url);
+			dl->setFailed();
+			break;
+		case NPRES_NETWORK_ERR:
+			LOG(LOG_ERROR,_("Download error ") << url);
+			dl->setFailed();
+			break;
+	}
+}
+
+PluginEngineData::PluginEngineData(nsPluginInstance* i, Display* d, VisualID v, Window win, int w, int h):
+	EngineData(d,v,win,w,h),instance(i)
+{
+}
+
+void PluginEngineData::setupMainThreadCallback(lightspark::ls_callback_t func, void* arg)
+{
+	NPN_PluginThreadAsyncCall(instance->mInstance, func, arg);
+}
+
+void PluginEngineData::stopMainDownload()
+{
+	if(instance->mainDownloader)
+		instance->mainDownloader->stop();
+}
+
+bool PluginEngineData::isSizable() const
+{
+	return false;
+}

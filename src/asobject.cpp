@@ -23,6 +23,7 @@
 #include <algorithm>
 #include <limits>
 #include "compat.h"
+#include "parsing/amf3_generator.h"
 
 using namespace lightspark;
 using namespace std;
@@ -52,12 +53,13 @@ tiny_string ASObject::toString(bool debugMsg)
 	toStringName.name_type=multiname::NAME_STRING;
 	toStringName.name_s="toString";
 	toStringName.ns.push_back(nsNameAndKind("",PACKAGE_NAMESPACE));
-	if(debugMsg==false && hasPropertyByMultiname(toStringName))
+	if(debugMsg==false && hasPropertyByMultiname(toStringName, true))
 	{
 		ASObject* obj_toString=getVariableByMultiname(toStringName);
 		if(obj_toString->getObjectType()==T_FUNCTION)
 		{
 			IFunction* f_toString=static_cast<IFunction*>(obj_toString);
+			incRef();
 			ASObject* ret=f_toString->call(this,NULL,0);
 			assert_and_throw(ret->getObjectType()==T_STRING);
 			tiny_string retS=ret->toString();
@@ -76,9 +78,9 @@ TRISTATE ASObject::isLess(ASObject* r)
 	valueOfName.name_type=multiname::NAME_STRING;
 	valueOfName.name_s="valueOf";
 	valueOfName.ns.push_back(nsNameAndKind("",NAMESPACE));
-	if(hasPropertyByMultiname(valueOfName))
+	if(hasPropertyByMultiname(valueOfName, true))
 	{
-		if(r->hasPropertyByMultiname(valueOfName)==false)
+		if(r->hasPropertyByMultiname(valueOfName, true)==false)
 			throw RunTimeException("Missing valueof for second operand");
 
 		ASObject* obj1=getVariableByMultiname(valueOfName);
@@ -154,7 +156,7 @@ bool ASObject::isEqual(ASObject* r)
 	equalsName.name_type=multiname::NAME_STRING;
 	equalsName.name_s="equals";
 	equalsName.ns.push_back(nsNameAndKind("",NAMESPACE));
-	if(hasPropertyByMultiname(equalsName))
+	if(hasPropertyByMultiname(equalsName, true))
 	{
 		ASObject* func_equals=getVariableByMultiname(equalsName);
 
@@ -177,9 +179,9 @@ bool ASObject::isEqual(ASObject* r)
 	valueOfName.name_type=multiname::NAME_STRING;
 	valueOfName.name_s="valueOf";
 	valueOfName.ns.push_back(nsNameAndKind("",NAMESPACE));
-	if(hasPropertyByMultiname(valueOfName))
+	if(hasPropertyByMultiname(valueOfName, true))
 	{
-		if(r->hasPropertyByMultiname(valueOfName)==false)
+		if(r->hasPropertyByMultiname(valueOfName, true)==false)
 			throw RunTimeException("Not handled less comparison for objects");
 
 		ASObject* obj1=getVariableByMultiname(valueOfName);
@@ -238,7 +240,7 @@ double ASObject::toNumber()
 	return (*end=='\0')?doubleRet:numeric_limits<double>::quiet_NaN();
 }
 
-obj_var* variables_map::findObjVar(const tiny_string& n, const nsNameAndKind& ns, bool create, bool borrowedMode)
+obj_var* variables_map::findObjVar(const tiny_string& n, const nsNameAndKind& ns, TRAIT_KIND createKind, uint32_t traitKinds)
 {
 	const var_iterator ret_begin=Variables.lower_bound(n);
 	//This actually look for the first different name, if we accept also previous levels
@@ -248,36 +250,37 @@ obj_var* variables_map::findObjVar(const tiny_string& n, const nsNameAndKind& ns
 	var_iterator ret=ret_begin;
 	for(;ret!=ret_end;++ret)
 	{
-		if(ret->second.kind==BORROWED_TRAIT && !borrowedMode)
+		if(!(ret->second.kind & traitKinds))
 			continue;
-		else if(ret->second.kind==OWNED_TRAIT && borrowedMode)
-			continue;
+
 		if(ret->second.ns==ns)
 			return &ret->second.var;
 	}
 
 	//Name not present, insert it if we have to create it
-	if(create)
-	{
-		//borrowedMode is used to create borrowed traits
-		var_iterator inserted=Variables.insert(ret_begin,make_pair(n, variable(ns, (borrowedMode)?BORROWED_TRAIT:OWNED_TRAIT) ) );
-		return &inserted->second.var;
-	}
-	else
+	if(createKind==NO_CREATE_TRAIT)
 		return NULL;
+
+	var_iterator inserted=Variables.insert(ret_begin,make_pair(n, variable(ns, createKind)) );
+	return &inserted->second.var;
 }
 
-bool ASObject::hasPropertyByMultiname(const multiname& name)
+bool ASObject::hasPropertyByMultiname(const multiname& name, bool considerDynamic)
 {
-	check();
+	bool ret=false;
 	//We look in all the object's levels
-	bool ret=(Variables.findObjVar(name, false, false)!=NULL);
+	uint32_t validTraits=DECLARED_TRAIT;
+	if(considerDynamic)
+		validTraits|=DYNAMIC_TRAIT;
+
+	ret=(Variables.findObjVar(name, NO_CREATE_TRAIT, validTraits)!=NULL);
+
 	if(!ret) //Ask the prototype chain for borrowed traits
 	{
 		Class_base* cur=prototype;
 		while(cur)
 		{
-			ret=(cur->Variables.findObjVar(name, false, true)!=NULL);
+			ret=(cur->Variables.findObjVar(name, NO_CREATE_TRAIT, BORROWED_TRAIT)!=NULL);
 			if(ret)
 				break;
 			cur=cur->super;
@@ -287,85 +290,68 @@ bool ASObject::hasPropertyByMultiname(const multiname& name)
 	return ret;
 }
 
-void ASObject::setMethodByQName(const tiny_string& name, const nsNameAndKind& ns, IFunction* o, bool isBorrowed)
+void ASObject::setDeclaredMethodByQName(const tiny_string& name, const tiny_string& ns, IFunction* o, METHOD_TYPE type, bool isBorrowed)
+{
+	setDeclaredMethodByQName(name, nsNameAndKind(ns, NAMESPACE), o, type, isBorrowed);
+}
+
+void ASObject::setDeclaredMethodByQName(const tiny_string& name, const nsNameAndKind& ns, IFunction* o, METHOD_TYPE type, bool isBorrowed)
 {
 	check();
 #ifndef NDEBUG
 	assert(!initialized);
 #endif
-	obj_var* obj=Variables.findObjVar(name,ns,true,isBorrowed);
-	if(obj->var!=NULL)
+	obj_var* obj=Variables.findObjVar(name,ns, (isBorrowed)?BORROWED_TRAIT:DECLARED_TRAIT, (isBorrowed)?BORROWED_TRAIT:DECLARED_TRAIT);
+	switch(type)
 	{
-		//This happens when interfaces are declared multiple times
-		assert_and_throw(o==obj->var);
-		return;
+		case NORMAL_METHOD:
+		{
+			if(obj->var!=NULL)
+			{
+				//This happens when interfaces are declared multiple times
+				assert_and_throw(o==obj->var);
+				return;
+			}
+			obj->setVar(o);
+			break;
+		}
+		case GETTER_METHOD:
+		{
+			if(obj->getter!=NULL)
+			{
+				//This happens when interfaces are declared multiple times
+				assert_and_throw(o==obj->getter);
+				return;
+			}
+			obj->getter=o;
+			break;
+		}
+		case SETTER_METHOD:
+		{
+			if(obj->setter!=NULL)
+			{
+				//This happens when interfaces are declared multiple times
+				assert_and_throw(o==obj->setter);
+				return;
+			}
+			obj->setter=o;
+			break;
+		}
 	}
-	obj->var=o;
-}
-
-void ASObject::setMethodByQName(const tiny_string& name, const tiny_string& ns, IFunction* o, bool isBorrowed)
-{
-	setMethodByQName(name, nsNameAndKind(ns, NAMESPACE), o, isBorrowed);
-}
-
-void ASObject::setGetterByQName(const tiny_string& name, const nsNameAndKind& ns, IFunction* o, bool isBorrowed)
-{
-	check();
-#ifndef NDEBUG
-	assert(!initialized);
-#endif
-	obj_var* obj=Variables.findObjVar(name,ns,true,isBorrowed);
-	if(obj->getter!=NULL)
-	{
-		//This happens when interfaces are declared multiple times
-		assert_and_throw(o==obj->getter);
-		return;
-	}
-	obj->getter=o;
-}
-
-void ASObject::setGetterByQName(const tiny_string& name, const tiny_string& ns, IFunction* o, bool isBorrowed)
-{
-	setGetterByQName(name, nsNameAndKind(ns, NAMESPACE), o, isBorrowed);
-}
-
-void ASObject::setSetterByQName(const tiny_string& name, const nsNameAndKind& ns, IFunction* o, bool isBorrowed)
-{
-	check();
-#ifndef NDEBUG
-	assert_and_throw(!initialized);
-#endif
-	obj_var* obj=Variables.findObjVar(name,ns,true,isBorrowed);
-	if(obj->setter!=NULL)
-	{
-		//This happens when interfaces are declared multiple times
-		assert_and_throw(o==obj->setter);
-		return;
-	}
-	obj->setter=o;
-}
-
-void ASObject::setSetterByQName(const tiny_string& name, const tiny_string& ns, IFunction* o, bool isBorrowed)
-{
-	setSetterByQName(name, nsNameAndKind(ns, NAMESPACE), o, isBorrowed);
 }
 
 void ASObject::deleteVariableByMultiname(const multiname& name)
 {
 	assert_and_throw(ref_count>0);
 
-	//Do not ask for borrowed traits in the protoype chain as those are undeletable
-	obj_var* obj=Variables.findObjVar(name,false,false);
+	//Only dynamic traits are deletable
+	obj_var* obj=Variables.findObjVar(name,NO_CREATE_TRAIT,DYNAMIC_TRAIT);
 	if(obj==NULL)
 		return;
 
-	//Now dereference the values
-	if(obj->var)
-		obj->var->decRef();
-	if(obj->getter)
-		obj->getter->decRef();
-	if(obj->setter)
-		obj->setter->decRef();
+	assert(obj->getter==NULL && obj->setter==NULL && obj->var!=NULL);
+	//Now dereference the value
+	obj->var->decRef();
 
 	//Now kill the variable
 	Variables.killObjVar(name);
@@ -380,7 +366,7 @@ void ASObject::setVariableByMultiname_i(const multiname& name, intptr_t value)
 
 obj_var* ASObject::findSettable(const multiname& name, bool borrowedMode)
 {
-	obj_var* ret=Variables.findObjVar(name,false,borrowedMode);
+	obj_var* ret=Variables.findObjVar(name,NO_CREATE_TRAIT,(borrowedMode)?BORROWED_TRAIT:(DECLARED_TRAIT|DYNAMIC_TRAIT));
 	if(ret)
 	{
 		//It seems valid for a class to redefine only the getter, so if we can't find
@@ -391,7 +377,7 @@ obj_var* ASObject::findSettable(const multiname& name, bool borrowedMode)
 	return ret;
 }
 
-void ASObject::setVariableByMultiname(const multiname& name, ASObject* o, ASObject* base)
+void ASObject::setVariableByMultiname(const multiname& name, ASObject* o)
 {
 	check();
 
@@ -410,21 +396,9 @@ void ASObject::setVariableByMultiname(const multiname& name, ASObject* o, ASObje
 				break;
 			cur=cur->super;
 		}
-		if(obj==NULL)
-		{
-			cur=getActualPrototype();
-			while(cur)
-			{
-				//TODO: should be only findSetter
-				obj=cur->findSettable(name, false);
-				if(obj)
-					break;
-				cur=cur->super;
-			}
-		}
 	}
 	if(obj==NULL)
-		obj=Variables.findObjVar(name,true,false);
+		obj=Variables.findObjVar(name,DYNAMIC_TRAIT,DYNAMIC_TRAIT);
 
 	if(obj->setter)
 	{
@@ -433,7 +407,7 @@ void ASObject::setVariableByMultiname(const multiname& name, ASObject* o, ASObje
 		//Overriding function is automatically done by using cur_level
 		IFunction* setter=obj->setter;
 		//One argument can be passed without creating an array
-		ASObject* target=(base)?base:this;
+		ASObject* target=this;
 		target->incRef();
 		ASObject* ret=setter->call(target,&o,1);
 		assert_and_throw(ret==NULL);
@@ -442,42 +416,54 @@ void ASObject::setVariableByMultiname(const multiname& name, ASObject* o, ASObje
 	else
 	{
 		assert_and_throw(!obj->getter);
-		if(obj->var)
-			obj->var->decRef();
-		obj->var=o;
+		obj->setVar(o);
 	}
 }
 
-void ASObject::setVariableByQName(const tiny_string& name, const tiny_string& ns, ASObject* o)
+void ASObject::setVariableByQName(const tiny_string& name, const tiny_string& ns, ASObject* o, TRAIT_KIND traitKind)
 {
-	//TODO: what about BORROWED traits
 	const nsNameAndKind tmpns(ns, NAMESPACE);
-	//NOTE: we assume that [gs]etSuper and setProperty correctly manipulate the cur_level
-	obj_var* obj=Variables.findObjVar(name,tmpns,false,false);
+	setVariableByQName(name, tmpns, o, traitKind);
+}
 
-	if(obj==NULL)
-		obj=Variables.findObjVar(name,tmpns,true,false);
+void ASObject::setVariableByQName(const tiny_string& name, const nsNameAndKind& ns, ASObject* o, TRAIT_KIND traitKind)
+{
+	obj_var* obj=Variables.findObjVar(name,ns,NO_CREATE_TRAIT,traitKind);
+	assert(obj==NULL);
+	assert_and_throw(obj==NULL);
+	obj=Variables.findObjVar(name,ns,traitKind,traitKind);
+	obj->setVar(o);
+}
 
-	if(obj->setter)
-	{
-		//Call the setter
-		LOG(LOG_CALLS,_("Calling the setter"));
-
-		IFunction* setter=obj->setter;
-		incRef();
-		//One argument can be passed without creating an array
-		ASObject* ret=setter->call(this,&o,1);
-		assert_and_throw(ret==NULL);
-		LOG(LOG_CALLS,_("End of setter"));
-	}
-	else
-	{
-		assert_and_throw(!obj->getter);
-		if(obj->var)
-			obj->var->decRef();
-		obj->var=o;
-	}
+void ASObject::initializeVariableByMultiname(const multiname& name, ASObject* o, Class_base* c)
+{
 	check();
+
+	obj_var* obj=findSettable(name, false);
+	if(obj)
+	{
+		//Initializing an already existing variable
+		LOG(LOG_NOT_IMPLEMENTED,"Variable " << name << " already initialized");
+		o->decRef();
+		assert_and_throw(obj->type==c);
+		return;
+	}
+
+	Variables.initializeVar(name, o, c);
+}
+
+void obj_var::setVar(ASObject* v)
+{
+	//Do the conversion early, so that errors does not leave the object in an half baked state
+	ASObject* newV=v;
+	if(type && v->getObjectType()!=T_NULL && (v->getPrototype()==NULL || !v->getPrototype()->isSubClass(type)))
+	{
+		newV=type->generator(&v,1);
+		v->decRef();
+	}
+	if(var)
+		var->decRef();
+	var=newV;
 }
 
 void variables_map::killObjVar(const multiname& mname)
@@ -505,7 +491,7 @@ void variables_map::killObjVar(const multiname& mname)
 	throw RunTimeException("Variable to kill not found");
 }
 
-obj_var* variables_map::findObjVar(const multiname& mname, bool create, bool borrowedMode)
+obj_var* variables_map::findObjVar(const multiname& mname, TRAIT_KIND createKind, uint32_t traitKinds)
 {
 	tiny_string name=mname.normalizedName();
 
@@ -514,13 +500,11 @@ obj_var* variables_map::findObjVar(const multiname& mname, bool create, bool bor
 	//Otherwise we are just doing equal_range
 	const var_iterator ret_end=Variables.upper_bound(name);
 
-	assert_and_throw(!mname.ns.empty());
+	assert(!mname.ns.empty());
 	var_iterator ret=ret_begin;
 	for(;ret!=ret_end;++ret)
 	{
-		if(ret->second.kind==BORROWED_TRAIT && !borrowedMode)
-			continue;
-		else if(ret->second.kind==OWNED_TRAIT && borrowedMode)
+		if(!(ret->second.kind & traitKinds))
 			continue;
 		//Check if one the namespace is already present
 		//We can use binary search, as the namespace are ordered
@@ -529,22 +513,26 @@ obj_var* variables_map::findObjVar(const multiname& mname, bool create, bool bor
 	}
 
 	//Name not present, insert it, if the multiname has a single ns and if we have to insert it
+	if(createKind==NO_CREATE_TRAIT)
+		return NULL;
+
 	//TODO: HACK: this is needed if the property should be present but it's not
-	if(create)
+	if(mname.ns.size()>1)
 	{
-		if(mname.ns.size()>1)
-		{
-			//Hack, insert with empty name
-			//Here the object MUST exist
-			var_iterator inserted=Variables.insert(ret,make_pair(name, 
-						variable(nsNameAndKind("",NAMESPACE), (borrowedMode)?BORROWED_TRAIT:OWNED_TRAIT)));
-			return &inserted->second.var;
-		}
-		var_iterator inserted=Variables.insert(ret,make_pair(name, variable(mname.ns[0], (borrowedMode)?BORROWED_TRAIT:OWNED_TRAIT)));
+		//Hack, insert with empty name
+		//Here the object MUST exist
+		var_iterator inserted=Variables.insert(ret,make_pair(name, 
+					variable(nsNameAndKind("",NAMESPACE), createKind)));
 		return &inserted->second.var;
 	}
-	else
-		return NULL;
+	var_iterator inserted=Variables.insert(ret,make_pair(name, variable(mname.ns[0], createKind)));
+	return &inserted->second.var;
+}
+
+void variables_map::initializeVar(const multiname& mname, ASObject* obj, Class_base* type)
+{
+	tiny_string name=mname.normalizedName();
+	Variables.insert(make_pair(name, variable(mname.ns[0], DECLARED_TRAIT, obj, type)));
 }
 
 ASFUNCTIONBODY(ASObject,generator)
@@ -568,7 +556,7 @@ ASFUNCTIONBODY(ASObject,hasOwnProperty)
 	name.name_type=multiname::NAME_STRING;
 	name.name_s=args[0]->toString();
 	name.ns.push_back(nsNameAndKind("",NAMESPACE));
-	bool ret=obj->hasPropertyByMultiname(name);
+	bool ret=obj->hasPropertyByMultiname(name, true);
 	return abstract_b(ret);
 }
 
@@ -606,8 +594,6 @@ void ASObject::initSlot(unsigned int n, const multiname& name)
 	Variables.initSlot(n,name.name_s,name.ns[0]);
 }
 
-//In all the getter function we first ask the interface, so that special handling (e.g. Array)
-//can be done
 intptr_t ASObject::getVariableByMultiname_i(const multiname& name)
 {
 	check();
@@ -617,9 +603,9 @@ intptr_t ASObject::getVariableByMultiname_i(const multiname& name)
 	return ret->toInt();
 }
 
-obj_var* ASObject::findGettable(const multiname& name)
+obj_var* ASObject::findGettable(const multiname& name, bool borrowedMode)
 {
-	obj_var* ret=Variables.findObjVar(name,false,false);
+	obj_var* ret=Variables.findObjVar(name,NO_CREATE_TRAIT,(borrowedMode)?BORROWED_TRAIT:(DECLARED_TRAIT|DYNAMIC_TRAIT));
 	if(ret)
 	{
 		//It seems valid for a class to redefine only the setter, so if we can't find
@@ -630,54 +616,64 @@ obj_var* ASObject::findGettable(const multiname& name)
 	return ret;
 }
 
-ASObject* ASObject::getVariableByMultiname(const multiname& name, bool skip_impl, ASObject* base)
+ASObject* ASObject::getVariableByMultiname(const multiname& name, bool skip_impl)
 {
 	check();
 
-	obj_var* obj=findGettable(name);
+	//Get from the current object without considering borrowed properties
+	obj_var* obj=findGettable(name, false);
 
-	if(obj!=NULL)
+	if(obj==NULL && prototype)
 	{
-		if(obj->getter)
+		//Look for borrowed traits before
+		Class_base* cur=getActualPrototype();
+		while(cur)
 		{
-			//Call the getter
-			ASObject* target=(base)?base:this;
-			if(target->prototype)
-			{
-				LOG(LOG_CALLS,_("Calling the getter on type ") << target->prototype->class_name);
-			}
-			else
-			{
-				LOG(LOG_CALLS,_("Calling the getter"));
-			}
-			IFunction* getter=obj->getter;
-			target->incRef();
-			ASObject* ret=getter->call(target,NULL,0);
-			LOG(LOG_CALLS,_("End of getter"));
-			assert_and_throw(ret);
-			//The returned value is already owned by the caller
-			ret->fake_decRef();
-			return ret;
+			obj=cur->findGettable(name,true);
+			if(obj)
+				break;
+			cur=cur->super;
 		}
-		else
-		{
-			assert_and_throw(!obj->setter);
-			assert_and_throw(obj->var);
-			return obj->var;
-		}
-	}
-	else if(prototype && getActualPrototype())
-	{
-		//First of all see if the prototype chain contains some borrowed properties
-		ASObject* ret=getActualPrototype()->getBorrowedVariableByMultiname(name,skip_impl,this);
-  		//If it has not been found yet, ask the prototype
-		if(!ret)
-			ret=getActualPrototype()->getVariableByMultiname(name,skip_impl,this);
-		return ret;
 	}
 
 	//If it has not been found
-	return NULL;
+	if(obj==NULL)
+	{
+		if(prototype==NULL)
+			return NULL;
+
+		//Check if we can lazily define the requested property
+		return Class<ASObject>::getClass()->lazyDefine(name);
+	}
+
+	if(obj->getter)
+	{
+		//Call the getter
+		ASObject* target=this;
+		if(target->prototype)
+		{
+			LOG(LOG_CALLS,_("Calling the getter on type ") << target->prototype->class_name);
+		}
+		else
+		{
+			LOG(LOG_CALLS,_("Calling the getter"));
+		}
+		IFunction* getter=obj->getter;
+		target->incRef();
+		ASObject* ret=getter->call(target,NULL,0);
+		LOG(LOG_CALLS,_("End of getter"));
+		if(ret==NULL)
+			ret=new Undefined;
+		//The returned value is already owned by the caller
+		ret->fake_decRef();
+		return ret;
+	}
+	else
+	{
+		assert_and_throw(!obj->setter);
+		assert_and_throw(obj->var);
+		return obj->var;
+	}
 }
 
 void ASObject::check() const
@@ -723,8 +719,25 @@ void variables_map::dumpVariables()
 {
 	var_iterator it=Variables.begin();
 	for(;it!=Variables.end();++it)
-		LOG(LOG_NO_INFO, ((it->second.kind==OWNED_TRAIT)?"O: ":"B: ") <<  '[' << it->second.ns.name << "] "<< it->first << ' ' << 
+	{
+		const char* kind;
+		switch(it->second.kind)
+		{
+			case DECLARED_TRAIT:
+				kind="Declared: ";
+				break;
+			case BORROWED_TRAIT:
+				kind="Borrowed: ";
+				break;
+			case DYNAMIC_TRAIT:
+				kind="Dynamic: ";
+				break;
+			case NO_CREATE_TRAIT:
+				assert(false);
+		}
+		LOG(LOG_NO_INFO, kind <<  '[' << it->second.ns.name << "] "<< it->first << ' ' <<
 			it->second.var.var << ' ' << it->second.var.setter << ' ' << it->second.var.getter);
+	}
 }
 
 variables_map::~variables_map()
@@ -747,7 +760,8 @@ void variables_map::destroyContents()
 	Variables.clear();
 }
 
-ASObject::ASObject(Manager* m):type(T_OBJECT),ref_count(1),manager(m),cur_level(0),prototype(NULL),implEnable(true)
+ASObject::ASObject(Manager* m):type(T_OBJECT),ref_count(1),manager(m),cur_level(0),prototype(NULL),constructed(false),
+		implEnable(true)
 {
 #ifndef NDEBUG
 	//Stuff only used in debugging
@@ -755,7 +769,8 @@ ASObject::ASObject(Manager* m):type(T_OBJECT),ref_count(1),manager(m),cur_level(
 #endif
 }
 
-ASObject::ASObject(const ASObject& o):type(o.type),ref_count(1),manager(NULL),cur_level(0),prototype(o.prototype),implEnable(true)
+ASObject::ASObject(const ASObject& o):type(o.type),ref_count(1),manager(NULL),cur_level(0),prototype(o.prototype),
+		constructed(false),implEnable(true)
 {
 	if(prototype)
 	{
@@ -860,8 +875,7 @@ void variables_map::setSlot(unsigned int n,ASObject* o)
 		assert_and_throw(slots_vars[n-1]!=Variables.end());
 		if(slots_vars[n-1]->second.var.setter)
 			throw UnsupportedException("setSlot has setters");
-		slots_vars[n-1]->second.var.var->decRef();
-		slots_vars[n-1]->second.var.var=o;
+		slots_vars[n-1]->second.var.setVar(o);
 	}
 	else
 		throw RunTimeException("setSlot out of bounds");
@@ -928,4 +942,35 @@ unsigned int ASObject::numVariables() const
 void ASObject::constructionComplete()
 {
 	//Nothing to be done now
+}
+
+void ASObject::serializeDynamicProperties(ByteArray* out, std::map<tiny_string, uint32_t>& stringMap,
+				std::map<const ASObject*, uint32_t>& objMap) const
+{
+	//Pairs of name, value
+	auto it=Variables.Variables.begin();
+	for(;it!=Variables.Variables.end();it++)
+	{
+		assert_and_throw(it->second.ns.name=="");
+		out->writeStringVR(stringMap,it->first);
+		it->second.var.var->serialize(out, stringMap, objMap);
+	}
+	//The empty string closes the object
+	out->writeStringVR(stringMap, "");
+}
+
+void ASObject::serialize(ByteArray* out, std::map<tiny_string, uint32_t>& stringMap,
+				std::map<const ASObject*, uint32_t>& objMap) const
+{
+	Class_base* type=getPrototype();
+	if(type!=Class<ASObject>::getClass())
+		throw UnsupportedException("ASObject::serialize not completely implemented");
+
+	//0x0A -> object marker
+	out->writeByte(amf3::object_marker);
+	//0x0B -> a dynamic instance follows
+	out->writeByte(0x0B);
+	//The class name, empty if no alias is registered
+	out->writeStringVR(stringMap, "");
+	serializeDynamicProperties(out, stringMap, objMap);
 }

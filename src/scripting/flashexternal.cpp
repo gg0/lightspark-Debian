@@ -31,12 +31,12 @@ REGISTER_CLASS_NAME(ExternalInterface);
 void ExternalInterface::sinit(Class_base* c)
 {
 	c->setConstructor(NULL);
-	c->setGetterByQName("available","",Class<IFunction>::getFunction(_getAvailable),false);
-	c->setGetterByQName("objectID","",Class<IFunction>::getFunction(_getObjectID),false);
-	c->setGetterByQName("marshallExceptions","",Class<IFunction>::getFunction(_getMarshallExceptions),false);
-	c->setSetterByQName("marshallExceptions","",Class<IFunction>::getFunction(_setMarshallExceptions),false);
-	c->setMethodByQName("addCallback","",Class<IFunction>::getFunction(addCallback),false);
-	c->setMethodByQName("call","",Class<IFunction>::getFunction(call),false);
+	c->setDeclaredMethodByQName("available","",Class<IFunction>::getFunction(_getAvailable),GETTER_METHOD,false);
+	c->setDeclaredMethodByQName("objectID","",Class<IFunction>::getFunction(_getObjectID),GETTER_METHOD,false);
+	c->setDeclaredMethodByQName("marshallExceptions","",Class<IFunction>::getFunction(_getMarshallExceptions),GETTER_METHOD,false);
+	c->setDeclaredMethodByQName("marshallExceptions","",Class<IFunction>::getFunction(_setMarshallExceptions),SETTER_METHOD,false);
+	c->setDeclaredMethodByQName("addCallback","",Class<IFunction>::getFunction(addCallback),NORMAL_METHOD,false);
+	c->setDeclaredMethodByQName("call","",Class<IFunction>::getFunction(call),NORMAL_METHOD,false);
 }
 
 ASFUNCTIONBODY(ExternalInterface,_getAvailable)
@@ -104,27 +104,18 @@ ASFUNCTIONBODY(ExternalInterface,call)
 	const ExtVariant* callArgs[argslen-1];
 	for(uint32_t i = 0; i < argslen-1; i++)
 		callArgs[i] = new ExtVariant(args[i+1]);
-	ExtVariant* result = NULL;
 
 	ASObject* asobjResult = NULL;
 	// Let the external script object call the external method
-	bool callSuccess = sys->extScriptObject->callExternal(args[0]->toString().raw_buf(), callArgs, argslen-1, &result);
+	bool callSuccess = sys->extScriptObject->callExternal(args[0]->toString().raw_buf(), callArgs, argslen-1, &asobjResult);
 
 	// Delete converted arguments
 	for(uint32_t i = 0; i < argslen-1; i++)
 		delete callArgs[i];
 	
-	if(callSuccess)
+	if(!callSuccess)
 	{
-		// Convert & copy result to ASObject and delete it
-		if(result != NULL)
-		{
-			asobjResult = result->getASObject();
-			delete result;
-		}
-	}
-	else
-	{
+		assert(asobjResult==NULL);
 		LOG(LOG_NO_INFO, "External function failed, returning null: " << args[0]->toString().raw_buf());
 		// If the call fails, return null
 		asobjResult = new Null;

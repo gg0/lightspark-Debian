@@ -75,6 +75,10 @@ public:
 	{
 		return m==r.getPtr();
 	}
+	template<class D> bool operator!=(const Ref<D>& r) const
+	{
+		return m!=r.getPtr();
+	}
 	template<class D> bool operator==(const NullableRef<D>&r) const;
 	bool operator==(T* r) const
 	{
@@ -85,6 +89,12 @@ public:
 	{
 		return m<r.m;
 	}
+	template<class D> Ref<D> cast() const
+	{
+		D* p = static_cast<D*>(m);
+		p->incRef();
+		return _MR(p);
+	}
 	~Ref()
 	{
 		m->decRef();
@@ -94,6 +104,12 @@ public:
 };
 
 #define _R Ref
+
+template<class T>
+inline std::ostream& operator<<(std::ostream& s, const Ref<T>& r)
+{
+	return s << "Ref: ";
+}
 
 template<class T>
 Ref<T> _MR(T* a)
@@ -144,12 +160,12 @@ public:
 	}
 	template<class D> NullableRef<T>& operator=(const NullableRef<D>& r)
 	{
-		if(r.m)
-			r.m->incRef();
+		if(r.getPtr())
+			r->incRef();
 
 		if(m)
 			m->decRef();
-		m=r.m;
+		m=r.getPtr();
 		return *this;
 	}
 	template<class D> NullableRef<T>& operator=(const Ref<D>& r)
@@ -181,6 +197,10 @@ public:
 	{
 		return m!=r.getPtr();
 	}
+	bool operator!=(T* r) const
+	{
+		return m!=r;
+	}
 	~NullableRef()
 	{
 		if(m)
@@ -199,10 +219,28 @@ public:
 	{
 		m=NULL;
 	}
+	template<class D> NullableRef<D> cast() const
+	{
+		if(!m)
+			return NullRef;
+		D* p = static_cast<D*>(m);
+		p->incRef();
+		return _MNR(p);
+	}
 };
 
 //Shorthand notation
 #define _NR NullableRef
+
+template<class T>
+inline std::ostream& operator<<(std::ostream& s, const NullableRef<T>& r)
+{
+	s << "NullableRef: ";
+	if(r.isNull())
+		return s << "null";
+	else
+		return s << *r.getPtr();
+}
 
 template<class T>
 Ref<T> _MR(NullableRef<T> a)

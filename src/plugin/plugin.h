@@ -30,7 +30,6 @@
 #include "backends/netutils.h"
 #include "backends/urlutils.h"
 #include "npscriptobject.h"
-#include <GL/glx.h>
 
 class NPDownloader;
 typedef void(*helper_t)(void*);
@@ -42,10 +41,9 @@ private:
 public:
 	NPDownloadManager(NPP i);
 	~NPDownloadManager();
-	lightspark::Downloader* download(const lightspark::tiny_string& url, bool cached=false, lightspark::LoaderInfo* owner=NULL);
-	lightspark::Downloader* download(const lightspark::URLInfo& url, bool cached=false, lightspark::LoaderInfo* owner=NULL);
+	lightspark::Downloader* download(const lightspark::URLInfo& url, bool cached, lightspark::ILoadable* owner);
 	lightspark::Downloader* downloadWithData(const lightspark::URLInfo& url, const std::vector<uint8_t>& data, 
-			lightspark::LoaderInfo* owner=NULL);
+			lightspark::ILoadable* owner);
 	void destroy(lightspark::Downloader* downloader);
 };
 
@@ -55,17 +53,30 @@ class NPDownloader: public lightspark::Downloader
 	friend class nsPluginInstance;
 private:
 	NPP instance;
-	bool started;
 	static void dlStartCallback(void* th);
 public:
+	enum STATE { INIT=0, STREAM_DESTROYED, ASYNC_DESTROY };
+	STATE state;
 	//Constructor used for the main file
-	NPDownloader(const lightspark::tiny_string& _url, lightspark::LoaderInfo* owner);
-	NPDownloader(const lightspark::tiny_string& _url, bool _cached, NPP _instance, lightspark::LoaderInfo* owner);
-	NPDownloader(const lightspark::tiny_string& _url, const std::vector<uint8_t>& _data, NPP _instance, lightspark::LoaderInfo* owner);
+	NPDownloader(const lightspark::tiny_string& _url, lightspark::ILoadable* owner);
+	NPDownloader(const lightspark::tiny_string& _url, bool _cached, NPP _instance, lightspark::ILoadable* owner);
+	NPDownloader(const lightspark::tiny_string& _url, const std::vector<uint8_t>& _data, NPP _instance, lightspark::ILoadable* owner);
+};
+
+class PluginEngineData: public lightspark::EngineData
+{
+private:
+	nsPluginInstance* instance;
+public:
+	PluginEngineData(nsPluginInstance* i, Display* d, VisualID v, Window win, int w, int h);
+	void setupMainThreadCallback(lightspark::ls_callback_t func, void* arg);
+	void stopMainDownload();
+	bool isSizable() const;
 };
 
 class nsPluginInstance : public nsPluginInstanceBase
 {
+friend class PluginEngineData;
 public:
 	nsPluginInstance(NPP aInstance, int16_t argc, char** argn, char** argv);
 	virtual ~nsPluginInstance();
@@ -80,15 +91,17 @@ public:
 	int32_t Write(NPStream *stream, int32_t offset, int32_t len, void *buffer);
 	int32_t WriteReady(NPStream *stream);
 	void    StreamAsFile(NPStream* stream, const char* fname);
+	void    URLNotify(const char* url, NPReason reason,
+			void* notifyData);
 
 	// locals
 	const char * getVersion();
 	void draw();
 
+	lightspark::SystemState* m_sys;
 private:
-	static void AsyncHelper(void* th, helper_t func, void* privArg);
-	static void StopDownloaderHelper(void* th_void);
 	std::string getPageURL() const;
+	void asyncDownloaderDestruction(NPStream* stream, NPDownloader* dl) const;
 
 	NPP mInstance;
 	NPBool mInitialized;
@@ -105,7 +118,6 @@ private:
 	std::istream mainDownloaderStream;
 	NPDownloader* mainDownloader;
 	NPScriptObjectGW* scriptObject;
-	lightspark::SystemState* m_sys;
 	lightspark::ParseThread* m_pt;
 };
 

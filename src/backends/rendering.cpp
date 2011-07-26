@@ -93,7 +93,7 @@ RenderThread::~RenderThread()
 /*void RenderThread::acquireTempBuffer(number_t xmin, number_t xmax, number_t ymin, number_t ymax)
 {
 	::abort();
-	GLint vertex_coords[8];
+	GLfloat vertex_coords[8];
 	static GLfloat color_coords[16];
 	assert(tempBufferAcquired==false);
 	tempBufferAcquired=true;
@@ -106,7 +106,7 @@ RenderThread::~RenderThread()
 	vertex_coords[4] = xmin;vertex_coords[5] = ymax;
 	vertex_coords[6] = xmax;vertex_coords[7] = ymax;
 
-	glVertexAttribPointer(VERTEX_ATTRIB, 2, GL_INT, GL_FALSE, 0, vertex_coords);
+	glVertexAttribPointer(VERTEX_ATTRIB, 2, GL_FLOAT, GL_FALSE, 0, vertex_coords);
 	glVertexAttribPointer(COLOR_ATTRIB, 4, GL_FLOAT, GL_FALSE, 0, color_coords);
 	glEnableVertexAttribArray(VERTEX_ATTRIB);
 	glEnableVertexAttribArray(COLOR_ATTRIB);
@@ -118,7 +118,7 @@ RenderThread::~RenderThread()
 void RenderThread::blitTempBuffer(number_t xmin, number_t xmax, number_t ymin, number_t ymax)
 {
 	assert(tempBufferAcquired==true);
-	GLint vertex_coords[8];
+	GLfloat vertex_coords[8];
 	tempBufferAcquired=false;
 
 	//Use the blittler program to blit only the used buffer
@@ -133,7 +133,7 @@ void RenderThread::blitTempBuffer(number_t xmin, number_t xmax, number_t ymin, n
 	vertex_coords[4] = xmin;vertex_coords[5] = ymax;
 	vertex_coords[6] = xmax;vertex_coords[7] = ymax;
 
-	glVertexAttribPointer(VERTEX_ATTRIB, 2, GL_INT, GL_FALSE, 0, vertex_coords);
+	glVertexAttribPointer(VERTEX_ATTRIB, 2, GL_FLOAT, GL_FALSE, 0, vertex_coords);
 	glEnableVertexAttribArray(VERTEX_ATTRIB);
 	glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 	glDisableVertexAttribArray(VERTEX_ATTRIB);
@@ -223,13 +223,13 @@ void* RenderThread::worker(RenderThread* th)
 		LOG(LOG_ERROR,_("glX not present"));
 		return NULL;
 	}
-	int attrib[10]={GLX_BUFFER_SIZE,24,GLX_DOUBLEBUFFER,True,None};
+	int attrib[10]={GLX_RED_SIZE, 8, GLX_GREEN_SIZE, 8, GLX_BLUE_SIZE, 8, GLX_DOUBLEBUFFER, True, None};
 	GLXFBConfig* fb=glXChooseFBConfig(d, 0, attrib, &a);
 	if(!fb)
 	{
-		attrib[2]=None;
-		fb=glXChooseFBConfig(d, 0, attrib, &a);
+		attrib[6]=None;
 		LOG(LOG_ERROR,_("Falling back to no double buffering"));
+		fb=glXChooseFBConfig(d, 0, attrib, &a);
 	}
 	if(!fb)
 	{
@@ -505,6 +505,8 @@ void RenderThread::commonGLInit(int width, int height)
 	maskUniform =glGetUniformLocation(gpu_program,"mask");
 	//The uniform that tells the alpha value multiplied to the alpha of every pixel
 	alphaUniform =glGetUniformLocation(gpu_program,"alpha");
+	//The uniform that tells to draw directly using the selected color
+	directUniform =glGetUniformLocation(gpu_program,"direct");
 	//The uniform that contains the coordinate matrix
 	projectionMatrixUniform =glGetUniformLocation(gpu_program,"ls_ProjectionMatrix");
 	modelviewMatrixUniform =glGetUniformLocation(gpu_program,"ls_ModelViewMatrix");
@@ -700,18 +702,16 @@ void RenderThread::mapCairoTexture(int w, int h)
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_BGRA, GL_UNSIGNED_BYTE, cairoTextureData);
 
-	GLint vertex_coords[] = {0,0, w,0, 0,h, w,h};
+	GLfloat vertex_coords[] = {0,0, GLfloat(w),0, 0,GLfloat(h), GLfloat(w),GLfloat(h)};
 	GLfloat texture_coords[] = {0,0, 1,0, 0,1, 1,1};
-	glVertexAttribPointer(VERTEX_ATTRIB, 2, GL_INT, GL_FALSE, 0, vertex_coords);
+	glVertexAttribPointer(VERTEX_ATTRIB, 2, GL_FLOAT, GL_FALSE, 0, vertex_coords);
 	glVertexAttribPointer(TEXCOORD_ATTRIB, 2, GL_FLOAT, GL_FALSE, 0, texture_coords);
 	glEnableVertexAttribArray(VERTEX_ATTRIB);
 	glEnableVertexAttribArray(TEXCOORD_ATTRIB);
 	glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 	glDisableVertexAttribArray(VERTEX_ATTRIB);
 	glDisableVertexAttribArray(TEXCOORD_ATTRIB);
-
 }
-
 
 void RenderThread::plotProfilingData()
 {
@@ -719,25 +719,41 @@ void RenderThread::plotProfilingData()
 	lsglScalef(1.0f/scaleX,-1.0f/scaleY,1);
 	lsglTranslatef(-offsetX,(windowHeight-offsetY)*(-1.0f),0);
 	setMatrixUniform(LSGL_MODELVIEW);
+
 	cairo_t *cr = getCairoContext(windowWidth, windowHeight);
+
+	glUniform1f(rt->directUniform, 1);
 
 	char frameBuf[20];
 	snprintf(frameBuf,20,"Frame %u",m_sys->state.FP);
-	renderText(cr, frameBuf, 20, 20);
+
+	GLfloat vertex_coords[40];
+	GLfloat color_coords[80];
 
 	//Draw bars
-	cairo_set_source_rgba(cr, 0.7, 0.7, 0.7, 0.7);
-
-	for (int i=1;i<10;i++)
+	for (int i=0;i<9;i++)
 	{
-		cairo_move_to(cr, 0, i*windowHeight/10);
-		cairo_line_to(cr, windowWidth, i*windowHeight/10);
+		vertex_coords[i*4] = 0;
+		vertex_coords[i*4+1] = (i+1)*windowHeight/10;
+		vertex_coords[i*4+2] = windowWidth;
+		vertex_coords[i*4+3] = (i+1)*windowHeight/10;
 	}
-	cairo_stroke(cr);
+	for (int i=0;i<80;i++)
+		color_coords[i] = 0.7;
 
+	glVertexAttribPointer(VERTEX_ATTRIB, 2, GL_FLOAT, GL_FALSE, 0, vertex_coords);
+	glVertexAttribPointer(COLOR_ATTRIB, 4, GL_FLOAT, GL_FALSE, 0, color_coords);
+	glEnableVertexAttribArray(VERTEX_ATTRIB);
+	glEnableVertexAttribArray(COLOR_ATTRIB);
+	glDrawArrays(GL_LINES, 0, 20);
+	glDisableVertexAttribArray(VERTEX_ATTRIB);
+	glDisableVertexAttribArray(COLOR_ATTRIB);
+ 
 	list<ThreadProfile>::iterator it=m_sys->profilingData.begin();
 	for(;it!=m_sys->profilingData.end();it++)
 		it->plot(1000000/m_sys->getFrameRate(),cr);
+	glUniform1f(rt->directUniform, 0);
+
 	mapCairoTexture(windowWidth, windowHeight);
 
 	//clear the surface
@@ -745,6 +761,7 @@ void RenderThread::plotProfilingData()
 	cairo_set_operator(cr, CAIRO_OPERATOR_CLEAR);
 	cairo_paint(cr);
 	cairo_restore(cr);
+
 }
 
 void RenderThread::coreRendering()
@@ -1049,7 +1066,7 @@ void RenderThread::renderTextured(const TextureChunk& chunk, int32_t x, int32_t 
 	uint32_t curChunk=0;
 	//The 4 corners of each texture are specified as the vertices of 2 triangles,
 	//so there are 6 vertices per quad, two of them duplicated (the diagonal)
-	GLint *vertex_coords = new GLint[chunk.getNumberOfChunks()*12];
+	GLfloat *vertex_coords = new GLfloat[chunk.getNumberOfChunks()*12];
 	GLfloat *texture_coords = new GLfloat[chunk.getNumberOfChunks()*12];
 	for(uint32_t i=0, k=0;i<chunk.height;i+=128)
 	{
@@ -1111,7 +1128,7 @@ void RenderThread::renderTextured(const TextureChunk& chunk, int32_t x, int32_t 
 		}
 	}
 
-	glVertexAttribPointer(VERTEX_ATTRIB, 2, GL_INT, GL_FALSE, 0, vertex_coords);
+	glVertexAttribPointer(VERTEX_ATTRIB, 2, GL_FLOAT, GL_FALSE, 0, vertex_coords);
 	glVertexAttribPointer(TEXCOORD_ATTRIB, 2, GL_FLOAT, GL_FALSE, 0, texture_coords);
 	glEnableVertexAttribArray(VERTEX_ATTRIB);
 	glEnableVertexAttribArray(TEXCOORD_ATTRIB);

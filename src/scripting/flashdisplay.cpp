@@ -328,6 +328,7 @@ void Loader::execute()
 
 	if(source==URL)
 	{
+		newRoot->setOrigin(url.getParsedURL(), "");
 		//TODO: add security checks
 		LOG(LOG_CALLS,_("Loader async execution ") << url);
 		assert_and_throw(postData.empty());
@@ -1340,15 +1341,30 @@ void DisplayObject::setOnStage(bool staged)
 			requestInvalidation();
 		if(getVm()==NULL)
 			return;
-		if(onStage==true && isConstructed() && hasEventListener("addedToStage"))
+		/*NOTE: By tests we can assert that added/addedToStage is dispatched
+		  immediately when addChild is called. On the other hand setOnStage may
+		  be also called outside of the VM thread (for example by Loader::execute)
+		  so we have to check isVmThread and act accordingly. If in the future
+		  asynchronous uses of setOnStage are removed the code can be simplified
+		  by removing the !isVmThread case.
+		*/
+		if(onStage==true && isConstructed())
 		{
 			this->incRef();
-			getVm()->addEvent(_MR(this),_MR(Class<Event>::getInstanceS("addedToStage")));
+			_R<Event> e=_MR(Class<Event>::getInstanceS("addedToStage"));
+			if(isVmThread)
+				ABCVm::publicHandleEvent(_MR(this),e);
+			else
+				getVm()->addEvent(_MR(this),e);
 		}
-		else if(onStage==false && hasEventListener("removedFromStage"))
+		else if(onStage==false)
 		{
 			this->incRef();
-			getVm()->addEvent(_MR(this),_MR(Class<Event>::getInstanceS("removedFromStage")));
+			_R<Event> e=_MR(Class<Event>::getInstanceS("removedFromStage"));
+			if(isVmThread)
+				ABCVm::publicHandleEvent(_MR(this),e);
+			else
+				getVm()->addEvent(_MR(this),e);
 		}
 	}
 }
@@ -2972,7 +2988,10 @@ ASFUNCTIONBODY(Graphics,beginGradientFill)
 	assert_and_throw(args[2]->getObjectType()==T_ARRAY);
 	Array* alphas=Class<Array>::cast(args[2]);
 
-	assert_and_throw(args[3]->getObjectType()==T_ARRAY);
+	//assert_and_throw(args[3]->getObjectType()==T_ARRAY);
+	//Work around for bug in YouTube player of July 13 2011
+	if(args[3]->getObjectType()==T_UNDEFINED)
+		return NULL;
 	Array* ratios=Class<Array>::cast(args[3]);
 
 	int NumGradient = colors->size();
@@ -3215,6 +3234,15 @@ SimpleButton::SimpleButton(DisplayObject *dS, DisplayObject *hTS,
 	if(hTS) hTS->initFrame();
 	if(oS) oS->initFrame();
 	if(uS) uS->initFrame();
+}
+
+void SimpleButton::finalize()
+{
+	DisplayObjectContainer::finalize();
+	downState.reset();
+	hitTestState.reset();
+	overState.reset();
+	upState.reset();
 }
 
 ASFUNCTIONBODY(SimpleButton,_constructor)
@@ -3504,7 +3532,7 @@ void MovieClip::initFrame()
 	 * may just have registered one. */
 	//TODO: check order: child or parent first?
 	if(newFrame && frameScripts.count(state.FP))
-		frameScripts[state.FP]->call(NULL,NULL,0,false);
+		frameScripts[state.FP]->call(NULL,NULL,0);
 
 }
 

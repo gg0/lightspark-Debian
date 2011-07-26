@@ -49,7 +49,7 @@
 using namespace std;
 using namespace lightspark;
 
-TLSDATA bool isVmThread=false;
+TLSDATA bool lightspark::isVmThread=false;
 
 DoABCTag::DoABCTag(RECORDHEADER h, std::istream& in):ControlTag(h)
 {
@@ -1093,7 +1093,8 @@ void ABCVm::shutdown()
 
 void ABCVm::finalize()
 {
-	if(!events_queue.empty())
+	//The event queue may be not empty if the VM has been been started
+	if(status==CREATED && !events_queue.empty())
 		LOG(LOG_ERROR, "Events queue is not empty as expected");
 	events_queue.clear();
 }
@@ -1209,7 +1210,7 @@ void ABCVm::handleEvent(std::pair<_NR<EventDispatcher>, _R<Event> > e)
 					try
 					{
 						ev->obj->incRef();
-						ASObject* result = ev->f->call(ev->obj.getPtr(),ev->args,ev->numArgs,ev->thisOverride);
+						ASObject* result = ev->f->call(ev->obj.getPtr(),ev->args,ev->numArgs);
 						// We should report the function result
 						if(ev->result != NULL)
 							*(ev->result) = result;
@@ -1236,7 +1237,7 @@ void ABCVm::handleEvent(std::pair<_NR<EventDispatcher>, _R<Event> > e)
 					assert(ev->sync.isNull());
 					if(!ev->obj.isNull())
 						ev->obj->incRef();
-					ASObject* result = ev->f->call(ev->obj.getPtr(),ev->args,ev->numArgs,ev->thisOverride);
+					ASObject* result = ev->f->call(ev->obj.getPtr(),ev->args,ev->numArgs);
 					// We should report the function result
 					if(ev->result != NULL)
 						*(ev->result) = result;
@@ -2125,6 +2126,17 @@ ASObject* method_info::getOptional(unsigned int i)
 {
 	assert_and_throw(i<options.size());
 	return context->getConstant(options[i].kind,options[i].val);
+}
+
+const multiname* method_info::paramTypeName(unsigned int i) const
+{
+	assert_and_throw(i<param_type.size());
+	return context->getMultiname(param_type[i],NULL);
+}
+
+const multiname* method_info::returnTypeName() const
+{
+	return context->getMultiname(return_type,NULL);
 }
 
 istream& lightspark::operator>>(istream& in, s32& v)

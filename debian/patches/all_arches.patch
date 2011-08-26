@@ -1,3 +1,8 @@
+Description: Enable configuration on all architectures.
+Author: Didier Raboud <odyx@debian.org>
+Origin: vendor
+Last-Update: 2011-05-10
+
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
 @@ -100,11 +100,9 @@

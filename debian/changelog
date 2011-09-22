@@ -1,3 +1,18 @@
+lightspark (0.5.1-1) unstable; urgency=low
+
+  * New 0.5.1 upstream release.
+
+  [ Didier Raboud ]
+  * Drop all architecture-widening patches: included upstream.
+  * Drop superfluous build-dependencies: fontconfig, gnash-common and
+    xulrunner-dev.
+  * Drop obsolete configure specifics.
+
+  [ Jani Monoses ]
+  * Drop libnspr build-dependency.
+
+ -- Didier Raboud <odyx@debian.org>  Thu, 22 Sep 2011 14:21:12 +0200
+
 lightspark (0.5.0-2) unstable; urgency=low
 
   * Upload to unstable.

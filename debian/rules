@@ -3,11 +3,6 @@
 %:
 	dh --parallel $@
 
-override_dh_auto_configure:
-	dh_auto_configure -- \
-	    -DCOMPILE_PLUGIN=1 \
-	    -DCMAKE_BUILD_TYPE=Debian
-
 override_dh_strip:
 	dh_strip --dbg-package=lightspark-dbg
 

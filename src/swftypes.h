@@ -45,6 +45,7 @@
 #ifdef BIG_ENDIAN
 #include <algorithm>
 #endif
+#include <glibmm/ustring.h>
 
 namespace lightspark
 {
@@ -58,11 +59,13 @@ namespace lightspark
 	friend class Class<className>; 
 
 enum SWFOBJECT_TYPE { T_OBJECT=0, T_INTEGER=1, T_NUMBER=2, T_FUNCTION=3, T_UNDEFINED=4, T_NULL=5, T_STRING=6, 
-	T_DEFINABLE=7, T_BOOLEAN=8, T_ARRAY=9, T_CLASS=10, T_QNAME=11, T_NAMESPACE=12, T_UINTEGER=13, T_PROXY=14};
+	T_DEFINABLE=7, T_BOOLEAN=8, T_ARRAY=9, T_CLASS=10, T_QNAME=11, T_NAMESPACE=12, T_UINTEGER=13, T_PROXY=14, T_TEMPLATE=15};
 
 enum STACK_TYPE{STACK_NONE=0,STACK_OBJECT,STACK_INT,STACK_UINT,STACK_NUMBER,STACK_BOOLEAN};
 
 enum TRISTATE { TFALSE=0, TTRUE, TUNDEFINED };
+
+enum FILE_TYPE { FT_UNKNOWN=0, FT_SWF, FT_COMPRESSED_SWF, FT_PNG, FT_JPEG, FT_GIF };
 
 typedef double number_t;
 
@@ -145,6 +148,12 @@ public:
 			createBuffer(stringSize);
 		strcpy(buf,r.c_str());
 	}
+	tiny_string(const Glib::ustring& r):buf(_buf_static),stringSize(r.bytes()+1),type(STATIC)
+	{
+		if(stringSize > STATIC_SIZE)
+			createBuffer(stringSize);
+		strcpy(buf,r.c_str());
+	}
 	~tiny_string()
 	{
 		resetToStatic();
@@ -184,6 +193,15 @@ public:
 		strcpy(buf,s.c_str());
 		return *this;
 	}
+	tiny_string& operator=(const Glib::ustring& s)
+	{
+		resetToStatic();
+		stringSize=s.bytes()+1;
+		if(stringSize > STATIC_SIZE)
+			createBuffer(stringSize);
+		strcpy(buf,s.c_str());
+		return *this;
+	}
 	tiny_string& operator=(const char* s)
 	{
 		makePrivateCopy(s);
@@ -203,6 +221,22 @@ public:
 			return false;
 
 		return strcmp(buf,r.buf)==0;
+	}
+	bool operator==(const Glib::ustring& r) const
+	{
+		//The length is checked as an optimization before checking the contents
+		if(stringSize != r.bytes()+1)
+			return false;
+
+		return strcmp(buf,r.c_str())==0;
+	}
+	bool operator==(const std::string& r) const
+	{
+		//The length is checked as an optimization before checking the contents
+		if(stringSize != r.size()+1)
+			return false;
+
+		return strcmp(buf,r.c_str())==0;
 	}
 	bool operator!=(const tiny_string& r) const
 	{
@@ -526,6 +560,7 @@ public:
 	UI8 Red;
 	UI8 Green;
 	UI8 Blue;
+	uint32_t toUInt() const { return Blue + (Green<<8) + (Red<<16); }
 };
 
 class RGBA
@@ -1325,7 +1360,6 @@ public:
 
 ASObject* abstract_i(intptr_t i);
 ASObject* abstract_ui(uint32_t i);
-ASObject* abstract_b(bool i);
 ASObject* abstract_d(number_t i);
 
 void stringToQName(const tiny_string& tmp, tiny_string& name, tiny_string& ns);

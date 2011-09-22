@@ -81,7 +81,8 @@ int main(int argc, char* argv[])
 	SecurityManager::SANDBOXTYPE sandboxType=SecurityManager::LOCAL_WITH_FILE;
 	bool useInterpreter=true;
 	bool useJit=false;
-	LOG_LEVEL log_level=LOG_NOT_IMPLEMENTED;
+	bool exitOnError=false;
+	LOG_LEVEL log_level=LOG_INFO;
 
 	setlocale(LC_ALL, "");
 	bindtextdomain("lightspark", "/usr/share/locale");
@@ -122,7 +123,7 @@ int main(int argc, char* argv[])
 				break;
 			}
 
-			log_level=(LOG_LEVEL)atoi(argv[i]);
+			log_level=(LOG_LEVEL) min(4, max(0, atoi(argv[i])));
 		}
 		else if(strcmp(argv[i],"-p")==0 || 
 			strcmp(argv[i],"--parameters-file")==0)
@@ -171,6 +172,10 @@ int main(int argc, char* argv[])
 		{
 			exit(0);
 		}
+		else if(strcmp(argv[i],"--exit-on-error")==0)
+		{
+			exitOnError = true;
+		}
 		else
 		{
 			//No options flag, so set the swf file name
@@ -188,6 +193,7 @@ int main(int argc, char* argv[])
 		cout << endl << "Usage: " << argv[0] << " [--url|-u http://loader.url/file.swf]" << 
 			" [--disable-interpreter|-ni] [--enable-jit|-j] [--log-level|-l 0-4]" << 
 			" [--parameters-file|-p params-file] [--security-sandbox|-s sandbox]" <<
+			" [--exit-on-error]" <<
 #ifdef PROFILING_SUPPORT
 			" [--profiling-output|-o profiling-file]" << 
 #endif
@@ -217,7 +223,7 @@ int main(int argc, char* argv[])
 	f.exceptions ( istream::eofbit | istream::failbit | istream::badbit );
 	cout.exceptions( ios::failbit | ios::badbit);
 	cerr.exceptions( ios::failbit | ios::badbit);
-	ParseThread* pt = new ParseThread(NULL,f);
+	ParseThread* pt = new ParseThread(f);
 	SystemState::staticInit();
 	//NOTE: see SystemState declaration
 	sys=new SystemState(pt, fileSize);
@@ -243,7 +249,7 @@ int main(int argc, char* argv[])
 	else
 	{
 		sys->setOrigin(string("file://") + fileName);
-		LOG(LOG_NO_INFO, _("Warning: running with no origin URL set."));
+		LOG(LOG_INFO, _("Warning: running with no origin URL set."));
 	}
 
 	//One of useInterpreter or useJit must be enabled
@@ -254,6 +260,7 @@ int main(int argc, char* argv[])
 	}
 	sys->useInterpreter=useInterpreter;
 	sys->useJit=useJit;
+	sys->exitOnError=exitOnError;
 	if(paramsFileName)
 		sys->parseParametersFromFile(paramsFileName);
 #ifdef PROFILING_SUPPORT
@@ -282,13 +289,13 @@ int main(int argc, char* argv[])
 
 	sys->securityManager->setSandboxType(sandboxType);
 	if(sandboxType == SecurityManager::REMOTE)
-		LOG(LOG_NO_INFO, _("Running in remote sandbox"));
+		LOG(LOG_INFO, _("Running in remote sandbox"));
 	else if(sandboxType == SecurityManager::LOCAL_WITH_NETWORK)
-		LOG(LOG_NO_INFO, _("Running in local-with-networking sandbox"));
+		LOG(LOG_INFO, _("Running in local-with-networking sandbox"));
 	else if(sandboxType == SecurityManager::LOCAL_WITH_FILE)
-		LOG(LOG_NO_INFO, _("Running in local-with-filesystem sandbox"));
+		LOG(LOG_INFO, _("Running in local-with-filesystem sandbox"));
 	else if(sandboxType == SecurityManager::LOCAL_TRUSTED)
-		LOG(LOG_NO_INFO, _("Running in local-trusted sandbox"));
+		LOG(LOG_INFO, _("Running in local-trusted sandbox"));
 
 	sys->downloadManager=new StandaloneDownloadManager();
 
@@ -300,7 +307,7 @@ int main(int argc, char* argv[])
 	gdk_threads_leave();
 
 	sys->wait();
-	delete sys;
+	sys->destroy();
 	delete pt;
 
 	SystemState::staticDeinit();

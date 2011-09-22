@@ -37,6 +37,7 @@
 #include "flashdisplay.h"
 #include "flashnet.h"
 #include "flashsystem.h"
+#include "flashsensors.h"
 #include "flashutils.h"
 #include "flashgeom.h"
 #include "flashexternal.h"
@@ -168,6 +169,7 @@ void ABCVm::registerClasses()
 	builtin->setVariableByQName("RegExp","",Class<RegExp>::getClass(),DECLARED_TRAIT);
 	builtin->setVariableByQName("QName","",Class<ASQName>::getClass(),DECLARED_TRAIT);
 	builtin->setVariableByQName("uint","",Class<UInteger>::getClass(),DECLARED_TRAIT);
+	builtin->setVariableByQName("Vector","__AS3__.vec",Template<Vector>::getTemplate(),DECLARED_TRAIT);
 	builtin->setVariableByQName("Error","",Class<ASError>::getClass(),DECLARED_TRAIT);
 	builtin->setVariableByQName("SecurityError","",Class<SecurityError>::getClass(),DECLARED_TRAIT);
 	builtin->setVariableByQName("ArgumentError","",Class<ArgumentError>::getClass(),DECLARED_TRAIT);
@@ -197,6 +199,8 @@ void ABCVm::registerClasses()
 
 	builtin->setVariableByQName("AccessibilityProperties","flash.accessibility",
 			Class<AccessibilityProperties>::getClass(),DECLARED_TRAIT);
+	builtin->setVariableByQName("AccessibilityImplementation","flash.accessibility",
+			Class<AccessibilityImplementation>::getClass(),DECLARED_TRAIT);
 
 	builtin->setVariableByQName("MovieClip","flash.display",Class<MovieClip>::getClass(),DECLARED_TRAIT);
 	builtin->setVariableByQName("DisplayObject","flash.display",Class<DisplayObject>::getClass(),DECLARED_TRAIT);
@@ -230,6 +234,8 @@ void ABCVm::registerClasses()
 	builtin->setVariableByQName("InterpolationMethod","flash.display",Class<InterpolationMethod>::getClass(),DECLARED_TRAIT);
 	builtin->setVariableByQName("FrameLabel","flash.display",Class<FrameLabel>::getClass(),DECLARED_TRAIT);
 	builtin->setVariableByQName("Scene","flash.display",Class<Scene>::getClass(),DECLARED_TRAIT);
+	builtin->setVariableByQName("AVM1Movie","flash.display",Class<AVM1Movie>::getClass(),DECLARED_TRAIT);
+	builtin->setVariableByQName("Shader","flash.display",Class<Shader>::getClass(),DECLARED_TRAIT);
 
 	builtin->setVariableByQName("DropShadowFilter","flash.filters",
 			Class<ASObject>::getClass(QName("DropShadowFilter","flash.filters")),DECLARED_TRAIT);
@@ -335,6 +341,8 @@ void ABCVm::registerClasses()
 			Class<ASObject>::getClass(QName("ContextMenu","flash.ui")),DECLARED_TRAIT);
 	builtin->setVariableByQName("ContextMenuItem","flash.ui",
 			Class<ASObject>::getClass(QName("ContextMenuItem","flash.ui")),DECLARED_TRAIT);
+
+	builtin->setVariableByQName("Accelerometer", "flash.sensors", Class<Accelerometer>::getClass(), DECLARED_TRAIT);
 
 	builtin->setVariableByQName("isNaN","",Class<IFunction>::getFunction(isNaN),DECLARED_TRAIT);
 	builtin->setVariableByQName("isFinite","",Class<IFunction>::getFunction(isFinite),DECLARED_TRAIT);
@@ -530,7 +538,7 @@ multiname* ABCContext::s_getMultiname(call_context* th, ASObject* rt1, int n)
 			}
 			case 0x0f: //RTQName
 			{
-				assert_and_throw(rt1->prototype==Class<Namespace>::getClass());
+				assert_and_throw(rt1->classdef==Class<Namespace>::getClass());
 				Namespace* tmpns=static_cast<Namespace*>(rt1);
 				//TODO: What is the right ns kind?
 				ret->ns.push_back(nsNameAndKind(tmpns->uri,NAMESPACE));
@@ -629,7 +637,7 @@ multiname* ABCContext::s_getMultiname(call_context* th, ASObject* rt1, int n)
 				//Reset the namespaces
 				ret->ns.clear();
 
-				assert_and_throw(rt1->prototype==Class<Namespace>::getClass());
+				assert_and_throw(rt1->classdef==Class<Namespace>::getClass());
 				Namespace* tmpns=static_cast<Namespace*>(rt1);
 				//TODO: What is the right ns kind?
 				ret->ns.push_back(nsNameAndKind(tmpns->uri,NAMESPACE));
@@ -815,7 +823,7 @@ multiname* ABCContext::getMultiname(unsigned int n, call_context* th)
 			case 0x0f: //RTQName
 			{
 				ASObject* n=th->runtime_stack_pop();
-				assert_and_throw(n->prototype==Class<Namespace>::getClass());
+				assert_and_throw(n->classdef==Class<Namespace>::getClass());
 				Namespace* tmpns=static_cast<Namespace*>(n);
 				//TODO: What is the right ns kind?
 				ret->ns.push_back(nsNameAndKind(tmpns->uri,NAMESPACE));
@@ -920,7 +928,7 @@ multiname* ABCContext::getMultiname(unsigned int n, call_context* th)
 				//Reset the namespaces
 				ret->ns.clear();
 
-				assert_and_throw(n->prototype==Class<Namespace>::getClass());
+				assert_and_throw(n->classdef==Class<Namespace>::getClass());
 				Namespace* tmpns=static_cast<Namespace*>(n);
 				//TODO: What is the right kind?
 				ret->ns.push_back(nsNameAndKind(tmpns->uri,NAMESPACE));
@@ -1065,7 +1073,7 @@ ABCVm::ABCVm(SystemState* s):m_sys(s),status(CREATED),shuttingdown(false)
 	uint_manager=new Manager(15);
 	number_manager=new Manager(15);
 	Global=new GlobalObject;
-	LOG(LOG_NO_INFO,_("Global is ") << Global);
+	LOG(LOG_INFO,_("Global is ") << Global);
 	//Push a dummy default context
 	pushObjAndLevel(Class<ASObject>::getInstanceS(),0);
 }
@@ -1105,6 +1113,15 @@ ABCVm::~ABCVm()
 	for(size_t i=0;i<contexts.size();++i)
 		delete contexts[i];
 
+	//free the dummy object
+	if(method_this_stack.size() != 1)
+		LOG(LOG_ERROR,"ABCVm::method_this_stack has not size 1 in destructor!");
+	else
+	{
+		//free the dummy object that we allocated in the constructor
+		popObjAndLevel().cur_this->decRef();
+	}
+
 	sem_destroy(&sem_event_count);
 	sem_destroy(&event_queue_mutex);
 	delete int_manager;
@@ -1122,20 +1139,93 @@ void ABCVm::publicHandleEvent(_R<EventDispatcher> dispatcher, _R<Event> event)
 {
 	std::deque<_R<DisplayObject>> parents;
 	assert_and_throw(event->target==NULL);
-	event->target=dispatcher;
+	event->setTarget(dispatcher);
+	/** rollOver/Out are special: according to spec 
+	http://help.adobe.com/en_US/FlashPlatform/reference/actionscript/3/flash/display/InteractiveObject.html?  		
+	filter_flash=cs5&filter_flashplayer=10.2&filter_air=2.6#event:rollOver 
+	*
+	*   The relatedObject is the object that was previously under the pointing device. 
+	*   The rollOver events are dispatched consecutively down the parent chain of the object, 
+	*   starting with the highest parent that is neither the root nor an ancestor of the relatedObject
+	*   and ending with the object.
+	*
+	*   So no bubbling phase, a truncated capture phase, and sometimes no target phase (when the target is an ancestor 
+	*	of the relatedObject).
+	*/
+	//This is to take care of rollOver/Out
+	bool doTarget = true;
 
 	//capture phase
-	if(dispatcher->prototype->isSubClass(Class<DisplayObject>::getClass()))
+	if(dispatcher->classdef->isSubClass(Class<DisplayObject>::getClass()))
 	{
 		event->eventPhase = EventPhase::CAPTURING_PHASE;
 		dispatcher->incRef();
-		_R<DisplayObject> cur = _MR(dynamic_cast<DisplayObject*>(dispatcher.getPtr()));
-		while(true)
+		//We fetch the relatedObject in the case of rollOver/Out
+		_NR<DisplayObject> rcur;
+		if(event->type == "rollOver" || event->type == "rollOut")
 		{
-			if(cur->getParent() == NULL)
-				break;
-			cur = cur->getParent();
-			parents.push_back(cur);
+			event->incRef();
+			_R<MouseEvent> mevent = _MR(dynamic_cast<MouseEvent*>(event.getPtr()));  
+			if(mevent->relatedObject != NULL) 
+			{  
+				mevent->relatedObject->incRef();
+				rcur = mevent->relatedObject;
+			}
+		}
+		//If the relObj is non null, we get its ancestors to build a truncated parents queue for the target 
+		if(rcur != NULL)
+		{
+			std::vector<_NR<DisplayObject>> rparents;
+			rparents.push_back(rcur);        
+			while(true)
+			{
+				if(rcur->getParent() == NULL)
+					break;
+				rcur = rcur->getParent();
+				rparents.push_back(rcur);
+			}
+			_R<DisplayObject> cur = _MR(dynamic_cast<DisplayObject*>(dispatcher.getPtr()));
+			//Check if cur is an ancestor of rcur
+			auto i = rparents.begin();
+			for(;i!=rparents.end();++i)
+			{
+				if((*i) == cur)
+				{
+					doTarget = false;//If the dispatcher is an ancestor of the relatedObject, no target phase
+					break;
+				}
+			}
+			//Get the parents of cur that are not ancestors of rcur
+			while(true && doTarget)
+			{
+				if(cur->getParent() == NULL)
+					break;        
+				cur = cur->getParent();
+				auto i = rparents.begin();        
+				bool stop = false;
+				for(;i!=rparents.end();++i)
+				{
+					if((*i) == cur) 
+					{
+						stop = true;
+						break;
+					}
+				}
+				if (stop) break;
+				parents.push_back(cur);
+			}          
+		}
+		//The standard behavior
+		else
+		{
+			_R<DisplayObject> cur = _MR(dynamic_cast<DisplayObject*>(dispatcher.getPtr()));
+			while(true)
+			{
+				if(cur->getParent() == NULL)
+					break;
+				cur = cur->getParent();
+				parents.push_back(cur);
+			}
 		}
 		auto i = parents.rbegin();
 		for(;i!=parents.rend();++i)
@@ -1146,9 +1236,12 @@ void ABCVm::publicHandleEvent(_R<EventDispatcher> dispatcher, _R<Event> event)
 	}
 
 	//Do target phase
-	event->eventPhase = EventPhase::AT_TARGET;
-	event->currentTarget=dispatcher;
-	dispatcher->handleEvent(event);
+	if(doTarget)
+	{
+		event->eventPhase = EventPhase::AT_TARGET;
+		event->currentTarget=dispatcher;
+		dispatcher->handleEvent(event);
+	}
 
 	//Do bubbling phase
 	if(event->bubbles && !parents.empty())
@@ -1167,7 +1260,7 @@ void ABCVm::publicHandleEvent(_R<EventDispatcher> dispatcher, _R<Event> event)
 
 	//Reset events so they might be recycled
 	event->currentTarget=NullRef;
-	event->target=NullRef;
+	event->setTarget(NullRef);
 }
 
 void ABCVm::handleEvent(std::pair<_NR<EventDispatcher>, _R<Event> > e)
@@ -1253,14 +1346,20 @@ void ABCVm::handleEvent(std::pair<_NR<EventDispatcher>, _R<Event> > e)
 			}
 			case INIT_FRAME:
 			{
+				InitFrameEvent* ev=static_cast<InitFrameEvent*>(e.second.getPtr());
 				LOG(LOG_CALLS,"INIT_FRAME");
-				sys->getStage()->initFrame();
+				if(!ev->clip.isNull())
+					ev->clip->initFrame();
+				else
+					sys->getStage()->initFrame();
 				break;
 			}
 			case ADVANCE_FRAME:
 			{
+				AdvanceFrameEvent* ev=static_cast<AdvanceFrameEvent*>(e.second.getPtr());
 				LOG(LOG_CALLS,"ADVANCE_FRAME");
 				sys->getStage()->advanceFrame();
+				ev->done.signal();
 				break;
 			}
 			case FLUSH_INVALIDATION_QUEUE:
@@ -1340,7 +1439,7 @@ void ABCVm::buildClassAndInjectBase(const string& s, _R<RootMovieClip> base)
 		return;
 
 	//Let's override the class
-	base->setPrototype(derived_class_tmp);
+	base->setClass(derived_class_tmp);
 	derived_class_tmp->bindToRoot();
 }
 
@@ -1450,6 +1549,9 @@ bool ABCContext::isinstance(ASObject* obj, multiname* name)
 {
 	LOG(LOG_CALLS, _("isinstance ") << *name);
 
+	if(name->qualifiedString() == "::any")
+		return true;
+	
 	ASObject* target;
 	ASObject* ret=getGlobal()->getVariableAndTargetByMultiname(*name, target);
 	if(!ret) //Could not retrieve type
@@ -1471,11 +1573,11 @@ bool ABCContext::isinstance(ASObject* obj, multiname* name)
 		return real_ret;
 	}
 
-	if(obj->prototype)
+	if(obj->classdef)
 	{
 		assert_and_throw(type->getObjectType()==T_CLASS);
 
-		objc=obj->prototype;
+		objc=obj->classdef;
 	}
 	else if(obj->getObjectType()==T_CLASS)
 	{
@@ -1518,7 +1620,11 @@ void ABCContext::exec()
 		SyntheticFunction* mf=Class<IFunction>::getSyntheticFunction(m);
 
 		for(unsigned int j=0;j<scripts[i].trait_count;j++)
+		{
+			mf->incRef();
 			buildTrait(global,&scripts[i].traits[j],false,mf);
+		}
+		mf->decRef(); //free local ref
 
 #ifndef NDEBUG
 		global->initialized=true;
@@ -1538,7 +1644,10 @@ void ABCContext::exec()
 
 	LOG(LOG_CALLS, _("Building entry script traits: ") << scripts[i].trait_count );
 	for(unsigned int j=0;j<scripts[i].trait_count;j++)
+	{
+		entry->incRef();
 		buildTrait(global,&scripts[i].traits[j],false,entry);
+	}
 
 #ifndef NDEBUG
 		global->initialized=true;
@@ -1546,9 +1655,11 @@ void ABCContext::exec()
 	//Register it as one of the global scopes
 	getGlobal()->registerGlobalScope(global);
 
+	global->incRef();
 	ASObject* ret=entry->call(global,NULL,0);
 	if(ret)
 		ret->decRef();
+	entry->decRef(); //free local ref
 	LOG(LOG_CALLS, _("End of Entry Point"));
 }
 
@@ -1606,10 +1717,10 @@ void ABCVm::Run(ABCVm* th)
 				if(th->events_queue.empty())
 					break;
 				//else
-				//	LOG(LOG_NO_INFO,th->events_queue.size() << _(" events missing before exit"));
+				//	LOG(LOG_INFO,th->events_queue.size() << _(" events missing before exit"));
 				else if(firstMissingEvents)
 				{
-					LOG(LOG_NO_INFO,th->events_queue.size() << _(" events missing before exit"));
+					LOG(LOG_INFO,th->events_queue.size() << _(" events missing before exit"));
 					firstMissingEvents = false;
 				}
 			}
@@ -1631,8 +1742,8 @@ void ABCVm::Run(ABCVm* th)
 		}
 		catch(ASObject*& e)
 		{
-			if(e->getPrototype())
-				LOG(LOG_ERROR,_("Unhandled ActionScript exception in VM ") << e->getPrototype()->class_name);
+			if(e->getClass())
+				LOG(LOG_ERROR,_("Unhandled ActionScript exception in VM ") << e->getClass()->class_name);
 			else
 				LOG(LOG_ERROR,_("Unhandled ActionScript exception in VM (no type)"));
 			th->m_sys->setError(_("Unhandled ActionScript exception"));
@@ -1706,7 +1817,7 @@ void ABCContext::linkTrait(Class_base* c, const traits_info* t)
 			}
 			else
 			{
-				LOG(LOG_NOT_IMPLEMENTED,_("Method not linkable"));
+				LOG(LOG_NOT_IMPLEMENTED,_("Method not linkable") << ": " << mname);
 			}
 
 			LOG(LOG_TRACE,_("End Method trait: ") << mname);
@@ -1737,7 +1848,7 @@ void ABCContext::linkTrait(Class_base* c, const traits_info* t)
 			}
 			else
 			{
-				LOG(LOG_NOT_IMPLEMENTED,_("Getter not linkable"));
+				LOG(LOG_NOT_IMPLEMENTED,_("Getter not linkable") << ": " << mname);
 			}
 			
 			LOG(LOG_TRACE,_("End Getter trait: ") << mname);
@@ -1768,7 +1879,7 @@ void ABCContext::linkTrait(Class_base* c, const traits_info* t)
 			}
 			else
 			{
-				LOG(LOG_NOT_IMPLEMENTED,_("Setter not linkable"));
+				LOG(LOG_NOT_IMPLEMENTED,_("Setter not linkable") << ": " << mname);
 			}
 			
 			LOG(LOG_TRACE,_("End Setter trait: ") << mname);
@@ -1824,12 +1935,61 @@ void ABCContext::buildTrait(ASObject* obj, const traits_info* t, bool isBorrowed
 		case traits_info::Class:
 		{
 			//Check if this already defined in upper levels
-			ASObject* tmpo=obj->getVariableByMultiname(mname,true);
+			ASObject* tmpo=obj->getVariableByMultiname(mname,ASObject::SKIP_IMPL);
 			if(tmpo)
 				return;
-
 			ASObject* ret;
-			if(deferred_initialization)
+
+			//check if this class has the 'interface' flag, i.e. it is an interface
+			if((instances[t->classi].flags)&0x04)
+			{
+				const multiname& mname=*getMultiname(t->name,NULL);
+				QName className(mname.name_s,mname.ns[0].name);
+
+				Class_inherit* ci=new Class_inherit(className);
+
+				LOG(LOG_CALLS,_("Building class traits"));
+				for(unsigned int i=0;i<classes[t->classi].trait_count;i++)
+					buildTrait(ci,&classes[t->classi].traits[i],false);
+				//Add protected namespace if needed
+				if((instances[t->classi].flags)&0x08)
+				{
+					ci->use_protected=true;
+					int ns=instances[t->classi].protectedNs;
+					const namespace_info& ns_info=constant_pool.namespaces[ns];
+					ci->protected_ns=nsNameAndKind(getString(ns_info.name),(NS_KIND)(int)ns_info.kind);
+				}
+				LOG(LOG_CALLS,_("Adding immutable object traits to class"));
+				//Class objects also contains all the methods/getters/setters declared for instances
+				for(unsigned int i=0;i<instances[t->classi].trait_count;i++)
+				{
+					int kind=instances[t->classi].traits[i].kind&0xf;
+					if(kind==traits_info::Method || kind==traits_info::Setter || kind==traits_info::Getter)
+						buildTrait(ci,&instances[t->classi].traits[i],true);
+				}
+
+				//add implemented interfaces
+				for(unsigned int i=0;i<instances[t->classi].interface_count;i++)
+				{
+					multiname* name=getMultiname(instances[t->classi].interfaces[i],NULL);
+					ci->addImplementedInterface(*name);
+				}
+
+				ci->class_index=t->classi;
+				ci->context = this;
+
+				//can an interface derive from an other interface?
+				//can an interface derive from an non interface class?
+				assert(instances[t->classi].supername == 0);
+				//do interfaces have cinit methods?
+				//TODO: call them, set constructor property, do something
+				if(classes[t->classi].cinit != 0)
+					LOG(LOG_NOT_IMPLEMENTED,"Interface cinit (static)");
+				if(instances[t->classi].init != 0)
+					LOG(LOG_NOT_IMPLEMENTED,"Interface cinit (constructor)");
+				ret = ci;
+			}
+			else if(deferred_initialization)
 				ret=new ScriptDefinable(deferred_initialization);
 			else
 				ret=new Undefined;
@@ -2011,7 +2171,7 @@ void ABCContext::buildTrait(ASObject* obj, const traits_info* t, bool isBorrowed
 		case traits_info::Const:
 		{
 			//Check if this already defined in upper levels
-			ASObject* tmpo=obj->getVariableByMultiname(mname,true);
+			ASObject* tmpo=obj->getVariableByMultiname(mname,ASObject::SKIP_IMPL);
 			if(tmpo)
 				return;
 
@@ -2044,7 +2204,7 @@ void ABCContext::buildTrait(ASObject* obj, const traits_info* t, bool isBorrowed
 		case traits_info::Slot:
 		{
 			//Check if this already defined in upper levels
-			ASObject* tmpo=obj->getVariableByMultiname(mname,true);
+			ASObject* tmpo=obj->getVariableByMultiname(mname,ASObject::SKIP_IMPL);
 			if(tmpo)
 				return;
 
@@ -2067,13 +2227,17 @@ void ABCContext::buildTrait(ASObject* obj, const traits_info* t, bool isBorrowed
 						typeObject=target->getVariableByMultiname(*type);
 					}
 
-					assert_and_throw(typeObject->getObjectType()==T_CLASS);
-					typeClass=static_cast<Class_base*>(typeObject);
+					assert_and_throw(typeObject->getObjectType()==T_CLASS || typeObject->getObjectType()==T_TEMPLATE);
+					if(typeObject->getObjectType()==T_CLASS)
+						typeClass=static_cast<Class_base*>(typeObject);
+					else
+						typeClass = NULL;
 				}
 			}
 
 			if(t->vindex)
 			{
+				assert(typeClass); //this is not implemented for T_TEMPLATE yet
 				ASObject* ret=getConstant(t->vkind,t->vindex);
 				obj->initializeVariableByMultiname(mname, ret, typeClass);
 				if(t->slot_id)
@@ -2102,11 +2266,13 @@ void ABCContext::buildTrait(ASObject* obj, const traits_info* t, bool isBorrowed
 							ret=abstract_i(0);
 						else if(type->name_s=="Number")
 							ret=abstract_d(numeric_limits<double>::quiet_NaN());
+						else if(type->name_s=="Boolean")
+							ret=abstract_b(false);
 						else
-							ret=new Undefined;
+							ret=new Null;
 					}
 					else
-						ret=new Undefined;
+						ret=new Null;
 				}
 				obj->initializeVariableByMultiname(mname, ret, typeClass);
 
@@ -2144,7 +2310,7 @@ istream& lightspark::operator>>(istream& in, s32& v)
 	int i=0;
 	v.val=0;
 	uint8_t t;
-	bool signExtend=true;
+	//bool signExtend=true;
 	do
 	{
 		in.read((char*)&t,1);
@@ -2157,7 +2323,7 @@ istream& lightspark::operator>>(istream& in, s32& v)
 			uint8_t t2=(t&0xf);
 			v.val|=(t2<<i);
 			//The number is filled, no sign extension
-			signExtend=false;
+			//signExtend=false;
 			break;
 		}
 		else

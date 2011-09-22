@@ -28,6 +28,7 @@
 #define ASFUNCTION(name) \
 	static ASObject* name(ASObject* , ASObject* const* args, const unsigned int argslen)
 
+/* declare setter/getter and associated member variable */
 #define ASPROPERTY_GETTER(type,name) \
 	type name; \
 	ASFUNCTION( _getter_##name)
@@ -41,9 +42,22 @@
 	ASFUNCTION( _getter_##name); \
 	ASFUNCTION( _setter_##name)
 
+/* declare setter/getter for already existing member variable */
+#define ASFUNCTION_GETTER(name) \
+	ASFUNCTION( _getter_##name)
+
+#define ASFUNCTION_SETTER(name) \
+	ASFUNCTION( _setter_##name)
+
+#define ASFUNCTION_GETTER_SETTER(name) \
+	ASFUNCTION( _getter_##name); \
+	ASFUNCTION( _setter_##name)
+
+/* general purpose body for an AS function */
 #define ASFUNCTIONBODY(c,name) \
 	ASObject* c::name(ASObject* obj, ASObject* const* args, const unsigned int argslen)
 
+/* full body for a getter declared by ASPROPERTY_GETTER or ASFUNCTION_GETTER */
 #define ASFUNCTIONBODY_GETTER(c,name) \
 	ASObject* c::_getter_##name(ASObject* obj, ASObject* const* args, const unsigned int argslen) \
 	{ \
@@ -53,6 +67,7 @@
 		return ArgumentConversion<decltype(th->name)>::toAbstract(th->name); \
 	}
 
+/* full body for a getter declared by ASPROPERTY_SETTER or ASFUNCTION_SETTER */
 #define ASFUNCTIONBODY_SETTER(c,name) \
 	ASObject* c::_setter_##name(ASObject* obj, ASObject* const* args, const unsigned int argslen) \
 	{ \
@@ -63,6 +78,9 @@
 		return NULL; \
 	}
 
+/* full body for a getter declared by ASPROPERTY_SETTER or ASFUNCTION_SETTER.
+ * After the property has been updated, the callback member function is called with the old value
+ * as parameter */
 #define ASFUNCTIONBODY_SETTER_CB(c,name,callback) \
 	ASObject* c::_setter_##name(ASObject* obj, ASObject* const* args, const unsigned int argslen) \
 	{ \
@@ -75,6 +93,7 @@
 		return NULL; \
 	}
 
+/* full body for a getter declared by ASPROPERTY_GETTER_SETTER or ASFUNCTION_GETTER_SETTER */
 #define ASFUNCTIONBODY_GETTER_SETTER(c,name) \
 		ASFUNCTIONBODY_GETTER(c,name) \
 		ASFUNCTIONBODY_SETTER(c,name)
@@ -83,8 +102,10 @@
 		ASFUNCTIONBODY_GETTER(c,name) \
 		ASFUNCTIONBODY_SETTER(c,name,callback)
 
+/* registers getter/setter with Class_base. To be used in ::sinit()-functions */
 #define REGISTER_GETTER(c,name) \
 	c->setDeclaredMethodByQName(#name,"",Class<IFunction>::getFunction(_getter_##name),GETTER_METHOD,true)
+
 #define REGISTER_SETTER(c,name) \
 	c->setDeclaredMethodByQName(#name,"",Class<IFunction>::getFunction(_setter_##name),SETTER_METHOD,true)
 
@@ -159,6 +180,7 @@ private:
 	void killObjVar(const multiname& mname);
 	ASObject* getSlot(unsigned int n)
 	{
+		assert(n<=slots_vars.size());
 		return slots_vars[n-1]->second.var.var;
 	}
 	void setSlot(unsigned int n,ASObject* o);
@@ -175,6 +197,13 @@ public:
 	void destroyContents();
 };
 
+/*
+ * This class manages a list of unreferenced
+ * objects (ref_count == 0), which can be reused
+ * to save new/delete. ASObjects that have their
+ * 'manager' property set wont delete themselves
+ * on decRef to zero, but call Manager::put.
+ */
 class Manager
 {
 friend class ASObject;
@@ -186,6 +215,7 @@ public:
 template<class T>
 	T* get();
 	void put(ASObject* o);
+	~Manager();
 };
 
 enum METHOD_TYPE { NORMAL_METHOD=0, SETTER_METHOD=1, GETTER_METHOD=2 };
@@ -200,7 +230,6 @@ friend class InterfaceClass;
 friend class IFunction; //Needed for clone
 CLASSBUILDABLE(ASObject);
 protected:
-	//ASObject* asprototype; //HUMM.. ok the prototype, actually class, should be renamed
 	//maps variable name to namespace and var
 	variables_map Variables;
 	ASObject(Manager* m=NULL);
@@ -209,16 +238,15 @@ protected:
 	SWFOBJECT_TYPE type;
 	void serializeDynamicProperties(ByteArray* out, std::map<tiny_string, uint32_t>& stringMap,
 				std::map<const ASObject*, uint32_t>& objMap) const;
+	obj_var* findGettable(const multiname& name, bool borrowedMode) DLL_LOCAL;
+	obj_var* findSettable(const multiname& name, bool borrowedMode, bool* has_getter=NULL) DLL_LOCAL;
 private:
 	ATOMIC_INT32(ref_count);
 	Manager* manager;
 	int cur_level;
 	virtual int _maxlevel();
-	Class_base* prototype;
+	Class_base* classdef;
 	ACQUIRE_RELEASE_FLAG(constructed);
-	obj_var* findGettable(const multiname& name, bool borrowedMode) DLL_LOCAL;
-	obj_var* findSettable(const multiname& name, bool borrowedMode) DLL_LOCAL;
-	tiny_string toStringImpl() const;
 public:
 #ifndef NDEBUG
 	//Stuff only used in debugging
@@ -226,12 +254,10 @@ public:
 	int getRefCount(){ return ref_count; }
 #endif
 	bool implEnable;
-	void setPrototype(Class_base* c);
-	Class_base* getPrototype() const { return prototype; }
+	void setClass(Class_base* c);
+	Class_base* getClass() const { return classdef; }
 	bool isConstructed() const { return ACQUIRE_READ(constructed); }
 	ASFUNCTION(_constructor);
-	ASFUNCTION(_getPrototype);
-	ASFUNCTION(_setPrototype);
 	ASFUNCTION(_toString);
 	ASFUNCTION(hasOwnProperty);
 	void check() const;
@@ -285,12 +311,13 @@ public:
 	   The finalize method must be callable multiple time with the same effects (no double frees)*/
 	virtual void finalize();
 
-	virtual ASObject* getVariableByMultiname(const multiname& name, bool skip_impl=false);
+	enum GET_VARIABLE_OPTION {NONE=0x00, SKIP_IMPL=0x01, XML_STRICT=0x02};
+	virtual ASObject* getVariableByMultiname(const multiname& name, GET_VARIABLE_OPTION opt=NONE);
 	virtual intptr_t getVariableByMultiname_i(const multiname& name);
 	virtual void setVariableByMultiname_i(const multiname& name, intptr_t value);
 	virtual void setVariableByMultiname(const multiname& name, ASObject* o);
 	void initializeVariableByMultiname(const multiname& name, ASObject* o, Class_base* type);
-	virtual void deleteVariableByMultiname(const multiname& name);
+	virtual bool deleteVariableByMultiname(const multiname& name);
 	void setVariableByQName(const tiny_string& name, const tiny_string& ns, ASObject* o, TRAIT_KIND traitKind);
 	void setVariableByQName(const tiny_string& name, const nsNameAndKind& ns, ASObject* o, TRAIT_KIND traitKind);
 	//NOTE: the isBorrowed flag is used to distinguish methods/setters/getters that are inside a class but on behalf of the instances
@@ -342,8 +369,8 @@ public:
 	}
 	void resetLevel();
 
-	//Prototype handling
-	Class_base* getActualPrototype() const;
+	//Class handling
+	Class_base* getActualClass() const;
 	
 	static void sinit(Class_base* c);
 	static void buildTraits(ASObject* o);
@@ -366,34 +393,38 @@ public:
 				std::map<const ASObject*, uint32_t>& objMap) const;
 
 	virtual ASObject *describeType() const;
+
+	/* returns true if the current object is of type T */
+	template<class T> bool is() const { return dynamic_cast<T*>(this); }
+	/* returns this object casted to the given type.
+	 * You have to make sure that is actually is the type (see is<T>() above)
+	 */
+	template<class T> const T* as() const { return static_cast<const T*>(this); }
+	template<class T> T* as() { return static_cast<T*>(this); }
 };
 
-inline void Manager::put(ASObject* o)
-{
-	if(available.size()>maxCache)
-		delete o;
-	else
-		available.push_back(o);
+class Number;
+class UInteger;
+class Integer;
+class Boolean;
+class Template_base;
+class ASString;
+class Function;
+class Array;
+class Definable;
+class Null;
+class Undefined;
+template<> inline bool ASObject::is<Number>() const { return type==T_NUMBER; }
+template<> inline bool ASObject::is<Integer>() const { return type==T_INTEGER; }
+template<> inline bool ASObject::is<UInteger>() const { return type==T_UINTEGER; }
+template<> inline bool ASObject::is<Boolean>() const { return type==T_BOOLEAN; }
+template<> inline bool ASObject::is<ASString>() const { return type==T_STRING; }
+template<> inline bool ASObject::is<Function>() const { return type==T_FUNCTION; }
+template<> inline bool ASObject::is<Undefined>() const { return type==T_UNDEFINED; }
+template<> inline bool ASObject::is<Null>() const { return type==T_NULL; }
+template<> inline bool ASObject::is<Definable>() const { return type==T_DEFINABLE; }
+template<> inline bool ASObject::is<Array>() const { return type==T_ARRAY; }
+template<> inline bool ASObject::is<Class_base>() const { return type==T_CLASS; }
+template<> inline bool ASObject::is<Template_base>() const { return type==T_TEMPLATE; };
 }
-
-template<class T>
-T* Manager::get()
-{
-	if(available.size())
-	{
-		T* ret=static_cast<T*>(available.back());
-		available.pop_back();
-		ret->incRef();
-		//std::cout << "getting[" << name << "] " << ret << std::endl;
-		return ret;
-	}
-	else
-	{
-		T* ret=Class<T>::getInstanceS(this);
-		//std::cout << "newing" << ret << std::endl;
-		return ret;
-	}
-}
-
-};
 #endif

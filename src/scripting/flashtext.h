@@ -35,20 +35,23 @@ public:
 	ASFUNCTION(enumerateFonts);
 };
 
-class TextField: public DisplayObject, public TextData
+class TextField: public InteractiveObject, public TextData
 {
 private:
-	_NR<InteractiveObject> hitTestImpl(_NR<InteractiveObject> last, number_t x, number_t y);
+        int textWidth, textHeight;
+
+	_NR<InteractiveObject> hitTestImpl(_NR<InteractiveObject> last, number_t x, number_t y, HIT_TYPE type);
 	void renderImpl(bool maskEnabled, number_t t1, number_t t2, number_t t3, number_t t4) const;
 	bool boundsRect(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const;
 	void invalidate();
 	void requestInvalidation();
 	void updateText(const tiny_string& new_text);
 public:
-	TextField() {};
-	TextField(const TextData& textData) : TextData(textData) {};
+	TextField() : textWidth(0),textHeight(0) {};
+	TextField(const TextData& textData) : TextData(textData),textWidth(0),textHeight(0) {};
 	static void sinit(Class_base* c);
 	static void buildTraits(ASObject* o);
+	void setTextSize(int textwidth, int textheight);
 	ASFUNCTION(appendText);
 	ASFUNCTION(_getWidth);
 	ASFUNCTION(_setWidth);
@@ -56,13 +59,18 @@ public:
 	ASFUNCTION(_setHeight);
 	ASFUNCTION(_getText);
 	ASFUNCTION(_setText);
+	ASFUNCTION(_getTextWidth);
+	ASFUNCTION(_getTextHeight);
+	ASFUNCTION(_setTextFormat);
+	ASFUNCTION_GETTER_SETTER(textColor);
 };
 
-class TextFormat: public ASObject, public TextFormat_data
+class TextFormat: public ASObject
 {
 public:
 	static void sinit(Class_base* c);
 	static void buildTraits(ASObject* o);
+	ASPROPERTY_GETTER_SETTER(_NR<ASObject>,color);
 };
 
 class TextFieldType: public ASObject
@@ -106,8 +114,8 @@ protected:
 		{ return TokenContainer::boundsRect(xmin,xmax,ymin,ymax); }
 	void renderImpl(bool maskEnabled, number_t t1, number_t t2, number_t t3, number_t t4) const
 		{ TokenContainer::renderImpl(maskEnabled,t1,t2,t3,t4); }
-	_NR<InteractiveObject> hitTestImpl(_NR<InteractiveObject> last, number_t x, number_t y)
-		{ return TokenContainer::hitTestImpl(last, x, y); }
+	_NR<InteractiveObject> hitTestImpl(_NR<InteractiveObject> last, number_t x, number_t y, HIT_TYPE type)
+		{ return TokenContainer::hitTestImpl(last, x, y, type); }
 public:
 	StaticText() : TokenContainer(this) {};
 	StaticText(const std::vector<GeomToken>& tokens) : TokenContainer(this, tokens, 1.0f/1024.0f/20.0f/20.0f) {};

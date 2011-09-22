@@ -29,6 +29,9 @@
 #include <cmath>
 #include <limits>
 #include <cstdio>
+#include <cstdlib>
+#include <ctype.h>
+#include <errno.h>
 
 #include "abc.h"
 #include "toplevel.h"
@@ -42,6 +45,7 @@
 #include <libxml++/nodes/textnode.h>
 
 using namespace std;
+using namespace Glib;
 using namespace lightspark;
 
 SET_NAMESPACE("");
@@ -50,7 +54,6 @@ REGISTER_CLASS_NAME(Array);
 REGISTER_CLASS_NAME2(ASQName,"QName","");
 REGISTER_CLASS_NAME2(IFunction,"Function","");
 REGISTER_CLASS_NAME2(UInteger,"uint","");
-REGISTER_CLASS_NAME(Boolean);
 REGISTER_CLASS_NAME(Integer);
 REGISTER_CLASS_NAME(Number);
 REGISTER_CLASS_NAME(Namespace);
@@ -68,6 +71,7 @@ REGISTER_CLASS_NAME(ReferenceError);
 REGISTER_CLASS_NAME(SyntaxError);
 REGISTER_CLASS_NAME(TypeError);
 REGISTER_CLASS_NAME(URIError);
+REGISTER_CLASS_NAME(Vector);
 REGISTER_CLASS_NAME(VerifyError);
 REGISTER_CLASS_NAME(XML);
 REGISTER_CLASS_NAME(XMLList);
@@ -75,8 +79,6 @@ REGISTER_CLASS_NAME(XMLList);
 Array::Array()
 {
 	type=T_ARRAY;
-	//constructor=new Function(_constructor);
-	//ASObject::setVariableByQName("toString","",new Function(ASObject::_toString));
 }
 
 void Array::sinit(Class_base* c)
@@ -97,7 +99,7 @@ void Array::sinit(Class_base* c)
 
 	// public functions
 	c->setDeclaredMethodByQName("concat",AS3,Class<IFunction>::getFunction(_concat),NORMAL_METHOD,true);
-	//c->setDeclaredMethodByQName("every",AS3,Class<IFunction>::getFunction(every),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("every",AS3,Class<IFunction>::getFunction(every),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("filter",AS3,Class<IFunction>::getFunction(filter),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("forEach",AS3,Class<IFunction>::getFunction(forEach),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("indexOf",AS3,Class<IFunction>::getFunction(indexOf),NORMAL_METHOD,true);
@@ -108,13 +110,13 @@ void Array::sinit(Class_base* c)
 	c->setDeclaredMethodByQName("push",AS3,Class<IFunction>::getFunction(_push),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("reverse",AS3,Class<IFunction>::getFunction(_reverse),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("shift",AS3,Class<IFunction>::getFunction(shift),NORMAL_METHOD,true);
-	//c->setDeclaredMethodByQName("slice",AS3,Class<IFunction>::getFunction(slice),NORMAL_METHOD,true);
-	//c->setDeclaredMethodByQName("some",AS3,Class<IFunction>::getFunction(some),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("slice",AS3,Class<IFunction>::getFunction(slice),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("some",AS3,Class<IFunction>::getFunction(some),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("sort",AS3,Class<IFunction>::getFunction(_sort),NORMAL_METHOD,true);
 	//c->setDeclaredMethodByQName("sortOn",AS3,Class<IFunction>::getFunction(sortOn),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("splice",AS3,Class<IFunction>::getFunction(splice),NORMAL_METHOD,true);
-	//c->setDeclaredMethodByQName("toLocaleString",AS3,Class<IFunction>::getFunction(toLocaleString),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("toString","",Class<IFunction>::getFunction(_toString),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("toLocaleString",AS3,Class<IFunction>::getFunction(_toString),NORMAL_METHOD,true);
+	c->prototype->setDeclaredMethodByQName("toString","",Class<IFunction>::getFunction(_toString),NORMAL_METHOD,false);
 	c->setDeclaredMethodByQName("unshift",AS3,Class<IFunction>::getFunction(unshift),NORMAL_METHOD,true);
 
 	// workaround, pop was encountered not in the AS3 namespace before, need to investigate it further
@@ -217,6 +219,82 @@ ASFUNCTIONBODY(Array,filter)
 	return ret;
 }
 
+ASFUNCTIONBODY(Array, some)
+{
+	Array* th=static_cast<Array*>(obj);
+	assert_and_throw(argslen==1 || argslen==2);
+	IFunction* f = static_cast<IFunction*>(args[0]);
+	ASObject* params[3];
+	ASObject *funcRet;
+
+	for(unsigned int i=0; i < th->data.size(); i++)
+	{
+		assert_and_throw(th->data[i].type==DATA_OBJECT);
+		params[0] = th->data[i].data;
+		th->data[i].data->incRef();
+		params[1] = abstract_i(i);
+		params[2] = th;
+		th->incRef();
+
+		if(argslen==1)
+		{
+			funcRet=f->call(new Null, params, 3);
+		}
+		else
+		{
+			args[1]->incRef();
+			funcRet=f->call(args[1], params, 3);
+		}
+		if(funcRet)
+		{
+			if(Boolean_concrete(funcRet))
+			{
+				return funcRet;
+			}
+			funcRet->decRef();
+		}
+	}
+	return abstract_b(false);
+}
+
+ASFUNCTIONBODY(Array, every)
+{
+	Array* th=static_cast<Array*>(obj);
+	assert_and_throw(argslen==1 || argslen==2);
+	IFunction* f = static_cast<IFunction*>(args[0]);
+	ASObject* params[3];
+	ASObject *funcRet;
+
+	for(unsigned int i=0; i < th->data.size(); i++)
+	{
+		assert_and_throw(th->data[i].type==DATA_OBJECT);
+		params[0] = th->data[i].data;
+		th->data[i].data->incRef();
+		params[1] = abstract_i(i);
+		params[2] = th;
+		th->incRef();
+
+		if(argslen==1)
+		{
+			funcRet=f->call(new Null, params, 3);
+		}
+		else
+		{
+			args[1]->incRef();
+			funcRet=f->call(args[1], params, 3);
+		}
+		if(funcRet)
+		{
+			if(!Boolean_concrete(funcRet))
+			{
+				return funcRet;
+			}
+			funcRet->decRef();
+		}
+	}
+	return abstract_b(true);
+}
+
 ASFUNCTIONBODY(Array,_getLength)
 {
 	Array* th=static_cast<Array*>(obj);
@@ -259,7 +337,8 @@ ASFUNCTIONBODY(Array, _reverse)
 
 	reverse(th->data.begin(), th->data.end());
 
-	return NULL;
+	th->incRef();
+	return th;
 }
 
 ASFUNCTIONBODY(Array,lastIndexOf)
@@ -315,6 +394,45 @@ ASFUNCTIONBODY(Array,shift)
 	return ret;
 }
 
+int Array::capIndex(int i) const
+{
+	int totalSize=data.size();
+
+	if(totalSize <= 0)
+		return 0;
+	else if(i < -totalSize)
+		return 0;
+	else if(i > totalSize)
+		return totalSize;
+	else if(i>=0)     // 0 <= i < totalSize
+		return i;
+	else              // -totalSize <= i < 0
+	{
+		//A negative i is relative to the end
+		return i+totalSize;
+	}
+}
+
+ASFUNCTIONBODY(Array,slice)
+{
+	Array* th=static_cast<Array*>(obj);
+
+	int startIndex=0;
+	int endIndex=16777215;
+	if(argslen>0)
+		startIndex=args[0]->toInt();
+	if(argslen>1)
+		endIndex=args[1]->toInt();
+
+	startIndex=th->capIndex(startIndex);
+	endIndex=th->capIndex(endIndex);
+	
+	Array* ret=Class<Array>::getInstanceS();
+	for(int i=startIndex; i<endIndex; i++)
+		ret->data.push_back(th->data[i]);
+	return ret;
+}
+
 ASFUNCTIONBODY(Array,splice)
 {
 	Array* th=static_cast<Array*>(obj);
@@ -324,16 +442,7 @@ ASFUNCTIONBODY(Array,splice)
 	int totalSize=th->data.size();
 	Array* ret=Class<Array>::getInstanceS();
 
-	//cap startIndex
-	if(startIndex<0 && -startIndex > totalSize)
-		startIndex=0;
-	else if(startIndex>0 && startIndex > totalSize)
-		startIndex=totalSize;
-	else if(totalSize)
-	{
-		//A negative startIndex is relative to the end
-		startIndex=(startIndex+totalSize)%totalSize;
-	}
+	startIndex=th->capIndex(startIndex);
 
 	if((startIndex+deleteCount)>totalSize)
 		deleteCount=totalSize-startIndex;
@@ -623,7 +732,7 @@ void XML::sinit(Class_base* c)
 	c->super=Class<ASObject>::getClass();
 	c->max_level=c->super->max_level+1;
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
-	c->setDeclaredMethodByQName("toString",AS3,Class<IFunction>::getFunction(XML::_toString),NORMAL_METHOD,true);
+	c->prototype->setDeclaredMethodByQName("toString",AS3,Class<IFunction>::getFunction(XML::_toString),NORMAL_METHOD,false);
 	c->setDeclaredMethodByQName("toXMLString",AS3,Class<IFunction>::getFunction(toXMLString),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("nodeKind",AS3,Class<IFunction>::getFunction(nodeKind),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("children",AS3,Class<IFunction>::getFunction(children),NORMAL_METHOD,true);
@@ -679,7 +788,7 @@ ASFUNCTIONBODY(XML,generator)
 	{
 		return Class<XML>::getInstanceS("");
 	}
-	else if(args[0]->getPrototype()==Class<XML>::getClass())
+	else if(args[0]->getClass()==Class<XML>::getClass())
 	{
 		args[0]->incRef();
 		return args[0];
@@ -772,9 +881,9 @@ ASFUNCTIONBODY(XML,appendChild)
 	XML* th=Class<XML>::cast(obj);
 	assert_and_throw(argslen==1);
 	XML* arg=NULL;
-	if(args[0]->getPrototype()==Class<XML>::getClass())
+	if(args[0]->getClass()==Class<XML>::getClass())
 		arg=Class<XML>::cast(args[0]);
-	else if(args[0]->getPrototype()==Class<XMLList>::getClass())
+	else if(args[0]->getClass()==Class<XMLList>::getClass())
 		arg=Class<XMLList>::cast(args[0])->convertToXML().getPtr();
 
 	if(arg==NULL)
@@ -993,10 +1102,10 @@ void XML::getDescendantsByQName(const tiny_string& name, const tiny_string& ns, 
 	recursiveGetDescendantsByQName(rootXML, node, name, ns, ret);
 }
 
-ASObject* XML::getVariableByMultiname(const multiname& name, bool skip_impl)
+ASObject* XML::getVariableByMultiname(const multiname& name, GET_VARIABLE_OPTION opt)
 {
-	if(skip_impl)
-		return ASObject::getVariableByMultiname(name, skip_impl);
+	if((opt & SKIP_IMPL)!=0)
+		return ASObject::getVariableByMultiname(name,opt);
 
 	if(node==NULL)
 	{
@@ -1066,6 +1175,10 @@ ASObject* XML::getVariableByMultiname(const multiname& name, bool skip_impl)
 
 		for(;it!=children.end();it++)
 			ret.push_back(_MR(Class<XML>::getInstanceS(rootXML, *it)));
+
+		if(ret.size()==0 && (opt & XML_STRICT)!=0)
+			return NULL;
+
 		XMLList* retObj=Class<XMLList>::getInstanceS(ret);
 		//The new object will be incReffed by the calling code
 		retObj->fake_decRef();
@@ -1302,9 +1415,10 @@ void XMLList::sinit(Class_base* c)
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
 	c->setDeclaredMethodByQName("length","",Class<IFunction>::getFunction(_getLength),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("appendChild",AS3,Class<IFunction>::getFunction(appendChild),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("descendants",AS3,Class<IFunction>::getFunction(descendants),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("hasSimpleContent",AS3,Class<IFunction>::getFunction(_hasSimpleContent),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("hasComplexContent",AS3,Class<IFunction>::getFunction(_hasComplexContent),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("toString",AS3,Class<IFunction>::getFunction(_toString),NORMAL_METHOD,true);
+	c->prototype->setDeclaredMethodByQName("toString",AS3,Class<IFunction>::getFunction(_toString),NORMAL_METHOD,false);
 	c->setDeclaredMethodByQName("toXMLString",AS3,Class<IFunction>::getFunction(toXMLString),NORMAL_METHOD,true);
 }
 
@@ -1385,12 +1499,12 @@ ASFUNCTIONBODY(XMLList,generator)
 		ASString* str=Class<ASString>::cast(args[0]);
 		return Class<XMLList>::getInstanceS(str->data);
 	}
-	else if(args[0]->getPrototype()==Class<XMLList>::getClass())
+	else if(args[0]->getClass()==Class<XMLList>::getClass())
 	{
 		args[0]->incRef();
 		return args[0];
 	}
-	else if(args[0]->getPrototype()==Class<XML>::getClass())
+	else if(args[0]->getClass()==Class<XML>::getClass())
 	{
 		std::vector< _R<XML> > nodes;
 		nodes.push_back(_MR(Class<XML>::cast(args[0])));
@@ -1405,14 +1519,24 @@ ASFUNCTIONBODY(XMLList,generator)
 		throw RunTimeException("Type not supported in XMLList()");
 }
 
-ASObject* XMLList::getVariableByMultiname(const multiname& name, bool skip_impl)
+ASFUNCTIONBODY(XMLList,descendants)
 {
-	if(skip_impl || !implEnable)
-		return ASObject::getVariableByMultiname(name,skip_impl);
+	XMLList* th=Class<XMLList>::cast(obj);
+	assert_and_throw(argslen==1);
+	assert_and_throw(args[0]->getObjectType()!=T_QNAME);
+	vector<_R<XML>> ret;
+	th->getDescendantsByQName(args[0]->toString(),"",ret);
+	return Class<XMLList>::getInstanceS(ret);
+}
+
+ASObject* XMLList::getVariableByMultiname(const multiname& name, GET_VARIABLE_OPTION opt)
+{
+	if((opt & SKIP_IMPL)!=0 || !implEnable)
+		return ASObject::getVariableByMultiname(name,opt);
 
 	assert_and_throw(name.ns.size()>0);
 	if(name.ns[0].name!="")
-		return ASObject::getVariableByMultiname(name,skip_impl);
+		return ASObject::getVariableByMultiname(name,opt);
 
 	unsigned int index=0;
 	if(Array::isValidMultiname(name,index))
@@ -1428,7 +1552,7 @@ ASObject* XMLList::getVariableByMultiname(const multiname& name, bool skip_impl)
 		std::vector<_R<XML> >::iterator it=nodes.begin();
 		for(; it!=nodes.end(); ++it)
 		{
-			ASObject *o=(*it)->getVariableByMultiname(name,skip_impl);
+			ASObject *o=(*it)->getVariableByMultiname(name,opt);
 			XMLList *x=dynamic_cast<XMLList *>(o);
 			if(!x)
 				continue;
@@ -1442,6 +1566,9 @@ ASObject* XMLList::getVariableByMultiname(const multiname& name, bool skip_impl)
 			o->incRef();
 			o->decRef();
 		}
+
+		if(retnodes.size()==0 && (opt & XML_STRICT)!=0)
+			return NULL;
 
 		XMLList *ret=Class<XMLList>::getInstanceS(retnodes);
 		ret->fake_decRef();
@@ -1488,6 +1615,15 @@ void XMLList::setVariableByMultiname(const multiname& name, ASObject* o)
 
 	//Nodes are always added at the end. The requested index are ignored. This is a tested behaviour.
 	nodes.push_back(_MR(newNode));
+}
+
+void XMLList::getDescendantsByQName(const tiny_string& name, const tiny_string& ns, std::vector<_R<XML> >& ret)
+{
+	std::vector<_R<XML> >::iterator it=nodes.begin();
+	for(; it!=nodes.end(); ++it)
+	{
+		(*it)->getDescendantsByQName(name, ns, ret);
+	}
 }
 
 _NR<XML> XMLList::convertToXML() const
@@ -1656,29 +1792,6 @@ _R<ASObject> XMLList::nextValue(uint32_t index)
 		throw RunTimeException("XMLList::nextValue out of bounds");
 }
 
-bool Array::isEqual(ASObject* r)
-{
-	assert_and_throw(implEnable);
-	if(r->getObjectType()!=T_ARRAY)
-		return false;
-	else
-	{
-		const Array* ra=static_cast<const Array*>(r);
-		int size=data.size();
-		if(size!=ra->size())
-			return false;
-
-		for(int i=0;i<size;i++)
-		{
-			if(data[i].type!=DATA_OBJECT)
-				throw UnsupportedException("Array::isEqual not completely implemented");
-			if(!data[i].data->isEqual(ra->at(i)))
-				return false;
-		}
-		return true;
-	}
-}
-
 intptr_t Array::getVariableByMultiname_i(const multiname& name)
 {
 	assert_and_throw(implEnable);
@@ -1714,18 +1827,18 @@ intptr_t Array::getVariableByMultiname_i(const multiname& name)
 	return ASObject::getVariableByMultiname_i(name);
 }
 
-ASObject* Array::getVariableByMultiname(const multiname& name, bool skip_impl)
+ASObject* Array::getVariableByMultiname(const multiname& name, GET_VARIABLE_OPTION opt)
 {
-	if(skip_impl || !implEnable)
-		return ASObject::getVariableByMultiname(name,skip_impl);
+	if((opt & SKIP_IMPL)!=0 || !implEnable)
+		return ASObject::getVariableByMultiname(name,opt);
 		
 	assert_and_throw(name.ns.size()>0);
 	if(name.ns[0].name!="")
-		return ASObject::getVariableByMultiname(name,skip_impl);
+		return ASObject::getVariableByMultiname(name,opt);
 
 	unsigned int index=0;
 	if(!isValidMultiname(name,index))
-		return ASObject::getVariableByMultiname(name,skip_impl);
+		return ASObject::getVariableByMultiname(name,opt);
 
 	if(index<data.size())
 	{
@@ -1890,6 +2003,11 @@ ASString::ASString(const string& s):data(s)
 	type=T_STRING;
 }
 
+ASString::ASString(const ustring& s):data(s)
+{
+	type=T_STRING;
+}
+
 ASString::ASString(const tiny_string& s):data(s.raw_buf())
 {
 	type=T_STRING;
@@ -1900,8 +2018,12 @@ ASString::ASString(const char* s):data(s)
 	type=T_STRING;
 }
 
-ASString::ASString(const char* s, uint32_t len):data(s, len)
+ASString::ASString(const char* s, uint32_t len)
 {
+	//we cannot use the ustring(const char*,size_t) constructor,
+	//because it expects the number of utf8-characters as second
+	//parameter
+	data = std::string(s,len);
 	type=T_STRING;
 }
 
@@ -1942,7 +2064,7 @@ void ASString::sinit(Class_base* c)
 	c->setDeclaredMethodByQName("toUpperCase",AS3,Class<IFunction>::getFunction(toUpperCase),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("fromCharCode",AS3,Class<IFunction>::getFunction(fromCharCode),NORMAL_METHOD,false);
 	c->setDeclaredMethodByQName("length","",Class<IFunction>::getFunction(_getLength),GETTER_METHOD,true);
-	c->setDeclaredMethodByQName("toString",AS3,Class<IFunction>::getFunction(ASString::_toString),NORMAL_METHOD,true);
+	c->prototype->setDeclaredMethodByQName("toString",AS3,Class<IFunction>::getFunction(ASString::_toString),NORMAL_METHOD,false);
 }
 
 void ASString::buildTraits(ASObject* o)
@@ -1963,109 +2085,113 @@ void Array::finalize()
 ASFUNCTIONBODY(ASString,search)
 {
 	ASString* th=static_cast<ASString*>(obj);
-	int ret=-1;
-	if(args[0]->getPrototype() && args[0]->getPrototype()==Class<RegExp>::getClass())
+	int ret = -1;
+	if(argslen == 0 || args[0]->getObjectType() == T_UNDEFINED)
+		return abstract_i(-1);
+
+	int options=PCRE_UTF8;
+	ustring restr;
+	if(args[0]->getClass() && args[0]->getClass()==Class<RegExp>::getClass())
 	{
 		RegExp* re=static_cast<RegExp*>(args[0]);
-
-		const char* error;
-		int errorOffset;
-		int options=0;
+		restr = re->re;
 		if(re->ignoreCase)
 			options|=PCRE_CASELESS;
 		if(re->extended)
 			options|=PCRE_EXTENDED;
 		if(re->multiline)
 			options|=PCRE_MULTILINE;
-		pcre* pcreRE=pcre_compile(re->re.c_str(), options, &error, &errorOffset,NULL);
-		if(error)
-			return abstract_i(ret);
-		//Verify that 30 for ovector is ok, it must be at least (captGroups+1)*3
-		int capturingGroups;
-		int infoOk=pcre_fullinfo(pcreRE, NULL, PCRE_INFO_CAPTURECOUNT, &capturingGroups);
-		if(infoOk!=0)
-		{
-			pcre_free(pcreRE);
-			return abstract_i(ret);
-		}
-		assert_and_throw(capturingGroups<10);
-		int ovector[30];
-		int offset=0;
-		//Global is not used in search
-		int rc=pcre_exec(pcreRE, NULL, th->data.c_str(), th->data.size(), offset, 0, ovector, 30);
-		if(rc<0)
-		{
-			//No matches or error
-			pcre_free(pcreRE);
-			return abstract_i(ret);
-		}
-		ret=ovector[0];
 	}
 	else
 	{
-		const string& arg0=args[0]->toString().raw_buf();
-		size_t index=th->data.find(arg0);
-		if(index!=th->data.npos)
-			ret=index;
+		restr = args[0]->toString().raw_buf();
 	}
+
+	const char* error;
+	int errorOffset;
+	pcre* pcreRE=pcre_compile(restr.c_str(), options, &error, &errorOffset,NULL);
+	if(error)
+		return abstract_i(ret);
+	//Verify that 30 for ovector is ok, it must be at least (captGroups+1)*3
+	int capturingGroups;
+	int infoOk=pcre_fullinfo(pcreRE, NULL, PCRE_INFO_CAPTURECOUNT, &capturingGroups);
+	if(infoOk!=0)
+	{
+		pcre_free(pcreRE);
+		return abstract_i(ret);
+	}
+	assert_and_throw(capturingGroups<10);
+	int ovector[30];
+	int offset=0;
+	//Global is not used in search
+	int rc=pcre_exec(pcreRE, NULL, th->data.c_str(), th->data.bytes(), offset, 0, ovector, 30);
+	if(rc<0)
+	{
+		//No matches or error
+		pcre_free(pcreRE);
+		return abstract_i(ret);
+	}
+	ret=ovector[0];
 	return abstract_i(ret);
 }
 
 ASFUNCTIONBODY(ASString,match)
 {
 	ASString* th=static_cast<ASString*>(obj);
-	if(args[0]->getObjectType()==T_NULL || args[0]->getObjectType()==T_UNDEFINED)
+	if(argslen == 0 || args[0]->getObjectType()==T_NULL || args[0]->getObjectType()==T_UNDEFINED)
 		return new Null;
 	Array* ret=NULL;
-	if(args[0]->getPrototype() && args[0]->getPrototype()==Class<RegExp>::getClass())
+
+	int options=PCRE_UTF8;
+	ustring restr;
+	bool isGlobal = false;
+	if(args[0]->getClass() && args[0]->getClass()==Class<RegExp>::getClass())
 	{
 		RegExp* re=static_cast<RegExp*>(args[0]);
-
-		const char* error;
-		int errorOffset;
-		int options=0;
+		restr = re->re;
 		if(re->ignoreCase)
 			options|=PCRE_CASELESS;
 		if(re->extended)
 			options|=PCRE_EXTENDED;
 		if(re->multiline)
 			options|=PCRE_MULTILINE;
-		pcre* pcreRE=pcre_compile(re->re.c_str(), options, &error, &errorOffset,NULL);
-		if(error)
-			return new Null;
-		//Verify that 30 for ovector is ok, it must be at least (captGroups+1)*3
-		int capturingGroups;
-		int infoOk=pcre_fullinfo(pcreRE, NULL, PCRE_INFO_CAPTURECOUNT, &capturingGroups);
-		if(infoOk!=0)
-		{
-			pcre_free(pcreRE);
-			return new Null;
-		}
-		assert_and_throw(capturingGroups<10);
-		int ovector[30];
-		int offset=0;
-		ret=Class<Array>::getInstanceS();
-		do
-		{
-			int rc=pcre_exec(pcreRE, NULL, th->data.c_str(), th->data.size(), offset, 0, ovector, 30);
-			if(rc<0)
-			{
-				//No matches or error
-				pcre_free(pcreRE);
-				return ret;
-			}
-			ret->push(Class<ASString>::getInstanceS(th->data.substr(ovector[0], ovector[1]-ovector[0])));
-			offset=ovector[1];
-		}
-		while(re->global);
+		isGlobal = re->global;
 	}
 	else
+		restr = args[0]->toString().raw_buf();
+
+	const char* error;
+	int errorOffset;
+	pcre* pcreRE=pcre_compile(restr.c_str(), options, &error, &errorOffset,NULL);
+	if(error)
+		return new Null;
+	//Verify that 30 for ovector is ok, it must be at least (captGroups+1)*3
+	int capturingGroups;
+	int infoOk=pcre_fullinfo(pcreRE, NULL, PCRE_INFO_CAPTURECOUNT, &capturingGroups);
+	if(infoOk!=0)
 	{
-		ret=Class<Array>::getInstanceS();
-		const tiny_string& arg0=args[0]->toString();
-		if(th->data.find(arg0.raw_buf())!=th->data.npos) //Match found
-			ret->push(Class<ASString>::getInstanceS(arg0));
+		pcre_free(pcreRE);
+		return new Null;
 	}
+	assert_and_throw(capturingGroups<10);
+	int ovector[30];
+	int offset=0;
+	ret=Class<Array>::getInstanceS();
+	do
+	{
+		int rc=pcre_exec(pcreRE, NULL, th->data.c_str(), th->data.bytes(), offset, 0, ovector, 30);
+		if(rc<0)
+		{
+			//No matches or error
+			pcre_free(pcreRE);
+			return ret;
+		}
+		//we cannot use ustrings substr here, because pcre returns those indices in bytes
+		//and ustring expects number of UTF8 characters. The same holds for ustring constructor
+		ret->push(Class<ASString>::getInstanceS(th->data.raw().substr(ovector[0],ovector[1]-ovector[0])));
+		offset=ovector[1];
+	}
+	while(isGlobal);
 	return ret;
 }
 
@@ -2080,20 +2206,29 @@ ASFUNCTIONBODY(ASString,split)
 {
 	ASString* th=static_cast<ASString*>(obj);
 	Array* ret=Class<Array>::getInstanceS();
+	assert(argslen >= 1);
 	ASObject* delimiter=args[0];
-	if(delimiter->getObjectType()==T_UNDEFINED)
+	if(argslen == 0 || delimiter->getObjectType()==T_UNDEFINED)
 	{
 		ret->push(Class<ASString>::getInstanceS(th->data));
 		return ret;
 	}
 
-	if(args[0]->getPrototype() && args[0]->getPrototype()==Class<RegExp>::getClass())
+	if(args[0]->getClass() && args[0]->getClass()==Class<RegExp>::getClass())
 	{
 		RegExp* re=static_cast<RegExp*>(args[0]);
 
+		if(re->re.length() == 0)
+		{
+			//the RegExp is empty, so split every character
+			for(size_t i=0;i<th->data.size();++i)
+				ret->push( Class<ASString>::getInstanceS(th->data.substr(i,1)) );
+			return ret;
+		}
+
 		const char* error;
 		int offset;
-		int options=0;
+		int options=PCRE_UTF8;
 		if(re->ignoreCase)
 			options|=PCRE_CASELESS;
 		if(re->extended)
@@ -2117,7 +2252,8 @@ ASFUNCTIONBODY(ASString,split)
 		unsigned int end;
 		do
 		{
-			int rc=pcre_exec(pcreRE, NULL, th->data.c_str(), th->data.size(), offset, 0, ovector, 30);
+			//offset is a byte offset that must point to the beginning of an utf8 character
+			int rc=pcre_exec(pcreRE, NULL, th->data.c_str(), th->data.bytes(), offset, 0, ovector, 30);
 			end=ovector[0];
 			if(rc<0)
 				end=th->data.size();
@@ -2127,7 +2263,8 @@ ASFUNCTIONBODY(ASString,split)
 			//Insert capturing groups
 			for(int i=1;i<rc;i++)
 			{
-				ASString* s=Class<ASString>::getInstanceS(th->data.substr(ovector[i*2],ovector[i*2+1]-ovector[i*2]));
+				//use string interface through raw(), because we index on bytes, not on UTF-8 characters
+				ASString* s=Class<ASString>::getInstanceS(th->data.raw().substr(ovector[i*2],ovector[i*2+1]-ovector[i*2]));
 				ret->push(s);
 			}
 		}
@@ -2341,11 +2478,6 @@ void Array::serialize(ByteArray* out, std::map<tiny_string, uint32_t>& stringMap
 	}
 }
 
-tiny_string Boolean::toString(bool debugMsg)
-{
-	return (val)?"true":"false";
-}
-
 tiny_string ASString::toString_priv() const
 {
 	return data;
@@ -2360,20 +2492,44 @@ tiny_string ASString::toString(bool debugMsg)
 double ASString::toNumber()
 {
 	assert_and_throw(implEnable);
-	for(unsigned int i=0;i<data.size();i++)
-	{
-		if(!((data[i]>='0' && data[i]<='9') || data[i]=='.')) //not a number
+
+	const char *s=data.c_str();
+	char *end=NULL;
+	double val=strtod(s, &end);
+
+	// strtod converts case-insensitive "inf" and "infinity" to
+	// inf, flash only accepts case-sensitive "Infinity".
+	if(std::isinf(val)) {
+		const char *tmp=s;
+		while(isspace(*tmp))
+			tmp++;
+		if(*tmp=='+' || *tmp=='-')
+			tmp++;
+		if(strncasecmp(tmp, "inf", 3)==0 && strcmp(tmp, "Infinity")!=0)
 			return numeric_limits<double>::quiet_NaN();
 	}
-	return atof(data.c_str());
+
+	// Fail if there is any rubbish after the converted number
+	while(*end)
+	{
+		if(!isspace(*end))
+			return numeric_limits<double>::quiet_NaN();
+		end++;
+	}
+
+	return val;
 }
 
 int32_t ASString::toInt()
 {
 	assert_and_throw(implEnable);
-	if(data.empty() || !isdigit(data[0]))
-		return 0;
-	return atoi(data.c_str());
+	return atol(data.c_str());
+}
+
+uint32_t ASString::toUInt()
+{
+	assert_and_throw(implEnable);
+	return atol(data.c_str());
 }
 
 bool ASString::isEqual(ASObject* r)
@@ -2420,19 +2576,6 @@ void ASString::serialize(ByteArray* out, std::map<tiny_string, uint32_t>& string
 {
 	out->writeByte(amf3::string_marker);
 	out->writeStringVR(stringMap, data);
-}
-
-bool Boolean::isEqual(ASObject* r)
-{
-	if(r->getObjectType()==T_BOOLEAN)
-	{
-		const Boolean* b=static_cast<const Boolean*>(r);
-		return b->val==val;
-	}
-	else
-	{
-		return ASObject::isEqual(r);
-	}
 }
 
 Undefined::Undefined()
@@ -2513,8 +2656,7 @@ ASFUNCTIONBODY(Integer,_toString)
 
 ASFUNCTIONBODY(Integer,generator)
 {
-	//Int is specified as 32bit
-	return abstract_i(args[0]->toInt()&0xffffffff);
+	return abstract_i(args[0]->toInt());
 }
 
 TRISTATE Integer::isLess(ASObject* o)
@@ -2524,6 +2666,13 @@ TRISTATE Integer::isLess(ASObject* o)
 		case T_INTEGER:
 			{
 				Integer* i=static_cast<Integer*>(o);
+				return (val < i->toInt())?TTRUE:TFALSE;
+			}
+			break;
+
+		case T_UINTEGER:
+			{
+				UInteger* i=static_cast<UInteger*>(o);
 				return (val < i->toInt())?TTRUE:TFALSE;
 			}
 			break;
@@ -2589,6 +2738,8 @@ bool Integer::isEqual(ASObject* o)
 	}
 	else if(o->getObjectType()==T_NUMBER)
 		return val==o->toNumber();
+	else if(o->getObjectType()==T_BOOLEAN)
+		return val==o->toInt();
 	else
 	{
 		return ASObject::isEqual(o);
@@ -2624,7 +2775,7 @@ void Integer::sinit(Class_base* c)
 	c->setVariableByQName("MIN_VALUE","",new Integer(-2147483648),DECLARED_TRAIT);
 	c->super=Class<ASObject>::getClass();
 	c->max_level=c->super->max_level+1;
-	c->setDeclaredMethodByQName("toString",AS3,Class<IFunction>::getFunction(Integer::_toString),NORMAL_METHOD,true);
+	c->prototype->setDeclaredMethodByQName("toString",AS3,Class<IFunction>::getFunction(Integer::_toString),NORMAL_METHOD,false);
 }
 
 void Integer::serialize(ByteArray* out, std::map<tiny_string, uint32_t>& stringMap,
@@ -2637,23 +2788,15 @@ void Integer::serialize(ByteArray* out, std::map<tiny_string, uint32_t>& stringM
 tiny_string UInteger::toString(bool debugMsg)
 {
 	char buf[20];
-	buf[19]=0;
-	char* cur=buf+19;
-
-	int v=val;
-	do
-	{
-		cur--;
-		*cur='0'+(v%10);
-		v/=10;
-	}
-	while(v!=0);
-	return tiny_string(cur,true); //Create a copy
+	snprintf(buf,sizeof(buf),"%u",val);
+	return tiny_string(buf,true);
 }
 
 TRISTATE UInteger::isLess(ASObject* o)
 {
-	if(o->getObjectType()==T_INTEGER)
+	if(o->getObjectType()==T_INTEGER ||
+	   o->getObjectType()==T_UINTEGER || 
+	   o->getObjectType()==T_BOOLEAN)
 	{
 		uint32_t val1=val;
 		int32_t val2=o->toInt();
@@ -2677,11 +2820,18 @@ TRISTATE UInteger::isLess(ASObject* o)
 		throw UnsupportedException("UInteger::isLess is not completely implemented");
 }
 
+ASFUNCTIONBODY(UInteger,generator)
+{
+	return abstract_ui(args[0]->toUInt());
+}
+
 bool Number::isEqual(ASObject* o)
 {
 	if(o->getObjectType()==T_INTEGER)
 		return val==o->toNumber();
 	else if(o->getObjectType()==T_NUMBER)
+		return val==o->toNumber();
+	else if(o->getObjectType()==T_BOOLEAN)
 		return val==o->toNumber();
 	else
 	{
@@ -2704,6 +2854,10 @@ TRISTATE Number::isLess(ASObject* o)
 		if(std::isnan(i->val)) return TUNDEFINED;
 		return (val<i->val)?TTRUE:TFALSE;
 	}
+	else if(o->getObjectType()==T_BOOLEAN)
+	{
+		return (val<o->toNumber())?TTRUE:TFALSE;
+	}
 	else if(o->getObjectType()==T_UNDEFINED)
 	{
 		//Undefined is NaN, so the result is undefined
@@ -2723,9 +2877,23 @@ TRISTATE Number::isLess(ASObject* o)
 	}
 }
 
-void Number::purgeTrailingZeroes(char* buf, int bufLen)
+/*
+ * This purges trailing zeros from the right, i.e.
+ * "144124.45600" -> "144124.456"
+ * "144124.000" -> "144124"
+ * "144124.45600e+12" -> "144124.456e+12"
+ * "144124.45600e+07" -> 144124.456e+7"
+ * and it transforms the ',' into a '.' if found.
+ */
+void Number::purgeTrailingZeroes(char* buf)
 {
-	int i=bufLen-1;
+	int i=strlen(buf)-1;
+	int Epos = 0;
+	if(i>4 && buf[i-3] == 'e')
+	{
+		Epos = i-3;
+		i=i-4;
+	}
 	for(;i>0;i--)
 	{
 		if(buf[i]!='0')
@@ -2737,7 +2905,19 @@ void Number::purgeTrailingZeroes(char* buf, int bufLen)
 		i--;
 		commaFound=true;
 	}
-	buf[i+1]='\0';
+	if(Epos)
+	{
+		//copy e+12 to the current place
+		strncpy(buf+i+1,buf+Epos,5);
+		if(buf[i+3] == '0')
+		{
+			//this looks like e+07, so turn it into e+7
+			buf[i+3] = buf[i+4];
+			buf[i+4] = '\0';
+		}
+	}
+	else
+		buf[i+1]='\0';
 
 	if(commaFound)
 		return;
@@ -2755,6 +2935,8 @@ void Number::purgeTrailingZeroes(char* buf, int bufLen)
 
 ASFUNCTIONBODY(Number,_toString)
 {
+	if(!obj->is<Number>())
+		throw Class<TypeError>::getInstanceS("Number.toString is not generic");
 	Number* th=static_cast<Number*>(obj);
 	int radix=10;
 	char buf[20];
@@ -2764,8 +2946,8 @@ ASFUNCTIONBODY(Number,_toString)
 
 	if(radix==10)
 	{
-		int bufLen=snprintf(buf,20,"%#f",th->val);
-		purgeTrailingZeroes(buf,bufLen);
+		//see e 15.7.4.2
+		return Class<ASString>::getInstanceS(th->toString(false));
 	}
 	else if(radix==16)
 		snprintf(buf,20,"%"PRIx64,(int64_t)th->val);
@@ -2775,14 +2957,33 @@ ASFUNCTIONBODY(Number,_toString)
 
 ASFUNCTIONBODY(Number,generator)
 {
-	return abstract_d(args[0]->toNumber());
+	if(argslen==0)
+		return abstract_d(0.);
+	else
+		return abstract_d(args[0]->toNumber());
 }
 
 tiny_string Number::toString(bool debugMsg)
 {
-	char buf[20];
-	int bufLen=snprintf(buf,20,"%#f",val);
-	purgeTrailingZeroes(buf,bufLen);
+	if(std::isnan(val))
+		return "NaN";
+	if(std::isinf(val))
+	{
+		if(val > 0)
+			return "Infinity";
+		else
+			return "-Infinity";
+	}
+	if(val == 0) //this also handles the case '-0'
+		return "0";
+
+	//See ecma3 8.9.1
+	char buf[40];
+	if(fabs(val) >= 1e+21 || fabs(val) <= 1e-6)
+		snprintf(buf,40,"%.15e",val);
+	else
+		snprintf(buf,40,"%.15f",val);
+	purgeTrailingZeroes(buf);
 	return tiny_string(buf,true);
 }
 
@@ -2790,20 +2991,34 @@ void Number::sinit(Class_base* c)
 {
 	c->super=Class<ASObject>::getClass();
 	c->max_level=c->super->max_level+1;
+	c->setConstructor(Class<IFunction>::getFunction(_constructor));
 	//Must create and link the number the hard way
 	Number* ninf=new Number(-numeric_limits<double>::infinity());
 	Number* pinf=new Number(numeric_limits<double>::infinity());
 	Number* pmax=new Number(numeric_limits<double>::max());
 	Number* pmin=new Number(numeric_limits<double>::min());
-	ninf->setPrototype(c);
-	pinf->setPrototype(c);
-	pmax->setPrototype(c);
-	pmin->setPrototype(c);
+	Number* pnan=new Number(numeric_limits<double>::quiet_NaN());
+	ninf->setClass(c);
+	pinf->setClass(c);
+	pmax->setClass(c);
+	pmin->setClass(c);
+	pnan->setClass(c);
 	c->setVariableByQName("NEGATIVE_INFINITY","",ninf,DECLARED_TRAIT);
 	c->setVariableByQName("POSITIVE_INFINITY","",pinf,DECLARED_TRAIT);
 	c->setVariableByQName("MAX_VALUE","",pmax,DECLARED_TRAIT);
 	c->setVariableByQName("MIN_VALUE","",pmin,DECLARED_TRAIT);
-	c->setDeclaredMethodByQName("toString",AS3,Class<IFunction>::getFunction(Number::_toString),NORMAL_METHOD,true);
+	c->setVariableByQName("NaN","",pnan,DECLARED_TRAIT);
+	c->prototype->setDeclaredMethodByQName("toString",AS3,Class<IFunction>::getFunction(Number::_toString),NORMAL_METHOD,false);
+}
+
+ASFUNCTIONBODY(Number,_constructor)
+{
+	Number* th=static_cast<Number*>(obj);
+	if(args && argslen==1)
+		th->val=args[0]->toNumber();
+	else
+		th->val=0;
+	return NULL;
 }
 
 void Number::serialize(ByteArray* out, std::map<tiny_string, uint32_t>& stringMap,
@@ -3031,6 +3246,10 @@ void IFunction::finalize()
 	closure_this.reset();
 }
 
+/**
+ * This provides a unified interface for calling a C++/ABC code function.
+ * It consumes one reference of obj and one of each arg
+ */
 ASObject* IFunction::call(ASObject* obj, ASObject* const* args, uint32_t num_args)
 {
 	return callImpl(obj, args, num_args, false);
@@ -3039,13 +3258,12 @@ ASObject* IFunction::call(ASObject* obj, ASObject* const* args, uint32_t num_arg
 ASFUNCTIONBODY(IFunction,apply)
 {
 	IFunction* th=static_cast<IFunction*>(obj);
-	assert_and_throw(argslen==2);
+	assert_and_throw(argslen<=2);
 
 	ASObject** newArgs=NULL;
 	int newArgsLen=0;
-
 	//Validate parameters
-	if(args[1]->getObjectType()==T_ARRAY)
+	if(argslen == 2 && args[1]->getObjectType()==T_ARRAY)
 	{
 		Array* array=Class<Array>::cast(args[1]);
 
@@ -3061,8 +3279,8 @@ ASFUNCTIONBODY(IFunction,apply)
 	args[0]->incRef();
 	bool overrideThis=true;
 	//Only allow overriding if the type of args[0] is a subclass of closure_this
-	if(!(th->closure_this.getPtr() && th->closure_this->prototype && args[0]->prototype && 
-				args[0]->prototype->isSubClass(th->closure_this->prototype)) ||	args[0]->prototype==NULL)
+	if(!(th->closure_this.getPtr() && th->closure_this->classdef && args[0]->classdef && 
+				args[0]->classdef->isSubClass(th->closure_this->classdef)) ||	args[0]->classdef==NULL)
 	{
 		overrideThis=false;
 	}
@@ -3095,8 +3313,8 @@ ASFUNCTIONBODY(IFunction,_call)
 	}
 	bool overrideThis=true;
 	//Only allow overriding if the type of args[0] is a subclass of closure_this
-	if(!(th->closure_this.getPtr() && th->closure_this->prototype && args[0]->prototype && 
-			args[0]->prototype->isSubClass(th->closure_this->prototype)) ||	args[0]->prototype==NULL)
+	if(!(th->closure_this.getPtr() && th->closure_this->classdef && args[0]->classdef && 
+			args[0]->classdef->isSubClass(th->closure_this->classdef)) ||	args[0]->classdef==NULL)
 	{
 		overrideThis=false;
 	}
@@ -3138,6 +3356,11 @@ void SyntheticFunction::finalize()
 	func_scope.clear();
 }
 
+/**
+ * This prepares a new call_context and then executes the ABC bytecode function
+ * by ABCVm::executeFunction() or through JIT.
+ * It consumes one reference of obj and one of each arg
+ */
 ASObject* SyntheticFunction::callImpl(ASObject* obj, ASObject* const* args, uint32_t numArgs, bool thisOverride)
 {
 	const int hit_threshold=10;
@@ -3164,7 +3387,6 @@ ASObject* SyntheticFunction::callImpl(ASObject* obj, ASObject* const* args, uint
 
 	call_context* cc=new call_context(mi,realLevel,args,passedToLocals);
 	cc->code=new istringstream(mi->body->code);
-	uint32_t i=passedToLocals;
 	cc->scope_stack=func_scope;
 	cc->initialScopeStack=func_scope.size();
 
@@ -3174,25 +3396,29 @@ ASObject* SyntheticFunction::callImpl(ASObject* obj, ASObject* const* args, uint
 		if(obj)
 			obj->decRef();
 		obj=closure_this.getPtr();
+		obj->incRef();
 	}
 
-	cc->locals[0]=obj;
 	assert_and_throw(obj);
-	obj->incRef();
+	obj->incRef(); //this is free'd in ~call_context
+	cc->locals[0]=obj;
+
 
 	//Fixup missing parameters
-	unsigned int missing_params=args_len-i;
-	assert_and_throw(missing_params<=mi->option_count);
-	int starting_options=mi->option_count-missing_params;
-
-	for(unsigned int j=starting_options;j<mi->option_count;j++)
+	uint32_t i=passedToLocals;
+	//Fill missing parameters until optional parameters begin
+	//like fun(a,b,c,d=3,e=5) called as fun(1,2) becomes
+	//locals = {this, 1, 2, Undefined, 3, 5}
+	for(;i<args_len;++i)
 	{
-		cc->locals[i+1]=mi->getOptional(j);
-		i++;
+		int iOptional = mi->option_count-args_len+i;
+		if(iOptional >= 0)
+			cc->locals[i+1]=mi->getOptional(iOptional);
+		else
+			cc->locals[i+1]=new Undefined();
 	}
 
-	assert_and_throw(i==args_len);
-
+	assert(i==args_len);
 	assert_and_throw(mi->needsArgs()==false || mi->needsRest()==false);
 	if(mi->needsRest()) //TODO
 	{
@@ -3233,13 +3459,16 @@ ASObject* SyntheticFunction::callImpl(ASObject* obj, ASObject* const* args, uint
 
 	ASObject* ret;
 
+	//obtain a local reference to this function, as it may delete itself
+	this->incRef();
+
 	while (true)
 	{
 		try
 		{
 			if(val==NULL && sys->useInterpreter)
 			{
-				//This is not an hot function, execute it using the intepreter
+				//This is not a hot function, execute it using the interpreter
 				ret=ABCVm::executeFunction(this,cc);
 			}
 			else
@@ -3264,7 +3493,8 @@ ASObject* SyntheticFunction::callImpl(ASObject* obj, ASObject* const* args, uint
 					cc->runtime_stack_clear();
 					cc->runtime_stack_push(excobj);
 					cc->scope_stack.clear();
-					cc->initialScopeStack=0;
+					cc->scope_stack=func_scope;
+					cc->initialScopeStack=func_scope.size();
 					break;
 				}
 			}
@@ -3293,9 +3523,16 @@ ASObject* SyntheticFunction::callImpl(ASObject* obj, ASObject* const* args, uint
 
 	delete cc;
 	hit_count++;
+
+	this->decRef(); //free local ref
+	obj->decRef();
 	return ret;
 }
 
+/**
+ * This executes a C++ function.
+ * It consumes one reference of obj and one of each arg
+ */
 ASObject* Function::callImpl(ASObject* obj, ASObject* const* args, uint32_t num_args, bool thisOverride)
 {
 	ASObject* ret;
@@ -3370,23 +3607,30 @@ ASFUNCTIONBODY(Math,atan2)
 
 ASFUNCTIONBODY(Math,_max)
 {
-	double largest = args[0]->toNumber();
+	double largest = -numeric_limits<double>::infinity();
 
-	for(unsigned int i = 1; i < argslen; i++)
+	for(unsigned int i = 0; i < argslen; i++)
 	{
-		largest = dmax(largest, args[i]->toNumber());
+		double arg = args[i]->toNumber();
+		if(largest == arg && signbit(largest) > signbit(arg))
+			largest = 0.0; //Spec 15.8.2.11: 0.0 should be larger than -0.0
+		else
+			largest = (arg>largest) ? arg : largest;
 	}
-
 	return abstract_d(largest);
 }
 
 ASFUNCTIONBODY(Math,_min)
 {
-	double smallest = args[0]->toNumber();
+	double smallest = numeric_limits<double>::infinity();
 
-	for(unsigned int i = 1; i < argslen; i++)
+	for(unsigned int i = 0; i < argslen; i++)
 	{
-		smallest = dmin(smallest, args[i]->toNumber());
+		double arg = args[i]->toNumber();
+		if(smallest == arg && signbit(arg) > signbit(smallest))
+			smallest = -0.0; //Spec 15.8.2.11: 0.0 should be larger than -0.0
+		else
+			smallest = (arg<smallest)? arg : smallest;
 	}
 
 	return abstract_d(smallest);
@@ -3394,6 +3638,8 @@ ASFUNCTIONBODY(Math,_min)
 
 ASFUNCTIONBODY(Math,exp)
 {
+	if(argslen == 0)
+		throw Class<ArgumentError>::getInstanceS("ArgumentError: Error #1063");
 	double n=args[0]->toNumber();
 	return abstract_d(::exp(n));
 }
@@ -3442,6 +3688,8 @@ ASFUNCTIONBODY(Math,tan)
 
 ASFUNCTIONBODY(Math,abs)
 {
+	if(argslen == 0)
+		throw Class<ArgumentError>::getInstanceS("ArgumentError: Error #1063");
 	double n=args[0]->toNumber();
 	return abstract_d(::fabs(n));
 }
@@ -3570,7 +3818,8 @@ void RegExp::buildTraits(ASObject* o)
 ASFUNCTIONBODY(RegExp,_constructor)
 {
 	RegExp* th=static_cast<RegExp*>(obj);
-	th->re=args[0]->toString().raw_buf();
+	if(argslen > 0)
+		th->re=args[0]->toString().raw_buf();
 	if(argslen>1)
 	{
 		const tiny_string& flags=args[1]->toString();
@@ -3612,7 +3861,7 @@ ASFUNCTIONBODY(RegExp,exec)
 	const tiny_string& arg0=args[0]->toString();
 	const char* error;
 	int errorOffset;
-	int options=0;
+	int options=PCRE_UTF8;
 	if(th->ignoreCase)
 		options|=PCRE_CASELESS;
 	if(th->extended)
@@ -3697,7 +3946,7 @@ ASFUNCTIONBODY(RegExp,test)
 
 	const tiny_string& arg0 = args[0]->toString();
 
-	int options = 0;
+	int options = PCRE_UTF8;
 	if(th->ignoreCase)
 		options |= PCRE_CASELESS;
 	if(th->extended)
@@ -3764,60 +4013,41 @@ ASFUNCTIONBODY(ASString,charAt)
 
 ASFUNCTIONBODY(ASString,charCodeAt)
 {
-	//TODO: should return utf16
-	LOG(LOG_CALLS,_("ASString::charCodeAt not really implemented"));
 	ASString* th=static_cast<ASString*>(obj);
 	unsigned int index=args[0]->toInt();
 	assert_and_throw(index>=0 && index<th->data.size());
 	//Character codes are expected to be positive
-	return abstract_i((uint8_t)th->data[index]);
+	return abstract_i(th->data[index]);
 }
 
 ASFUNCTIONBODY(ASString,indexOf)
 {
 	ASString* th=static_cast<ASString*>(obj);
-	const tiny_string& arg0=args[0]->toString();
+	tiny_string arg0=args[0]->toString();
 	int startIndex=0;
 	if(argslen>1)
 		startIndex=args[1]->toInt();
-	
-	bool found=false;
-	unsigned int i;
-	for(i=startIndex;i<th->data.size();i++)
-	{
-		if(th->data[i]==arg0[0])
-		{
-			found=true;
-			for(int j=1;j<arg0.len();j++)
-			{
-				if(th->data[i+j]!=arg0[j])
-				{
-					found=false;
-					break;
-				}
-			}
-		}
-		if(found)
-			break;
-	}
 
-	if(!found)
+	size_t pos = th->data.find_first_of(arg0.raw_buf(), startIndex);
+	if(pos == th->data.npos)
 		return abstract_i(-1);
 	else
-		return abstract_i(i);
+		return abstract_i(pos);
 }
 
 ASFUNCTIONBODY(ASString,lastIndexOf)
 {
 	assert_and_throw(argslen==1 || argslen==2);
 	ASString* th=static_cast<ASString*>(obj);
-	const tiny_string& val=args[0]->toString();
-	int startIndex=0x7fffffff;
-	if(argslen == 2 && args[1]->getObjectType() != T_UNDEFINED && !std::isnan(args[1]->toNumber()))
-		startIndex=args[1]->toInt();
-		
-	if(startIndex < 0) //If negative offset is passed, clamp to 0 for start-of-string matches
-		return (th->data.substr(0, val.len()) == val.raw_buf() ? abstract_i(0) : abstract_i(-1));
+	tiny_string val=args[0]->toString();
+	size_t startIndex=th->data.npos;
+	if(argslen > 1 && args[1]->getObjectType() != T_UNDEFINED && !std::isnan(args[1]->toNumber()))
+	{
+		int32_t i = args[1]->toInt();
+		if(i<0)
+			return abstract_i(-1);
+		startIndex = i;
+	}
 
 	size_t pos=th->data.rfind(val.raw_buf(), startIndex);
 	if(pos==th->data.npos)
@@ -3829,17 +4059,13 @@ ASFUNCTIONBODY(ASString,lastIndexOf)
 ASFUNCTIONBODY(ASString,toLowerCase)
 {
 	ASString* th=static_cast<ASString*>(obj);
-	ASString* ret=Class<ASString>::getInstanceS(th->data);
-	transform(th->data.begin(), th->data.end(), ret->data.begin(), ::tolower);
-	return ret;
+	return Class<ASString>::getInstanceS(th->data.lowercase());
 }
 
 ASFUNCTIONBODY(ASString,toUpperCase)
 {
 	ASString* th=static_cast<ASString*>(obj);
-	ASString* ret=Class<ASString>::getInstanceS(th->data);
-	transform(th->data.begin(), th->data.end(), ret->data.begin(), ::toupper);
-	return ret;
+	return Class<ASString>::getInstanceS(th->data.uppercase());
 }
 
 ASFUNCTIONBODY(ASString,fromCharCode)
@@ -3847,10 +4073,7 @@ ASFUNCTIONBODY(ASString,fromCharCode)
 	ASString* ret=Class<ASString>::getInstanceS();
 	for(uint32_t i=0;i<argslen;i++)
 	{
-		int newChar=args[i]->toInt();
-		if(newChar>127)
-			LOG(LOG_NOT_IMPLEMENTED,_("Unicode not supported in String::fromCharCode"));
-		ret->data+=char(newChar);
+		ret->data+=gunichar(args[i]->toInt());
 	}
 	return ret;
 }
@@ -3859,25 +4082,33 @@ ASFUNCTIONBODY(ASString,replace)
 {
 	ASString* th=static_cast<ASString*>(obj);
 	enum REPLACE_TYPE { STRING=0, FUNC };
-	REPLACE_TYPE type=(args[1]->getObjectType()==T_FUNCTION)?FUNC:STRING;
+	REPLACE_TYPE type;
 	ASString* ret=Class<ASString>::getInstanceS(th->data);
-	assert_and_throw(argslen==2);
+	assert_and_throw(argslen >= 0);
 
 	string replaceWith;
-	if(type==STRING)
+	if(argslen < 2)
 	{
+		type = STRING;
+		replaceWith="";
+	}
+	else if(args[1]->getObjectType()!=T_FUNCTION)
+	{
+		type = STRING;
 		replaceWith=args[1]->toString().raw_buf();
 		//Look if special substitution are needed
 		assert_and_throw(replaceWith.find('$')==replaceWith.npos);
 	}
+	else
+		type = FUNC;
 
-	if(args[0]->getPrototype()==Class<RegExp>::getClass())
+	if(args[0]->getClass()==Class<RegExp>::getClass())
 	{
 		RegExp* re=static_cast<RegExp*>(args[0]);
 
 		const char* error;
 		int errorOffset;
-		int options=0;
+		int options=PCRE_UTF8;
 		if(re->ignoreCase)
 			options|=PCRE_CASELESS;
 		if(re->extended)
@@ -3901,7 +4132,7 @@ ASFUNCTIONBODY(ASString,replace)
 		int retDiff=0;
 		do
 		{
-			int rc=pcre_exec(pcreRE, NULL, ret->data.c_str(), ret->data.size(), offset, 0, ovector, 30);
+			int rc=pcre_exec(pcreRE, NULL, ret->data.c_str(), ret->data.bytes(), offset, 0, ovector, 30);
 			if(rc<0)
 			{
 				//No matches or error
@@ -3913,9 +4144,10 @@ ASFUNCTIONBODY(ASString,replace)
 				//Get the replace for this match
 				IFunction* f=static_cast<IFunction*>(args[1]);
 				ASObject* subargs[3+capturingGroups];
-				subargs[0]=Class<ASString>::getInstanceS(ret->data.substr(ovector[0],ovector[1]-ovector[0]));
+				//use string interface through raw(), because we index on bytes, not on UTF-8 characters
+				subargs[0]=Class<ASString>::getInstanceS(ret->data.raw().substr(ovector[0],ovector[1]-ovector[0]));
 				for(int i=0;i<capturingGroups;i++)
-					subargs[i+1]=Class<ASString>::getInstanceS(ret->data.substr(ovector[i*2+2],ovector[i*2+3]-ovector[i*2+2]));
+					subargs[i+1]=Class<ASString>::getInstanceS(ret->data.raw().substr(ovector[i*2+2],ovector[i*2+3]-ovector[i*2+2]));
 				subargs[capturingGroups+1]=abstract_i(ovector[0]-retDiff);
 				th->incRef();
 				subargs[capturingGroups+2]=th;
@@ -4032,7 +4264,7 @@ void ASError::sinit(Class_base* c)
 	c->max_level=c->super->max_level+1;
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
 	c->setDeclaredMethodByQName("getStackTrace",AS3,Class<IFunction>::getFunction(getStackTrace),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("toString",AS3,Class<IFunction>::getFunction(_toString),NORMAL_METHOD,true);
+	c->prototype->setDeclaredMethodByQName("toString",AS3,Class<IFunction>::getFunction(_toString),NORMAL_METHOD,false);
 	c->setDeclaredMethodByQName("errorID","",Class<IFunction>::getFunction(_getErrorID),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("message","",Class<IFunction>::getFunction(_getMessage),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("message","",Class<IFunction>::getFunction(_setMessage),SETTER_METHOD,true);
@@ -4264,10 +4496,33 @@ void VerifyError::buildTraits(ASObject* o)
 {
 }
 
+ASObject* Prototype::getVariableByMultiname(const multiname& name, GET_VARIABLE_OPTION opt)
+{
+	if(name.normalizedName() == "prototype")
+		return prototype.getPtr();
+
+	obj_var* obj=findGettable(name, false);
+	if(obj==NULL)
+	{
+		if(prototype != NULL)
+			return prototype->getVariableByMultiname(name,opt);
+		else
+			return NULL;
+	}
+	assert(!obj->getter);
+	assert(obj->var);
+	return obj->var;
+}
+
 Class_base::Class_base(const QName& name):use_protected(false),protected_ns("",NAMESPACE),constructor(NULL),referencedObjectsMutex("referencedObjects"),
 	super(NULL),context(NULL),class_name(name),class_index(-1),max_level(0)
 {
 	type=T_CLASS;
+}
+
+void Class_base::addPrototypeGetter()
+{
+	setDeclaredMethodByQName("prototype","",Class<IFunction>::getFunction(_getter_prototype),GETTER_METHOD,false);
 }
 
 Class_base::~Class_base()
@@ -4275,6 +4530,8 @@ Class_base::~Class_base()
 	if(!referencedObjects.empty())
 		LOG(LOG_ERROR,_("Class destroyed without cleanUp called"));
 }
+
+ASFUNCTIONBODY_GETTER(Class_base, prototype);
 
 ASObject* Class_base::generator(ASObject* const* args, const unsigned int argslen)
 {
@@ -4317,7 +4574,7 @@ void Class_base::setConstructor(IFunction* c)
 
 void Class_base::handleConstruction(ASObject* target, ASObject* const* args, unsigned int argslen, bool buildAndLink)
 {
-/*	if(getActualPrototype()->class_index==-2)
+/*	if(getActualClass()->class_index==-2)
 	{
 		abort();
 		//We have to build the method traits
@@ -4419,21 +4676,9 @@ void Class_base::finalize()
 	}
 }
 
-void Class_base::cleanUp()
+Template_base::Template_base(QName name) : template_name(name)
 {
-	//finalize must have been called before using cleanUp
-
-	//cleanUp may be called multiple times, be sure all the code is executable multiple times
-	//without double freeing anything
-	//Destroy all the object reference by us
-	if(!referencedObjects.empty())
-		LOG(LOG_CALLS, "Class " << class_name << " references " << referencedObjects.size());
-
-	while(!referencedObjects.empty())
-	{
-		set<ASObject*>::iterator it=referencedObjects.begin();
-		delete *it;
-	}
+	type = T_TEMPLATE;
 }
 
 Class_object* Class_object::getClass()
@@ -4454,17 +4699,9 @@ Class_object* Class_object::getClass()
 	return ret;
 }
 
-void IFunction::sinit(Class_base* c)
-{
-	c->super=Class<ASObject>::getClass();
-	c->max_level=c->super->max_level+1;
-	c->setDeclaredMethodByQName("call",AS3,Class<IFunction>::getFunction(IFunction::_call),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("apply",AS3,Class<IFunction>::getFunction(IFunction::apply),NORMAL_METHOD,true);
-}
-
 Class_function::Class_function(IFunction* _f, ASObject* _p):Class_base(QName("Function","")),f(_f),asprototype(_p)
 {
-	setPrototype(Class<IFunction>::getClass());
+	setClass(Class<IFunction>::getClass());
 }
 
 bool Class_function::hasPropertyByMultiname(const multiname& name, bool considerDynamic)
@@ -4894,6 +5131,8 @@ bool UInteger::isEqual(ASObject* o)
 		return val==o->toUInt();
 	else if(o->getObjectType()==T_NUMBER)
 		return val==o->toUInt();
+	else if(o->getObjectType()==T_BOOLEAN)
+		return val==o->toUInt();
 	else
 	{
 		return ASObject::isEqual(o);
@@ -4912,8 +5151,20 @@ Class<IFunction>* Class<IFunction>::getClass()
 	if(it==sys->classes.end()) //This class is not yet in the map, create it
 	{
 		ret=new Class<IFunction>;
+		ret->incRef();
+		ret->prototype = _MNR(new Prototype(_MR(ret)));
+		ret->super=Class<ASObject>::getClass();
+		ret->max_level=ret->super->max_level+1;
+		ret->prototype->prototype = ret->super->prototype;
+
 		sys->classes.insert(std::make_pair(QName(ClassName<IFunction>::name,ClassName<IFunction>::ns),ret));
-		IFunction::sinit(ret);
+
+		//we cannot use sinit, as we need to set max_level before calling 'classes.insert' before calling
+		//addPrototypeGetter and setDeclaredMethodByQName.
+		//Thus we make sure that everything is in order when getFunction() below is called
+		ret->addPrototypeGetter();
+		ret->setDeclaredMethodByQName("call",AS3,Class<IFunction>::getFunction(IFunction::_call),NORMAL_METHOD,true);
+		ret->setDeclaredMethodByQName("apply",AS3,Class<IFunction>::getFunction(IFunction::apply),NORMAL_METHOD,true);
 	}
 	else
 		ret=static_cast<Class<IFunction>*>(it->second);
@@ -4960,6 +5211,12 @@ ASObject* GlobalObject::getVariableAndTargetByMultiname(const multiname& name, A
 	return o;
 }
 
+GlobalObject::~GlobalObject()
+{
+	for(auto i = globalScopes.begin(); i != globalScopes.end(); ++i)
+		(*i)->decRef();
+}
+
 /*ASObject* GlobalObject::getVariableByMultiname(const multiname& name, bool skip_impl, bool enableOverride, ASObject* base)
 {
 	ASObject* ret=ASObject::getVariableByMultiname(name, skip_impl, enableOverride, base);
@@ -4975,102 +5232,6 @@ ASObject* GlobalObject::getVariableAndTargetByMultiname(const multiname& name, A
 	return ret;
 }*/
 
-ASFUNCTIONBODY(Boolean,generator)
-{
-	assert_and_throw(argslen==1);
-	return abstract_b(Boolean_concrete(args[0]));
-}
-
-//We follow the Boolean() algorithm, but return a concrete result, not a Boolean object
-bool lightspark::Boolean_concrete(ASObject* obj)
-{
-	if(obj->getObjectType()==T_STRING)
-	{
-		LOG(LOG_CALLS,_("String to bool"));
-		const tiny_string& s=obj->toString();
-		if(s.len()==0)
-			return false;
-		else
-			return true;
-	}
-	else if(obj->getObjectType()==T_BOOLEAN)
-	{
-		Boolean* b=static_cast<Boolean*>(obj);
-		LOG(LOG_CALLS,_("Boolean to bool ") << b->val);
-		return b->val;
-	}
-	else if(obj->getObjectType()==T_OBJECT)
-	{
-		LOG(LOG_CALLS,_("Object to bool"));
-		return true;
-	}
-	else if(obj->getObjectType()==T_CLASS)
-	{
-		LOG(LOG_CALLS,_("Class to bool"));
-		return true;
-	}
-	else if(obj->getObjectType()==T_ARRAY)
-	{
-		LOG(LOG_CALLS,_("Array to bool"));
-		return true;
-	}
-	else if(obj->getObjectType()==T_FUNCTION)
-	{
-		LOG(LOG_CALLS,_("Function to bool"));
-		return true;
-	}
-	else if(obj->getObjectType()==T_UNDEFINED)
-	{
-		LOG(LOG_CALLS,_("Undefined to bool"));
-		return false;
-	}
-	else if(obj->getObjectType()==T_NULL)
-	{
-		LOG(LOG_CALLS,_("Null to bool"));
-		return false;
-	}
-	else if(obj->getObjectType()==T_NUMBER)
-	{
-		LOG(LOG_CALLS,_("Number to bool"));
-		double val=obj->toNumber();
-		if(val==0 || std::isnan(val))
-			return false;
-		else
-			return true;
-	}
-	else if(obj->getObjectType()==T_INTEGER)
-	{
-		LOG(LOG_CALLS,_("Integer to bool"));
-		int32_t val=obj->toInt();
-		if(val==0)
-			return false;
-		else
-			return true;
-	}
-	else
-	{
-		LOG(LOG_NOT_IMPLEMENTED,_("Boolean conversion for type ") << obj->getObjectType() << endl);
-		return false;
-	}
-}
-
-ASFUNCTIONBODY(Boolean,_toString)
-{
-	Boolean* th=static_cast<Boolean*>(obj);
-	return Class<ASString>::getInstanceS(th->toString(false));
-}
-
-void Boolean::sinit(Class_base* c)
-{
-	c->setDeclaredMethodByQName("toString",AS3,Class<IFunction>::getFunction(Boolean::_toString),NORMAL_METHOD,true);
-}
-
-void Boolean::serialize(ByteArray* out, std::map<tiny_string, uint32_t>& stringMap,
-				std::map<const ASObject*, uint32_t>& objMap) const
-{
-	throw UnsupportedException("Boolean:serialize not implemented");
-}
-
 ASFUNCTIONBODY(lightspark,parseInt)
 {
 	assert_and_throw(argslen==1 || argslen==2);
@@ -5081,33 +5242,32 @@ ASFUNCTIONBODY(lightspark,parseInt)
 	}
 	else
 	{
-		int radix=10;
+		int radix=0;
 		if(argslen==2)
 		{
 			radix=args[1]->toInt();
-			assert_and_throw(radix==10 || radix==16);
+			if(radix < 2 || radix > 36)
+				return abstract_d(numeric_limits<double>::quiet_NaN());
 		}
-		const tiny_string& val=args[0]->toString();
-		const char* cur=val.raw_buf();
-		//Also 0x could be used to flag the number is hexadecimal
-		if(val.len()>=2 && strncmp(cur,"0x",2)==0)
+		const tiny_string& str=args[0]->toString();
+		const char* cur=str.raw_buf();
+
+		errno=0;
+		char *end;
+		long val=strtol(cur, &end, radix);
+
+		if(errno==ERANGE)
 		{
-			radix=16;
-			cur+=2;
+			if(val==LONG_MAX)
+				return abstract_d(numeric_limits<double>::infinity());
+			if(val==LONG_MIN)
+				return abstract_d(-numeric_limits<double>::infinity());
 		}
-		int ret=0;
-		if(radix==16) // Should be an exadecimal number
-		{
-			while(*cur)
-			{
-				ret<<=4; //*16
-				ret+=Math::hexToInt(*cur);
-				cur++;
-			}
-		}
-		else if(radix==10)
-			ret=atoi(cur);
-		return abstract_i(ret);
+
+		if(end==cur)
+			return abstract_d(numeric_limits<double>::quiet_NaN());
+
+		return abstract_d(val);
 	}
 }
 
@@ -5268,6 +5428,139 @@ ASFUNCTIONBODY(lightspark,trace)
 	return NULL;
 }
 
+void Vector::sinit(Class_base* c)
+{
+	c->setConstructor(Class<IFunction>::getFunction(_constructor));
+	c->super=Class<ASObject>::getClass();
+	c->max_level=c->super->max_level+1;
+	c->setDeclaredMethodByQName("push",AS3,Class<IFunction>::getFunction(push),NORMAL_METHOD,true);
+}
+
+void Vector::setTypes(const std::vector<Class_base*>& types)
+{
+	assert(vec_type == NULL);
+	assert_and_throw(types.size() == 1);
+	vec_type = types[0];
+}
+
+ASObject* Vector::generator(TemplatedClass<Vector>* o_class, ASObject* const* args, const unsigned int argslen)
+{
+	assert_and_throw(argslen == 1);
+	assert_and_throw(args[0]->getClass());
+	assert_and_throw(o_class->getTypes().size() == 1);
+
+	Class_base* type = o_class->getTypes()[0];
+
+	if(args[0]->getClass() == Class<Array>::getClass())
+	{
+		//create object without calling _constructor
+		Vector* ret = o_class->getInstance(false,NULL,0);
+
+		Array* a = static_cast<Array*>(args[0]);
+		for(int i=0;i<a->size();++i)
+		{
+			ASObject* obj = a->at(i);
+			obj->incRef();
+			//Convert the elements of the array to the type of this vector
+			//by calling the type's generator
+			ret->vec.push_back( type->generator(&obj,1) );
+		}
+		return ret;
+	}
+	else if(args[0]->getClass()->getTemplate() == Template<Vector>::getTemplate())
+	{
+		Vector* arg = static_cast<Vector*>(args[0]);
+		TemplatedClass<Vector>* arg_class = static_cast<TemplatedClass<Vector>*>(arg->getClass());
+		Class_base* arg_type = arg_class->getTypes()[0];
+
+		if(!arg_type->isSubClass(type))
+			throw ArgumentError("Cannot convert one Vector into another because type of first is not subclass of later");
+
+		//create object without calling _constructor
+		Vector* ret = o_class->getInstance(false,NULL,0);
+		for(auto i = arg->vec.begin(); i != arg->vec.end(); ++i)
+		{
+			(*i)->incRef();
+			ret->vec.push_back( *i );
+		}
+		return ret;
+	}
+	else
+	{
+		throw ArgumentError("global Vector() function takes Array or Vector");
+	}
+}
+
+ASFUNCTIONBODY(Vector,_constructor)
+{
+	//length:uint = 0, fixed:Boolean = false
+	assert_and_throw(argslen <= 2);
+	ASObject::_constructor(obj,NULL,0);
+
+	Vector* th=static_cast< Vector *>(obj);
+	assert(th->vec_type);
+	//TODO
+	th->fixed = false;
+	return NULL;
+}
+
+ASFUNCTIONBODY(Vector,push)
+{
+	Vector* th=static_cast<Vector*>(obj);
+	for(size_t i = 0; i < argslen; ++i)
+	{
+		//The proprietary player violates the specification and allows elements of any type to be pushed;
+		//they are converted to the vec_type
+		if(args[i]->getClass()->isSubClass(th->vec_type))
+			th->vec.push_back( th->vec_type->generator(&args[i],1) );
+		else
+		{
+			args[i]->incRef();
+			th->vec.push_back(args[i]);
+		}
+	}
+	return abstract_ui(th->vec.size());
+}
+
+/* this handles the [] operator, because vec[12] becomes vec.12 in bytecode */
+ASObject* Vector::getVariableByMultiname(const multiname& name, GET_VARIABLE_OPTION opt)
+{
+	if((opt & SKIP_IMPL)!=0 || !implEnable)
+		return ASObject::getVariableByMultiname(name,opt);
+
+	assert_and_throw(name.ns.size()>0);
+	if(name.ns[0].name!="")
+		return ASObject::getVariableByMultiname(name,opt);
+
+	unsigned int index=0;
+	if(!Array::isValidMultiname(name,index))
+		return ASObject::getVariableByMultiname(name,opt);
+
+	if(index < vec.size())
+	{
+			return vec[index]; //incRef is done by caller
+	}
+	else
+	{
+		LOG(LOG_NOT_IMPLEMENTED,"Vector: Access beyond size");
+		return NULL; //TODO: test if we should throw something or if we should return new Undefined();
+	}
+}
+
+tiny_string Vector::toString(bool debugMsg)
+{
+	//TODO: test
+	tiny_string t;
+	for(size_t i = 0; i < vec.size(); ++i)
+	{
+		if( i )
+			t += ",";
+		t += vec[i]->toString();
+	}
+	return t;
+}
+
+
 template<>
 number_t lightspark::ArgumentConversion<number_t>::toConcrete(ASObject* obj)
 {
@@ -5307,6 +5600,13 @@ tiny_string lightspark::ArgumentConversion<tiny_string>::toConcrete(ASObject* ob
 }
 
 template<>
+RGB lightspark::ArgumentConversion<RGB>::toConcrete(ASObject* obj)
+{
+	/* TODO: throw ArgumentError if object is not convertible to number */
+	return RGB(obj->toUInt());
+}
+
+template<>
 ASObject* lightspark::ArgumentConversion<int32_t>::toAbstract(const int32_t& val)
 {
 	return abstract_i(val);
@@ -5334,4 +5634,10 @@ template<>
 ASObject* lightspark::ArgumentConversion<tiny_string>::toAbstract(const tiny_string& val)
 {
 	return Class<ASString>::getInstanceS(val);
+}
+
+template<>
+ASObject* lightspark::ArgumentConversion<RGB>::toAbstract(const RGB& val)
+{
+	return abstract_ui(val.toUInt());
 }

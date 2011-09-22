@@ -34,8 +34,8 @@
 #include "backends/pluginmanager.h"
 #include "backends/rendering.h"
 #include "backends/security.h"
+#include "backends/image.h"
 
-#include <GL/glew.h>
 #ifdef ENABLE_CURL
 #include <curl/curl.h>
 #endif
@@ -56,29 +56,22 @@ using namespace lightspark;
 extern TLSDATA ParseThread* pt;
 
 RootMovieClip::RootMovieClip(LoaderInfo* li, bool isSys):mutex("mutexRoot"),parsingIsFailed(false),frameRate(0),
-	toBind(false)
+	toBind(false), finishedLoading(false)
 {
-	this->incRef();
-	sem_init(&new_frame,0,0);
 	if(li)
 		li->incRef();
 	loaderInfo=_MNR(li);
 
 	//We set the protoype to a generic MovieClip
 	if(!isSys)
-		setPrototype(Class<MovieClip>::getClass());
+		setClass(Class<MovieClip>::getClass());
 }
 
-RootMovieClip::~RootMovieClip()
-{
-	sem_destroy(&new_frame);
-}
 
 void RootMovieClip::parsingFailed()
 {
 	//The parsing is failed, we have no change to be ever valid
 	parsingIsFailed=true;
-	sem_post(&new_frame);
 }
 
 void RootMovieClip::bindToName(const tiny_string& n)
@@ -105,19 +98,19 @@ void RootMovieClip::setOrigin(const tiny_string& u, const tiny_string& filename)
 	}
 }
 
-void SystemState::registerEnterFrameListener(DisplayObject* obj)
+void SystemState::registerFrameListener(_R<DisplayObject> obj)
 {
-	Locker l(mutexEnterFrameListeners);
+	Locker l(mutexFrameListeners);
 	obj->incRef();
-	enterFrameListeners.insert(obj);
+	frameListeners.insert(obj);
 }
 
-void SystemState::unregisterEnterFrameListener(DisplayObject* obj)
+void SystemState::unregisterFrameListener(_R<DisplayObject> obj)
 {
-	Locker l(mutexEnterFrameListeners);
-	if(enterFrameListeners.erase(obj))
-		obj->decRef();
+	Locker l(mutexFrameListeners);
+	frameListeners.erase(obj);
 }
+
 void RootMovieClip::setOnStage(bool staged)
 {
 	MovieClip::setOnStage(staged);
@@ -126,7 +119,7 @@ void RootMovieClip::setOnStage(bool staged)
 RootMovieClip* RootMovieClip::getInstance(LoaderInfo* li)
 {
 	RootMovieClip* ret=new RootMovieClip(li);
-	ret->setPrototype(Class<MovieClip>::getClass());
+	ret->setClass(Class<MovieClip>::getClass());
 	return ret;
 }
 
@@ -156,9 +149,9 @@ SystemState::SystemState(ParseThread* parseThread, uint32_t fileSize):
 	RootMovieClip(NULL,true),renderRate(0),error(false),shutdown(false),
 	renderThread(NULL),inputThread(NULL),engineData(NULL),fileDumpAvailable(0),
 	waitingForDump(false),vmVersion(VMNONE),childPid(0),useGnashFallback(false),
-	parameters(NullRef),mutexEnterFrameListeners("mutexEnterFrameListeners"),
+	parameters(NullRef),mutexFrameListeners("mutexFrameListeners"),
 	invalidateQueueHead(NullRef),invalidateQueueTail(NullRef),showProfilingData(false),
-	currentVm(NULL),useInterpreter(true),useJit(false),downloadManager(NULL),
+	currentVm(NULL),useInterpreter(true),useJit(false),exitOnError(false),downloadManager(NULL),
 	extScriptObject(NULL),scaleMode(SHOW_ALL)
 {
 	cookiesFileName[0]=0;
@@ -168,7 +161,7 @@ SystemState::SystemState(ParseThread* parseThread, uint32_t fileSize):
 
 	//Get starting time
 	if(parseThread) //ParseThread may be null in tightspark
-		parseThread->root=this;
+		parseThread->setRootMovie(this);
 	threadPool=new ThreadPool(this);
 	timerThread=new TimerThread(this);
 	config=new Config;
@@ -186,7 +179,7 @@ SystemState::SystemState(ParseThread* parseThread, uint32_t fileSize):
 	stage->_addChildAt(_MR(this),0);
 	startTime=compat_msectiming();
 	
-	setPrototype(Class<MovieClip>::getClass());
+	setClass(Class<MovieClip>::getClass());
 
 	//Override getStage as for SystemState that can't be null
 	setDeclaredMethodByQName("stage","",Class<IFunction>::getFunction(_getStage),GETTER_METHOD,false);
@@ -345,9 +338,14 @@ void SystemState::finalize()
 	invalidateQueueHead.reset();
 	invalidateQueueTail.reset();
 	parameters.reset();
+	frameListeners.clear();
 }
 
 SystemState::~SystemState()
+{
+}
+
+void SystemState::destroy()
 {
 #ifdef PROFILING_SUPPORT
 	saveProfilingInformation();
@@ -376,17 +374,24 @@ SystemState::~SystemState()
 		threadPool->forceStop();
 	stopEngines();
 
+	delete intervalManager;
 	//Finalize ourselves
 	finalize();
 
-	//We are already being destroyed, make our prototype abandon us
-	setPrototype(NULL);
+	//We are already being destroyed, make our classdef abandon us
+	setClass(NULL);
 	
+	//Free the stage. This should free all objects on the displaylist
+	stage->decRef();
+	stage = NULL;
+
 	/*
-	   Now we have to kill all objects that are still alive. This is done is two passes
-	   1) call finalize on all objects, this will decRef all referenced objects
-	   2) delete all the objects. Now destroying an object should not cause accesses to
-	   	any other object */
+	 * 1) call finalize on all objects, this will free all referenced objects and thereby
+	 * cut circular references. After that, all ASObjects but classes and templates should
+	 * have been deleted through decRef. Else it is an error.
+	 * 2) decRef all the classes and templates to which we hold a reference through the
+	 * 'classes' and 'templates' maps.
+	 */
 
 	std::map<QName, Class_base*>::iterator it=classes.begin();
 	for(;it!=classes.end();++it)
@@ -396,24 +401,17 @@ SystemState::~SystemState()
 	if(currentVm)
 		currentVm->finalize();
 
-	//Destroy the contents of all the classes
-	it=classes.begin();
-	for(;it!=classes.end();++it)
-	{
-		//Make sure classes survives their cleanUp
-		it->second->incRef();
-		it->second->cleanUp();
-	}
+	//Free classes by decRef'ing them
+	for(auto i = classes.begin(); i != classes.end(); ++i)
+		i->second->decRef();
 
-	//Destroy all registered classes
-	it=classes.begin();
-	for(;it!=classes.end();++it)
-	{
-		//DEPRECATED: to force garbage collection we delete all the classes
-		delete it->second;
-		//it->second->decRef()
-	}
+	//Free templates by decRef'ing them
+	for(auto i = templates.begin(); i != templates.end(); ++i)
+		i->second->decRef();
+
 	//The Vm must be destroyed this late to clean all managed integers and numbers
+	//This deletes the {int,uint,number}_managers; therefore no Number/.. object may be
+	//decRef'ed after this line as it would cause a manager->put()
 	delete currentVm;
 
 	//Some objects needs to remove the jobs when destroyed so keep the timerThread until now
@@ -426,6 +424,7 @@ SystemState::~SystemState()
 	inputThread=NULL;
 	delete engineData;
 	sem_destroy(&terminated);
+	this->decRef(); //free a reference we obtained by 'new SystemState'
 }
 
 bool SystemState::isOnError() const
@@ -445,6 +444,8 @@ bool SystemState::shouldTerminate() const
 
 void SystemState::setError(const string& c)
 {
+	if(exitOnError)
+		exit(1);
 	//We record only the first error for easier fix and reporting
 	if(!error)
 	{
@@ -587,7 +588,7 @@ void SystemState::createEngines()
 				return;
 			l.lock();
 		}
-		LOG(LOG_NO_INFO,_("Trying to invoke gnash!"));
+		LOG(LOG_INFO,_("Trying to invoke gnash!"));
 		//Dump the cookies to a temporary file
 		strcpy(cookiesFileName,"/tmp/lightsparkcookiesXXXXXX");
 		int file=mkstemp(cookiesFileName);
@@ -738,6 +739,14 @@ void SystemState::createEngines()
 	engineData->setupMainThreadCallback((ls_callback_t)delayedCreation, this);
 
 	renderThread->waitForInitialization();
+
+	// If the SWF file is AVM1 and Gnash fallback isn't enabled, just shut down.
+	if(vmVersion != AVM2)
+	{
+		LOG(LOG_INFO, "Unsupported flash file (AVM1), shutting down...");
+		setShutdownFlag();
+	}
+
 	l.lock();
 	//As we lost the lock the shutdown procesure might have started
 	if(shutdown)
@@ -754,7 +763,7 @@ void SystemState::needsAVM2(bool n)
 	if(n)
 	{
 		vmVersion=AVM2;
-		LOG(LOG_NO_INFO,_("Creating VM"));
+		LOG(LOG_INFO,_("Creating VM"));
 		currentVm=new ABCVm(this);
 	}
 	else
@@ -975,11 +984,22 @@ void ThreadProfile::plot(uint32_t maxTime, cairo_t *cr)
 	}
 }
 
-ParseThread::ParseThread(RootMovieClip* r,istream& in):root(NULL),version(0),useAVM2(false),
-	useNetwork(false),f(in),zlibFilter(NULL),backend(NULL),isEnded(false),fileType(NONE)
+ParseThread::ParseThread(istream& in, Loader *_loader, tiny_string srcurl)
+  : version(0),useAVM2(false),useNetwork(false),
+    f(in),zlibFilter(NULL),backend(NULL),isEnded(false),loader(_loader),
+    parsedObject(NullRef),url(srcurl),fileType(FT_UNKNOWN)
 {
 	f.exceptions ( istream::eofbit | istream::failbit | istream::badbit );
-	root=r;
+	sem_init(&ended,0,0);
+}
+
+ParseThread::ParseThread(std::istream& in, RootMovieClip *root)
+  : version(0),useAVM2(false),useNetwork(false),
+    f(in),zlibFilter(NULL),backend(NULL),isEnded(false),loader(NULL),
+    parsedObject(NullRef),url(),fileType(FT_UNKNOWN)
+{
+	f.exceptions ( istream::eofbit | istream::failbit | istream::badbit );
+	setRootMovie(root);
 	sem_init(&ended,0,0);
 }
 
@@ -991,48 +1011,46 @@ ParseThread::~ParseThread()
 		f.rdbuf(backend);
 		delete zlibFilter;
 	}
+	parsedObject.reset();
 	sem_destroy(&ended);
 }
 
-void ParseThread::checkType(uint8_t c1, uint8_t c2, uint8_t c3, uint8_t c4)
+FILE_TYPE ParseThread::recognizeFile(uint8_t c1, uint8_t c2, uint8_t c3, uint8_t c4)
 {
 	if(c1=='F' && c2=='W' && c3=='S')
-	{
-		fileType=SWF;
-		version=c4;
-		root->version=version;
-	}
+		return FT_SWF;
 	else if(c1=='C' && c2=='W' && c3=='S')
-	{
-		fileType=COMPRESSED_SWF;
-		version=c4;
-		root->version=version;
-	}
+		return FT_COMPRESSED_SWF;
 	else if((c1&0x80) && c2=='P' && c3=='N' && c4=='G')
-		fileType=PNG;
+		return FT_PNG;
 	else if(c1==0xff && c2==0xd8 && c3==0xff && c4==0xe0)
-		fileType=JPEG;
+		return FT_JPEG;
 	else if(c1=='G' && c2=='I' && c3=='F' && c4=='8')
-		fileType=GIF;
+		return FT_GIF;
+	else
+		return FT_UNKNOWN;
 }
 
-void ParseThread::parseSWFHeader()
+void ParseThread::parseSWFHeader(RootMovieClip *root, UI8 ver)
 {
 	UI32_SWF FileLength;
 	RECT FrameSize;
 	UI16_SWF FrameRate;
 	UI16_SWF FrameCount;
 
+	version=ver;
+	root->version=version;
 	f >> FileLength;
 	//Enable decompression if needed
-	if(fileType==SWF)
-		LOG(LOG_NO_INFO, _("Uncompressed SWF file: Version ") << (int)version);
-	else if(fileType==COMPRESSED_SWF)
+	if(fileType==FT_SWF)
+		LOG(LOG_INFO, _("Uncompressed SWF file: Version ") << (int)version);
+	else if(fileType==FT_COMPRESSED_SWF)
 	{
-		LOG(LOG_NO_INFO, _("Compressed SWF file: Version ") << (int)version);
+		LOG(LOG_INFO, _("Compressed SWF file: Version ") << (int)version);
 		//The file is compressed, create a filtering streambuf
 		backend=f.rdbuf();
-		f.rdbuf(new zlib_filter(backend));
+		zlibFilter = new zlib_filter(backend);
+		f.rdbuf(zlibFilter);
 	}
 
 	f >> FrameSize >> FrameRate >> FrameCount;
@@ -1040,7 +1058,7 @@ void ParseThread::parseSWFHeader()
 	root->fileLength=FileLength;
 	float frameRate=FrameRate;
 	frameRate/=256;
-	LOG(LOG_NO_INFO,_("FrameRate ") << frameRate);
+	LOG(LOG_INFO,_("FrameRate ") << frameRate);
 	root->setFrameRate(frameRate);
 	//TODO: setting render rate should be done when the clip is added to the displaylist
 	sys->setRenderRate(frameRate);
@@ -1055,17 +1073,42 @@ void ParseThread::execute()
 	{
 		UI8 Signature[4];
 		f >> Signature[0] >> Signature[1] >> Signature[2] >> Signature[3];
-		checkType(Signature[0],Signature[1],Signature[2],Signature[3]);
-		if(fileType==NONE)
+		fileType=recognizeFile(Signature[0],Signature[1],Signature[2],Signature[3]);
+		if(fileType==FT_UNKNOWN)
 			throw ParseException("Not a supported file");
-		if(fileType==PNG || fileType==JPEG || fileType==GIF)
+		else if(fileType==FT_PNG || fileType==FT_JPEG || fileType==FT_GIF)
 		{
-			//Not really supported
-			pt=NULL;
-			sem_post(&ended);
-			return;
+			f.putback(Signature[3]).putback(Signature[2]).
+			  putback(Signature[1]).putback(Signature[0]);
+			parseBitmap();
 		}
-		parseSWFHeader();
+		else
+		{
+			parseSWF(Signature[3]);
+		}
+	}
+	catch(LightsparkException& e)
+	{
+		LOG(LOG_ERROR,_("Exception in ParseThread ") << e.cause);
+		sys->setError(e.cause);
+	}
+	catch(std::exception& e)
+	{
+		LOG(LOG_ERROR,_("Stream exception in ParseThread ") << e.what());
+	}
+	pt=NULL;
+
+	sem_post(&ended);
+}
+
+void ParseThread::parseSWF(UI8 ver)
+{
+	RootMovieClip* root=getRootMovie();
+	assert_and_throw(root);
+
+	try
+	{
+		parseSWFHeader(root, ver);
 
 		//Create a top level TagFactory
 		TagFactory factory(f, true);
@@ -1078,11 +1121,12 @@ void ParseThread::execute()
 			{
 				case END_TAG:
 				{
-					LOG(LOG_NO_INFO,_("End of parsing @ ") << f.tellg());
+					LOG(LOG_INFO,_("End of parsing @ ") << f.tellg());
 					if(!empty)
 						root->commitFrame(false);
 					else
 						root->revertFrame();
+					RELEASE_WRITE(root->finishedLoading,true);
 					done=true;
 					root->check();
 					break;
@@ -1134,26 +1178,74 @@ void ParseThread::execute()
 				break;
 		}
 	}
-	catch(LightsparkException& e)
-	{
-		LOG(LOG_ERROR,_("Exception in ParseThread ") << e.cause);
-		root->parsingFailed();
-		sys->setError(e.cause);
-	}
 	catch(std::exception& e)
 	{
-		LOG(LOG_ERROR,_("Stream exception in ParseThread ") << e.what());
 		root->parsingFailed();
+		throw;
 	}
-	pt=NULL;
+}
 
-	sem_post(&ended);
+void ParseThread::parseBitmap()
+{
+	_NR<Bitmap> tmp=_MNR(Class<Bitmap>::getInstanceS(&f, fileType));
+
+	{
+		SpinlockLocker l(objectSpinlock);
+		parsedObject=tmp;
+	}
+}
+
+_NR<DisplayObject> ParseThread::getParsedObject()
+{
+	SpinlockLocker l(objectSpinlock);
+	return parsedObject;
+}
+
+void ParseThread::setRootMovie(RootMovieClip *root)
+{
+	SpinlockLocker l(objectSpinlock);
+	assert(root);
+	root->incRef();
+	parsedObject=_MNR(root);
+}
+
+RootMovieClip *ParseThread::getRootMovie()
+{
+	objectSpinlock.lock();
+	RootMovieClip *root=Class<RootMovieClip>::dyncast(parsedObject.getPtr());
+	objectSpinlock.unlock();
+	if(root)
+		return root;
+	else if(fileType==FT_SWF || fileType==FT_COMPRESSED_SWF)
+	{
+		LoaderInfo *li=loader?loader->getContentLoaderInfo().getPtr():NULL;
+		root=RootMovieClip::getInstance(li);
+		objectSpinlock.lock();
+		parsedObject=_MNR(root);
+		objectSpinlock.unlock();
+		if(url.len()>0)
+			root->setOrigin(url, "");
+
+		// The parser will call contentLoader's sendInit()
+		// during the parsing. We have to set loader's content
+		// here, before the event is sent.
+		if(loader)
+		{
+			root->incRef();
+			loader->setContent(_MNR(root));
+		}
+		return root;
+	}
+	else
+		return NULL;
 }
 
 void ParseThread::threadAbort()
 {
 	//Tell the our RootMovieClip that the parsing is ending
-	root->parsingFailed();
+	RootMovieClip *root=getRootMovie();
+	if(root)
+		root->parsingFailed();
 }
 
 bool RootMovieClip::boundsRect(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const
@@ -1194,12 +1286,19 @@ void RootMovieClip::commitFrame(bool another)
 	if(another)
 		frames.emplace_back();
 
-	if(getFramesLoaded()==1 && this == sys && frameRate!=0)
+	if(getFramesLoaded()==1 && frameRate!=0)
 	{
-		/* now the frameRate is available and all SymbolClass tags have created their classes */
-		sys->addTick(1000/frameRate,sys);
+		if(this==sys)
+		{
+			/* now the frameRate is available and all SymbolClass tags have created their classes */
+			sys->addTick(1000/frameRate,sys);
+		}
+		else
+		{
+			this->incRef();
+			sys->currentVm->addEvent(NullRef, _MR(new InitFrameEvent(_MNR(this))));
+		}
 	}
-	sem_post(&new_frame);
 }
 
 void RootMovieClip::revertFrame()
@@ -1324,35 +1423,15 @@ void SystemState::tick()
 	/* TODO: Step 1: declare new objects */
 
 	/* Step 2: Send enterFrame events, if needed */
-	/* TODO: make this a child of the stage (spec says so)
-	 * so we only need to send this to the stage.
-	 * TODO: This event will be handled much later
-	 * than we send it, so until then there may already
-	 * be an eventListern.
-	 * Example of send vs. handled events:
-	 *  tick() -> initFrame,advanceFrame,initFrame,advanceFrame, enterFrame,initFrame,advanceFrame
-	 *  vm()   ->                                              | handle first initFrame, add event Listener
-	 *  We could make tick() wait for the completion of advanceFrame event.
-	 */
 	{
-		Locker l(mutexEnterFrameListeners);
-		if(!enterFrameListeners.empty())
+		Locker l(mutexFrameListeners);
+		if(!frameListeners.empty())
 		{
 			_R<Event> e(Class<Event>::getInstanceS("enterFrame"));
-			auto it=enterFrameListeners.begin();
-			for(;it!=enterFrameListeners.end();it++)
-			{
-				(*it)->incRef();
-				getVm()->addEvent(_MR(*it),e);
-			}
+			auto it=frameListeners.begin();
+			for(;it!=frameListeners.end();it++)
+				getVm()->addEvent(*it,e);
 		}
-	}
-	//Enter frame should be sent to the stage too
-	if(stage->hasEventListener("enterFrame"))
-	{
-		_R<Event> e(Class<Event>::getInstanceS("enterFrame"));
-		stage->incRef();
-		getVm()->addEvent(_MR(stage),e);
 	}
 
 	/* Step 3: create legacy objects, which are new in this frame (top-down),
@@ -1360,12 +1439,35 @@ void SystemState::tick()
 	 * and their frameScripts (Step 5) (bottom-up) */
 	sys->currentVm->addEvent(NullRef, _MR(new InitFrameEvent()));
 
-	/* TODO: Step 4: dispatch frameConstructed */
-	/* TODO: Step 6: dispatch exitFrame event */
+	/* Step 4: dispatch frameConstructed events */
+	/* (TODO: should be run between step 3 and 5 */
+	{
+		Locker l(mutexFrameListeners);
+		if(!frameListeners.empty())
+		{
+			_R<Event> e(Class<Event>::getInstanceS("frameConstructed"));
+			auto it=frameListeners.begin();
+			for(;it!=frameListeners.end();it++)
+				getVm()->addEvent(*it,e);
+		}
+	}
+	/* Step 6: dispatch exitFrame event */
+	{
+		Locker l(mutexFrameListeners);
+		if(!frameListeners.empty())
+		{
+			_R<Event> e(Class<Event>::getInstanceS("exitFrame"));
+			auto it=frameListeners.begin();
+			for(;it!=frameListeners.end();it++)
+				getVm()->addEvent(*it,e);
+		}
+	}
 	/* TODO: Step 7: dispatch render event (Assuming stage.invalidate() has been called) */
 
 	/* Step 0: Set current frame number to the next frame */
-	sys->currentVm->addEvent(NullRef, _MR(new AdvanceFrameEvent()));
+	_R<AdvanceFrameEvent> advFrame = _MR(new AdvanceFrameEvent());
+	if(sys->currentVm->addEvent(NullRef, advFrame))
+		advFrame->done.wait();
 }
 
 void SystemState::resizeCompleted() const
@@ -1382,7 +1484,7 @@ void RootMovieClip::initFrame()
 {
 	LOG(LOG_CALLS,"Root:initFrame " << getFramesLoaded() << " " << state.FP);
 	/* We have to wait for at least one frame
-	 * so our class get the right prototype. Else we will
+	 * so our class get the right classdef. Else we will
 	 * call the wrong constructor. */
 	if(getFramesLoaded() == 0)
 		return;

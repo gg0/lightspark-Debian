@@ -59,11 +59,17 @@ public:
 	ASFUNCTION(_setDefaultObjectEncoding);
 	ASFUNCTION(readByte);
 	ASFUNCTION(readBytes);
+	ASFUNCTION(readDouble);
+	ASFUNCTION(readFloat);
 	ASFUNCTION(readInt);
+	ASFUNCTION(readUnsignedInt);
 	ASFUNCTION(readObject);
 	ASFUNCTION(writeByte);
 	ASFUNCTION(writeBytes);
+	ASFUNCTION(writeDouble);
+	ASFUNCTION(writeFloat);
 	ASFUNCTION(writeInt);
+	ASFUNCTION(writeUnsignedInt);
 	ASFUNCTION(writeObject);
 	ASFUNCTION(writeUTFBytes);
 	ASFUNCTION(_toString);
@@ -80,12 +86,11 @@ public:
 
 	static void sinit(Class_base* c);
 	static void buildTraits(ASObject* o);
-	ASObject* getVariableByMultiname(const multiname& name, bool skip_impl=false);
+	ASObject* getVariableByMultiname(const multiname& name, GET_VARIABLE_OPTION opt=NONE);
 	intptr_t getVariableByMultiname_i(const multiname& name);
 	void setVariableByMultiname(const multiname& name, ASObject* o);
 	void setVariableByMultiname_i(const multiname& name, intptr_t value);
 	bool hasPropertyByMultiname(const multiname& name, bool considerDynamic);
-	bool isEqual(ASObject* r);
 };
 
 class Timer: public EventDispatcher, public ITickJob
@@ -123,7 +128,7 @@ public:
 	static void sinit(Class_base*);
 	static void buildTraits(ASObject* o);
 	ASFUNCTION(_constructor);
-	ASObject* getVariableByMultiname(const multiname& name, bool skip_impl=false);
+	ASObject* getVariableByMultiname(const multiname& name, GET_VARIABLE_OPTION opt=NONE);
 	intptr_t getVariableByMultiname_i(const multiname& name)
 	{
 		assert_and_throw(implEnable);
@@ -131,7 +136,7 @@ public:
 	}
 	void setVariableByMultiname(const multiname& name, ASObject* o);
 	void setVariableByMultiname_i(const multiname& name, intptr_t value);
-	void deleteVariableByMultiname(const multiname& name);
+	bool deleteVariableByMultiname(const multiname& name);
 	bool hasPropertyByMultiname(const multiname& name, bool considerDynamic);
 	tiny_string toString(bool debugMsg=false);
 	uint32_t nextNameIndex(uint32_t cur_index);
@@ -146,7 +151,7 @@ public:
 	static void sinit(Class_base*);
 	static void buildTraits(ASObject* o);
 //	ASFUNCTION(_constructor);
-	ASObject* getVariableByMultiname(const multiname& name, bool skip_impl=false);
+	ASObject* getVariableByMultiname(const multiname& name, GET_VARIABLE_OPTION opt=NONE);
 	intptr_t getVariableByMultiname_i(const multiname& name)
 	{
 		assert_and_throw(implEnable);
@@ -158,7 +163,7 @@ public:
 		assert_and_throw(implEnable);
 		throw UnsupportedException("setVariableByMultiName_i not supported for Proxy");
 	}
-	void deleteVariableByMultiname(const multiname& name)
+	bool deleteVariableByMultiname(const multiname& name)
 	{
 		assert_and_throw(implEnable);
 		throw UnsupportedException("deleteVariableByMultiName not supported for Proxy");

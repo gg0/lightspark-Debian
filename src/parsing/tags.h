@@ -133,7 +133,7 @@ public:
 	ASObject* instance() const
 	{
 		Shape* ret=new Shape(tokens, 1.0f/20.0f);
-		ret->setPrototype(Class<Shape>::getClass());
+		ret->setClass(Class<Shape>::getClass());
 		return ret;
 	}
 };
@@ -348,8 +348,6 @@ public:
 	SoundStreamHead2Tag(RECORDHEADER h, std::istream& in);
 };
 
-class BUTTONCONDACTION;
-
 class DefineButton2Tag: public DictionaryTag
 {
 private:
@@ -358,7 +356,6 @@ private:
 	UB TrackAsMenu;
 	UI16_SWF ActionOffset;
 	std::vector<BUTTONRECORD> Characters;
-	std::vector<BUTTONCONDACTION> Actions;
 public:
 	DefineButton2Tag(RECORDHEADER h, std::istream& in);
 	virtual int getId(){ return ButtonId; }
@@ -386,7 +383,7 @@ public:
 		uint8_t* b = new uint8_t[len];
 		memcpy(b,bytes,len);
 		ByteArray* ret=new ByteArray(b, len);
-		ret->setPrototype(Class<ByteArray>::getClass());
+		ret->setClass(Class<ByteArray>::getClass());
 		return ret;
 	}
 };
@@ -552,8 +549,9 @@ private:
 	UI8 BitmapColorTableSize;
 	//ZlibBitmapData;
 public:
-	DefineBitsLosslessTag(RECORDHEADER h, std::istream& in);
+	DefineBitsLosslessTag(RECORDHEADER h, std::istream& in, int version);
 	int getId(){ return CharacterId; }
+	ASObject* instance() const;
 };
 
 class DefineBitsTag: public DictionaryTag, public Bitmap
@@ -574,6 +572,7 @@ private:
 public:
 	DefineBitsJPEG2Tag(RECORDHEADER h, std::istream& in);
 	int getId(){ return CharacterId; }
+	ASObject* instance() const;
 };
 
 class DefineBitsJPEG3Tag: public DictionaryTag, public Bitmap
@@ -585,24 +584,7 @@ public:
 	DefineBitsJPEG3Tag(RECORDHEADER h, std::istream& in);
 	~DefineBitsJPEG3Tag();
 	int getId(){ return CharacterId; }
-};
-
-class DefineBitsLossless2Tag: public DictionaryTag, public Bitmap
-{
-private:
-	UI16_SWF CharacterId;
-	UI8 BitmapFormat;
-	UI16_SWF BitmapWidth;
-	UI16_SWF BitmapHeight;
-	UI8 BitmapColorTableSize;
-	//ZlibBitmapData;
-public:
-	DefineBitsLossless2Tag(RECORDHEADER h, std::istream& in);
-	int getId(){ return CharacterId; }
 	ASObject* instance() const;
-	void renderImpl(bool maskEnabled, number_t t1,number_t t2,number_t t3,number_t t4) const
-		{ LOG(LOG_NOT_IMPLEMENTED,"DefineBitsLossless2Tag: renderImpl"); }
-
 };
 
 class DefineScalingGridTag: public Tag

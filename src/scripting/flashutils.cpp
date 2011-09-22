@@ -63,15 +63,20 @@ void ByteArray::sinit(Class_base* c)
 	sys->staticByteArrayDefaultObjectEncoding = ObjectEncoding::DEFAULT;
 	c->setDeclaredMethodByQName("readBytes","",Class<IFunction>::getFunction(readBytes),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("readByte","",Class<IFunction>::getFunction(readByte),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("readDouble","",Class<IFunction>::getFunction(readDouble),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("readFloat","",Class<IFunction>::getFunction(readFloat),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("readInt","",Class<IFunction>::getFunction(readInt),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("readUnsignedInt","",Class<IFunction>::getFunction(readInt),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("readObject","",Class<IFunction>::getFunction(readObject),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("writeUTFBytes","",Class<IFunction>::getFunction(writeUTFBytes),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("writeBytes","",Class<IFunction>::getFunction(writeBytes),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("writeByte","",Class<IFunction>::getFunction(writeByte),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("writeDouble","",Class<IFunction>::getFunction(writeDouble),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("writeFloat","",Class<IFunction>::getFunction(writeFloat),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("writeInt","",Class<IFunction>::getFunction(writeInt),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("writeUnsignedInt","",Class<IFunction>::getFunction(writeUnsignedInt),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("writeObject","",Class<IFunction>::getFunction(writeObject),NORMAL_METHOD,true);
-//	c->setDeclaredMethodByQName("toString",AS3,Class<IFunction>::getFunction(ByteArray::_toString),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("toString","",Class<IFunction>::getFunction(ByteArray::_toString),NORMAL_METHOD,true);
+	c->prototype->setDeclaredMethodByQName("toString","",Class<IFunction>::getFunction(ByteArray::_toString),NORMAL_METHOD,false);
 }
 
 void ByteArray::buildTraits(ASObject* o)
@@ -177,7 +182,7 @@ ASFUNCTIONBODY(ByteArray,readBytes)
 	ByteArray* th=static_cast<ByteArray*>(obj);
 	//Validate parameters
 	assert_and_throw(argslen>=1 && argslen<=3);
-	assert_and_throw(args[0]->getPrototype()==Class<ByteArray>::getClass());
+	assert_and_throw(args[0]->getClass()==Class<ByteArray>::getClass());
 
 	ByteArray* out=Class<ByteArray>::cast(args[0]);
 	uint32_t offset=0;
@@ -236,7 +241,7 @@ ASFUNCTIONBODY(ByteArray,writeBytes)
 	ByteArray* th=static_cast<ByteArray*>(obj);
 	//Validate parameters
 	assert_and_throw(argslen>=1 && argslen<=3);
-	assert_and_throw(args[0]->getPrototype()==Class<ByteArray>::getClass());
+	assert_and_throw(args[0]->getClass()==Class<ByteArray>::getClass());
 	ByteArray* out=Class<ByteArray>::cast(args[0]);
 	uint32_t offset=0;
 	uint32_t length=0;
@@ -280,12 +285,54 @@ ASFUNCTIONBODY(ByteArray,writeByte)
 	return NULL;
 }
 
+ASFUNCTIONBODY(ByteArray,writeDouble)
+{
+	ByteArray* th=static_cast<ByteArray*>(obj);
+	assert_and_throw(argslen==1);
+
+	double value=args[0]->toNumber();
+
+	th->getBuffer(th->position+8,true);
+	memcpy(th->bytes+th->position,&value,8);
+	th->position+=8;
+
+	return NULL;
+}
+
+ASFUNCTIONBODY(ByteArray,writeFloat)
+{
+	ByteArray* th=static_cast<ByteArray*>(obj);
+	assert_and_throw(argslen==1);
+
+	float value=args[0]->toNumber();
+
+	th->getBuffer(th->position+4,true);
+	memcpy(th->bytes+th->position,&value,4);
+	th->position+=4;
+
+	return NULL;
+}
+
 ASFUNCTIONBODY(ByteArray,writeInt)
 {
 	ByteArray* th=static_cast<ByteArray*>(obj);
 	assert_and_throw(argslen==1);
 
 	int32_t value=args[0]->toInt();
+
+	th->getBuffer(th->position+4,true);
+	memcpy(th->bytes+th->position,&value,4);
+	th->position+=4;
+
+	return NULL;
+}
+
+ASFUNCTIONBODY(ByteArray,writeUnsignedInt)
+{
+	ByteArray* th=static_cast<ByteArray*>(obj);
+	assert_and_throw(argslen==1);
+
+	uint32_t value=args[0]->toUInt();
 
 	th->getBuffer(th->position+4,true);
 	memcpy(th->bytes+th->position,&value,4);
@@ -344,6 +391,44 @@ ASFUNCTIONBODY(ByteArray, readByte)
 	return abstract_i(ret);
 }
 
+ASFUNCTIONBODY(ByteArray,readDouble)
+{
+	ByteArray* th=static_cast<ByteArray*>(obj);
+	assert_and_throw(argslen==0);
+
+	if(th->len < th->position+8)
+	{
+		LOG(LOG_ERROR,"ByteArray::readDouble not enough data");
+		//TODO: throw AS exceptions
+		return NULL;
+	}
+
+	double ret;
+	memcpy(&ret,th->bytes+th->position,8);
+	th->position+=8;
+
+	return abstract_d(ret);
+}
+
+ASFUNCTIONBODY(ByteArray,readFloat)
+{
+	ByteArray* th=static_cast<ByteArray*>(obj);
+	assert_and_throw(argslen==0);
+
+	if(th->len < th->position+4)
+	{
+		LOG(LOG_ERROR,"ByteArray::readFloat not enough data");
+		//TODO: throw AS exceptions
+		return NULL;
+	}
+
+	float ret;
+	memcpy(&ret,th->bytes+th->position,4);
+	th->position+=4;
+
+	return abstract_d(ret);
+}
+
 ASFUNCTIONBODY(ByteArray,readInt)
 {
 	ByteArray* th=static_cast<ByteArray*>(obj);
@@ -361,6 +446,25 @@ ASFUNCTIONBODY(ByteArray,readInt)
 	th->position+=4;
 
 	return abstract_i(ret);
+}
+
+ASFUNCTIONBODY(ByteArray,readUnsignedInt)
+{
+	ByteArray* th=static_cast<ByteArray*>(obj);
+	assert_and_throw(argslen==0);
+
+	if(th->len < th->position+4)
+	{
+		LOG(LOG_ERROR,"ByteArray::readUnsignedInt not enough data");
+		//TODO: throw AS exceptions
+		return NULL;
+	}
+
+	uint32_t ret;
+	memcpy(&ret,th->bytes+th->position,4);
+	th->position+=4;
+
+	return abstract_ui(ret);
 }
 
 ASFUNCTIONBODY(ByteArray,readObject)
@@ -417,12 +521,12 @@ bool ByteArray::hasPropertyByMultiname(const multiname& name, bool considerDynam
 	return index<len;
 }
 
-ASObject* ByteArray::getVariableByMultiname(const multiname& name, bool skip_impl)
+ASObject* ByteArray::getVariableByMultiname(const multiname& name, GET_VARIABLE_OPTION opt)
 {
 	assert_and_throw(implEnable);
 	unsigned int index=0;
-	if(skip_impl || !Array::isValidMultiname(name,index))
-		return ASObject::getVariableByMultiname(name,skip_impl);
+	if((opt & ASObject::SKIP_IMPL)!=0 || !Array::isValidMultiname(name,index))
+		return ASObject::getVariableByMultiname(name,opt);
 
 	assert_and_throw(index<len);
 	ASObject* ret=abstract_i(bytes[index]);
@@ -475,16 +579,6 @@ void ByteArray::setVariableByMultiname_i(const multiname& name, intptr_t value)
 	}
 
 	throw UnsupportedException("ByteArray::setVariableByMultiname_i not completely implemented");
-}
-
-bool ByteArray::isEqual(ASObject* r)
-{
-	assert_and_throw(implEnable);
-	/*if(r->getObjectType()!=T_OBJECT)
-		return false;*/
-
-	throw UnsupportedException("ByteArray::isEqual");
-	return false;
 }
 
 void ByteArray::acquireBuffer(uint8_t* buf, int bufLen)
@@ -640,6 +734,8 @@ ASFUNCTIONBODY(Timer,_setDelay)
 ASFUNCTIONBODY(Timer,start)
 {
 	Timer* th=static_cast<Timer*>(obj);
+	if(th->running)
+		return NULL;
 	th->running=true;
 	th->stopMe=false;
 	th->incRef();
@@ -691,8 +787,8 @@ ASFUNCTIONBODY(lightspark,getQualifiedClassName)
 	Class_base* c;
 	if(target->getObjectType()!=T_CLASS)
 	{
-		assert_and_throw(target->getPrototype());
-		c=target->getPrototype();
+		assert_and_throw(target->getClass());
+		c=target->getClass();
 	}
 	else
 		c=static_cast<Class_base*>(target);
@@ -707,8 +803,8 @@ ASFUNCTIONBODY(lightspark,getQualifiedSuperclassName)
 	Class_base* c;
 	if(target->getObjectType()!=T_CLASS)
 	{
-		assert_and_throw(target->getPrototype());
-		c=target->getPrototype()->super;
+		assert_and_throw(target->getClass());
+		c=target->getClass()->super;
 	}
 	else
 		c=static_cast<Class_base*>(target)->super;
@@ -822,10 +918,10 @@ void Dictionary::setVariableByMultiname(const multiname& name, ASObject* o)
 	}
 }
 
-void Dictionary::deleteVariableByMultiname(const multiname& name)
+bool Dictionary::deleteVariableByMultiname(const multiname& name)
 {
 	assert_and_throw(implEnable);
-	
+
 	if(name.name_type==multiname::NAME_OBJECT)
 	{
 		_R<ASObject> name_o(name.name_o);
@@ -835,7 +931,11 @@ void Dictionary::deleteVariableByMultiname(const multiname& name)
 
 		map<_R<ASObject>, _R<ASObject> >::iterator it=data.find(name_o);
 		if(it != data.end())
+		{
 			data.erase(it);
+			return true;
+		}
+		return false;
 	}
 	else
 	{
@@ -848,9 +948,9 @@ void Dictionary::deleteVariableByMultiname(const multiname& name)
 	}
 }
 
-ASObject* Dictionary::getVariableByMultiname(const multiname& name, bool skip_impl)
+ASObject* Dictionary::getVariableByMultiname(const multiname& name, GET_VARIABLE_OPTION opt)
 {
-	if(!skip_impl && implEnable)
+	if((opt & ASObject::SKIP_IMPL)==0 && implEnable)
 	{
 		if(name.name_type==multiname::NAME_OBJECT)
 		{
@@ -879,11 +979,11 @@ ASObject* Dictionary::getVariableByMultiname(const multiname& name, bool skip_im
 			assert(name.name_type==multiname::NAME_STRING ||
 				name.name_type==multiname::NAME_INT ||
 				name.name_type==multiname::NAME_NUMBER);
-			return ASObject::getVariableByMultiname(name, skip_impl);
+			return ASObject::getVariableByMultiname(name, opt);
 		}
 	}
 	//Try with the base implementation
-	return ASObject::getVariableByMultiname(name, skip_impl);
+	return ASObject::getVariableByMultiname(name, opt);
 }
 
 bool Dictionary::hasPropertyByMultiname(const multiname& name, bool considerDynamic)
@@ -1006,7 +1106,7 @@ void Proxy::setVariableByMultiname(const multiname& name, ASObject* o)
 	setPropertyName.name_type=multiname::NAME_STRING;
 	setPropertyName.name_s="setProperty";
 	setPropertyName.ns.push_back(nsNameAndKind(flash_proxy,NAMESPACE));
-	ASObject* proxySetter=getVariableByMultiname(setPropertyName,true);
+	ASObject* proxySetter=getVariableByMultiname(setPropertyName,ASObject::SKIP_IMPL);
 
 	if(proxySetter==NULL)
 	{
@@ -1031,22 +1131,22 @@ void Proxy::setVariableByMultiname(const multiname& name, ASObject* o)
 	implEnable=true;
 }
 
-ASObject* Proxy::getVariableByMultiname(const multiname& name, bool skip_impl)
+ASObject* Proxy::getVariableByMultiname(const multiname& name, GET_VARIABLE_OPTION opt)
 {
 	//It seems that various kind of implementation works only with the empty namespace
 	assert_and_throw(name.ns.size()>0);
-	if(name.ns[0].name!="" || ASObject::hasPropertyByMultiname(name, true) || !implEnable || skip_impl)
-		return ASObject::getVariableByMultiname(name,skip_impl);
+	if(name.ns[0].name!="" || ASObject::hasPropertyByMultiname(name, true) || !implEnable || (opt & ASObject::SKIP_IMPL)!=0)
+		return ASObject::getVariableByMultiname(name,opt);
 
 	//Check if there is a custom getter defined, skipping implementation to avoid recursive calls
 	multiname getPropertyName;
 	getPropertyName.name_type=multiname::NAME_STRING;
 	getPropertyName.name_s="getProperty";
 	getPropertyName.ns.push_back(nsNameAndKind(flash_proxy,NAMESPACE));
-	ASObject* o=getVariableByMultiname(getPropertyName,true);
+	ASObject* o=getVariableByMultiname(getPropertyName,ASObject::SKIP_IMPL);
 
 	if(o==NULL)
-		return ASObject::getVariableByMultiname(name,skip_impl);
+		return ASObject::getVariableByMultiname(name,opt);
 
 	assert_and_throw(o->getObjectType()==T_FUNCTION);
 
@@ -1080,7 +1180,7 @@ uint32_t Proxy::nextNameIndex(uint32_t cur_index)
 	nextNameIndexName.name_type=multiname::NAME_STRING;
 	nextNameIndexName.name_s="nextNameIndex";
 	nextNameIndexName.ns.push_back(nsNameAndKind(flash_proxy,NAMESPACE));
-	ASObject* o=getVariableByMultiname(nextNameIndexName,true);
+	ASObject* o=getVariableByMultiname(nextNameIndexName,ASObject::SKIP_IMPL);
 	assert_and_throw(o && o->getObjectType()==T_FUNCTION);
 	IFunction* f=static_cast<IFunction*>(o);
 	ASObject* arg=abstract_i(cur_index);
@@ -1100,7 +1200,7 @@ _R<ASObject> Proxy::nextName(uint32_t index)
 	nextNameName.name_type=multiname::NAME_STRING;
 	nextNameName.name_s="nextName";
 	nextNameName.ns.push_back(nsNameAndKind(flash_proxy,NAMESPACE));
-	ASObject* o=getVariableByMultiname(nextNameName,true);
+	ASObject* o=getVariableByMultiname(nextNameName,ASObject::SKIP_IMPL);
 	assert_and_throw(o && o->getObjectType()==T_FUNCTION);
 	IFunction* f=static_cast<IFunction*>(o);
 	ASObject* arg=abstract_i(index);
@@ -1117,7 +1217,7 @@ _R<ASObject> Proxy::nextValue(uint32_t index)
 	nextValueName.name_type=multiname::NAME_STRING;
 	nextValueName.name_s="nextValue";
 	nextValueName.ns.push_back(nsNameAndKind(flash_proxy,NAMESPACE));
-	ASObject* o=getVariableByMultiname(nextValueName,true);
+	ASObject* o=getVariableByMultiname(nextValueName,ASObject::SKIP_IMPL);
 	assert_and_throw(o && o->getObjectType()==T_FUNCTION);
 	IFunction* f=static_cast<IFunction*>(o);
 	ASObject* arg=abstract_i(index);

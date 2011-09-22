@@ -645,7 +645,7 @@ std::istream& lightspark::operator>>(std::istream& s, FILLSTYLE& v)
 		{
 			try
 			{
-				_R<DictionaryTag> dict=pt->root->dictionaryLookup(bitmapId);
+				_R<DictionaryTag> dict=pt->getRootMovie()->dictionaryLookup(bitmapId);
 				v.bitmap=dynamic_cast<Bitmap*>(dict.getPtr());
 				if(v.bitmap==NULL)
 				{
@@ -1119,11 +1119,6 @@ ASObject* lightspark::abstract_d(number_t i)
 	Number* ret=getVm()->number_manager->get<Number>();
 	ret->val=i;
 	return ret;
-}
-
-ASObject* lightspark::abstract_b(bool i)
-{
-	return Class<Boolean>::getInstanceS(i);
 }
 
 ASObject* lightspark::abstract_i(intptr_t i)

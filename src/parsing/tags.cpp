@@ -26,7 +26,6 @@
 #include <sstream>
 #include "scripting/abc.h"
 #include "tags.h"
-#include "scripting/actions.h"
 #include "backends/geometry.h"
 #include "backends/rendering.h"
 #include "backends/security.h"
@@ -34,6 +33,7 @@
 #include "swf.h"
 #include "logger.h"
 #include "compat.h"
+#include "streams.h"
 
 #undef RGB
 
@@ -77,9 +77,6 @@ _NR<Tag> TagFactory::readTag()
 		case 11:
 			ret=new DefineTextTag(h,f);
 			break;
-		case 12:
-			ret=new DoActionTag(h,f);
-			break;
 		case 13:
 			ret=new DefineFontInfoTag(h,f);
 			break;
@@ -96,7 +93,7 @@ _NR<Tag> TagFactory::readTag()
 			ret=new SoundStreamBlockTag(h,f);
 			break;
 		case 20:
-			ret=new DefineBitsLosslessTag(h,f);
+			ret=new DefineBitsLosslessTag(h,f,1);
 			break;
 		case 21:
 			ret=new DefineBitsJPEG2Tag(h,f);
@@ -126,7 +123,7 @@ _NR<Tag> TagFactory::readTag()
 			ret=new DefineBitsJPEG3Tag(h,f);
 			break;
 		case 36:
-			ret=new DefineBitsLossless2Tag(h,f);
+			ret=new DefineBitsLosslessTag(h,f,2);
 			break;
 		case 37:
 			ret=new DefineEditTextTag(h,f);
@@ -149,14 +146,8 @@ _NR<Tag> TagFactory::readTag()
 		case 48:
 			ret=new DefineFont2Tag(h,f);
 			break;
-		case 56:
-			ret=new ExportAssetsTag(h,f);
-			break;
 		case 58:
 			ret=new EnableDebuggerTag(h,f);
-			break;
-		case 59:
-			ret=new DoInitActionTag(h,f);
 			break;
 		case 60:
 			ret=new DefineVideoStreamTag(h,f);
@@ -227,14 +218,14 @@ _NR<Tag> TagFactory::readTag()
 	}
 
 	//Check if this clip is the main clip and if AVM2 has been enabled by a FileAttributes tag
-	if(topLevel && firstTag && pt->root==sys)
+	if(topLevel && firstTag && pt->getRootMovie()==sys)
 	{
 		sys->needsAVM2(pt->useAVM2);
 		if(pt->useNetwork
 		&& sys->securityManager->getSandboxType() == SecurityManager::LOCAL_WITH_FILE)
 		{
 			sys->securityManager->setSandboxType(SecurityManager::LOCAL_WITH_NETWORK);
-			LOG(LOG_NO_INFO, _("Switched to local-with-networking sandbox by FileAttributesTag"));
+			LOG(LOG_INFO, _("Switched to local-with-networking sandbox by FileAttributesTag"));
 		}
 	}
 	firstTag=false;
@@ -301,7 +292,7 @@ DefineEditTextTag::DefineEditTextTag(RECORDHEADER h, std::istream& in):Dictionar
 		if(HasFontClass)
 			in >> FontClass;
 		in >> FontHeight;
-		textData.format.size = FontHeight;
+		textData.fontSize = FontHeight;
 	}
 	if(HasTextColor)
 		in >> TextColor;
@@ -326,7 +317,7 @@ ASObject* DefineEditTextTag::instance() const
 	TextField* ret=new TextField(textData);
 	//TODO: check
 	assert_and_throw(bindedTo==NULL);
-	ret->setPrototype(Class<TextField>::getClass());
+	ret->setClass(Class<TextField>::getClass());
 	return ret;
 }
 
@@ -397,10 +388,10 @@ ASObject* DefineSpriteTag::instance() const
 	if(bindedTo)
 	{
 		//A class is binded to this tag
-		ret->setPrototype(bindedTo);
+		ret->setClass(bindedTo);
 	}
 	else
-		ret->setPrototype(Class<MovieClip>::getClass());
+		ret->setClass(Class<MovieClip>::getClass());
 
 	return ret;
 }
@@ -631,7 +622,7 @@ DefineFont4Tag::DefineFont4Tag(RECORDHEADER h, std::istream& in):DictionaryTag(h
 	ignore(in,dest-in.tellg());
 }
 
-DefineBitsLosslessTag::DefineBitsLosslessTag(RECORDHEADER h, istream& in):DictionaryTag(h)
+DefineBitsLosslessTag::DefineBitsLosslessTag(RECORDHEADER h, istream& in, int version):DictionaryTag(h)
 {
 	int dest=in.tellg();
 	dest+=h.getLength();
@@ -640,34 +631,45 @@ DefineBitsLosslessTag::DefineBitsLosslessTag(RECORDHEADER h, istream& in):Dictio
 	if(BitmapFormat==3)
 		in >> BitmapColorTableSize;
 
-	//TODO: read bitmap data
-	ignore(in,dest-in.tellg());
-}
-
-DefineBitsLossless2Tag::DefineBitsLossless2Tag(RECORDHEADER h, istream& in):DictionaryTag(h)
-{
-	int dest=in.tellg();
-	dest+=h.getLength();
-	in >> CharacterId >> BitmapFormat >> BitmapWidth >> BitmapHeight;
-
-	if(BitmapFormat==3)
-		in >> BitmapColorTableSize;
-
-	//TODO: read bitmap data
-	ignore(in,dest-in.tellg());
-}
-
-ASObject* DefineBitsLossless2Tag::instance() const
-{
-	DefineBitsLossless2Tag* ret=new DefineBitsLossless2Tag(*this);
-	//TODO: check
-	if(bindedTo)
+	if(BitmapFormat != 5)
 	{
-		//A class is binded to this tag
-		ret->setPrototype(bindedTo);
+		LOG(LOG_NOT_IMPLEMENTED,"DefineBitsLossless(2)Tag with unsupported BitmapFormat");
+		ignore(in,dest-in.tellg());
+		return;
 	}
+
+	string cData;
+	size_t cSize = dest-in.tellg(); //rest of this tag
+	cData.resize(cSize);
+	in.read(&cData[0], cSize);
+	istringstream cDataStream(cData);
+	zlib_filter zf(cDataStream.rdbuf());
+	istream zfstream(&zf);
+
+	size_t size = BitmapWidth * BitmapHeight * 4;
+	uint8_t* inData=new(nothrow) uint8_t[size];
+	zfstream.read((char*)inData,size);
+	assert(!zfstream.fail() && !zfstream.eof());
+
+	if(version == 1)
+	{	/* for version 1, the alpha field is always zero
+		 * but should not be interpreted. Setting it to
+		 * 0xff (opaque) allows us to handle it as ARGB
+		 */
+		for(size_t i=0;i<size;i+=4)
+			inData[i] = 0xFF;
+	}
+
+	Bitmap::fromRGB(inData, BitmapWidth, BitmapHeight, true);
+}
+
+ASObject* DefineBitsLosslessTag::instance() const
+{
+	DefineBitsLosslessTag* ret=new DefineBitsLosslessTag(*this);
+	if(bindedTo)
+		ret->setClass(bindedTo);
 	else
-		ret->setPrototype(Class<Bitmap>::getClass());
+		ret->setClass(Class<Bitmap>::getClass());
 	return ret;
 }
 
@@ -699,7 +701,7 @@ ASObject* DefineTextTag::instance() const
 		computeCached();
 
 	StaticText* ret=new StaticText(tokens);
-	ret->setPrototype(Class<StaticText>::getClass());
+	ret->setClass(Class<StaticText>::getClass());
 	return ret;
 }
 
@@ -804,7 +806,7 @@ ASObject* DefineMorphShapeTag::instance() const
 {
 	DefineMorphShapeTag* ret=new DefineMorphShapeTag(*this);
 	assert_and_throw(bindedTo==NULL);
-	ret->setPrototype(Class<MorphShape>::getClass());
+	ret->setClass(Class<MorphShape>::getClass());
 	return ret;
 }
 
@@ -959,7 +961,7 @@ void PlaceObject2Tag::setProperties(DisplayObject* obj, DisplayObjectContainer* 
 	if(PlaceFlagHasName)
 	{
 		//Set a variable on the parent to link this object
-		LOG(LOG_NO_INFO,_("Registering ID ") << CharacterId << _(" with name ") << Name);
+		LOG(LOG_INFO,_("Registering ID ") << CharacterId << _(" with name ") << Name);
 		if(!PlaceFlagMove)
 		{
 			obj->name = (const char*)Name;
@@ -1141,7 +1143,7 @@ ProductInfoTag::ProductInfoTag(RECORDHEADER h, std::istream& in):Tag(h)
 	longlongTime<<=32;
 	longlongTime|=CompileTimeLo;
 
-	LOG(LOG_NO_INFO,_("SWF Info:") << 
+	LOG(LOG_INFO,_("SWF Info:") << 
 	endl << "\tProductId:\t\t" << ProductId <<
 	endl << "\tEdition:\t\t" << Edition <<
 	endl << "\tVersion:\t\t" << int(MajorVersion) << "." << int(MinorVersion) << "." << MajorBuild << "." << MinorBuild <<
@@ -1179,16 +1181,7 @@ DefineButton2Tag::DefineButton2Tag(RECORDHEADER h, std::istream& in):DictionaryT
 	while(true);
 
 	if(ActionOffset)
-	{
 		LOG(LOG_NOT_IMPLEMENTED,"DefineButton2Tag: Actions are not supported");
-		BUTTONCONDACTION bca;
-		do
-		{
-			in >> bca;
-			Actions.push_back(bca);
-		}
-		while(!bca.isLast());
-	}
 }
 
 ASObject* DefineButton2Tag::instance() const
@@ -1246,13 +1239,13 @@ ASObject* DefineButton2Tag::instance() const
 	}
 
 	SimpleButton* ret=new SimpleButton(states[0], states[1], states[2], states[3]);
-	ret->setPrototype(Class<SimpleButton>::getClass());
+	ret->setClass(Class<SimpleButton>::getClass());
 	return ret;
 }
 
 DefineVideoStreamTag::DefineVideoStreamTag(RECORDHEADER h, std::istream& in):DictionaryTag(h)
 {
-	LOG(LOG_NO_INFO,_("DefineVideoStreamTag"));
+	LOG(LOG_INFO,_("DefineVideoStreamTag"));
 	in >> CharacterID >> NumFrames >> Width >> Height;
 	BitStream bs(in);
 	UB(4,bs);
@@ -1267,10 +1260,10 @@ ASObject* DefineVideoStreamTag::instance() const
 	if(bindedTo)
 	{
 		//A class is binded to this tag
-		ret->setPrototype(bindedTo);
+		ret->setClass(bindedTo);
 	}
 	else
-		ret->setPrototype(Class<Video>::getClass());
+		ret->setClass(Class<Video>::getClass());
 	return ret;
 }
 
@@ -1328,7 +1321,7 @@ ScriptLimitsTag::ScriptLimitsTag(RECORDHEADER h, std::istream& in):Tag(h)
 {
 	LOG(LOG_TRACE,_("ScriptLimitsTag Tag"));
 	in >> MaxRecursionDepth >> ScriptTimeoutSeconds;
-	LOG(LOG_NO_INFO,_("MaxRecursionDepth: ") << MaxRecursionDepth << _(", ScriptTimeoutSeconds: ") << ScriptTimeoutSeconds);
+	LOG(LOG_INFO,_("MaxRecursionDepth: ") << MaxRecursionDepth << _(", ScriptTimeoutSeconds: ") << ScriptTimeoutSeconds);
 }
 
 DebugIDTag::DebugIDTag(RECORDHEADER h, std::istream& in):Tag(h)
@@ -1338,7 +1331,7 @@ DebugIDTag::DebugIDTag(RECORDHEADER h, std::istream& in):Tag(h)
 		in >> DebugId[i];
 
 	//Note the switch to hex formatting on the ostream, and switch back to dec
-	LOG(LOG_NO_INFO,_("DebugId ") << hex <<
+	LOG(LOG_INFO,_("DebugId ") << hex <<
 		int(DebugId[0]) << int(DebugId[1]) << int(DebugId[2]) << int(DebugId[3]) << "-" <<
 		int(DebugId[4]) << int(DebugId[5]) << "-" <<
 		int(DebugId[6]) << int(DebugId[7]) << "-" <<
@@ -1353,7 +1346,7 @@ EnableDebuggerTag::EnableDebuggerTag(RECORDHEADER h, std::istream& in):Tag(h)
 	DebugPassword = "";
 	if(h.getLength() > 0)
 		in >> DebugPassword;
-	LOG(LOG_NO_INFO,_("Debugger enabled, password: ") << DebugPassword);
+	LOG(LOG_INFO,_("Debugger enabled, password: ") << DebugPassword);
 }
 
 EnableDebugger2Tag::EnableDebugger2Tag(RECORDHEADER h, std::istream& in):Tag(h)
@@ -1364,7 +1357,7 @@ EnableDebugger2Tag::EnableDebugger2Tag(RECORDHEADER h, std::istream& in):Tag(h)
 	DebugPassword = "";
 	if(h.getLength() > sizeof(ReservedWord))
 		in >> DebugPassword;
-	LOG(LOG_NO_INFO,_("Debugger enabled, reserved: ") << ReservedWord << _(", password: ") << DebugPassword);
+	LOG(LOG_INFO,_("Debugger enabled, reserved: ") << ReservedWord << _(", password: ") << DebugPassword);
 }
 
 MetadataTag::MetadataTag(RECORDHEADER h, std::istream& in):Tag(h)
@@ -1381,7 +1374,7 @@ MetadataTag::MetadataTag(RECORDHEADER h, std::istream& in):Tag(h)
 		if(xml.get_depth() == 2 && xml.get_node_type() == xmlpp::TextReader::Element)
 			output << endl << "\t" << xml.get_local_name() << ":\t\t" << xml.read_string();
 	}
-	LOG(LOG_NO_INFO, "SWF Metadata:" << output.str());
+	LOG(LOG_INFO, "SWF Metadata:" << output.str());
 }
 
 DefineBitsTag::DefineBitsTag(RECORDHEADER h, std::istream& in):DictionaryTag(h)
@@ -1412,6 +1405,16 @@ DefineBitsJPEG2Tag::DefineBitsJPEG2Tag(RECORDHEADER h, std::istream& in):Diction
 	delete[] inData;
 }
 
+ASObject* DefineBitsJPEG2Tag::instance() const
+{
+	DefineBitsJPEG2Tag* ret=new DefineBitsJPEG2Tag(*this);
+	if(bindedTo)
+		ret->setClass(bindedTo);
+	else
+		ret->setClass(Class<Bitmap>::getClass());
+	return ret;
+}
+
 DefineBitsJPEG3Tag::DefineBitsJPEG3Tag(RECORDHEADER h, std::istream& in):DictionaryTag(h),alphaData(NULL)
 {
 	LOG(LOG_TRACE,_("DefineBitsJPEG3Tag Tag"));
@@ -1433,6 +1436,16 @@ DefineBitsJPEG3Tag::DefineBitsJPEG3Tag(RECORDHEADER h, std::istream& in):Diction
 		alphaData=new(nothrow) uint8_t[alphaSize];
 		in.read((char*)alphaData,alphaSize);
 	}
+}
+
+ASObject* DefineBitsJPEG3Tag::instance() const
+{
+	DefineBitsJPEG3Tag* ret=new DefineBitsJPEG3Tag(*this);
+	if(bindedTo)
+		ret->setClass(bindedTo);
+	else
+		ret->setClass(Class<Bitmap>::getClass());
+	return ret;
 }
 
 DefineBitsJPEG3Tag::~DefineBitsJPEG3Tag()

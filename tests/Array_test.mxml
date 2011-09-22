@@ -45,8 +45,9 @@
 		Tests.assertArrayEquals(b, new Array(3, 6, 9), "forEach()");
 
 		var c:Array=[ 1, 2, 3 ];
-		c.reverse();
+		var c2:Array=c.reverse();
 		Tests.assertArrayEquals(c, new Array(3, 2, 1), "reverse()");
+		Tests.assertTrue(c == c2, "reverse() return value");
 
 		var d:Array=[ 2, 1, 2, 3 ];
 		Tests.assertEquals(d.indexOf(2), 0, "indexOf() single parameter");
@@ -84,6 +85,33 @@
 		Tests.assertArrayEquals(f4, [ ], "splice with huge deleteCount and huge negative startIndex: original array");
 		Tests.assertArrayEquals(g4, [ 2, 3, 4, 5], "splice with huge deleteCount and huge negative startIndex: returned array");
 
+		var h:Array=[2, 3, 4, 5];
+		Tests.assertArrayEquals(h.slice(1), [3, 4, 5], "slice with one argument");
+		Tests.assertArrayEquals(h.slice(-2), [4, 5], "slice with negative start index");
+		Tests.assertArrayEquals(h.slice(1000), [], "slice with huge start index");
+		Tests.assertArrayEquals(h.slice(-1000), [2, 3, 4, 5], "slice with huge negative start index");
+		Tests.assertArrayEquals(h.slice(1, 3), [3, 4], "slice with two arguments");
+		Tests.assertArrayEquals(h.slice(1, -1), [3, 4], "slice with positive start index and negative end index");
+		Tests.assertArrayEquals(h.slice(1, -1000), [], "slice with small start index and huge end index");
+
+		function isNumeric(element:*, index:int, arr:Array):Boolean {
+			return (element is Number);
+		}
+
+		var i1:Array=[1, 2, 3];
+		var i2:Array=["x", 2, 3];
+		Tests.assertEquals(i1.every(isNumeric), true, "every on int array with callback checking if value is numeric");
+		Tests.assertEquals(i2.every(isNumeric), false, "every on mixed type array with callback checking if value is numeric");
+
+		var i3:Array=["x", "y", "z"];
+		var i4:Array=["x", "y", 3];
+		Tests.assertEquals(i3.some(isNumeric), false, "some on character array with callback checking if value is numeric");
+		Tests.assertEquals(i4.some(isNumeric), true, "some on mixed type array with callback checking if value is numeric");
+
+		Tests.assertEquals(i3.toString(), "x,y,z", "toString()");
+		Tests.assertEquals(i3.toLocaleString(), "[object String],[object String],[object String]", "toLocaleString()");
+		Tests.assertEquals(false,(["a","b",3] == ["a","b",3]),"Arrays not equals -> different objects");
+		Tests.assertEquals(false,(["a","b",3] === ["a","b",3]),"Arrays not equals -> different objects");
 		Tests.report(visual, this.name);
 	}
 	]]>

@@ -50,6 +50,8 @@ URLRequest::URLRequest():method(GET)
 void URLRequest::sinit(Class_base* c)
 {
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
+	c->super=Class<ASObject>::getClass();
+	c->max_level=c->super->max_level+1;
 	c->setDeclaredMethodByQName("url","",Class<IFunction>::getFunction(_setURL),SETTER_METHOD,true);
 	c->setDeclaredMethodByQName("url","",Class<IFunction>::getFunction(_getURL),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("method","",Class<IFunction>::getFunction(_setMethod),SETTER_METHOD,true);
@@ -71,7 +73,7 @@ URLInfo URLRequest::getRequestURL() const
 	if(data.isNull())
 		return ret;
 
-	if(data->getPrototype()==Class<ByteArray>::getClass())
+	if(data->getClass()==Class<ByteArray>::getClass())
 		throw RunTimeException("ByteArray data not supported in URLRequest");
 	else
 	{
@@ -94,9 +96,9 @@ void URLRequest::getPostData(vector<uint8_t>& outData) const
 	if(data.isNull())
 		return;
 
-	if(data->getPrototype()==Class<ByteArray>::getClass())
+	if(data->getClass()==Class<ByteArray>::getClass())
 		throw RunTimeException("ByteArray not support in URLRequest");
-	else if(data->getPrototype()==Class<URLVariables>::getClass())
+	else if(data->getClass()==Class<URLVariables>::getClass())
 	{
 		//Prepend the Content-Type header
 		tiny_string strData="Content-type: application/x-www-form-urlencoded\r\nContent-length: ";
@@ -194,6 +196,8 @@ ASFUNCTIONBODY(URLRequest,_setData)
 
 void URLRequestMethod::sinit(Class_base* c)
 {
+	c->super=Class<ASObject>::getClass();
+	c->max_level=c->super->max_level+1;
 	c->setVariableByQName("GET","",Class<ASString>::getInstanceS("GET"),DECLARED_TRAIT);
 	c->setVariableByQName("POST","",Class<ASString>::getInstanceS("POST"),DECLARED_TRAIT);
 }
@@ -226,6 +230,11 @@ void URLLoader::buildTraits(ASObject* o)
 ASFUNCTIONBODY(URLLoader,_constructor)
 {
 	EventDispatcher::_constructor(obj,NULL,0);
+	if(argslen==1 && args[0]->getClass() == Class<URLRequest>::getClass())
+	{
+		//URLRequest* urlRequest=Class<URLRequest>::dyncast(args[0]);
+		load(obj, args, argslen);
+	}
 	return NULL;
 }
 
@@ -402,6 +411,8 @@ ASFUNCTIONBODY(URLLoader,_setDataFormat)
 
 void URLLoaderDataFormat::sinit(Class_base* c)
 {
+	c->super=Class<ASObject>::getClass();
+	c->max_level=c->super->max_level+1;
 	c->setVariableByQName("VARIABLES","",Class<ASString>::getInstanceS("variables"),DECLARED_TRAIT);
 	c->setVariableByQName("TEXT","",Class<ASString>::getInstanceS("text"),DECLARED_TRAIT);
 	c->setVariableByQName("BINARY","",Class<ASString>::getInstanceS("binary"),DECLARED_TRAIT);
@@ -409,10 +420,14 @@ void URLLoaderDataFormat::sinit(Class_base* c)
 
 void SharedObject::sinit(Class_base* c)
 {
+	c->super=Class<EventDispatcher>::getClass();
+	c->max_level=c->super->max_level+1;
 };
 
 void ObjectEncoding::sinit(Class_base* c)
 {
+	c->super=Class<ASObject>::getClass();
+	c->max_level=c->super->max_level+1;
 	c->setVariableByQName("AMF0","",abstract_i(AMF0),DECLARED_TRAIT);
 	c->setVariableByQName("AMF3","",abstract_i(AMF3),DECLARED_TRAIT);
 	c->setVariableByQName("DEFAULT","",abstract_i(DEFAULT),DECLARED_TRAIT);
@@ -659,7 +674,7 @@ ASFUNCTIONBODY(NetStream,_constructor)
 
 	LOG(LOG_CALLS,_("NetStream constructor"));
 	assert_and_throw(argslen>=1 && argslen <=2);
-	assert_and_throw(args[0]->getPrototype()==Class<NetConnection>::getClass());
+	assert_and_throw(args[0]->getClass()==Class<NetConnection>::getClass());
 
 	args[0]->incRef();
 	_R<NetConnection> netConnection = _MR(Class<NetConnection>::cast(args[0]));
@@ -1243,8 +1258,10 @@ void URLVariables::decode(const tiny_string& s)
 void URLVariables::sinit(Class_base* c)
 {
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
+	c->super=Class<ASObject>::getClass();
+	c->max_level=c->super->max_level+1;
 	c->setDeclaredMethodByQName("decode","",Class<IFunction>::getFunction(decode),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("toString","",Class<IFunction>::getFunction(_toString),NORMAL_METHOD,true);
+	c->prototype->setDeclaredMethodByQName("toString","",Class<IFunction>::getFunction(_toString),NORMAL_METHOD,false);
 }
 
 void URLVariables::buildTraits(ASObject* o)

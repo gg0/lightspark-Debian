@@ -59,10 +59,17 @@ void TextField::sinit(Class_base* c)
 	c->setDeclaredMethodByQName("width","",Class<IFunction>::getFunction(TextField::_setWidth),SETTER_METHOD,true);
 	c->setDeclaredMethodByQName("height","",Class<IFunction>::getFunction(TextField::_getHeight),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("height","",Class<IFunction>::getFunction(TextField::_setHeight),SETTER_METHOD,true);
+	c->setDeclaredMethodByQName("textHeight","",Class<IFunction>::getFunction(TextField::_getTextHeight),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("textWidth","",Class<IFunction>::getFunction(TextField::_getTextWidth),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("text","",Class<IFunction>::getFunction(TextField::_getText),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("text","",Class<IFunction>::getFunction(TextField::_setText),SETTER_METHOD,true);
 	c->setDeclaredMethodByQName("appendText","",Class<IFunction>::getFunction(TextField:: appendText),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("setTextFormat","",Class<IFunction>::getFunction(_setTextFormat),NORMAL_METHOD,true);
+
+	REGISTER_GETTER_SETTER(c,textColor);
 }
+
+ASFUNCTIONBODY_GETTER_SETTER(TextField,textColor);
 
 void TextField::buildTraits(ASObject* o)
 {
@@ -77,12 +84,12 @@ bool TextField::boundsRect(number_t& xmin, number_t& xmax, number_t& ymin, numbe
 	return true;
 }
 
-_NR<InteractiveObject> TextField::hitTestImpl(_NR<InteractiveObject> last, number_t x, number_t y)
+_NR<InteractiveObject> TextField::hitTestImpl(_NR<InteractiveObject> last, number_t x, number_t y, DisplayObject::HIT_TYPE type)
 {
 	/* I suppose one does not have to actually hit a character */
 	number_t xmin,xmax,ymin,ymax;
 	boundsRect(xmin,xmax,ymin,ymax);
-	if( xmin <= x && x <= xmax && ymin <= y && y <= ymax )
+	if( xmin <= x && x <= xmax && ymin <= y && y <= ymax && isHittable(type))
 		return last;
 	else
 		return NullRef;
@@ -116,6 +123,18 @@ ASFUNCTIONBODY(TextField,_setHeight)
 	return NULL;
 }
 
+ASFUNCTIONBODY(TextField,_getTextWidth)
+{
+	TextField* th=Class<TextField>::cast(obj);
+	return abstract_i(th->textWidth);
+}
+
+ASFUNCTIONBODY(TextField,_getTextHeight)
+{
+	TextField* th=Class<TextField>::cast(obj);
+	return abstract_i(th->textHeight);
+}
+
 ASFUNCTIONBODY(TextField,_getText)
 {
 	TextField* th=Class<TextField>::cast(obj);
@@ -138,6 +157,30 @@ ASFUNCTIONBODY(TextField, appendText)
 	return NULL;
 }
 
+ASFUNCTIONBODY(TextField,_setTextFormat)
+{
+	TextField* th=Class<TextField>::cast(obj);
+	if(argslen == 0)
+		throw RunTimeException("TextField.setTextFormat: Not enough parameters");
+	if(argslen > 1)
+		LOG(LOG_NOT_IMPLEMENTED,"setTextFormat with more than one parameter");
+
+	TextFormat* tf = Class<TextFormat>::cast(args[0]);
+	if(tf->color != NULL)
+		th->textColor = tf->color->toUInt();
+
+	LOG(LOG_NOT_IMPLEMENTED,"setTextFormat does not read all fields of TextFormat");
+	return NULL;
+}
+
+void TextField::setTextSize(int twidth, int theight)
+{
+	// TOOD: textWidth and textHeight should be updated in one
+	// atomic step
+	textWidth=twidth;
+	textHeight=theight;
+}
+
 void TextField::updateText(const tiny_string& new_text)
 {
 	text = new_text;
@@ -148,6 +191,9 @@ void TextField::requestInvalidation()
 {
 	incRef();
 	sys->addToInvalidateQueue(_MR(this));
+
+	// Note: textWidth and textHeight should be updated now.
+	// Currently updating is delayed until rendering step.
 }
 
 void TextField::invalidate()
@@ -208,7 +254,10 @@ void TextFormat::sinit(Class_base* c)
 	c->setConstructor(NULL);
 	c->super=Class<ASObject>::getClass();
 	c->max_level=c->super->max_level+1;
+	REGISTER_GETTER_SETTER(c,color);
 }
+
+ASFUNCTIONBODY_GETTER_SETTER(TextFormat,color);
 
 void TextFormat::buildTraits(ASObject* o)
 {

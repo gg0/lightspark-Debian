@@ -25,17 +25,10 @@ using namespace lightspark;
 
 ASObject* Class<ASObject>::lazyDefine(const multiname& name)
 {
-	if(name.ns.size()!=1)
+	if(name.ns.empty())
 		return NULL;
 
-	//Check if we should do lazy definition
-	if(name.ns[0].name=="" && name.name_s=="toString")
-	{
-		ASObject* ret=Class<IFunction>::getFunction(ASObject::_toString);
-		setVariableByQName("toString","",ret,BORROWED_TRAIT);
-		return ret;
-	}
-	else if(name.ns[0].name==AS3 && name.name_s=="hasOwnProperty")
+	if(binary_search(name.ns.begin(),name.ns.end(),nsNameAndKind(AS3,NAMESPACE)) && name.name_s=="hasOwnProperty")
 	{
 		ASObject* ret=Class<IFunction>::getFunction(ASObject::hasOwnProperty);
 		setVariableByQName("hasOwnProperty",AS3,ret,BORROWED_TRAIT);
@@ -66,8 +59,8 @@ ASObject* Class_inherit::getInstance(bool construct, ASObject* const* args, cons
 		//Our super should not construct, we are going to do it ourselves
 		ret=super->getInstance(false,NULL,0);
 	}
-	//We override the prototype
-	ret->setPrototype(this);
+	//We override the classdef
+	ret->setClass(this);
 	if(construct)
 		handleConstruction(ret,args,argslen,true);
 	return ret;

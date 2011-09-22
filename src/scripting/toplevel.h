@@ -28,6 +28,8 @@
 #include <libxml/tree.h>
 #include <libxml++/parsers/domparser.h>
 #include "abcutils.h"
+#include <glibmm/ustring.h>
+#include "Boolean.h"
 
 namespace lightspark
 {
@@ -35,6 +37,7 @@ const tiny_string AS3="http://adobe.com/AS3/2006/builtin";
 
 class Event;
 class ABCContext;
+class Template_base;
 class method_info;
 struct call_context;
 struct traits_info;
@@ -43,6 +46,16 @@ class InterfaceClass: public ASObject
 {
 protected:
 	static void lookupAndLink(Class_base* c, const tiny_string& name, const tiny_string& interfaceNs);
+};
+
+class Prototype: public ASObject
+{
+public:
+	Prototype(const _R<Class_base>& _classdef) : classdef(_classdef) {}
+	_NR<Prototype> prototype;
+	ASObject* getVariableByMultiname(const multiname& name, GET_VARIABLE_OPTION opt);
+	/* this is the class such that classdef->prototype == this */
+	_R<Class_base> classdef;
 };
 
 class Class_base: public ASObject
@@ -65,8 +78,9 @@ private:
 	Mutex referencedObjectsMutex;
 	std::set<ASObject*> referencedObjects;
 	void finalizeObjects() const;
-
 public:
+	void addPrototypeGetter();
+	ASPROPERTY_GETTER(_NR<Prototype>,prototype);
 	Class_base* super;
 	//We need to know what is the context we are referring to
 	ABCContext* context;
@@ -90,11 +104,19 @@ public:
 	virtual ASObject* generator(ASObject* const* args, const unsigned int argslen);
 	ASObject *describeType() const;
 	void describeInstance(xmlpp::Element* root) const;
-	
+	virtual const Template_base* getTemplate() const { return NULL; }
 	//DEPRECATED: naive garbage collector
-	void abandonObject(ASObject* ob);
-	void acquireObject(ASObject* ob);
-	void cleanUp();
+	void abandonObject(ASObject* ob) DLL_PUBLIC;
+	void acquireObject(ASObject* ob) DLL_PUBLIC;
+};
+
+class Template_base : public ASObject
+{
+private:
+	QName template_name;
+public:
+	Template_base(QName name);
+	virtual Class_base* applyType(ASObject* const* args, const unsigned int argslen)=0;
 };
 
 class Class_object: public Class_base
@@ -132,11 +154,11 @@ private:
 	}
 public:
 	Class_function(IFunction* _f, ASObject* _p);
-	ASObject* getVariableByMultiname(const multiname& name, bool skip_impl=false)
+	ASObject* getVariableByMultiname(const multiname& name, GET_VARIABLE_OPTION opt=NONE)
 	{
-		ASObject* ret=Class_base::getVariableByMultiname(name,skip_impl);
+		ASObject* ret=Class_base::getVariableByMultiname(name,opt);
 		if(ret==NULL && asprototype)
-			ret=asprototype->getVariableByMultiname(name,skip_impl);
+			ret=asprototype->getVariableByMultiname(name,opt);
 		return ret;
 	}
 	intptr_t getVariableByMultiname_i(const multiname& name)
@@ -185,8 +207,8 @@ public:
 			{
 				//Generate a copy
 				ret=clone();
-				ret->prototype=NULL; //Drop the prototype and set it ex novo
-				ret->setPrototype(getPrototype());
+				ret->classdef=NULL; //Drop the classdef and set it ex novo
+				ret->setClass(getClass());
 			}
 			ret->bound=true;
 			ret->closure_this=c;
@@ -204,7 +226,6 @@ public:
 		closure_level=l;
 	}
 	virtual method_info* getMethodInfo() const=0;
-	static void sinit(Class_base* c);
 	virtual ASObject *describeType() const;
 };
 
@@ -286,49 +307,21 @@ public:
 	{
 		Class<IFunction>* c=Class<IFunction>::getClass();
 		Function* ret=new Function(v);
-		ret->setPrototype(c);
-		//c->handleConstruction(ret,NULL,0,true);
+		ret->setClass(c);
+		ret->resetLevel();
 		return ret;
 	}
 	static SyntheticFunction* getSyntheticFunction(method_info* m)
 	{
 		Class<IFunction>* c=Class<IFunction>::getClass();
 		SyntheticFunction* ret=new SyntheticFunction(m);
-		ret->setPrototype(c);
+		ret->setClass(c);
 		c->handleConstruction(ret,NULL,0,true);
 		return ret;
 	}
 	void buildInstanceTraits(ASObject* o) const
 	{
 	}
-};
-
-class Boolean: public ASObject
-{
-friend bool Boolean_concrete(ASObject* obj);
-CLASSBUILDABLE(Boolean);
-private:
-	bool val;
-	Boolean(){}
-	Boolean(bool v):val(v){type=T_BOOLEAN;}
-public:
-	int32_t toInt()
-	{
-		return val ? 1 : 0;
-	}
-	bool isEqual(ASObject* r);
-	tiny_string toString(bool debugMsg);
-	double toNumber()
-	{
-		return val ? 1.0 : 0.0;
-	}
-	static void buildTraits(ASObject* o){};
-	static void sinit(Class_base*);
-	ASFUNCTION(_toString);
-	ASFUNCTION(generator);
-	//Serialization interface
-	void serialize(ByteArray* out, std::map<tiny_string, uint32_t>& stringMap,
-			std::map<const ASObject*, uint32_t>& objMap) const;
 };
 
 class Undefined : public ASObject
@@ -354,11 +347,12 @@ private:
 	tiny_string toString_priv() const;
 	ASString();
 	ASString(const std::string& s);
+	ASString(const Glib::ustring& s);
 	ASString(const tiny_string& s);
 	ASString(const char* s);
 	ASString(const char* s, uint32_t len);
 public:
-	std::string data;
+	Glib::ustring data;
 	static void sinit(Class_base* c);
 	static void buildTraits(ASObject* o);
 	ASFUNCTION(_constructor);
@@ -384,6 +378,7 @@ public:
 	tiny_string toString(bool debugMsg=false);
 	double toNumber();
 	int32_t toInt();
+	uint32_t toUInt();
 	ASFUNCTION(generator);
 	//Serialization interface
 	void serialize(ByteArray* out, std::map<tiny_string, uint32_t>& stringMap,
@@ -483,6 +478,7 @@ private:
 		bool operator()(const data_slot& d1, const data_slot& d2);
 	};
 	tiny_string toString_priv() const;
+	int capIndex(int i) const;
 public:
 	void finalize();
 	//These utility methods are also used by ByteArray 
@@ -510,6 +506,9 @@ public:
 	ASFUNCTION(lastIndexOf);
 	ASFUNCTION(_map);
 	ASFUNCTION(_toString);
+	ASFUNCTION(slice);
+	ASFUNCTION(every);
+	ASFUNCTION(some);
 
 	ASObject* at(unsigned int index) const;
 	void set(unsigned int index, ASObject* o)
@@ -535,13 +534,12 @@ public:
 	{
 		data.resize(n);
 	}
-	ASObject* getVariableByMultiname(const multiname& name, bool skip_impl);
+	ASObject* getVariableByMultiname(const multiname& name, GET_VARIABLE_OPTION opt);
 	intptr_t getVariableByMultiname_i(const multiname& name);
 	void setVariableByMultiname(const multiname& name, ASObject* o);
 	void setVariableByMultiname_i(const multiname& name, intptr_t value);
 	bool hasPropertyByMultiname(const multiname& name, bool considerDynamic);
 	tiny_string toString(bool debugMsg=false);
-	bool isEqual(ASObject* r);
 	uint32_t nextNameIndex(uint32_t cur_index);
 	_R<ASObject> nextName(uint32_t index);
 	_R<ASObject> nextValue(uint32_t index);
@@ -559,10 +557,10 @@ friend class ABCContext;
 friend ASObject* abstract_i(intptr_t i);
 CLASSBUILDABLE(Integer);
 private:
-	int32_t val;
 	Integer(int32_t v=0):val(v){type=T_INTEGER;}
 	Integer(Manager* m):ASObject(m),val(0){type=T_INTEGER;}
 public:
+	int32_t val;
 	static void buildTraits(ASObject* o){};
 	static void sinit(Class_base* c);
 	ASFUNCTION(_toString);
@@ -588,9 +586,9 @@ class UInteger: public ASObject
 friend ASObject* abstract_ui(uint32_t i);
 CLASSBUILDABLE(UInteger);
 private:
-	uint32_t val;
 	UInteger(Manager* m):ASObject(m),val(0){type=T_UINTEGER;}
 public:
+	uint32_t val;
 	UInteger(uint32_t v=0):val(v){type=T_UINTEGER;}
 
 	static void sinit(Class_base* c);
@@ -609,6 +607,7 @@ public:
 	}
 	TRISTATE isLess(ASObject* r);
 	bool isEqual(ASObject* o);
+	ASFUNCTION(generator);
 	//CHECK: should this have a special serialization?
 };
 
@@ -619,12 +618,13 @@ friend class ABCContext;
 friend class ABCVm;
 CLASSBUILDABLE(Number);
 private:
-	double val;
-	Number(){}
+	Number():val(0) {type=T_NUMBER;}
 	Number(double v):val(v){type=T_NUMBER;}
 	Number(Manager* m):ASObject(m),val(0){type=T_NUMBER;}
-	static void purgeTrailingZeroes(char* buf, int bufLen);
+	static void purgeTrailingZeroes(char* buf);
 public:
+	double val;
+	ASFUNCTION(_constructor);
 	ASFUNCTION(_toString);
 	tiny_string toString(bool debugMsg);
 	unsigned int toUInt()
@@ -692,7 +692,7 @@ public:
 	static void buildTraits(ASObject* o){};
 	static void sinit(Class_base* c);
 	void getDescendantsByQName(const tiny_string& name, const tiny_string& ns, std::vector<_R<XML> >& ret);
-	ASObject* getVariableByMultiname(const multiname& name, bool skip_impl);
+	ASObject* getVariableByMultiname(const multiname& name, GET_VARIABLE_OPTION opt);
 	bool hasPropertyByMultiname(const multiname& name, bool considerDynamic);
 	tiny_string toString(bool debugMsg=false);
 	void toXMLString_priv(xmlBufferPtr buf);
@@ -735,9 +735,11 @@ public:
 	ASFUNCTION(_toString);
 	ASFUNCTION(toXMLString);
 	ASFUNCTION(generator);
-	ASObject* getVariableByMultiname(const multiname& name, bool skip_impl);
+	ASFUNCTION(descendants);
+	ASObject* getVariableByMultiname(const multiname& name, GET_VARIABLE_OPTION opt);
 	void setVariableByMultiname(const multiname& name, ASObject* o);
 	bool hasPropertyByMultiname(const multiname& name, bool considerDynamic);
+	void getDescendantsByQName(const tiny_string& name, const tiny_string& ns, std::vector<_R<XML> >& ret);
 	_NR<XML> convertToXML() const;
 	bool hasSimpleContent() const;
 	bool hasComplexContent() const;
@@ -799,9 +801,9 @@ public:
 class ScriptDefinable: public Definable
 {
 private:
-	IFunction* f;
+	_R<IFunction> f;
 public:
-	ScriptDefinable(IFunction* _f):f(_f){}
+	ScriptDefinable(IFunction* _f):f(_MR(_f)){}
 	//The global object will be passed from the calling context
 	void define(ASObject* g){ g->incRef(); f->call(g,NULL,0); }
 };
@@ -838,7 +840,7 @@ class RegExp: public ASObject
 CLASSBUILDABLE(RegExp);
 friend class ASString;
 private:
-	std::string re;
+	Glib::ustring re;
 	bool global;
 	bool ignoreCase;
 	bool extended;
@@ -852,6 +854,31 @@ public:
 	ASFUNCTION(exec);
 	ASFUNCTION(test);
 	ASFUNCTION(_getGlobal);
+};
+
+template<class T> class TemplatedClass;
+class Vector: public ASObject
+{
+	Class_base* vec_type;
+	bool fixed;
+	std::vector<ASObject*> vec;
+public:
+	Vector() : vec_type(NULL) {}
+	static void sinit(Class_base* c);
+	static void buildTraits(ASObject* o) {};
+	static ASObject* generator(TemplatedClass<Vector>* o_class, ASObject* const* args, const unsigned int argslen);
+
+	void setTypes(const std::vector<Class_base*>& types);
+
+	//Overloads
+	tiny_string toString(bool debugMsg=false);
+	ASObject* getVariableByMultiname(const multiname& name, GET_VARIABLE_OPTION opt);
+
+	//TODO: do we need to implement generator?
+	ASFUNCTION(_constructor);
+	ASFUNCTION(_applytype);
+
+	ASFUNCTION(push);
 };
 
 class ASError: public ASObject
@@ -984,10 +1011,8 @@ public:
 	std::vector<ASObject*> globalScopes;
 	ASObject* getVariableByString(const std::string& name, ASObject*& target);
 	ASObject* getVariableAndTargetByMultiname(const multiname& name, ASObject*& target);
+	~GlobalObject();
 };
-
-bool Boolean_concrete(ASObject* obj);
-
 
 template<class T>
 class ArgumentConversion
@@ -1022,6 +1047,9 @@ class ArgumentConversion<NullableRef<T>>
 public:
 	static NullableRef<T> toConcrete(ASObject* obj)
 	{
+		if(obj->getObjectType() == T_NULL)
+			return NullRef;
+
 		T* o = dynamic_cast<T*>(obj);
 		if(!o)
 			throw ArgumentError("Wrong type");
@@ -1047,6 +1075,8 @@ template<>
 int32_t ArgumentConversion<int32_t>::toConcrete(ASObject* obj);
 template<>
 tiny_string ArgumentConversion<tiny_string>::toConcrete(ASObject* obj);
+template<>
+RGB ArgumentConversion<RGB>::toConcrete(ASObject* obj);
 
 template<>
 ASObject* ArgumentConversion<int32_t>::toAbstract(const int32_t& val);
@@ -1058,6 +1088,8 @@ template<>
 ASObject* ArgumentConversion<bool>::toAbstract(const bool& val);
 template<>
 ASObject* ArgumentConversion<tiny_string>::toAbstract(const tiny_string& val);
+template<>
+ASObject* ArgumentConversion<RGB>::toAbstract(const RGB& val);
 
 ASObject* parseInt(ASObject* obj,ASObject* const* args, const unsigned int argslen);
 ASObject* parseFloat(ASObject* obj,ASObject* const* args, const unsigned int argslen);
@@ -1071,6 +1103,54 @@ ASObject* escape(ASObject* obj,ASObject* const* args, const unsigned int argslen
 ASObject* unescape(ASObject* obj,ASObject* const* args, const unsigned int argslen);
 ASObject* print(ASObject* obj,ASObject* const* args, const unsigned int argslen);
 ASObject* trace(ASObject* obj,ASObject* const* args, const unsigned int argslen);
+
+
+inline void Manager::put(ASObject* o)
+{
+	if(available.size()>maxCache)
+		delete o;
+	else
+	{
+		//The Manager now owns this object
+		if(o->classdef)
+			o->classdef->abandonObject(o);
+		available.push_back(o);
+	}
+}
+
+template<class T>
+T* Manager::get()
+{
+	if(available.size())
+	{
+		T* ret=static_cast<T*>(available.back());
+		available.pop_back();
+		ret->incRef();
+		//Transfer ownership back to the classdef
+		if(ret->getClass())
+			ret->getClass()->acquireObject(ret);
+		//std::cout << "getting[" << name << "] " << ret << std::endl;
+		return ret;
+	}
+	else
+	{
+		T* ret=Class<T>::getInstanceS(this);
+		//std::cout << "newing" << ret << std::endl;
+		return ret;
+	}
+}
+
+inline Manager::~Manager()
+{
+	for(auto i = available.begin(); i != available.end(); ++i)
+	{
+		// ~ASObject will call abandonObject() again
+		if((*i)->classdef)
+			(*i)->classdef->acquireObject(*i);
+		delete *i;
+	}
+}
+
 };
 
 #endif

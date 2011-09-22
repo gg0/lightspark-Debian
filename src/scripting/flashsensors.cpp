@@ -17,35 +17,37 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
-#include "vm.h"
-#include "swf.h"
-#include "actions.h"
-#include "flashdisplay.h"
+#include <map>
+#include "abc.h"
+#include "flashsensors.h"
+#include "class.h"
+#include "scripting/flashsystem.h"
 #include "compat.h"
+#include "backends/audio.h"
+#include "backends/builtindecoder.h"
+#include "backends/rendering.h"
+#include "backends/security.h"
 
 using namespace std;
 using namespace lightspark;
 
-VirtualMachine::VirtualMachine()
+SET_NAMESPACE("flash.sensors");
+
+REGISTER_CLASS_NAME(Accelerometer);
+
+Accelerometer::Accelerometer() {}
+
+void Accelerometer::sinit(Class_base* c)
 {
-	sem_init(&mutex,0,1);
-	//Global.setVariableByQName("MovieClip","",new MovieClip);
+	// properties
+	c->setDeclaredMethodByQName("isSupported", "", Class<IFunction>::getFunction(_isSupported),GETTER_METHOD,false);
 }
 
-VirtualMachine::~VirtualMachine()
+void Accelerometer::buildTraits(ASObject *o)
 {
-	sem_destroy(&mutex);
 }
 
-void VirtualMachine::setConstantPool(vector<STRING>& p)
+ASFUNCTIONBODY(Accelerometer,_isSupported)
 {
-	//sem_wait(&mutex);
-	ConstantPool=p;
-	//sem_post(&mutex);
+	return abstract_b(false);
 }
-
-STRING VirtualMachine::getConstantByIndex(int i)
-{
-	return ConstantPool[i];
-}
-

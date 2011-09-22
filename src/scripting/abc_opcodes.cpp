@@ -150,7 +150,7 @@ ASObject* ABCVm::checkfilter(ASObject* o)
 	Class_base* xmlClass=Class<XML>::getClass();
 	Class_base* xmlListClass=Class<XMLList>::getClass();
 
-	if (o->getPrototype()!=xmlClass && o->getPrototype()!=xmlListClass)
+	if (o->getClass()!=xmlClass && o->getClass()!=xmlListClass)
 		throw Class<TypeError>::getInstanceS();
 
 	return o;
@@ -301,8 +301,8 @@ void ABCVm::callProperty(call_context* th, int n, int m, method_info*& called_mi
 	LOG(LOG_CALLS,_("callProperty ") << *name << ' ' << m);
 
 	ASObject* obj=th->runtime_stack_pop();
-	if(obj->prototype)
-		LOG(LOG_CALLS,obj->prototype->class_name);
+	if(obj->classdef)
+		LOG(LOG_CALLS,obj->classdef->class_name);
 
 	//We have to reset the level, as we may be getting a function defined at a lower level
 	thisAndLevel tl=getVm()->getCurObjAndLevel();
@@ -310,7 +310,7 @@ void ABCVm::callProperty(call_context* th, int n, int m, method_info*& called_mi
 		obj->resetLevel();
 
 	//We should skip the special implementation of get
-	ASObject* o=obj->getVariableByMultiname(*name, true);
+	ASObject* o=obj->getVariableByMultiname(*name, ASObject::SKIP_IMPL);
 
 	if(tl.cur_this==obj)
 		obj->setLevel(tl.cur_level);
@@ -344,7 +344,7 @@ void ABCVm::callProperty(call_context* th, int n, int m, method_info*& called_mi
 		}
 		else if(o->getObjectType()==T_UNDEFINED)
 		{
-			LOG(LOG_NOT_IMPLEMENTED,_("We got a Undefined function on obj ") << ((obj->prototype)?obj->prototype->class_name.name:_("Object")));
+			LOG(LOG_NOT_IMPLEMENTED,_("We got a Undefined function on obj ") << ((obj->classdef)?obj->classdef->class_name.name:_("Object")));
 			th->runtime_stack_push(new Undefined);
 		}
 		else if(o->getObjectType()==T_CLASS)
@@ -359,14 +359,14 @@ void ABCVm::callProperty(call_context* th, int n, int m, method_info*& called_mi
 	else
 	{
 		//If the object is a Proxy subclass, try to invoke callProperty
-		if(obj->prototype && obj->prototype->isSubClass(Class<Proxy>::getClass()))
+		if(obj->classdef && obj->classdef->isSubClass(Class<Proxy>::getClass()))
 		{
 			//Check if there is a custom caller defined, skipping implementation to avoid recursive calls
 			multiname callPropertyName;
 			callPropertyName.name_type=multiname::NAME_STRING;
 			callPropertyName.name_s="callProperty";
 			callPropertyName.ns.push_back(nsNameAndKind(flash_proxy,NAMESPACE));
-			ASObject* o=obj->getVariableByMultiname(callPropertyName,true);
+			ASObject* o=obj->getVariableByMultiname(callPropertyName,ASObject::SKIP_IMPL);
 
 			if(o)
 			{
@@ -400,7 +400,7 @@ void ABCVm::callProperty(call_context* th, int n, int m, method_info*& called_mi
 		}
 
 		LOG(LOG_NOT_IMPLEMENTED,_("Calling an undefined function ") << *name << _(" on obj ") << 
-				((obj->prototype)?obj->prototype->class_name.name:"Object"));
+				((obj->classdef)?obj->classdef->class_name.name:"Object"));
 		th->runtime_stack_push(new Undefined);
 	}
 	LOG(LOG_CALLS,_("End of calling ") << *name);
@@ -436,9 +436,9 @@ ASObject* ABCVm::getProperty(ASObject* obj, multiname* name)
 	
 	if(ret==NULL)
 	{
-		if(obj->prototype)
+		if(obj->classdef)
 		{
-			LOG(LOG_NOT_IMPLEMENTED,_("Property not found ") << *name << _(" on type ") << obj->prototype->class_name);
+			LOG(LOG_NOT_IMPLEMENTED,_("Property not found ") << *name << _(" on type ") << obj->classdef->class_name);
 		}
 		else
 		{
@@ -448,15 +448,19 @@ ASObject* ABCVm::getProperty(ASObject* obj, multiname* name)
 	}
 	else
 	{
-		//If we are getting a function object attach the the current scope
 		if(ret->getObjectType()==T_FUNCTION)
 		{
-			//TODO: maybe also the level should be binded
-			LOG(LOG_CALLS,_("Attaching this to function ") << name);
-			//the obj reference is acquired by the smart reference
-			IFunction* f=static_cast<IFunction*>(ret)->bind(_MR(obj),-1);
-			//No incref is needed, as the function is a new instance
-			return f;
+			//The Property object only collects functions, but it has no meaning
+			//to call them on it.
+			if(!dynamic_cast<Prototype*>(obj))
+			{
+				//TODO: maybe also the level should be binded
+				LOG(LOG_CALLS,_("Attaching this to function ") << name);
+				//the obj reference is acquired by the smart reference
+				IFunction* f=static_cast<IFunction*>(ret)->bind(_MR(obj),-1);
+				//No incref is needed, as the function is a new instance
+				return f;
+			}
 		}
 		else if(ret->getObjectType()==T_DEFINABLE)
 		{
@@ -730,7 +734,7 @@ void ABCVm::construct(call_context* th, int m)
 
 		case T_OBJECT:
 		{
-			Class_base* o_class=static_cast<Class_base*>(obj->getPrototype());
+			Class_base* o_class=static_cast<Class_base*>(obj->getClass());
 			assert(o_class);
 			ret=o_class->getInstance(true,args,m);
 			break;
@@ -769,18 +773,18 @@ void ABCVm::construct(call_context* th, int m)
 				if(ret2)
 					ret2->decRef();
 
-				//Let's see if an AS prototype has been defined on the function
+				//Let's see if an AS classdef has been defined on the function
 				multiname prototypeName;
 				prototypeName.name_type=multiname::NAME_STRING;
 				prototypeName.name_s="prototype";
 				prototypeName.ns.push_back(nsNameAndKind("",NAMESPACE));
-				ASObject* asp=sf->getVariableByMultiname(prototypeName,true);
+				ASObject* asp=sf->getVariableByMultiname(prototypeName,ASObject::SKIP_IMPL);
 				if(asp)
 					asp->incRef();
 
-				//Now add our prototype
+				//Now add our classdef
 				sf->incRef();
-				ret->setPrototype(new Class_function(sf,asp));
+				ret->setClass(new Class_function(sf,asp));
 			}
 			break;
 		}
@@ -801,7 +805,6 @@ void ABCVm::construct(call_context* th, int m)
 
 void ABCVm::constructGenericType(call_context* th, int m)
 {
-//	throw UnsupportedException("constructGenericType not implement");
 	LOG(LOG_CALLS, _("constructGenericType ") << m);
 	assert_and_throw(m==1);
 	ASObject** args=new ASObject*[m];
@@ -810,29 +813,24 @@ void ABCVm::constructGenericType(call_context* th, int m)
 
 	ASObject* obj=th->runtime_stack_pop();
 
-/*	if(obj->getObjectType()==T_DEFINABLE)
+	if(obj->getObjectType() != T_TEMPLATE)
 	{
-		LOG(LOG_ERROR,_("Check"));
-		abort();
-		LOG(LOG_CALLS,_("Deferred definition of property ") << name);
-		Definable* d=static_cast<Definable*>(o);
-		d->define(obj);
-		o=obj->getVariableByMultiname(name,owner);
-		LOG(LOG_CALLS,_("End of deferred definition of property ") << name);
+		LOG(LOG_NOT_IMPLEMENTED, "constructGenericType of " << obj->getObjectType());
+		obj->decRef();
+		obj = new Undefined();
+		th->runtime_stack_push(obj);
+		for(int i=0;i<m;i++)
+			args[i]->decRef();
+		delete[] args;
+		return;
 	}
 
-	LOG(LOG_CALLS,_("Constructing"));
-	Class_base* o_class=static_cast<Class_base*>(obj);
-	assert_and_throw(o_class->getObjectType()==T_CLASS);
-	ASObject* ret=o_class->getInstance(true,args,m);*/
-	ASObject* ret=new Undefined;
+	Template_base* o_template=static_cast<Template_base*>(obj);
 
-	obj->decRef();
-	LOG(LOG_CALLS,_("End of constructing"));
-	th->runtime_stack_push(ret);
-	//TODO: remove when implemented
-	for(int i=0;i<m;i++)
-		args[i]->decRef();
+	/* Instantiate the template to obtain a class */
+	Class_base* o_class = o_template->applyType(args,m);
+
+	th->runtime_stack_push(o_class);
 	delete[] args;
 }
 
@@ -880,8 +878,8 @@ void ABCVm::callPropVoid(call_context* th, int n, int m, method_info*& called_mi
 		args[m-i-1]=th->runtime_stack_pop();
 	ASObject* obj=th->runtime_stack_pop();
 
-	if(obj->prototype)
-		LOG(LOG_CALLS, obj->prototype->class_name);
+	if(obj->classdef)
+		LOG(LOG_CALLS, obj->classdef->class_name);
 
 	//We have to reset the level, as we may be getting a function defined at a lower level
 	thisAndLevel tl=getVm()->getCurObjAndLevel();
@@ -889,7 +887,7 @@ void ABCVm::callPropVoid(call_context* th, int n, int m, method_info*& called_mi
 		obj->resetLevel();
 
 	//We should skip the special implementation of get
-	ASObject* o=obj->getVariableByMultiname(*name,true);
+	ASObject* o=obj->getVariableByMultiname(*name,ASObject::SKIP_IMPL);
 
 	if(tl.cur_this==obj)
 		obj->setLevel(tl.cur_level);
@@ -913,7 +911,7 @@ void ABCVm::callPropVoid(call_context* th, int n, int m, method_info*& called_mi
 		else if(o->getObjectType()==T_UNDEFINED)
 		{
 			LOG(LOG_NOT_IMPLEMENTED,_("Calling an undefined function ") << *name << _(" on obj ") << 
-					((obj->prototype)?obj->prototype->class_name.name:"Object"));
+					((obj->classdef)?obj->classdef->class_name.name:"Object"));
 		}
 		else
 			throw UnsupportedException("Not callable object in callPropVoid");
@@ -921,14 +919,14 @@ void ABCVm::callPropVoid(call_context* th, int n, int m, method_info*& called_mi
 	else
 	{
 		//If the object is a Proxy subclass, try to use callProperty
-		if(obj->prototype && obj->prototype->isSubClass(Class<Proxy>::getClass()))
+		if(obj->classdef && obj->classdef->isSubClass(Class<Proxy>::getClass()))
 		{
 			//Check if there is a custom caller defined, skipping implementation to avoid recursive calls
 			multiname callPropertyName;
 			callPropertyName.name_type=multiname::NAME_STRING;
 			callPropertyName.name_s="callProperty";
 			callPropertyName.ns.push_back(nsNameAndKind(flash_proxy,NAMESPACE));
-			ASObject* o=obj->getVariableByMultiname(callPropertyName,true);
+			ASObject* o=obj->getVariableByMultiname(callPropertyName,ASObject::SKIP_IMPL);
 			if(o)
 			{
 				assert_and_throw(o->getObjectType()==T_FUNCTION);
@@ -960,9 +958,9 @@ void ABCVm::callPropVoid(call_context* th, int n, int m, method_info*& called_mi
 			}
 		}
 
-		if(obj->prototype)
+		if(obj->classdef)
 		{
-			LOG(LOG_NOT_IMPLEMENTED,_("We got a Undefined function ") << name->name_s << _(" on obj type ") << obj->prototype->class_name);
+			LOG(LOG_NOT_IMPLEMENTED,_("We got a Undefined function ") << name->name_s << _(" on obj type ") << obj->classdef->class_name);
 		}
 		else
 		{
@@ -1152,18 +1150,18 @@ ASObject* ABCVm::add(ASObject* val2, ASObject* val1)
 		Class_base* xmlClass=Class<XML>::getClass();
 		Class_base* xmlListClass=Class<XMLList>::getClass();
 
-		if((val1->getPrototype()==xmlClass || val1->getPrototype()==xmlListClass) &&
-			(val2->getPrototype()==xmlClass || val2->getPrototype()==xmlListClass))
+		if((val1->getClass()==xmlClass || val1->getClass()==xmlListClass) &&
+			(val2->getClass()==xmlClass || val2->getClass()==xmlListClass))
 		{
 			XMLList* newList=Class<XMLList>::getInstanceS(true);
-			if(val1->getPrototype()==xmlClass)
+			if(val1->getClass()==xmlClass)
 				newList->append(_MR(static_cast<XML*>(val1)));
-			else //if(val1->getPrototype()==xmlListClass)
+			else //if(val1->getClass()==xmlListClass)
 				newList->append(_MR(static_cast<XMLList*>(val1)));
 
-			if(val2->getPrototype()==xmlClass)
+			if(val2->getClass()==xmlClass)
 				newList->append(_MR(static_cast<XML*>(val2)));
-			else //if(val2->getPrototype()==xmlListClass)
+			else //if(val2->getClass()==xmlListClass)
 				newList->append(_MR(static_cast<XMLList*>(val2)));
 
 			//The references of val1 and val2 have been passed to the smart references
@@ -1356,10 +1354,6 @@ bool ABCVm::equals(ASObject* val2, ASObject* val1)
 
 bool ABCVm::strictEqualImpl(ASObject* obj1, ASObject* obj2)
 {
-	//If we are dealing with objects, check the prototype
-	if(obj1->getObjectType()==T_OBJECT && obj2->getObjectType()==T_OBJECT && obj1->prototype!=obj2->prototype)
-			return false;
-
 	SWFOBJECT_TYPE type1=obj1->getObjectType();
 	SWFOBJECT_TYPE type2=obj2->getObjectType();
 	if(type1!=type2)
@@ -1526,7 +1520,7 @@ void ABCVm::getSuper(call_context* th, int n)
 	obj->decLevel();
 
 	//Should we skip implementation? I think it's reasonable
-	ASObject* o=obj->getVariableByMultiname(*name, true);
+	ASObject* o=obj->getVariableByMultiname(*name, ASObject::SKIP_IMPL);
 	//TODO: should bind if the return type is Function
 
 	tl=getVm()->getCurObjAndLevel();
@@ -1571,12 +1565,19 @@ void ABCVm::getLex(call_context* th, int n)
 		if(it->object==tl.cur_this)
 			tl.cur_this->resetLevel();
 
-		//Skip implementation
-		ASObject* tmpo=it->object->getVariableByMultiname(*name, !it->considerDynamic);
+		// XML_STRICT flag tells getVariableByMultiname to
+		// ignore non-existing properties in XML obejcts
+		// (normally it would return an empty XMLList if the
+		// property does not exist).
+		ASObject::GET_VARIABLE_OPTION opt=ASObject::XML_STRICT;
+		if(!it->considerDynamic)
+			opt=(ASObject::GET_VARIABLE_OPTION)(opt | ASObject::SKIP_IMPL);
+
+		o=it->object->getVariableByMultiname(*name, opt);
+
 		if(it->object==tl.cur_this)
 			tl.cur_this->setLevel(tl.cur_level);
 
-		o=tmpo;
 		if(o)
 		{
 			target=it->object.getPtr();
@@ -1598,10 +1599,15 @@ void ABCVm::getLex(call_context* th, int n)
 	//If we are getting a function object attach the the current scope
 	if(o->getObjectType()==T_FUNCTION)
 	{
-		LOG(LOG_CALLS,_("Attaching this to function ") << name);
-		target->incRef();
-		IFunction* f=static_cast<IFunction*>(o)->bind(_MR(target),-1);
-		o=f;
+		//The Property object only collects functions, but it has no meaning
+		//to call them on it.
+		if(!dynamic_cast<Prototype*>(o))
+		{
+			LOG(LOG_CALLS,_("Attaching this to function ") << name);
+			target->incRef();
+			IFunction* f=static_cast<IFunction*>(o)->bind(_MR(target),-1);
+			o=f;
+		}
 	}
 	else if(o->getObjectType()==T_DEFINABLE)
 	{
@@ -1631,12 +1637,12 @@ void ABCVm::constructSuper(call_context* th, int m)
 	assert_and_throw(tl.cur_this==obj);
 	assert_and_throw(tl.cur_level==obj->getLevel());
 
-	LOG(LOG_CALLS,_("Cur prototype name ") << obj->getActualPrototype()->class_name);
+	LOG(LOG_CALLS,_("Cur prototype name ") << obj->getActualClass()->class_name);
 	//Change current level
 	obj->decLevel();
-	LOG(LOG_CALLS,_("Super prototype name ") << obj->getActualPrototype()->class_name);
+	LOG(LOG_CALLS,_("Super prototype name ") << obj->getActualClass()->class_name);
 
-	Class_base* curProt=obj->getActualPrototype();
+	Class_base* curProt=obj->getActualClass();
 	curProt->handleConstruction(obj,args, m, false);
 	LOG(LOG_CALLS,_("End super construct "));
 	obj->setLevel(tl.cur_level);
@@ -1794,7 +1800,7 @@ void ABCVm::callSuper(call_context* th, int n, int m, method_info*& called_mi)
 	obj->decLevel();
 
 	//We should skip the special implementation of get
-	ASObject* o=obj->getVariableByMultiname(*name, true);
+	ASObject* o=obj->getVariableByMultiname(*name, ASObject::SKIP_IMPL);
 
 	//And the reset it using the stack
 	thisAndLevel tl=getVm()->getCurObjAndLevel();
@@ -1881,7 +1887,7 @@ void ABCVm::callSuperVoid(call_context* th, int n, int m, method_info*& called_m
 	obj->decLevel();
 
 	//We should skip the special implementation of get
-	ASObject* o=obj->getVariableByMultiname(*name, true);
+	ASObject* o=obj->getVariableByMultiname(*name, ASObject::SKIP_IMPL);
 
 	//And the reset it using the stack
 	thisAndLevel tl=getVm()->getCurObjAndLevel();
@@ -1970,11 +1976,11 @@ bool ABCVm::isTypelate(ASObject* type, ASObject* obj)
 		return real_ret;
 	}
 
-	if(obj->prototype)
+	if(obj->classdef)
 	{
 		assert_and_throw(type->getObjectType()==T_CLASS);
 
-		objc=obj->prototype;
+		objc=obj->classdef;
 	}
 	else if(obj->getObjectType()==T_CLASS)
 	{
@@ -2047,8 +2053,8 @@ ASObject* ABCVm::asTypelate(ASObject* type, ASObject* obj)
 	}
 
 	Class_base* objc;
-	if(obj->prototype)
-		objc=obj->prototype;
+	if(obj->classdef)
+		objc=obj->classdef;
 	else if(obj->getObjectType()==T_CLASS)
 	{
 		//Special case for Class
@@ -2198,18 +2204,18 @@ void ABCVm::constructProp(call_context* th, int n, int m)
 			if(ret2)
 				ret2->decRef();
 
-			//Let's see if an AS prototype has been defined on the function
+			//Let's see if an AS classdef has been defined on the function
 			multiname prototypeName;
 			prototypeName.name_type=multiname::NAME_STRING;
 			prototypeName.name_s="prototype";
 			prototypeName.ns.push_back(nsNameAndKind("",NAMESPACE));
-			ASObject* asp=sf->getVariableByMultiname(prototypeName,true);
+			ASObject* asp=sf->getVariableByMultiname(prototypeName,ASObject::SKIP_IMPL);
 			if(asp)
 				asp->incRef();
 
-			//Now add our prototype
+			//Now add our classdef
 			sf->incRef();
-			ret->setPrototype(new Class_function(sf,asp));
+			ret->setClass(new Class_function(sf,asp));
 		}
 	}
 	else
@@ -2268,13 +2274,25 @@ void ABCVm::getDescendants(call_context* th, int n)
 	multiname* name=th->context->getMultiname(n,th);
 	LOG(LOG_CALLS,"getDescendants " << *name);
 	ASObject* obj=th->runtime_stack_pop();
-	assert_and_throw(obj->getPrototype()==Class<XML>::getClass());
-	XML* xmlObj=Class<XML>::cast(obj);
 	//The name must be a QName
 	assert_and_throw(name->name_type==multiname::NAME_STRING);
 	vector<_R<XML> > ret;
 	//TODO: support multiname and namespaces
-	xmlObj->getDescendantsByQName(name->name_s, "", ret);
+	if(obj->getClass()==Class<XML>::getClass())
+	{
+		XML* xmlObj=Class<XML>::cast(obj);
+		xmlObj->getDescendantsByQName(name->name_s, "", ret);
+	}
+	else if(obj->getClass()==Class<XMLList>::getClass())
+	{
+		XMLList* xmlObj=Class<XMLList>::cast(obj);
+		xmlObj->getDescendantsByQName(name->name_s, "", ret);
+	}
+	else
+	{
+		obj->decRef();
+		throw Class<TypeError>::getInstanceS("Only XML and XMLList objects have descendants");
+	}
 	obj->decRef();
 	XMLList* retObj=Class<XMLList>::getInstanceS(ret);
 	th->runtime_stack_push(retObj);
@@ -2380,13 +2398,13 @@ void ABCVm::newClass(call_context* th, int n)
 		ret->setLevel(ret->max_level);
 	}
 
-	LOG(LOG_CALLS,_("Building class traits"));
-	for(unsigned int i=0;i<th->context->classes[n].trait_count;i++)
-		th->context->buildTrait(ret,&th->context->classes[n].traits[i],false);
-
 	ret->class_scope=th->scope_stack;
 	ret->incRef();
 	ret->class_scope.emplace_back(_MR(ret),false);
+
+	LOG(LOG_CALLS,_("Building class traits"));
+	for(unsigned int i=0;i<th->context->classes[n].trait_count;i++)
+		th->context->buildTrait(ret,&th->context->classes[n].traits[i],false);
 
 	//Add protected namespace if needed
 	if((th->context->instances[n].flags)&0x08)
@@ -2413,9 +2431,16 @@ void ABCVm::newClass(call_context* th, int n)
 	ret->constructor=constructorFunc;
 	ret->class_index=n;
 
-	//Set the constructor variable to the class itself (this is accessed by object using the protoype)
+	//Set the constructor variable to the class itself (this is accessed by object using the classdef)
 	ret->incRef();
 	ret->setVariableByQName("constructor","",ret, DECLARED_TRAIT);
+
+	//Add prototype variable
+	ret->incRef();
+	ret->prototype = _MNR(new Prototype(_MR(ret)));
+	if(ret->super != NULL)
+		ret->prototype->prototype = ret->super->prototype;
+	ret->addPrototypeGetter();
 
 	//add implemented interfaces
 	for(unsigned int i=0;i<th->context->instances[n].interface_count;i++)
@@ -2548,13 +2573,13 @@ void ABCVm::call(call_context* th, int m, method_info*& called_mi)
 
 void ABCVm::deleteProperty(call_context* th, int n)
 {
-	multiname* name=th->context->getMultiname(n,th); 
+	multiname* name=th->context->getMultiname(n,th);
 	LOG(LOG_CALLS,_("deleteProperty ") << *name);
 	ASObject* obj=th->runtime_stack_pop();
-	obj->deleteVariableByMultiname(*name);
+	bool ret = obj->deleteVariableByMultiname(*name);
 
 	//TODO: Now we assume that all objects are dynamic
-	th->runtime_stack_push(abstract_b(true));
+	th->runtime_stack_push(abstract_b(ret));
 
 	obj->decRef();
 }

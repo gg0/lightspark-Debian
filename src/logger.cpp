@@ -21,8 +21,8 @@
 
 sem_t Log::mutex;
 bool Log::loggingInited = false;
-LOG_LEVEL Log::log_level=LOG_NO_INFO;
-const char* Log::level_names[]={"INFO","ERROR","NOT_IMPLEMENTED","CALLS","TRACE"};
+LOG_LEVEL Log::log_level=LOG_INFO;
+const char* Log::level_names[]={"ERROR", "INFO","NOT_IMPLEMENTED","CALLS","TRACE"};
 
 Log::Log(LOG_LEVEL l)
 {
@@ -30,7 +30,6 @@ Log::Log(LOG_LEVEL l)
 	{
 		cur_level=l;
 		valid=true;
-		sem_wait(&mutex);
 	}
 	else
 		valid=false;
@@ -39,13 +38,16 @@ Log::Log(LOG_LEVEL l)
 Log::~Log()
 {
 	if(valid)
+	{
+		sem_wait(&mutex);
+		std::cout << level_names[cur_level] << ": " << message.str();
 		sem_post(&mutex);
+	}
 }
 
 std::ostream& Log::operator()()
 {
-	std::cout << level_names[cur_level] << ": ";
-	return std::cout;
+	return message;
 }
 
 void Log::initLogging(LOG_LEVEL l)

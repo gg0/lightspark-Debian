@@ -17,49 +17,48 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
-#ifndef VM_H
-#define VM_H
+#ifndef BOOLEAN_H_
+#define BOOLEAN_H_
 
-#include "compat.h"
-#include <semaphore.h>
-#include <vector>
-#include "swftypes.h"
+#include "asobject.h"
 
 namespace lightspark
 {
 
-//#include "asobjects.h"
+/* returns a Boolean AS Object with value b, i.e. Class<Boolean>::getInstanceS(b); */
+Boolean* abstract_b(bool b);
 
-/*class Stack
+/* implements ecma3's ToBoolean() operation, see section 9.2, but returns the value instead of an Boolean object */
+bool Boolean_concrete(const ASObject* obj);
+
+class Boolean: public ASObject
 {
+CLASSBUILDABLE(Boolean);
 private:
-	std::vector<ASObject*> data;
+	Boolean(bool v = false):val(v){type=T_BOOLEAN;}
+	static void buildTraits(ASObject* o){};
+	static void sinit(Class_base*);
 public:
-	ASObject* operator()(int i){return *(data.rbegin()+i);}
-	void push(ASObject* o){ data.push_back(o);}
-	ASObject* pop()
+	bool val;
+	int32_t toInt()
 	{
-		if(data.size()==0)
-			LOG(ERROR,_("Empty stack"));
-		ASObject* ret=data.back();
-		data.pop_back(); 
-		return ret;
+		return val ? 1 : 0;
 	}
-};*/
-
-class VirtualMachine
-{
-private:
-	sem_t mutex;
-	std::vector<STRING> ConstantPool;
-public:
-//	Stack stack;
-	VirtualMachine();
-	~VirtualMachine();
-	void setConstantPool(std::vector<STRING>& p);
-	STRING getConstantByIndex(int index);
-//	ASObject Global;
+	bool isEqual(ASObject* r);
+	TRISTATE isLess(ASObject* r);
+	tiny_string toString(bool debugMsg);
+	double toNumber()
+	{
+		return val ? 1.0 : 0.0;
+	}
+	ASFUNCTION(_constructor);
+	ASFUNCTION(_toString);
+	ASFUNCTION(_valueOf);
+	ASFUNCTION(generator);
+	//Serialization interface
+	void serialize(ByteArray* out, std::map<tiny_string, uint32_t>& stringMap,
+			std::map<const ASObject*, uint32_t>& objMap) const;
 };
 
-};
-#endif
+}
+#endif /* BOOLEAN_H_ */

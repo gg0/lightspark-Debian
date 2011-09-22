@@ -26,6 +26,7 @@
 #include "backends/rendering.h"
 #include "glmatrices.h"
 #include "compat.h"
+#include "scripting/flashtext.h"
 
 #include <iostream>
 
@@ -264,8 +265,8 @@ TextureChunk::TextureChunk(uint32_t w, uint32_t h)
 		chunks=NULL;
 		return;
 	}
-	const uint32_t blocksW=(w+127)/128;
-	const uint32_t blocksH=(h+127)/128;
+	const uint32_t blocksW=(w+CHUNKSIZE-1)/CHUNKSIZE;
+	const uint32_t blocksH=(h+CHUNKSIZE-1)/CHUNKSIZE;
 	chunks=new uint32_t[blocksW*blocksH];
 }
 
@@ -287,8 +288,8 @@ TextureChunk& TextureChunk::operator=(const TextureChunk& r)
 	}
 	width=r.width;
 	height=r.height;
-	uint32_t blocksW=(width+127)/128;
-	uint32_t blocksH=(height+127)/128;
+	uint32_t blocksW=(width+CHUNKSIZE-1)/CHUNKSIZE;
+	uint32_t blocksH=(height+CHUNKSIZE-1)/CHUNKSIZE;
 	texId=r.texId;
 	if(r.chunks)
 	{
@@ -326,9 +327,9 @@ bool TextureChunk::resizeIfLargeEnough(uint32_t w, uint32_t h)
 		height=h;
 		return true;
 	}
-	const uint32_t blocksW=(width+127)/128;
-	const uint32_t blocksH=(height+127)/128;
-	if(w<=blocksW*128 && h<=blocksH*128)
+	const uint32_t blocksW=(width+CHUNKSIZE-1)/CHUNKSIZE;
+	const uint32_t blocksH=(height+CHUNKSIZE-1)/CHUNKSIZE;
+	if(w<=blocksW*CHUNKSIZE && h<=blocksH*CHUNKSIZE)
 	{
 		width=w;
 		height=h;
@@ -365,6 +366,8 @@ void CairoRenderer::upload(uint8_t* data, uint32_t w, uint32_t h) const
 
 const TextureChunk& CairoRenderer::getTexture()
 {
+	/* This is called in the render thread,
+	 * so we need no locking for surface */
 	//Verify that the texture is large enough
 	if(!surface.tex.resizeIfLargeEnough(width, height))
 		surface.tex=sys->getRenderThread()->allocateTexture(width, height,false);
@@ -495,10 +498,10 @@ cairo_pattern_t* CairoTokenRenderer::FILLSTYLEToCairo(const FILLSTYLE& style, do
 				throw RunTimeException("Invalid bitmap");
 
 			IntSize size = style.bitmap->getBitmapSize();
-			//TODO: ARGB32 always give a white surface
+
 			cairo_surface_t* surface = cairo_image_surface_create_for_data (style.bitmap->data,
-										CAIRO_FORMAT_RGB24, size.width, size.height,
-										cairo_format_stride_for_width(CAIRO_FORMAT_RGB24, size.width));
+										CAIRO_FORMAT_ARGB32, size.width, size.height,
+										cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, size.width));
 
 			pattern = cairo_pattern_create_for_surface(surface);
 			cairo_surface_destroy(surface);
@@ -707,16 +710,23 @@ void CairoRenderer::execute()
 	int32_t windowWidth=sys->getRenderThread()->windowWidth;
 	int32_t windowHeight=sys->getRenderThread()->windowHeight;
 	//Discard stuff that it's outside the visible part
-	if(xOffset >= windowWidth || yOffset >= windowHeight)
+	if(xOffset >= windowWidth || yOffset >= windowHeight
+		|| xOffset + width <= 0 || yOffset + height <= 0)
 	{
 		uploadNeeded = false;
 		return;
 	}
 
+	//TODO:clip on the right and bottom also
+	if(xOffset<0)
+		width+=xOffset;
+	if(yOffset<0)
+		height+=yOffset;
+
 	//Clip the size to the screen borders
-	if((width+xOffset) > windowWidth)
+	if((xOffset>=0) && (width+xOffset) > windowWidth)
 		width=windowWidth-xOffset;
-	if((height+yOffset) > windowHeight)
+	if((yOffset>0) && (height+yOffset) > windowHeight)
 		height=windowHeight-yOffset;
 	cairo_surface_t* cairoSurface=allocateSurface();
 
@@ -726,8 +736,11 @@ void CairoRenderer::execute()
 
 	//Make sure the rendering starts at 0,0 in surface coordinates
 	//This also guarantees that all the shape fills in width/height pixels
-	matrix.TranslateX-=xOffset;
-	matrix.TranslateY-=yOffset;
+	//We don't translate for negative offsets as we don't want to see what's in negative coords
+	if(xOffset >= 0)
+		matrix.TranslateX-=xOffset;
+	if(yOffset >= 0)
+		matrix.TranslateY-=yOffset;
 	const cairo_matrix_t& mat=MATRIXToCairo(matrix);
 	cairo_transform(cr, &mat);
 
@@ -780,16 +793,33 @@ bool CairoTokenRenderer::isOpaque(const std::vector<GeomToken>& tokens, float sc
 	return pixelBytes[0]!=0x00;
 }
 
+uint8_t* CairoRenderer::convertBitmapWithAlphaToCairo(uint8_t* inData, uint32_t width, uint32_t height)
+{
+	uint32_t stride = cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, width);
+	uint8_t* outData = new uint8_t[stride * height];
+	uint32_t* inData32 = (uint32_t*)inData;
+
+	for(uint32_t i = 0; i < height; i++)
+	{
+		for(uint32_t j = 0; j < width; j++)
+		{
+			uint32_t* outDataPos = (uint32_t*)(outData+i*stride) + j;
+			*outDataPos = BigEndianToHost32( *(inData32+(i*width+j)) );
+		}
+	}
+	return outData;
+}
+
 uint8_t* CairoRenderer::convertBitmapToCairo(uint8_t* inData, uint32_t width, uint32_t height)
 {
-	uint32_t stride = cairo_format_stride_for_width(CAIRO_FORMAT_RGB24, width);
+	uint32_t stride = cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, width);
 	uint8_t* outData = new uint8_t[stride * height];
 	for(uint32_t i = 0; i < height; i++)
 	{
 		for(uint32_t j = 0; j < width; j++)
 		{
 			uint32_t* outDataPos = (uint32_t*)(outData+i*stride) + j;
-			uint32_t pdata = 0;
+			uint32_t pdata = 0xFF;
 			/* the alpha channel is set to zero above */
 			uint8_t* rgbData = ((uint8_t*)&pdata)+1;
 			/* copy the RGB bytes to rgbData */
@@ -817,8 +847,8 @@ void CairoPangoRenderer::executeDraw(cairo_t* cr)
 
 	/* setup font description */
 	desc = pango_font_description_new();
-	pango_font_description_set_family(desc, textData.format.font.raw_buf());
-	pango_font_description_set_size(desc, PANGO_SCALE*textData.format.size);
+	pango_font_description_set_family(desc, textData.font.raw_buf());
+	pango_font_description_set_size(desc, PANGO_SCALE*textData.fontSize);
 	pango_layout_set_font_description(layout, desc);
 	pango_font_description_free(desc);
 
@@ -828,6 +858,15 @@ void CairoPangoRenderer::executeDraw(cairo_t* cr)
 		cairo_paint(cr);
 	}
 	cairo_set_source_rgb (cr, textData.textColor.Red, textData.textColor.Green, textData.textColor.Blue);
+
+	TextField* tf=dynamic_cast<TextField*>(owner);
+	if(tf)
+	{
+		int width, height;
+		pango_layout_get_pixel_size(layout, &width, &height);
+		tf->setTextSize(width, height);
+	}
+
 	/* draw the text */
 	pango_cairo_show_layout(cr, layout);
 

@@ -33,12 +33,6 @@
 
 #include "platforms/engineutils.h"
 
-#ifndef WIN32
-#include <GL/glx.h>
-#else
-//#include <windows.h>
-#endif
-
 namespace lightspark
 {
 
@@ -64,8 +58,6 @@ protected:
 	Mutex mutex;
 	URLInfo origin;
 private:
-	//Semaphore to wait for new frames to be available
-	sem_t new_frame;
 	bool parsingIsFailed;
 	RGB Background;
 	Spinlock dictSpinlock;
@@ -82,9 +74,10 @@ private:
 	void initFrame();
 	void advanceFrame();
 	void setOnStage(bool staged);
+	ACQUIRE_RELEASE_FLAG(finishedLoading);
 public:
 	RootMovieClip(LoaderInfo* li, bool isSys=false);
-	~RootMovieClip();
+	bool hasFinishedLoading() { return ACQUIRE_READ(finishedLoading); }
 	uint32_t version;
 	uint32_t fileLength;
 	RGB getBackground();
@@ -199,8 +192,8 @@ private:
 	URLInfo url;
 	Spinlock profileDataSpinlock;
 
-	Mutex mutexEnterFrameListeners;
-	std::set<DisplayObject*> enterFrameListeners;
+	Mutex mutexFrameListeners;
+	std::set<_R<DisplayObject>> frameListeners;
 	/*
 	   The head of the invalidate queue
 	*/
@@ -219,6 +212,8 @@ private:
 	*/
 	tiny_string profOut;
 #endif
+protected:
+	~SystemState();
 public:
 	void setURL(const tiny_string& url) DLL_PUBLIC;
 
@@ -249,7 +244,11 @@ public:
 	//before any other thread gets started
 	SystemState(ParseThread* p, uint32_t fileSize) DLL_PUBLIC;
 	void finalize();
-	~SystemState();
+	/* Stop engines, threads and free classes and objects.
+	 * This call will decRef this object in the end,
+	 * thus destroy() may cause a 'delete this'.
+	 */
+	void destroy() DLL_PUBLIC;
 	
 	//Performance profiling
 	ThreadProfile* allocateProfiler(const RGB& color);
@@ -265,12 +264,14 @@ public:
 	//Application starting time in milliseconds
 	uint64_t startTime;
 
-	//Class map
+	//Class/Template map. They own one reference to each class/template
 	std::map<QName, Class_base*> classes;
+	std::map<QName, Template_base*> templates;
 
 	//Flags for command line options
 	bool useInterpreter;
 	bool useJit;
+	bool exitOnError;
 
 	//Parameters/FlashVars
 	void parseParametersFromFile(const char* f) DLL_PUBLIC;
@@ -313,8 +314,8 @@ public:
 	ObjectEncoding::ENCODING staticByteArrayDefaultObjectEncoding;
 	
 	//enterFrame event management
-	void registerEnterFrameListener(DisplayObject* clip);
-	void unregisterEnterFrameListener(DisplayObject* clip);
+	void registerFrameListener(_R<DisplayObject> clip);
+	void unregisterFrameListener(_R<DisplayObject> clip);
 
 	//tags management
 	void registerTag(Tag* t);
@@ -337,29 +338,39 @@ public:
 class ParseThread: public IThreadJob
 {
 public:
-	RootMovieClip* root;
 	int version;
 	bool useAVM2;
 	bool useNetwork;
-	ParseThread(RootMovieClip* r,std::istream& in) DLL_PUBLIC;
+	// Parse an object from stream. The type is detected
+	// automatically. After parsing the new object is available
+	// from getParsedObject().
+	ParseThread(std::istream& in, Loader *loader=NULL, tiny_string url="") DLL_PUBLIC;
+	// Parse a clip from stream into root. The stream must be an
+	// SWF file.
+	ParseThread(std::istream& in, RootMovieClip *root) DLL_PUBLIC;
 	~ParseThread();
-	enum FILE_TYPE { NONE=0, SWF, COMPRESSED_SWF, PNG, JPEG, GIF };
 	FILE_TYPE getFileType() const { return fileType; }
+        _NR<DisplayObject> getParsedObject();
+	void setRootMovie(RootMovieClip *root);
+	RootMovieClip *getRootMovie();
+	static FILE_TYPE recognizeFile(uint8_t c1, uint8_t c2, uint8_t c3, uint8_t c4);
 private:
 	std::istream& f;
 	std::streambuf* zlibFilter;
 	std::streambuf* backend;
 	sem_t ended;
 	bool isEnded;
+	Loader *loader;
+	_NR<DisplayObject> parsedObject;
+	Spinlock objectSpinlock;
+	tiny_string url;
+	FILE_TYPE fileType;
 	void execute();
 	void threadAbort();
 	void jobFence() {};
-	/*
-	   parseHeader takes the first four characters as argument
-	*/
-	void parseSWFHeader();
-	void checkType(uint8_t c1, uint8_t c2, uint8_t c3, uint8_t c4);
-	FILE_TYPE fileType;
+	void parseSWFHeader(RootMovieClip *root, UI8 ver);
+	void parseSWF(UI8 ver);
+	void parseBitmap();
 };
 
 };

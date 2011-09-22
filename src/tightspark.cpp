@@ -41,7 +41,7 @@ int main(int argc, char* argv[])
 	std::vector<char*> fileNames;
 	bool useInterpreter=true;
 	bool useJit=false;
-	LOG_LEVEL log_level=LOG_NOT_IMPLEMENTED;
+	LOG_LEVEL log_level=LOG_INFO;
 	bool error=false;
 
 	for(int i=1;i<argc;i++)
@@ -113,14 +113,21 @@ int main(int argc, char* argv[])
 	for(unsigned int i=0;i<fileNames.size();i++)
 	{
 		ifstream f(fileNames[i]);
-		ABCContext* context=new ABCContext(f);
-		contexts.push_back(context);
-		f.close();
-		vm->addEvent(NullRef,_MR(new ABCContextInitEvent(context)));
+		if(f.is_open())
+		{
+			ABCContext* context=new ABCContext(f);
+			contexts.push_back(context);
+			f.close();
+			vm->addEvent(NullRef,_MR(new ABCContextInitEvent(context)));
+		}
+		else
+		{
+			LOG(LOG_ERROR, fileNames[i] << _(" could not be opened for execution"));
+		}
 	}
 	vm->start();
 	sys->setShutdownFlag();
 	sys->wait();
-	delete sys;
+	sys->destroy();
 	SystemState::staticDeinit();
 }

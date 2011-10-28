@@ -134,6 +134,43 @@ tiny_string multiname::normalizedName() const
 	}
 }
 
+void multiname::setName(ASObject* n)
+{
+	if(n->is<Integer>())
+	{
+		name_i=n->as<Integer>()->val;
+		name_type = NAME_INT;
+	}
+	else if(n->is<UInteger>())
+	{
+		name_i=n->as<UInteger>()->val;
+		name_type = NAME_INT;
+	}
+	else if(n->is<Number>())
+	{
+		name_d=n->as<Number>()->val;
+		name_type = NAME_NUMBER;
+	}
+	else if(n->getObjectType()==T_QNAME)
+	{
+		ASQName* qname=static_cast<ASQName*>(n);
+		name_s=qname->local_name;
+		name_type = NAME_STRING;
+	}
+	else if(n->getObjectType()==T_STRING)
+	{
+		ASString* o=static_cast<ASString*>(n);
+		name_s=o->data;
+		name_type = NAME_STRING;
+	}
+	else
+	{
+		n->incRef();
+		name_o=n;
+		name_type = NAME_OBJECT;
+	}
+}
+
 std::ostream& lightspark::operator<<(std::ostream& s, const QName& r)
 {
 	s << r.ns << ':' << r.name;
@@ -282,7 +319,7 @@ MATRIX MATRIX::multiplyMatrix(const MATRIX& r) const
 	return ret;
 }
 
-const bool MATRIX::operator!=(const MATRIX& r) const
+bool MATRIX::operator!=(const MATRIX& r) const
 {
 	return ScaleX!=r.ScaleX ||
 		RotateSkew1!=r.RotateSkew1 ||
@@ -1121,7 +1158,7 @@ ASObject* lightspark::abstract_d(number_t i)
 	return ret;
 }
 
-ASObject* lightspark::abstract_i(intptr_t i)
+ASObject* lightspark::abstract_i(int32_t i)
 {
 	Integer* ret=getVm()->int_manager->get<Integer>();
 	ret->val=i;

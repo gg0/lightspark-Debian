@@ -56,21 +56,26 @@ SET(LIBSPARK_SOURCES
   scripting/abc_codesynt.cpp
   scripting/abc_interpreter.cpp
   scripting/abc_opcodes.cpp
-  scripting/Boolean.cpp
+  scripting/flash/accessibility/flashaccessibility.cpp
+  scripting/flash/display/flashdisplay.cpp
+  scripting/flash/events/flashevents.cpp
+  scripting/flash/external/ExternalInterface.cpp
+  scripting/flash/geom/flashgeom.cpp
+  scripting/flash/media/flashmedia.cpp
+  scripting/flash/net/flashnet.cpp
+  scripting/flash/sensors/flashsensors.cpp
+  scripting/flash/system/flashsystem.cpp
+  scripting/flash/text/flashtext.cpp
+  scripting/flash/utils/flashutils.cpp
+  scripting/flash/xml/flashxml.cpp
+  scripting/toplevel/Array.cpp
+  scripting/toplevel/Boolean.cpp
+  scripting/toplevel/Date.cpp
+  scripting/toplevel/Error.cpp
+  scripting/toplevel/Math.cpp
+  scripting/toplevel/Vector.cpp
   scripting/class.cpp
-  scripting/flashaccessibility.cpp
-  scripting/flashdisplay.cpp
-  scripting/flashevents.cpp
-  scripting/flashexternal.cpp
-  scripting/flashgeom.cpp
-  scripting/flashmedia.cpp
-  scripting/flashnet.cpp
-	scripting/flashsensors.cpp
-  scripting/flashsystem.cpp
-  scripting/flashtext.cpp
-  scripting/flashutils.cpp
-  scripting/flashxml.cpp
-  scripting/toplevel.cpp)
+  scripting/toplevel/toplevel.cpp)
 IF(${i386})
   SET(LIBSPARK_SOURCES ${LIBSPARK_SOURCES} platforms/fastpaths_x86.cpp)
   IF(CMAKE_COMPILER_IS_GNUCC)
@@ -87,6 +92,7 @@ ELSE()
 ENDIF(${i386})
 
 INCLUDE_DIRECTORIES(${PROJECT_SOURCE_DIR}/src)
+INCLUDE_DIRECTORIES(${PROJECT_SOURCE_DIR}/src/scripting)
 
 # liblightspark.so target
 IF(CMAKE_COMPILER_IS_GNUCC)

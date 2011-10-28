@@ -1,6 +1,6 @@
 #!/bin/bash
 #Set you lightspark executable path here
-LIGHTSPARK="lightspark"
+LIGHTSPARK=${LIGHTSPARK-"lightspark"}
 #Set the default loglevel here
 LOGLEVEL="0"
 #Set the default root URL here
@@ -10,10 +10,9 @@ MXMLC="mxmlc"
 #If you prefer no colors, you can permanently set the default here
 COLORS=1;
 #Seconds after which a process is killed
-TIMEOUTCMD="timeout 10"
+TIMEOUTCMD="timeout 120"
 
 #Setting C locale to make sort and comm behave the same on every machine
-#Especially as the file 'blacklist' must be sorted with C locale
 export LC_ALL="C"
 TESTS_SRC=`ls -1 *mxml 2> /dev/null`;
 COMPILE_TESTS_SRC="";
@@ -30,7 +29,9 @@ COMPILE=0;
 QUIT=0;
 DEBUG=0;
 PROPRIETARY=0;
+BLACKLIST=0;
 JUNITFILE=""
+NOXVFB=0;
 
 if ! `which timeout > /dev/null`; then
 	echo "Warning: 'timeout' command not found"
@@ -42,6 +43,7 @@ if [ ! -d tamarin-SWF ]; then
 	echo "Did you built the tamarin testsuit with the 'make-tamarin' script?"
 fi
 
+ALLARGS=$*
 while [ $# -ne 0 ]; do
 	if [ $1 == "-h" ] || [ $1 == "--help" ] || [ $1 == "-u" ] || [ $1 == "--usage" ]; then
 		echo "Usage: [-q|--quiet] [-nc|--no-colors] [-f|--failures] [-c|--compile] [-cq|--compile-quit] [-m|--mxmlc] [-e|--executable] [-d|--debug] [-l|--log-level level] [-u|--url url] [-t|--tests tests|tests]";
@@ -58,6 +60,8 @@ while [ $# -ne 0 ]; do
 		echo -e "\t-t|--tests\t\tfiles to compile/test, must be last parameter (otherwise compile/test all files in this directory)";
 		echo -e "\t-p|--proprietary\t\tUse proprietary player to run tests";
 		echo -e "\t-j|--junit file\t\tWrite test results in junit's xml format to 'file'"
+		echo -e "\t-b|--blacklist file\t\tRun the testsuite on the blacklisted files only - those that do not fully pass with the proprietary player"
+		echo -e "\t--no-xvfb\t\tDo not run the testsuite under xvfb (when it is found)"
 		echo "Examples:";
 		echo -e "\t./tests -q -f\t\tTests all files, only reporting failures"
 		echo -e "\t./tests -q -c -t FILE\tRecompiles the file and runs it, only showing reports"
@@ -104,9 +108,13 @@ while [ $# -ne 0 ]; do
 			echo -e "$HOME/mm.cfg not found or does not have TraceOutputFileEnable=1 in it"
 			exit 1
 		fi
+	elif [ $1 == "-b" ] || [ $1 == "--blacklist" ]; then
+		BLACKLIST=1
 	elif [ $1 == "-j" ] || [ $1 == "--junit" ]; then
 		JUNITFILE="$2"
 		shift
+	elif [ $1 == "--no-xvfb" ]; then
+		NOXVFB=1
 	else
 		if [ $1 == "-t" ] || [ $1 == "--tests" ]; then
 			shift;
@@ -121,9 +129,25 @@ while [ $# -ne 0 ]; do
 	shift;
 done
 
-#Blacklist of tests that (partially) fail the proprietary player is in 'blacklist' file
-#transform spaces to newlines, sort, compare
-TESTS=`echo $TESTS | tr ' ' '\n' | sort | comm -2 -3 - blacklist`
+XVFB_NOT_RUNNING=`echo $XAUTHORITY | grep xvfb-run > /dev/null; echo $?`
+#Check for '--no-xfvb' or if we are already running under xvfb-run
+if [[ "$NOXVFB" == "0" && "$XVFB_NOT_RUNNING" == "1" ]]; then
+	if [ `which xvfb-run > /dev/null` ]; then
+		echo "Warning: 'xvfb-run' not found. Windows will pop up."
+		echo "xvfb-run is part of the XvFB package (e.g. apt-get install xvfb)."
+	else
+		xvfb-run -s '-extension GLX' -a $0 --no-xvfb $ALLARGS
+		exit $?
+	fi
+fi
+
+#Blacklisted tests fail the proprietary player are listed in the 'blacklist' file and are not run by default
+#If --blacklist or -b is passed run them instead of the other tests
+if [ $BLACKLIST -eq 1 ]; then
+	TESTS=`cat blacklist`
+else
+	TESTS=`comm -2 -3 <(echo $TESTS | tr ' ' '\n' | sort) <(sort blacklist)`
+fi
 
 if [ ! $COMPILE -eq 1 ]; then
 	for test in $TESTS; do
@@ -184,12 +208,6 @@ INDENTPREFIX='\t';
 
 FAILED_TESTS=""
 TOTALTESTCOUNT=`echo $TESTS | wc -w`
-
-if ! `echo $XAUTHORITY | grep xvfb-run > /dev/null`; then
-  echo "Tip: If you use 'xvfb-run -s '-extension GLX' -a ./tests', you won't be disturbed by the windows popping up."
-  echo "Its part of the XvFB package (e.g. apt-get install xvfb)."
-  echo ""
-fi
 
 if [ $PROPRIETARY -eq 0 ]; then
 	LOGFILE=`tempfile`
@@ -277,6 +295,7 @@ for test in $TESTS; do
 		FAILED_TESTS="$FAILED_TESTS $test"
 	elif [ "`echo $lines | grep '==No failures'`" != "" ]; then
 		THISSUCCESSCOUNT=`echo "$lines" | sed -n -e 's/.*=No failures (\(.*\))=.*/\1/p'`
+		THISNUMTESTS="$THISSUCCESSCOUNT"
 		SUCCESSCOUNT=`expr $SUCCESSCOUNT + $THISSUCCESSCOUNT`;
 	else
 		if [ $COLORS -eq 1 ]; then
@@ -294,11 +313,12 @@ for test in $TESTS; do
 
 	if [[ -n "$JUNITFILE" ]]; then
 		#For xml output
-		tcnum=1
+		tcnum=0
 		#Find all lines that start with '. [' or 'F [' or 'A ..F.. ['
-		echo -e "$lines" | sed -n -e "/^\(A \)\?[F\.]\+ \[.*/p" \
-		| while read L
+		tcnum=$(echo -e "$lines" | sed -n -e "/^\(A \)\?[F\.]\+ \[.*/p" \
+		| { while read L
 		do
+			tcnum=`expr $tcnum + 1`
 			#Escape <>& and remove non-printable characters
 			xml_l=`echo -e "$L" | sed -e 's/[^[:print:]]//g' -e 's/\&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'`
 			#Check if L starts with an 'F' or with 'A ...F'
@@ -307,8 +327,13 @@ for test in $TESTS; do
 			else
 				echo "<testcase classname=\"$testclass\" name=\"${testname}_tc${tcnum}\"/>" >> "$JUNITFILE"
 			fi
-			tcnum=`expr $tcnum + 1`
 		done
+		echo $tcnum
+		})
+		if [[ "$tcnum" != "$THISNUMTESTS" ]]; then
+			echo -e "\nError parsing test output of $test: Not enough testcases seen"
+			exit 1
+		fi
 	fi
 
 	if [ $QUIET -eq 1 ]; then
@@ -334,7 +359,7 @@ for test in $TESTS; do
 			-e "s/^\(${INFOPREFIX}\)\(.*\)$/${BLUE}\1${PURPLEB}\2${CLEAR}/" \
 			-e "s/^\(${CURLPREFIX}\)\(.*\)$/${PINK}\1${PINK}\2${CLEAR}/" \
 \
-			-e "/${ASSERTARRAYCHAR} /{
+			-e "/^${ASSERTARRAYCHAR} /{
 			s/${ASSERTFAILEDCHAR}/${REDB}\0${CLEAR}/g
 			}" \
 			-e "s/^\(${ASSERTFAILEDCHAR}\) \(${ASSERTMSGBRACKETOPEN}.*${ASSERTMSGBRACKETCLOSE}\)$/${REDB}\1 ${RED}\2${CLEAR}/g" \
@@ -348,7 +373,7 @@ for test in $TESTS; do
 			s/${INDENTPREFIX}\(.*\)/${INDENTPREFIX}${REDB}\1${CLEAR}/
 			}" \
 \
-			-e "/${ASSERTARRAYCHAR} /{
+			-e "/^${ASSERTARRAYCHAR} /{
 			s/\(${ASSERTSUCCESSCHAR}\)/${GREENB}\1${CLEAR}/g
 			}" \
 			-e "s/^\(${ASSERTSUCCESSCHAR}\) \(\[.*\)$/${GREENB}\1 ${GREEN}\2${CLEAR}/" \
@@ -375,8 +400,3 @@ if [ $COLORS -eq 1 ]; then
 else
 	echo -e "Tests run: $TESTCOUNT, $SUCCESSCOUNT successful and $FAILURECOUNT failed" 1>&2
 fi
-echo "Failed tests:"
-for t in $FAILED_TESTS
-do
-  echo "$t"
-done

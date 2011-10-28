@@ -25,7 +25,7 @@
 #include "compat.h"
 #include "scripting/abc.h"
 #include "scripting/class.h"
-#include "scripting/toplevel.h"
+#include "scripting/toplevel/Array.h"
 
 #include "extscriptobject.h"
 
@@ -290,6 +290,7 @@ ASObject* ExtVariant::getASObject() const
 						}
 						else
 						{
+							conv.str("");
 							conv << ids[i]->getInt();
 							asobj->setVariableByQName(conv.str().c_str(), "",
 									property->getASObject(), DYNAMIC_TRAIT);

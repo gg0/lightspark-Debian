@@ -6,7 +6,7 @@ Uploaders: Didier Raboud <odyx@debian.org>
 Build-Depends: debhelper (>= 7.0.50),
   cmake,
   nasm,
-  llvm-2.7-dev (>= 2.7) | llvm-dev (>= 2.7),
+  llvm-2.8-dev (>= 2.8) | llvm-dev (>= 2.8),
   libcurl4-gnutls-dev,
   zlib1g-dev,
   libgl1-mesa-dev,

@@ -18,6 +18,7 @@
 **************************************************************************/
 
 #include "scripting/abcutils.h"
+#include "scripting/toplevel/Array.h"
 #include "compat.h"
 #include "asobject.h"
 #include "swf.h"
@@ -61,6 +62,7 @@ public:
 		bool ret=
 #endif
 		sys->classes.insert(std::make_pair(name,this)).second;
+		this->setDeclaredMethodByQName("toString",AS3,Class<IFunction>::getFunction(Class_base::_toString),NORMAL_METHOD,false);
 		assert(ret);
 	}
 	void finalize();
@@ -80,6 +82,9 @@ public:
 	//Closure stack
 	std::vector<scope_entry> class_scope;
 };
+
+/* helper function: does Class<ASObject>::getInstances(), but solves forward declaration problem */
+ASObject* new_asobject();
 
 template< class T>
 class Class: public Class_base
@@ -105,30 +110,35 @@ public:
 		c->handleConstruction(ret,NULL,0,true);
 		return ret;
 	}
-	static Class<T>* getClass(const QName& name)
+	static Class<T>* getClass()
 	{
+		QName name(ClassName<T>::name,ClassName<T>::ns);
 		std::map<QName, Class_base*>::iterator it=sys->classes.find(name);
 		Class<T>* ret=NULL;
 		if(it==sys->classes.end()) //This class is not yet in the map, create it
 		{
 			ret=new Class<T>(name);
 			sys->classes.insert(std::make_pair(name,ret));
+			ret->setDeclaredMethodByQName("toString",AS3,Class<IFunction>::getFunction(Class_base::_toString),NORMAL_METHOD,false);
+			ret->prototype = _MNR(new_asobject());
+
 			ret->incRef();
-			ret->prototype = _MNR(new Prototype(_MR(ret)));
+			ret->prototype->setVariableByQName("constructor","",ret,DYNAMIC_TRAIT);
 			T::sinit(ret);
-			if(ret->super != NULL)
-				ret->prototype->prototype = ret->super->prototype;
+			if(ret->super)
+				ret->prototype->setprop_prototype(ret->super->prototype);
 			ret->addPrototypeGetter();
 		}
 		else
 			ret=static_cast<Class<T>*>(it->second);
 
-		ret->incRef();
 		return ret;
 	}
-	static Class<T>* getClass()
+	static _R<Class<T>> getRef()
 	{
-		return getClass(QName(ClassName<T>::name,ClassName<T>::ns));
+		Class<T>* ret = getClass();
+		ret->incRef();
+		return _MR(ret);
 	}
 	static T* cast(ASObject* o)
 	{
@@ -146,7 +156,58 @@ public:
 	{
 		return T::generator(NULL, args, argslen);
 	}
+	ASObject* coerce(ASObject* o) const
+	{
+		return Class_base::coerce(o);
+	}
 };
+
+template<>
+inline ASObject* Class<Number>::coerce(ASObject* o) const
+{
+	number_t n = o->toNumber();
+	o->decRef();
+	return abstract_d(n);
+}
+
+template<>
+inline ASObject* Class<UInteger>::coerce(ASObject* o) const
+{
+	uint32_t n = o->toUInt();
+	o->decRef();
+	return abstract_ui(n);
+}
+
+template<>
+inline ASObject* Class<Integer>::coerce(ASObject* o) const
+{
+	int32_t n = o->toInt();
+	o->decRef();
+	return abstract_i(n);
+}
+
+template<>
+inline ASObject* Class<Boolean>::coerce(ASObject* o) const
+{
+	bool n = Boolean_concrete(o);
+	o->decRef();
+	return abstract_b(n);
+}
+
+template<>
+inline ASObject* Class<ASString>::coerce(ASObject* o) const
+{ //Special handling for Null and Undefined follows avm2overview's description of 'coerce_s' opcode
+	if(o->is<Null>())
+		return o;
+	if(o->is<Undefined>())
+	{
+		o->decRef();
+		return new Null;
+	}
+	tiny_string n = o->toString();
+	o->decRef();
+	return Class<ASString>::getInstanceS(n);
+}
 
 template<>
 class Class<ASObject>: public Class_base
@@ -168,28 +229,51 @@ public:
 		Class<ASObject>* c=Class<ASObject>::getClass();
 		return c->getInstance(true,NULL,0);
 	}
-	static Class<ASObject>* getClass(const QName& name)
+	/* This creates a stub class, i.e. a class with given name but without
+	 * any implementation.
+	 */
+	static _R<Class<ASObject>> getStubClass(const QName& name)
 	{
+		Class<ASObject>* ret = new Class<ASObject>(name);
+
+		ret->super = Class<ASObject>::getRef();
+		ret->prototype = _MNR(new_asobject());
+		ret->prototype->setprop_prototype(ret->super->prototype);
+		ret->incRef();
+		ret->prototype->setVariableByQName("constructor","",ret,DYNAMIC_TRAIT);
+		ret->addPrototypeGetter();
+
+		ret->setDeclaredMethodByQName("toString",AS3,Class<IFunction>::getFunction(Class_base::_toString),NORMAL_METHOD,false);
+		sys->classes.insert(std::make_pair(name,ret));
+		ret->incRef();
+		return _MR(ret);
+	}
+	static Class<ASObject>* getClass()
+	{
+		QName name(ClassName<ASObject>::name,ClassName<ASObject>::ns);
 		std::map<QName, Class_base*>::iterator it=sys->classes.find(name);
 		Class<ASObject>* ret=NULL;
 		if(it==sys->classes.end()) //This class is not yet in the map, create it
 		{
 			ret=new Class<ASObject>(name);
 			sys->classes.insert(std::make_pair(name,ret));
+			ret->prototype = _MNR(new_asobject());
+			ret->setDeclaredMethodByQName("toString",AS3,Class<IFunction>::getFunction(Class_base::_toString),NORMAL_METHOD,false);
 			ret->incRef();
-			ret->prototype = _MNR(new Prototype(_MR(ret)));
+			ret->prototype->setVariableByQName("constructor","",ret,DYNAMIC_TRAIT);
 			ASObject::sinit(ret);
 			ret->addPrototypeGetter();
 		}
 		else
 			ret=static_cast<Class<ASObject>*>(it->second);
 
-		ret->incRef();
 		return ret;
 	}
-	static Class<ASObject>* getClass()
+	static _R<Class<ASObject>> getRef()
 	{
-		return getClass(QName(ClassName<ASObject>::name,ClassName<ASObject>::ns));
+		Class<ASObject>* ret = getClass();
+		ret->incRef();
+		return _MR(ret);
 	}
 	static ASObject* cast(ASObject* o)
 	{
@@ -265,7 +349,8 @@ public:
 
 	QName getQName(ASObject* const* types, const unsigned int numtypes)
 	{
-		//This is modeled after the internal naming of the proprietary player
+		//This is the naming scheme that the ABC compiler uses,
+		//and we need to stay in sync here
 		assert_and_throw(numtypes);
 		QName ret(ClassName<T>::name, ClassName<T>::ns);
 		for(size_t i=0;i<numtypes;++i)
@@ -289,11 +374,10 @@ public:
 		{
 			ret=new TemplatedClass<T>(instantiatedQName,types,numtypes,this);
 			sys->classes.insert(std::make_pair(instantiatedQName,ret));
-			ret->incRef();
-			ret->prototype = _MNR(new Prototype(_MR(ret)));
+			ret->prototype = _MNR(new_asobject());
 			T::sinit(ret);
 			if(ret->super != NULL)
-				ret->prototype->prototype = ret->super->prototype;
+				ret->prototype->setprop_prototype(ret->super->prototype);
 			ret->addPrototypeGetter();
 		}
 		else

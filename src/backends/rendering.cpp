@@ -159,8 +159,12 @@ void RenderThread::finalizeUpload()
 	u->sizeNeeded(w,h);
 	const TextureChunk& tex=u->getTexture();
 	glBindBuffer(GL_PIXEL_UNPACK_BUFFER, pixelBuffers[currentPixelBuffer]);
+#ifndef ENABLE_GLES2
 	//Copy content of the pbo to the texture, currentPixelBufferOffset is the offset in the pbo
 	loadChunkBGRA(tex, w, h, (uint8_t*)currentPixelBufferOffset);
+#else
+	loadChunkBGRA(tex, w, h, pixelBuf);
+#endif
 	glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
 	u->uploadFence();
 	prevUploadJob=NULL;
@@ -192,10 +196,11 @@ void RenderThread::handleUpload()
 	//TODO See if a more elegant way of handling the non-PBO case can be found.
 	//for now, each frame is uploaded one at a time synchronously to the server
 	if(!pixelBuf)
-		posix_memalign((void **)&pixelBuf, 16, w*h*4);
+		if(posix_memalign((void **)&pixelBuf, 16, w*h*4)) {
+			LOG(LOG_ERROR, "posix_memalign could not allocate memory");
+			return;
+		}
 	u->upload(pixelBuf, w, h);
-	//When not using Pixel Buffer Objects, this offset is actually the pointer to the texture buffer
-	currentPixelBufferOffset = (int32_t)pixelBuf;
 #endif
 	//Get the texture to be sure it's allocated when the upload comes
 	u->getTexture();
@@ -655,6 +660,7 @@ void RenderThread::commonGLInit(int width, int height)
 	if(status != GL_FRAMEBUFFER_COMPLETE)
 	{
 		LOG(LOG_ERROR,_("Incomplete FBO status ") << status << _("... Aborting"));
+		err=glGetError();
 		while(err!=GL_NO_ERROR)
 		{
 			LOG(LOG_ERROR,_("GL errors during initialization: ") << err);
@@ -947,6 +953,7 @@ void RenderThread::renderErrorPage(RenderThread *th, bool standalone)
 				0,th->windowHeight/2-40);
 	}
 
+	glUniform1f(rt->alphaUniform, 1);
 	mapCairoTexture(windowWidth, windowHeight);
 	glFlush();
 }
@@ -1303,7 +1310,7 @@ void RenderThread::loadChunkBGRA(const TextureChunk& chunk, uint32_t w, uint32_t
 		//We need to copy the texture area to a contiguous memory region first,
 		//as GLES2 does not support UNPACK state (skip pixels, skip rows, row_lenght).
 		uint8_t *gdata = new uint8_t[4*sizeX*sizeY];
-		for(int j=0;j<sizeY;j++) {
+		for(unsigned int j=0;j<sizeY;j++) {
 			memcpy(gdata+4*j*sizeX, data+4*w*(j+curY)+4*curX, sizeX*4);
 		}
 		glTexSubImage2D(GL_TEXTURE_2D, 0, blockX, blockY, sizeX, sizeY, GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_HOST, gdata);

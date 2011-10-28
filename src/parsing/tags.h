@@ -27,10 +27,9 @@
 #include "swftypes.h"
 #include "backends/input.h"
 #include "backends/geometry.h"
-#include "scripting/flashdisplay.h"
-#include "scripting/flashtext.h"
-#include "scripting/flashutils.h"
-#include "scripting/flashmedia.h"
+#include "scripting/flash/text/flashtext.h"
+#include "scripting/flash/utils/flashutils.h"
+#include "scripting/flash/media/flashmedia.h"
 #include "scripting/class.h"
 
 namespace lightspark
@@ -663,13 +662,15 @@ public:
 	CSMTextSettingsTag(RECORDHEADER h, std::istream& in);
 };
 
-class ScriptLimitsTag: public Tag
+class ScriptLimitsTag: public ControlTag
 {
 private:
 	UI16_SWF MaxRecursionDepth;
 	UI16_SWF ScriptTimeoutSeconds;
 public:
 	ScriptLimitsTag(RECORDHEADER h, std::istream& in);
+	TAGTYPE getType() const{ return ABC_TAG; }
+	void execute(RootMovieClip* root);
 };
 
 class ProductInfoTag: public Tag

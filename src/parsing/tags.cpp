@@ -45,8 +45,20 @@ extern TLSDATA ParseThread* pt;
 _NR<Tag> TagFactory::readTag()
 {
 	RECORDHEADER h;
-	f >> h;
-	
+
+	//Catch eofs
+	try
+	{
+		f >> h;
+	}
+	catch (ifstream::failure e) {
+		if(!f.eof()) //Only handle eof
+			throw e;
+		f.clear();
+		LOG(LOG_INFO,"Simulating EndTag at EOF @ " << f.tellg());
+		return _MR(new EndTag(h,f));
+	}
+
 	unsigned int expectedLen=h.getLength();
 	unsigned int start=f.tellg();
 	Tag* ret=NULL;
@@ -54,7 +66,7 @@ _NR<Tag> TagFactory::readTag()
 	switch(h.getTagType())
 	{
 		case 0:
-			LOG(LOG_TRACE, _("EndTag at position ") << f.tellg());
+			LOG(LOG_INFO,_("End of parsing @ ") << f.tellg());
 			ret=new EndTag(h,f);
 			break;
 		case 1:
@@ -1317,7 +1329,7 @@ ASObject* DefineSoundTag::instance() const
 	return Class<Sound>::getInstanceS();
 }
 
-ScriptLimitsTag::ScriptLimitsTag(RECORDHEADER h, std::istream& in):Tag(h)
+ScriptLimitsTag::ScriptLimitsTag(RECORDHEADER h, std::istream& in):ControlTag(h)
 {
 	LOG(LOG_TRACE,_("ScriptLimitsTag Tag"));
 	in >> MaxRecursionDepth >> ScriptTimeoutSeconds;

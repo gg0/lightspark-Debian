@@ -21,11 +21,6 @@
 #define SWFTYPES_H
 
 #include "compat.h"
-#ifdef LLVM_28
-#include <llvm/System/DataTypes.h>
-#else
-#include <llvm/Support/DataTypes.h>
-#endif
 #include <iostream>
 #include <fstream>
 #include <vector>
@@ -50,18 +45,37 @@
 namespace lightspark
 {
 
-#define ASFUNCTION(name) \
-	static ASObject* name(ASObject* , ASObject* const* args, const unsigned int argslen)
-#define ASFUNCTIONBODY(c,name) \
-	ASObject* c::name(ASObject* obj, ASObject* const* args, const unsigned int argslen)
-
-#define CLASSBUILDABLE(className) \
-	friend class Class<className>; 
-
 enum SWFOBJECT_TYPE { T_OBJECT=0, T_INTEGER=1, T_NUMBER=2, T_FUNCTION=3, T_UNDEFINED=4, T_NULL=5, T_STRING=6, 
 	T_DEFINABLE=7, T_BOOLEAN=8, T_ARRAY=9, T_CLASS=10, T_QNAME=11, T_NAMESPACE=12, T_UINTEGER=13, T_PROXY=14, T_TEMPLATE=15};
 
 enum STACK_TYPE{STACK_NONE=0,STACK_OBJECT,STACK_INT,STACK_UINT,STACK_NUMBER,STACK_BOOLEAN};
+inline std::ostream& operator<<(std::ostream& s, const STACK_TYPE& st)
+{
+	switch(st)
+	{
+	case STACK_NONE:
+		s << "none";
+		break;
+	case STACK_OBJECT:
+		s << "object";
+		break;
+	case STACK_INT:
+		s << "int";
+		break;
+	case STACK_UINT:
+		s << "uint";
+		break;
+	case STACK_NUMBER:
+		s << "number";
+		break;
+	case STACK_BOOLEAN:
+		s << "boolean";
+		break;
+	default:
+		assert(false);
+	}
+	return s;
+}
 
 enum TRISTATE { TFALSE=0, TTRUE, TUNDEFINED };
 
@@ -501,6 +515,9 @@ struct multiname
 	*/
 	tiny_string normalizedName() const;
 	tiny_string qualifiedString() const;
+	/* sets name_type, name_s/name_d based on the object n */
+	void setName(ASObject* n);
+	bool isQName() const { return ns.size() == 1; }
 };
 
 class FLOAT 
@@ -904,7 +921,7 @@ public:
 	void multiply2D(number_t xin, number_t yin, number_t& xout, number_t& yout) const;
 	Vector2f multiply2D(const Vector2f& in) const;
 	MATRIX multiplyMatrix(const MATRIX& r) const;
-	const bool operator!=(const MATRIX& r) const;
+	bool operator!=(const MATRIX& r) const;
 	MATRIX getInverted() const;
 	bool isInvertible() const;
 };
@@ -1358,7 +1375,7 @@ public:
 	RunState();
 };
 
-ASObject* abstract_i(intptr_t i);
+ASObject* abstract_i(int32_t i);
 ASObject* abstract_ui(uint32_t i);
 ASObject* abstract_d(number_t i);
 

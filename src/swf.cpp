@@ -21,9 +21,8 @@
 #include <pthread.h>
 #include <algorithm>
 #include "scripting/abc.h"
-#include "scripting/flashdisplay.h"
-#include "scripting/flashevents.h"
-#include "scripting/flashutils.h"
+#include "scripting/flash/events/flashevents.h"
+#include "scripting/flash/utils/flashutils.h"
 #include "swf.h"
 #include "logger.h"
 #include "parsing/streams.h"
@@ -140,6 +139,8 @@ void SystemState::staticInit()
 
 void SystemState::staticDeinit()
 {
+	delete Type::anyType;
+	delete Type::voidType;
 #ifdef ENABLE_CURL
 	curl_global_cleanup();
 #endif
@@ -201,6 +202,18 @@ void SystemState::setCookies(const char* c)
 	rawCookies=c;
 }
 
+static int hexToInt(char c)
+{
+	if(c>='0' && c<='9')
+		return c-'0';
+	else if(c>='a' && c<='f')
+		return c-'a'+10;
+	else if(c>='A' && c<='F')
+		return c-'A'+10;
+	else
+		return -1;
+}
+
 void SystemState::parseParametersFromFlashvars(const char* v)
 {
 	if(useGnashFallback) //Save a copy of the string
@@ -209,6 +222,10 @@ void SystemState::parseParametersFromFlashvars(const char* v)
 	//Add arguments to SystemState
 	string vars(v);
 	uint32_t cur=0;
+	char* pfile = getenv("LIGHTSPARK_PLUGIN_PARAMFILE");
+        ofstream f;
+	if(pfile)
+		f.open(pfile);
 	while(cur<vars.size())
 	{
 		int n1=vars.find('=',cur);
@@ -237,8 +254,8 @@ void SystemState::parseParametersFromFlashvars(const char* v)
 					break;
 				}
 
-				int t1=Math::hexToInt(vars[j+1]);
-				int t2=Math::hexToInt(vars[j+2]);
+				int t1=hexToInt(vars[j+1]);
+				int t2=hexToInt(vars[j+2]);
 				if(t1==-1 || t2==-1)
 				{
 					ok=false;
@@ -254,6 +271,8 @@ void SystemState::parseParametersFromFlashvars(const char* v)
 		if(ok)
 		{
 			//cout << varName << ' ' << varValue << endl;
+			if(pfile)
+				f << varName << endl << varValue << endl;
 			params->setVariableByQName(varName,"",
 					lightspark::Class<lightspark::ASString>::getInstanceS(varValue),DYNAMIC_TRAIT);
 		}
@@ -595,7 +614,7 @@ void SystemState::createEngines()
 		if(file!=-1)
 		{
 			std::string data("Set-Cookie: " + rawCookies);
-			size_t res;
+			ssize_t res;
 			size_t written = 0;
 			// Keep writing until everything we wanted to write actually got written
 			do
@@ -621,7 +640,8 @@ void SystemState::createEngines()
 
 		// This will be used to pipe the SWF's data to Gnash's stdin
 		int gnashStdin[2];
-		pipe(gnashStdin);
+		if (pipe(gnashStdin) != 0)
+			LOG(LOG_ERROR,_("Pipe creation failed"));
 
 		childPid=fork();
 		if(childPid==-1)
@@ -986,21 +1006,19 @@ void ThreadProfile::plot(uint32_t maxTime, cairo_t *cr)
 
 ParseThread::ParseThread(istream& in, Loader *_loader, tiny_string srcurl)
   : version(0),useAVM2(false),useNetwork(false),
-    f(in),zlibFilter(NULL),backend(NULL),isEnded(false),loader(_loader),
+    f(in),zlibFilter(NULL),backend(NULL),loader(_loader),
     parsedObject(NullRef),url(srcurl),fileType(FT_UNKNOWN)
 {
 	f.exceptions ( istream::eofbit | istream::failbit | istream::badbit );
-	sem_init(&ended,0,0);
 }
 
 ParseThread::ParseThread(std::istream& in, RootMovieClip *root)
   : version(0),useAVM2(false),useNetwork(false),
-    f(in),zlibFilter(NULL),backend(NULL),isEnded(false),loader(NULL),
+    f(in),zlibFilter(NULL),backend(NULL),loader(NULL),
     parsedObject(NullRef),url(),fileType(FT_UNKNOWN)
 {
 	f.exceptions ( istream::eofbit | istream::failbit | istream::badbit );
 	setRootMovie(root);
-	sem_init(&ended,0,0);
 }
 
 ParseThread::~ParseThread()
@@ -1012,7 +1030,6 @@ ParseThread::~ParseThread()
 		delete zlibFilter;
 	}
 	parsedObject.reset();
-	sem_destroy(&ended);
 }
 
 FILE_TYPE ParseThread::recognizeFile(uint8_t c1, uint8_t c2, uint8_t c3, uint8_t c4)
@@ -1023,7 +1040,7 @@ FILE_TYPE ParseThread::recognizeFile(uint8_t c1, uint8_t c2, uint8_t c3, uint8_t
 		return FT_COMPRESSED_SWF;
 	else if((c1&0x80) && c2=='P' && c3=='N' && c4=='G')
 		return FT_PNG;
-	else if(c1==0xff && c2==0xd8 && c3==0xff && c4==0xe0)
+	else if(c1==0xff && c2==0xd8 && c3==0xff)
 		return FT_JPEG;
 	else if(c1=='G' && c2=='I' && c3=='F' && c4=='8')
 		return FT_GIF;
@@ -1097,8 +1114,6 @@ void ParseThread::execute()
 		LOG(LOG_ERROR,_("Stream exception in ParseThread ") << e.what());
 	}
 	pt=NULL;
-
-	sem_post(&ended);
 }
 
 void ParseThread::parseSWF(UI8 ver)
@@ -1121,7 +1136,6 @@ void ParseThread::parseSWF(UI8 ver)
 			{
 				case END_TAG:
 				{
-					LOG(LOG_INFO,_("End of parsing @ ") << f.tellg());
 					if(!empty)
 						root->commitFrame(false);
 					else
@@ -1225,15 +1239,6 @@ RootMovieClip *ParseThread::getRootMovie()
 		objectSpinlock.unlock();
 		if(url.len()>0)
 			root->setOrigin(url, "");
-
-		// The parser will call contentLoader's sendInit()
-		// during the parsing. We have to set loader's content
-		// here, before the event is sent.
-		if(loader)
-		{
-			root->incRef();
-			loader->setContent(_MNR(root));
-		}
 		return root;
 	}
 	else
@@ -1505,5 +1510,6 @@ void RootMovieClip::advanceFrame()
 void RootMovieClip::constructionComplete()
 {
 	MovieClip::constructionComplete();
-	loaderInfo->sendInit();
+	if(this==sys)
+		loaderInfo->sendInit();
 }

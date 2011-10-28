@@ -61,9 +61,11 @@
 #define ASFUNCTIONBODY_GETTER(c,name) \
 	ASObject* c::_getter_##name(ASObject* obj, ASObject* const* args, const unsigned int argslen) \
 	{ \
-		c* th = Class<c>::cast(obj); \
+		if(!obj->is<c>()) \
+			throw Class<ArgumentError>::getInstanceS("Function applied to wrong object"); \
+		c* th = obj->as<c>(); \
 		if(argslen != 0) \
-			throw ArgumentError("Arguments provided in getter"); \
+			throw Class<ArgumentError>::getInstanceS("Arguments provided in getter"); \
 		return ArgumentConversion<decltype(th->name)>::toAbstract(th->name); \
 	}
 
@@ -71,9 +73,11 @@
 #define ASFUNCTIONBODY_SETTER(c,name) \
 	ASObject* c::_setter_##name(ASObject* obj, ASObject* const* args, const unsigned int argslen) \
 	{ \
-		c* th = Class<c>::cast(obj); \
+		if(!obj->is<c>()) \
+			throw Class<ArgumentError>::getInstanceS("Function applied to wrong object"); \
+		c* th = obj->as<c>(); \
 		if(argslen != 1) \
-			throw ArgumentError("Wrong number of arguments in setter"); \
+			throw Class<ArgumentError>::getInstanceS("Wrong number of arguments in setter"); \
 		th->name = ArgumentConversion<decltype(th->name)>::toConcrete(args[0]); \
 		return NULL; \
 	}
@@ -84,9 +88,11 @@
 #define ASFUNCTIONBODY_SETTER_CB(c,name,callback) \
 	ASObject* c::_setter_##name(ASObject* obj, ASObject* const* args, const unsigned int argslen) \
 	{ \
-		c* th = Class<c>::cast(obj); \
+		if(!obj->is<c>()) \
+			throw Class<ArgumentError>::getInstanceS("Function applied to wrong object"); \
+		c* th = obj->as<c>(); \
 		if(argslen != 1) \
-			throw ArgumentError("Wrong number of arguments in setter"); \
+			throw Class<ArgumentError>::getInstanceS("Wrong number of arguments in setter"); \
 		decltype(th->name) oldValue = th->name; \
 		th->name = ArgumentConversion<decltype(th->name)>::toConcrete(args[0]); \
 		th->callback(oldValue); \
@@ -100,7 +106,7 @@
 
 #define ASFUNCTIONBODY_GETTER_SETTER_CB(c,name,callback) \
 		ASFUNCTIONBODY_GETTER(c,name) \
-		ASFUNCTIONBODY_SETTER(c,name,callback)
+		ASFUNCTIONBODY_SETTER_CB(c,name,callback)
 
 /* registers getter/setter with Class_base. To be used in ::sinit()-functions */
 #define REGISTER_GETTER(c,name) \
@@ -116,9 +122,6 @@
 #define CLASSBUILDABLE(className) \
 	friend class Class<className>; 
 
-enum SWFOBJECT_TYPE { T_OBJECT=0, T_INTEGER=1, T_NUMBER=2, T_FUNCTION=3, T_UNDEFINED=4, T_NULL=5, T_STRING=6, 
-	T_DEFINABLE=7, T_BOOLEAN=8, T_ARRAY=9, T_CLASS=10, T_QNAME=11, T_NAMESPACE=12, T_UINTEGER=13, T_PROXY=14};
-
 namespace lightspark
 {
 
@@ -128,44 +131,35 @@ class Manager;
 template<class T> class Class;
 class Class_base;
 class ByteArray;
-
-struct obj_var
-{
-	ASObject* var;
-	Class_base* type;
-	IFunction* setter;
-	IFunction* getter;
-	obj_var():var(NULL),type(NULL),setter(NULL),getter(NULL){}
-	obj_var(ASObject* _v, Class_base* _t):var(_v),type(_t),setter(NULL),getter(NULL){}
-	void setVar(ASObject* v);
-};
+class Type;
 
 enum TRAIT_KIND { NO_CREATE_TRAIT=0, DECLARED_TRAIT=1, DYNAMIC_TRAIT=2, BORROWED_TRAIT=4 };
 
 struct variable
 {
 	nsNameAndKind ns;
-	obj_var var;
+	ASObject* var;
+	multiname* typemname;
+	const Type* type;
+	IFunction* setter;
+	IFunction* getter;
 	TRAIT_KIND kind;
-	variable(const nsNameAndKind& _ns, TRAIT_KIND _k):ns(_ns),kind(_k){}
-	variable(const nsNameAndKind& _ns, TRAIT_KIND _k, ASObject* _v, Class_base* _c):ns(_ns),var(_v,_c),kind(_k){}
+	//obj_var(ASObject* _v, Class_base* _t):var(_v),type(_t),{}
+	variable(const nsNameAndKind& _ns, TRAIT_KIND _k)
+		:ns(_ns),var(NULL),typemname(NULL),type(NULL),setter(NULL),getter(NULL),kind(_k){}
+	variable(const nsNameAndKind& _ns, TRAIT_KIND _k, ASObject* _v, multiname* _t, const Type* type)
+		:ns(_ns),var(_v),typemname(_t),type(type),setter(NULL),getter(NULL),kind(_k){}
+	void setVar(ASObject* v);
 };
 
 class variables_map
 {
-//ASObject knows how to use its variable_map
-friend class ASObject;
-//Class_base uses the internal data to handle borrowed variables
-friend class Class_base;
-//Useful when linking
-friend class InterfaceClass;
-//ABCContext uses findObjVar when building and linking traits
-friend class ABCContext;
 private:
 	std::multimap<tiny_string,variable> Variables;
 	typedef std::multimap<tiny_string,variable>::iterator var_iterator;
 	typedef std::multimap<tiny_string,variable>::const_iterator const_var_iterator;
 	std::vector<var_iterator> slots_vars;
+public:
 	/**
 	   Find a variable in the map
 
@@ -173,15 +167,15 @@ private:
 				a new one is created with the given kind
 	   @param traitKinds Bitwise OR of accepted trait kinds
 	*/
-	obj_var* findObjVar(const tiny_string& name, const nsNameAndKind& ns, TRAIT_KIND createKind, uint32_t traitKinds);
-	obj_var* findObjVar(const multiname& mname, TRAIT_KIND createKind, uint32_t traitKinds);
+	variable* findObjVar(const tiny_string& name, const nsNameAndKind& ns, TRAIT_KIND createKind, uint32_t traitKinds);
+	variable* findObjVar(const multiname& mname, TRAIT_KIND createKind, uint32_t traitKinds);
 	//Initialize a new variable specifying the type (TODO: add support for const)
-	void initializeVar(const multiname& mname, ASObject* obj, Class_base* type);
+	void initializeVar(const multiname& mname, ASObject* obj, multiname* typemname);
 	void killObjVar(const multiname& mname);
 	ASObject* getSlot(unsigned int n)
 	{
 		assert(n<=slots_vars.size());
-		return slots_vars[n-1]->second.var.var;
+		return slots_vars[n-1]->second.var;
 	}
 	void setSlot(unsigned int n,ASObject* o);
 	void initSlot(unsigned int n,const tiny_string& name, const nsNameAndKind& ns);
@@ -190,9 +184,11 @@ private:
 		return Variables.size();
 	}
 	tiny_string getNameAt(unsigned int i) const;
-	obj_var* getValueAt(unsigned int i);
+	variable* getValueAt(unsigned int i);
 	~variables_map();
-public:
+	void check() const;
+	void serialize(ByteArray* out, std::map<tiny_string, uint32_t>& stringMap,
+			std::map<const ASObject*, uint32_t>& objMap) const;
 	void dumpVariables();
 	void destroyContents();
 };
@@ -206,7 +202,6 @@ public:
  */
 class Manager
 {
-friend class ASObject;
 private:
 	std::vector<ASObject*> available;
 	uint32_t maxCache;
@@ -219,6 +214,9 @@ template<class T>
 };
 
 enum METHOD_TYPE { NORMAL_METHOD=0, SETTER_METHOD=1, GETTER_METHOD=2 };
+//for toPrimitive
+enum TP_HINT { NO_HINT, NUMBER_HINT, STRING_HINT };
+
 
 class ASObject
 {
@@ -230,21 +228,20 @@ friend class InterfaceClass;
 friend class IFunction; //Needed for clone
 CLASSBUILDABLE(ASObject);
 protected:
-	//maps variable name to namespace and var
-	variables_map Variables;
-	ASObject(Manager* m=NULL);
+	ASObject();
 	ASObject(const ASObject& o);
 	virtual ~ASObject();
 	SWFOBJECT_TYPE type;
 	void serializeDynamicProperties(ByteArray* out, std::map<tiny_string, uint32_t>& stringMap,
 				std::map<const ASObject*, uint32_t>& objMap) const;
-	obj_var* findGettable(const multiname& name, bool borrowedMode) DLL_LOCAL;
-	obj_var* findSettable(const multiname& name, bool borrowedMode, bool* has_getter=NULL) DLL_LOCAL;
 private:
+	//maps variable name to namespace and var
+	variables_map Variables;
+	variable* findGettable(const multiname& name, bool borrowedMode) DLL_LOCAL;
+	variable* findSettable(const multiname& name, bool borrowedMode, bool* has_getter=NULL) DLL_LOCAL;
+
 	ATOMIC_INT32(ref_count);
 	Manager* manager;
-	int cur_level;
-	virtual int _maxlevel();
 	Class_base* classdef;
 	ACQUIRE_RELEASE_FLAG(constructed);
 public:
@@ -312,12 +309,37 @@ public:
 	virtual void finalize();
 
 	enum GET_VARIABLE_OPTION {NONE=0x00, SKIP_IMPL=0x01, XML_STRICT=0x02};
-	virtual ASObject* getVariableByMultiname(const multiname& name, GET_VARIABLE_OPTION opt=NONE);
-	virtual intptr_t getVariableByMultiname_i(const multiname& name);
-	virtual void setVariableByMultiname_i(const multiname& name, intptr_t value);
-	virtual void setVariableByMultiname(const multiname& name, ASObject* o);
-	void initializeVariableByMultiname(const multiname& name, ASObject* o, Class_base* type);
+
+	virtual _NR<ASObject> getVariableByMultiname(const multiname& name, GET_VARIABLE_OPTION opt=NONE)
+	{
+		return getVariableByMultiname(name,opt,classdef);
+	}
+	/*
+	 * Gets a variable of this object. It looks through all classes (beginning at cls),
+	 * then the prototype chain, and then instance variables.
+	 * If the property found is a getter, it is called and its return value returned.
+	 */
+	_NR<ASObject> getVariableByMultiname(const multiname& name, GET_VARIABLE_OPTION opt, Class_base* cls);
+	virtual int32_t getVariableByMultiname_i(const multiname& name);
+	virtual void setVariableByMultiname_i(const multiname& name, int32_t value);
+	virtual void setVariableByMultiname(const multiname& name, ASObject* o)
+	{
+		setVariableByMultiname(name,o,classdef);
+	}
+	/*
+	 * Sets  variable of this object. It looks through all classes (beginning at cls),
+	 * then the prototype chain, and then instance variables.
+	 * If the property found is a setter, it is called with the given 'o'.
+	 * If no property is found, an instance variable is created.
+	 */
+	void setVariableByMultiname(const multiname& name, ASObject* o, Class_base* cls);
+	void initializeVariableByMultiname(const multiname& name, ASObject* o, multiname* typemname);
 	virtual bool deleteVariableByMultiname(const multiname& name);
+	void setVariableByQName(const tiny_string& name, const tiny_string& ns, _R<ASObject> o, TRAIT_KIND traitKind)
+	{
+		o->incRef();
+		setVariableByQName(name,ns,o.getPtr(),traitKind);
+	}
 	void setVariableByQName(const tiny_string& name, const tiny_string& ns, ASObject* o, TRAIT_KIND traitKind);
 	void setVariableByQName(const tiny_string& name, const nsNameAndKind& ns, ASObject* o, TRAIT_KIND traitKind);
 	//NOTE: the isBorrowed flag is used to distinguish methods/setters/getters that are inside a class but on behalf of the instances
@@ -343,38 +365,38 @@ public:
 	{
 		return type;
 	}
-	virtual tiny_string toString(bool debugMsg=false);
+	/* Implements ECMA's 9.8 ToString operation, but returns the concrete value */
+	tiny_string toString();
 	virtual int32_t toInt();
 	virtual uint32_t toUInt();
-	virtual double toNumber();
+	/* Implements ECMA's 9.3 ToNumber operation, but returns the concrete value */
+	number_t toNumber();
+	/* Implements ECMA's ToPrimitive (9.1) and [[DefaultValue]] (8.6.2.6) */
+	_R<ASObject> toPrimitive(TP_HINT hint = NO_HINT);
+	bool isPrimitive() const;
+
+	/* helper functions for calling the "valueOf" and
+	 * "toString" AS-functions which may be members of this
+	 *  object */
+	bool has_valueOf();
+	_R<ASObject> call_valueOf();
+	bool has_toString();
+	_R<ASObject> call_toString();
+
 	ASFUNCTION(generator);
+
+	/* helpers for the dynamic property 'prototype' */
+	bool hasprop_prototype();
+	ASObject* getprop_prototype();
+	void setprop_prototype(_NR<ASObject>& prototype);
 
 	//Comparison operators
 	virtual bool isEqual(ASObject* r);
 	virtual TRISTATE isLess(ASObject* r);
 
-	//Level handling
-	int getLevel() const
-	{
-		return cur_level;
-	}
-	void decLevel()
-	{
-		assert_and_throw(cur_level>0);
-		cur_level--;
-	}
-	void setLevel(int l)
-	{
-		cur_level=l;
-	}
-	void resetLevel();
-
-	//Class handling
-	Class_base* getActualClass() const;
-	
 	static void sinit(Class_base* c);
 	static void buildTraits(ASObject* o);
-	
+
 	//Enumeration handling
 	virtual uint32_t nextNameIndex(uint32_t cur_index);
 	virtual _R<ASObject> nextName(uint32_t index);
@@ -395,12 +417,15 @@ public:
 	virtual ASObject *describeType() const;
 
 	/* returns true if the current object is of type T */
-	template<class T> bool is() const { return dynamic_cast<T*>(this); }
+	template<class T> bool is() const { return dynamic_cast<const T*>(this); }
 	/* returns this object casted to the given type.
-	 * You have to make sure that is actually is the type (see is<T>() above)
+	 * You have to make sure that it actually is the type (see is<T>() above)
 	 */
 	template<class T> const T* as() const { return static_cast<const T*>(this); }
 	template<class T> T* as() { return static_cast<T*>(this); }
+
+	/* Returns a debug string identifying this object */
+	virtual std::string toDebugString() const;
 };
 
 class Number;
@@ -414,6 +439,7 @@ class Array;
 class Definable;
 class Null;
 class Undefined;
+class Type;
 template<> inline bool ASObject::is<Number>() const { return type==T_NUMBER; }
 template<> inline bool ASObject::is<Integer>() const { return type==T_INTEGER; }
 template<> inline bool ASObject::is<UInteger>() const { return type==T_UINTEGER; }
@@ -425,6 +451,7 @@ template<> inline bool ASObject::is<Null>() const { return type==T_NULL; }
 template<> inline bool ASObject::is<Definable>() const { return type==T_DEFINABLE; }
 template<> inline bool ASObject::is<Array>() const { return type==T_ARRAY; }
 template<> inline bool ASObject::is<Class_base>() const { return type==T_CLASS; }
-template<> inline bool ASObject::is<Template_base>() const { return type==T_TEMPLATE; };
+template<> inline bool ASObject::is<Template_base>() const { return type==T_TEMPLATE; }
+template<> inline bool ASObject::is<Type>() const { return type==T_CLASS; }
 }
 #endif

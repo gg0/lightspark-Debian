@@ -1,3 +1,10 @@
+lightspark (0.5.2-1) unstable; urgency=low
+
+  * New 0.5.2 upstream release.
+    - Bump Build-Dependency on llvm-dev to 2.8.
+
+ -- Didier Raboud <odyx@debian.org>  Fri, 28 Oct 2011 16:54:35 +0200
+
 lightspark (0.5.1-1) unstable; urgency=low
 
   * New 0.5.1 upstream release.

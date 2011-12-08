@@ -37,9 +37,11 @@ private:
 	int hour;
 	int minute;
 	int second;
-	int millisecond;
+	bool nan;
 	Date();
+	virtual ~Date();
 	GDateTime *datetime;
+	GDateTime *datetimeUTC;
 	ASObject *msSinceEpoch();
 public:
 	static void sinit(Class_base*);
@@ -79,8 +81,10 @@ public:
 	ASFUNCTION(setUTCMinutes);
 	ASFUNCTION(setUTCSeconds);
 	ASFUNCTION(setUTCMilliseconds);
+	ASFUNCTION(setTime);
 	ASFUNCTION(timezoneOffset);
-	tiny_string toString(bool debugMsg=false);
+	ASFUNCTION(_toString);
+	tiny_string toString();
 	tiny_string toString_priv() const;
 	//Serialization interface
 	void serialize(ByteArray* out, std::map<tiny_string, uint32_t>& stringMap,

@@ -33,9 +33,12 @@
 #include <ctype.h>
 #include <errno.h>
 
+#include <glib.h>
+
 #include "abc.h"
 #include "toplevel.h"
 #include "flash/events/flashevents.h"
+#include "flash/xml/flashxml.h"
 #include "swf.h"
 #include "compat.h"
 #include "class.h"
@@ -46,7 +49,6 @@
 #include "argconv.h"
 
 using namespace std;
-using namespace Glib;
 using namespace lightspark;
 
 SET_NAMESPACE("");
@@ -54,7 +56,7 @@ SET_NAMESPACE("");
 REGISTER_CLASS_NAME2(ASQName,"QName","");
 REGISTER_CLASS_NAME2(IFunction,"Function","");
 REGISTER_CLASS_NAME2(UInteger,"uint","");
-REGISTER_CLASS_NAME(Integer);
+REGISTER_CLASS_NAME2(Integer,"int","");
 REGISTER_CLASS_NAME2(Global,"global","");
 REGISTER_CLASS_NAME(Number);
 REGISTER_CLASS_NAME(Namespace);
@@ -63,33 +65,14 @@ REGISTER_CLASS_NAME2(ASString, "String", "");
 REGISTER_CLASS_NAME(XML);
 REGISTER_CLASS_NAME(XMLList);
 
-const Any* const Type::anyType = new Any();
-const Void* const Type::voidType = new Void();
+Any* const Type::anyType = new Any();
+Void* const Type::voidType = new Void();
 
-Class_base* Definable::define()
-{
-	assert(getRefCount() > 0);
-
-	//Check if the class has already been defined
-	auto i = sys->classes.find(name);
-	if(i != sys->classes.end())
-		return i->second;
-
-	this->incRef(); //runScriptInit will decRef this
-	context->runScriptInit(scriptid, global);
-
-	i = sys->classes.find(name);
-	assert(i != sys->classes.end());
-	this->decRef();
-
-	return i->second;
-}
-
-XML::XML():root(NULL),node(NULL),constructed(false)
+XML::XML():node(NULL),constructed(false)
 {
 }
 
-XML::XML(const string& str):root(NULL),node(NULL),constructed(true)
+XML::XML(const string& str):node(NULL),constructed(true)
 {
 	buildFromString(str);
 }
@@ -99,7 +82,7 @@ XML::XML(_R<XML> _r, xmlpp::Node* _n):root(_r),node(_n),constructed(true)
 	assert(node);
 }
 
-XML::XML(xmlpp::Node* _n):root(NULL),constructed(true)
+XML::XML(xmlpp::Node* _n):constructed(true)
 {
 	assert(_n);
 	node=parser.get_document()->create_root_node_by_import(_n);
@@ -113,12 +96,13 @@ void XML::finalize()
 
 void XML::sinit(Class_base* c)
 {
-	c->super=Class<ASObject>::getRef();
+	c->setSuper(Class<ASObject>::getRef());
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
 	c->prototype->setVariableByQName("toString",AS3,Class<IFunction>::getFunction(XML::_toString),DYNAMIC_TRAIT);
 	c->setDeclaredMethodByQName("toXMLString",AS3,Class<IFunction>::getFunction(toXMLString),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("nodeKind",AS3,Class<IFunction>::getFunction(nodeKind),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("children",AS3,Class<IFunction>::getFunction(children),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("attribute",AS3,Class<IFunction>::getFunction(attribute),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("attributes",AS3,Class<IFunction>::getFunction(attributes),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("localName",AS3,Class<IFunction>::getFunction(localName),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("name",AS3,Class<IFunction>::getFunction(name),NORMAL_METHOD,true);
@@ -164,7 +148,7 @@ ASFUNCTIONBODY(XML,generator)
 	if(args[0]->getObjectType()==T_STRING)
 	{
 		ASString* str=Class<ASString>::cast(args[0]);
-		return Class<XML>::getInstanceS(str->data);
+		return Class<XML>::getInstanceS(std::string(str->data));
 	}
 	else if(args[0]->getObjectType()==T_NULL ||
 		args[0]->getObjectType()==T_UNDEFINED)
@@ -175,6 +159,10 @@ ASFUNCTIONBODY(XML,generator)
 	{
 		args[0]->incRef();
 		return args[0];
+	}
+	else if(args[0]->is<XMLNode>())
+	{
+		return Class<XML>::getInstanceS(args[0]->as<XMLNode>()->node);
 	}
 	else
 		throw RunTimeException("Type not supported in XML()");
@@ -197,7 +185,7 @@ ASFUNCTIONBODY(XML,_constructor)
 	{
 		assert_and_throw(args[0]->getObjectType()==T_STRING);
 		ASString* str=Class<ASString>::cast(args[0]);
-		th->buildFromString(str->data);
+		th->buildFromString(std::string(str->data));
 	}
 	return NULL;
 }
@@ -289,18 +277,25 @@ ASFUNCTIONBODY(XML,appendChild)
 	return arg;
 }
 
-ASFUNCTIONBODY(XML,attributes)
+/* returns the named attribute in an XMLList */
+ASFUNCTIONBODY(XML,attribute)
 {
-	XML* th=Class<XML>::cast(obj);
-	assert_and_throw(argslen==0);
-	assert(th->node);
-	//Needed dynamic cast, we want the type check
+	XML* th = obj->as<XML>();
+	tiny_string attrname;
+	//see spec for QName handling
+	if(argslen > 0 && args[0]->is<QName>())
+		LOG(LOG_NOT_IMPLEMENTED,"XML.attribute called with QName");
+	ARG_UNPACK (attrname);
+
 	xmlpp::Element* elem=dynamic_cast<xmlpp::Element*>(th->node);
-	if(elem==NULL)
+        if(elem==NULL)
 		return Class<XMLList>::getInstanceS();
-	const xmlpp::Element::AttributeList& list=elem->get_attributes();
-	xmlpp::Element::AttributeList::const_iterator it=list.begin();
-	std::vector<_R<XML>> ret;
+	xmlpp::Attribute* attribute = elem->get_attribute(attrname);
+	if(!attribute)
+	{
+		LOG(LOG_ERROR,"attribute " << attrname << " not found");
+		return Class<XMLList>::getInstanceS();
+	}
 	_NR<XML> rootXML=NullRef;
 	if(th->root.isNull())
 	{
@@ -309,6 +304,36 @@ ASFUNCTIONBODY(XML,attributes)
 	}
 	else
 		rootXML=th->root;
+
+	std::vector<_R<XML>> ret;
+	ret.push_back(_MR(Class<XML>::getInstanceS(rootXML, attribute)));
+	return Class<XMLList>::getInstanceS(ret);
+}
+
+ASFUNCTIONBODY(XML,attributes)
+{
+	assert_and_throw(argslen==0);
+	return obj->as<XML>()->getAllAttributes();
+}
+
+XMLList* XML::getAllAttributes()
+{
+	assert(node);
+	//Needed dynamic cast, we want the type check
+	xmlpp::Element* elem=dynamic_cast<xmlpp::Element*>(node);
+	if(elem==NULL)
+		return Class<XMLList>::getInstanceS();
+	const xmlpp::Element::AttributeList& list=elem->get_attributes();
+	xmlpp::Element::AttributeList::const_iterator it=list.begin();
+	std::vector<_R<XML>> ret;
+	_NR<XML> rootXML=NullRef;
+	if(root.isNull())
+	{
+		this->incRef();
+		rootXML=_MR(this);
+	}
+	else
+		rootXML=this->root;
 
 	for(;it!=list.end();it++)
 		ret.push_back(_MR(Class<XML>::getInstanceS(rootXML, *it)));
@@ -457,7 +482,7 @@ void XML::recursiveGetDescendantsByQName(_R<XML> root, xmlpp::Node* node, const 
 		std::vector<_R<XML>>& ret)
 {
 	//Check if this node is being requested. The empty string means ALL
-	if(name.len()==0 || node->get_name()==name.raw_buf())
+	if(name.empty() || name == node->get_name())
 	{
 		root->incRef();
 		ret.push_back(_MR(Class<XML>::getInstanceS(root, node)));
@@ -497,9 +522,9 @@ _NR<ASObject> XML::getVariableByMultiname(const multiname& name, GET_VARIABLE_OP
 	}
 
 	bool isAttr=name.isAttribute;
-	const tiny_string& normalizedName=name.normalizedName();
+	const tiny_string normalizedName=name.normalizedName();
 	const char *buf=normalizedName.raw_buf();
-	if(normalizedName[0]=='@')
+	if(!normalizedName.empty() && normalizedName.charAt(0)=='@')
 	{
 		isAttr=true;
 		buf+=1;
@@ -509,15 +534,19 @@ _NR<ASObject> XML::getVariableByMultiname(const multiname& name, GET_VARIABLE_OP
 		//Lookup attribute
 		//TODO: support namespaces
 		assert_and_throw(name.ns.size()>0 && name.ns[0].name=="");
+
+		if(normalizedName.empty())
+			return _MR(getAllAttributes());
+
 		//Normalize the name to the string form
 		assert(node);
 		//To have attributes we must be an Element
 		xmlpp::Element* element=dynamic_cast<xmlpp::Element*>(node);
 		if(element==NULL)
-			return NullRef;
+			return _MNR(Class<XMLList>::getInstanceS());
 		xmlpp::Attribute* attr=element->get_attribute(buf);
 		if(attr==NULL)
-			return NullRef;
+			return _MNR(Class<XMLList>::getInstanceS());
 
 		_NR<XML> rootXML=NullRef;
 		if(root.isNull())
@@ -569,9 +598,9 @@ bool XML::hasPropertyByMultiname(const multiname& name, bool considerDynamic)
 		return ASObject::hasPropertyByMultiname(name, considerDynamic);
 
 	bool isAttr=name.isAttribute;
-	const tiny_string& normalizedName=name.normalizedName();
+	const tiny_string normalizedName=name.normalizedName();
 	const char *buf=normalizedName.raw_buf();
-	if(normalizedName[0]=='@')
+	if(!normalizedName.empty() && normalizedName.charAt(0)=='@')
 	{
 		isAttr=true;
 		buf+=1;
@@ -780,7 +809,7 @@ void XMLList::finalize()
 
 void XMLList::sinit(Class_base* c)
 {
-	c->super=Class<ASObject>::getRef();
+	c->setSuper(Class<ASObject>::getRef());
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
 	c->setDeclaredMethodByQName("length","",Class<IFunction>::getFunction(_getLength),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("appendChild",AS3,Class<IFunction>::getFunction(appendChild),NORMAL_METHOD,true);
@@ -807,7 +836,7 @@ ASFUNCTIONBODY(XMLList,_constructor)
 
 	assert_and_throw(args[0]->getObjectType()==T_STRING);
 	ASString* str=Class<ASString>::cast(args[0]);
-	th->buildFromString(str->data);
+	th->buildFromString(std::string(str->data));
 	return NULL;
 }
 
@@ -866,7 +895,7 @@ ASFUNCTIONBODY(XMLList,generator)
 	if(args[0]->getObjectType()==T_STRING)
 	{
 		ASString* str=Class<ASString>::cast(args[0]);
-		return Class<XMLList>::getInstanceS(str->data);
+		return Class<XMLList>::getInstanceS(std::string(str->data));
 	}
 	else if(args[0]->getClass()==Class<XMLList>::getClass())
 	{
@@ -876,6 +905,7 @@ ASFUNCTIONBODY(XMLList,generator)
 	else if(args[0]->getClass()==Class<XML>::getClass())
 	{
 		std::vector< _R<XML> > nodes;
+		args[0]->incRef();
 		nodes.push_back(_MR(Class<XML>::cast(args[0])));
 		return Class<XMLList>::getInstanceS(nodes);
 	}
@@ -1155,31 +1185,23 @@ ASString::ASString()
 	type=T_STRING;
 }
 
-ASString::ASString(const string& s):data(s)
+ASString::ASString(const string& s): data(s)
 {
 	type=T_STRING;
 }
 
-ASString::ASString(const ustring& s):data(s)
+ASString::ASString(const tiny_string& s) : data(s)
 {
 	type=T_STRING;
 }
 
-ASString::ASString(const tiny_string& s):data(s.raw_buf())
-{
-	type=T_STRING;
-}
-
-ASString::ASString(const char* s):data(s)
+ASString::ASString(const char* s) : data(s, /*copy:*/true)
 {
 	type=T_STRING;
 }
 
 ASString::ASString(const char* s, uint32_t len)
 {
-	//we cannot use the ustring(const char*,size_t) constructor,
-	//because it expects the number of utf8-characters as second
-	//parameter
 	data = std::string(s,len);
 	type=T_STRING;
 }
@@ -1195,12 +1217,12 @@ ASFUNCTIONBODY(ASString,_constructor)
 ASFUNCTIONBODY(ASString,_getLength)
 {
 	ASString* th=static_cast<ASString*>(obj);
-	return abstract_i(th->data.size());
+	return abstract_i(th->data.numChars());
 }
 
 void ASString::sinit(Class_base* c)
 {
-	c->super=Class<ASObject>::getRef();
+	c->setSuper(Class<ASObject>::getRef());
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
 	c->setDeclaredMethodByQName("split",AS3,Class<IFunction>::getFunction(split),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("substr",AS3,Class<IFunction>::getFunction(substr),NORMAL_METHOD,true);
@@ -1236,7 +1258,7 @@ ASFUNCTIONBODY(ASString,search)
 		return abstract_i(-1);
 
 	int options=PCRE_UTF8;
-	ustring restr;
+	tiny_string restr;
 	if(args[0]->getClass() && args[0]->getClass()==Class<RegExp>::getClass())
 	{
 		RegExp* re=static_cast<RegExp*>(args[0]);
@@ -1250,12 +1272,12 @@ ASFUNCTIONBODY(ASString,search)
 	}
 	else
 	{
-		restr = args[0]->toString().raw_buf();
+		restr = args[0]->toString();
 	}
 
 	const char* error;
 	int errorOffset;
-	pcre* pcreRE=pcre_compile(restr.c_str(), options, &error, &errorOffset,NULL);
+	pcre* pcreRE=pcre_compile(restr.raw_buf(), options, &error, &errorOffset,NULL);
 	if(error)
 		return abstract_i(ret);
 	//Verify that 30 for ovector is ok, it must be at least (captGroups+1)*3
@@ -1270,7 +1292,7 @@ ASFUNCTIONBODY(ASString,search)
 	int ovector[30];
 	int offset=0;
 	//Global is not used in search
-	int rc=pcre_exec(pcreRE, NULL, th->data.c_str(), th->data.bytes(), offset, 0, ovector, 30);
+	int rc=pcre_exec(pcreRE, NULL, th->data.raw_buf(), th->data.numBytes(), offset, 0, ovector, 30);
 	if(rc<0)
 	{
 		//No matches or error
@@ -1289,7 +1311,7 @@ ASFUNCTIONBODY(ASString,match)
 	Array* ret=NULL;
 
 	int options=PCRE_UTF8;
-	ustring restr;
+	tiny_string restr;
 	bool isGlobal = false;
 	if(args[0]->getClass() && args[0]->getClass()==Class<RegExp>::getClass())
 	{
@@ -1304,11 +1326,11 @@ ASFUNCTIONBODY(ASString,match)
 		isGlobal = re->global;
 	}
 	else
-		restr = args[0]->toString().raw_buf();
+		restr = args[0]->toString();
 
 	const char* error;
 	int errorOffset;
-	pcre* pcreRE=pcre_compile(restr.c_str(), options, &error, &errorOffset,NULL);
+	pcre* pcreRE=pcre_compile(restr.raw_buf(), options, &error, &errorOffset,NULL);
 	if(error)
 		return new Null;
 	//Verify that 30 for ovector is ok, it must be at least (captGroups+1)*3
@@ -1325,7 +1347,7 @@ ASFUNCTIONBODY(ASString,match)
 	ret=Class<Array>::getInstanceS();
 	do
 	{
-		int rc=pcre_exec(pcreRE, NULL, th->data.c_str(), th->data.bytes(), offset, 0, ovector, 30);
+		int rc=pcre_exec(pcreRE, NULL, th->data.raw_buf(), th->data.numBytes(), offset, 0, ovector, 30);
 		if(rc<0)
 		{
 			//No matches or error
@@ -1334,7 +1356,7 @@ ASFUNCTIONBODY(ASString,match)
 		}
 		//we cannot use ustrings substr here, because pcre returns those indices in bytes
 		//and ustring expects number of UTF8 characters. The same holds for ustring constructor
-		ret->push(Class<ASString>::getInstanceS(th->data.raw().substr(ovector[0],ovector[1]-ovector[0])));
+		ret->push(Class<ASString>::getInstanceS(th->data.substr_bytes(ovector[0],ovector[1]-ovector[0])));
 		offset=ovector[1];
 	}
 	while(isGlobal);
@@ -1369,11 +1391,11 @@ ASFUNCTIONBODY(ASString,split)
 	{
 		RegExp* re=static_cast<RegExp*>(args[0]);
 
-		if(re->re.length() == 0)
+		if(re->re.empty())
 		{
 			//the RegExp is empty, so split every character
-			for(size_t i=0;i<th->data.size();++i)
-				ret->push( Class<ASString>::getInstanceS(th->data.substr(i,1)) );
+			for(auto i=th->data.begin();i!=th->data.end();++i)
+				ret->push( Class<ASString>::getInstanceS( tiny_string::fromChar(*i) ) );
 			return ret;
 		}
 
@@ -1386,7 +1408,7 @@ ASFUNCTIONBODY(ASString,split)
 			options|=PCRE_EXTENDED;
 		if(re->multiline)
 			options|=PCRE_MULTILINE;
-		pcre* pcreRE=pcre_compile(re->re.c_str(), options, &error, &offset,NULL);
+		pcre* pcreRE=pcre_compile(re->re.raw_buf(), options, &error, &offset,NULL);
 		if(error)
 			return ret;
 		//Verify that 30 for ovector is ok, it must be at least (captGroups+1)*3
@@ -1405,7 +1427,7 @@ ASFUNCTIONBODY(ASString,split)
 		do
 		{
 			//offset is a byte offset that must point to the beginning of an utf8 character
-			int rc=pcre_exec(pcreRE, NULL, th->data.c_str(), th->data.bytes(), offset, 0, ovector, 30);
+			int rc=pcre_exec(pcreRE, NULL, th->data.raw_buf(), th->data.numBytes(), offset, 0, ovector, 30);
 			end=ovector[0];
 			if(rc<0)
 				break;
@@ -1415,7 +1437,7 @@ ASFUNCTIONBODY(ASString,split)
 				continue;
 			}
 			//Extract string from last match until the beginning of the current match
-			ASString* s=Class<ASString>::getInstanceS(th->data.raw().substr(lastMatch,end-lastMatch));
+			ASString* s=Class<ASString>::getInstanceS(th->data.substr_bytes(lastMatch,end-lastMatch));
 			ret->push(s);
 			lastMatch=offset=ovector[1];
 
@@ -1423,14 +1445,14 @@ ASFUNCTIONBODY(ASString,split)
 			for(int i=1;i<rc;i++)
 			{
 				//use string interface through raw(), because we index on bytes, not on UTF-8 characters
-				ASString* s=Class<ASString>::getInstanceS(th->data.raw().substr(ovector[i*2],ovector[i*2+1]-ovector[i*2]));
+				ASString* s=Class<ASString>::getInstanceS(th->data.substr_bytes(ovector[i*2],ovector[i*2+1]-ovector[i*2]));
 				ret->push(s);
 			}
 		}
-		while(end<th->data.size());
-		if(lastMatch != th->data.size()+1)
+		while(end<th->data.numBytes());
+		if(lastMatch != th->data.numBytes()+1)
 		{
-			ASString* s=Class<ASString>::getInstanceS(th->data.raw().substr(lastMatch,th->data.size()-lastMatch));
+			ASString* s=Class<ASString>::getInstanceS(th->data.substr_bytes(lastMatch,th->data.numBytes()-lastMatch));
 			ret->push(s);
 		}
 		pcre_free(pcreRE);
@@ -1438,26 +1460,26 @@ ASFUNCTIONBODY(ASString,split)
 	else
 	{
 		const tiny_string& del=args[0]->toString();
-		if(del.len() == 0)
+		if(del.empty())
 		{
 			//the string is empty, so split every character
-			for(size_t i=0;i<th->data.size();++i)
-				ret->push( Class<ASString>::getInstanceS(th->data.substr(i,1)) );
+			for(auto i=th->data.begin();i!=th->data.end();++i)
+				ret->push( Class<ASString>::getInstanceS( tiny_string::fromChar(*i) ) );
 			return ret;
 		}
 		unsigned int start=0;
 		do
 		{
-			int match=th->data.find(del.raw_buf(),start);
-			if(del.len()==0)
+			int match=th->data.find(del,start);
+			if(del.empty())
 				match++;
 			if(match==-1)
-				match=th->data.size();
+				match=th->data.numChars();
 			ASString* s=Class<ASString>::getInstanceS(th->data.substr(start,(match-start)));
 			ret->push(s);
-			start=match+del.len();
+			start=match+del.numChars();
 		}
-		while(start<th->data.size());
+		while(start<th->data.numChars());
 	}
 
 	return ret;
@@ -1470,12 +1492,12 @@ ASFUNCTIONBODY(ASString,substr)
 	if(argslen>=1)
 		start=args[0]->toInt();
 	if(start<0) {
-		start=th->data.size()+start;
+		start=th->data.numChars()+start;
 		if(start<0)
 			start=0;
 	}
-	if(start>(int)th->data.size())
-		start=th->data.size();
+	if(start>(int)th->data.numChars())
+		start=th->data.numChars();
 
 	int len=0x7fffffff;
 	if(argslen==2)
@@ -1492,16 +1514,16 @@ ASFUNCTIONBODY(ASString,substring)
 		start=args[0]->toInt();
 	if(start<0)
 		start=0;
-	if(start>(int)th->data.size())
-		start=th->data.size();
+	if(start>(int)th->data.numChars())
+		start=th->data.numChars();
 
 	int end=0x7fffffff;
 	if(argslen>=2)
 		end=args[1]->toInt();
 	if(end<0)
 		end=0;
-	if(end>(int)th->data.size())
-		end=th->data.size();
+	if(end>(int)th->data.numChars())
+		end=th->data.numChars();
 
 	if(start>end) {
 		int tmp=start;
@@ -1524,15 +1546,18 @@ double ASString::toNumber() const
 {
 	assert_and_throw(implEnable);
 
-	const char *s=data.c_str();
+	/* TODO: data holds a utf8-character sequence, not ascii! */
+	const char *s=data.raw_buf();
 	char *end=NULL;
-	double val=strtod(s, &end);
+	while(g_ascii_isspace(*s))
+		s++;
+	double val=g_ascii_strtod(s, &end);
 
 	// strtod converts case-insensitive "inf" and "infinity" to
 	// inf, flash only accepts case-sensitive "Infinity".
 	if(std::isinf(val)) {
 		const char *tmp=s;
-		while(isspace(*tmp))
+		while(g_ascii_isspace(*tmp))
 			tmp++;
 		if(*tmp=='+' || *tmp=='-')
 			tmp++;
@@ -1541,9 +1566,8 @@ double ASString::toNumber() const
 	}
 
 	// Fail if there is any rubbish after the converted number
-	while(*end)
-	{
-		if(!isspace(*end))
+	while(*end) {
+		if(!g_ascii_isspace(*end))
 			return numeric_limits<double>::quiet_NaN();
 		end++;
 	}
@@ -1554,13 +1578,15 @@ double ASString::toNumber() const
 int32_t ASString::toInt()
 {
 	assert_and_throw(implEnable);
-	return atol(data.c_str());
+	//TODO: this assumes data to be ascii, but it is utf8!
+	return atoi(data.raw_buf());
 }
 
 uint32_t ASString::toUInt()
 {
 	assert_and_throw(implEnable);
-	return atol(data.c_str());
+	//TODO: this assumes data to be ascii, but it is utf8!
+	return atol(data.raw_buf());
 }
 
 bool ASString::isEqual(ASObject* r)
@@ -1770,6 +1796,12 @@ bool Integer::isEqual(ASObject* o)
 
 tiny_string Integer::toString()
 {
+	return Integer::toString(val);
+}
+
+/* static helper function */
+tiny_string Integer::toString(int32_t val)
+{
 	char buf[20];
 	if(val<0)
 	{
@@ -1793,9 +1825,9 @@ tiny_string Integer::toString()
 
 void Integer::sinit(Class_base* c)
 {
-	c->setVariableByQName("MAX_VALUE","",new Integer(2147483647),DECLARED_TRAIT);
-	c->setVariableByQName("MIN_VALUE","",new Integer(-2147483648),DECLARED_TRAIT);
-	c->super=Class<ASObject>::getRef();
+	c->setSuper(Class<ASObject>::getRef());
+	c->setVariableByQName("MAX_VALUE","",new Integer(numeric_limits<int32_t>::max()),DECLARED_TRAIT);
+	c->setVariableByQName("MIN_VALUE","",new Integer(numeric_limits<int32_t>::min()),DECLARED_TRAIT);
 	c->prototype->setVariableByQName("toString",AS3,Class<IFunction>::getFunction(Integer::_toString),DYNAMIC_TRAIT);
 }
 
@@ -1807,6 +1839,12 @@ void Integer::serialize(ByteArray* out, std::map<tiny_string, uint32_t>& stringM
 }
 
 tiny_string UInteger::toString()
+{
+	return UInteger::toString(val);
+}
+
+/* static helper function */
+tiny_string UInteger::toString(uint32_t val)
 {
 	char buf[20];
 	snprintf(buf,sizeof(buf),"%u",val);
@@ -2041,6 +2079,12 @@ ASFUNCTIONBODY(Number,generator)
 
 tiny_string Number::toString()
 {
+	return Number::toString(val);
+}
+
+/* static helper function */
+tiny_string Number::toString(number_t val)
+{
 	if(std::isnan(val))
 		return "NaN";
 	if(std::isinf(val))
@@ -2065,7 +2109,7 @@ tiny_string Number::toString()
 
 void Number::sinit(Class_base* c)
 {
-	c->super=Class<ASObject>::getRef();
+	c->setSuper(Class<ASObject>::getRef());
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
 	//Must create and link the number the hard way
 	Number* ninf=new Number(-numeric_limits<double>::infinity());
@@ -2102,14 +2146,14 @@ void Number::serialize(ByteArray* out, std::map<tiny_string, uint32_t>& stringMa
 	out->writeByte(amf3::double_marker);
 	//We have to write the double in network byte order (big endian)
 	const uint64_t* tmpPtr=reinterpret_cast<const uint64_t*>(&val);
-	uint64_t bigEndianVal=BigEndianToHost64(*tmpPtr);
+	uint64_t bigEndianVal=GINT64_FROM_BE(*tmpPtr);
 	uint8_t* bigEndianPtr=reinterpret_cast<uint8_t*>(&bigEndianVal);
 
 	for(uint32_t i=0;i<8;i++)
 		out->writeByte(bigEndianPtr[i]);
 }
 
-IFunction::IFunction():closure_this(NULL),inClass(NULL),length(0)
+IFunction::IFunction():inClass(NULL),length(0)
 {
 	type=T_FUNCTION;
 	prototype = _MR(new_asobject());
@@ -2242,7 +2286,7 @@ ASObject* SyntheticFunction::call(ASObject* obj, ASObject* const* args, uint32_t
 	const int hit_threshold=10;
 	assert_and_throw(mi->body);
 
-	if(ABCVm::cur_recursion == sys->currentVm->limits.max_recursion)
+	if(ABCVm::cur_recursion == getVm()->limits.max_recursion)
 	{
 		for(uint32_t i=0;i<numArgs;i++)
 			args[i]->decRef();
@@ -2278,7 +2322,7 @@ ASObject* SyntheticFunction::call(ASObject* obj, ASObject* const* args, uint32_t
 	}
 
 	//Temporarily disable JITting
-	if(!mi->body->exception_count && sys->useJit && (hit_count==hit_threshold || sys->useInterpreter==false))
+	if(!mi->body->exception_count && getSys()->useJit && (hit_count==hit_threshold || getSys()->useInterpreter==false))
 	{
 		//We passed the hot function threshold, synt the function
 		val=mi->synt_method();
@@ -2313,11 +2357,11 @@ ASObject* SyntheticFunction::call(ASObject* obj, ASObject* const* args, uint32_t
 	cc.inClass = inClass;
 	cc.mi=mi;
 	cc.locals_size=mi->body->local_count+1;
-	ASObject* locals[cc.locals_size];
+	ASObject** locals = g_newa(ASObject*, cc.locals_size);
 	cc.locals=locals;
 	memset(cc.locals,0,sizeof(ASObject*)*cc.locals_size);
 	cc.max_stack = mi->body->max_stack;
-	ASObject* stack[cc.max_stack];
+	ASObject** stack = g_newa(ASObject*, cc.max_stack);
 	cc.stack=stack;
 	cc.stack_index=0;
 	cc.context=mi->context;
@@ -2325,7 +2369,10 @@ ASObject* SyntheticFunction::call(ASObject* obj, ASObject* const* args, uint32_t
 	cc.scope_stack=func_scope;
 	cc.initialScopeStack=func_scope.size();
 	cc.exec_pos=0;
-	getVm()->curGlobalObj = ABCVm::getGlobalScope(&cc);
+
+	/* Set the current global object, each script in each DoABCTag has its own */
+	Global* saved_global = getVm()->curGlobalObj;
+	getVm()->curGlobalObj = cc.scope_stack[0].object->as<Global>();
 
 	if(isBound())
 	{ /* closure_this can never been overriden */
@@ -2388,7 +2435,7 @@ ASObject* SyntheticFunction::call(ASObject* obj, ASObject* const* args, uint32_t
 	{
 		try
 		{
-			if(mi->body->exception_count || (val==NULL && sys->useInterpreter))
+			if(mi->body->exception_count || (val==NULL && getSys()->useInterpreter))
 			{
 				//This is not a hot function, execute it using the interpreter
 				ret=ABCVm::executeFunction(this,&cc);
@@ -2424,6 +2471,7 @@ ASObject* SyntheticFunction::call(ASObject* obj, ASObject* const* args, uint32_t
 			{
 				ABCVm::cur_recursion--; //decrement current recursion depth
 				Log::calls_indent--;
+				getVm()->curGlobalObj = saved_global;
 				throw excobj;
 			}
 			continue;
@@ -2432,6 +2480,7 @@ ASObject* SyntheticFunction::call(ASObject* obj, ASObject* const* args, uint32_t
 	}
 	ABCVm::cur_recursion--; //decrement current recursion depth
 	Log::calls_indent--;
+	getVm()->curGlobalObj= saved_global;
 
 	hit_count++;
 
@@ -2557,7 +2606,7 @@ RegExp::RegExp():global(false),ignoreCase(false),extended(false),multiline(false
 
 void RegExp::sinit(Class_base* c)
 {
-	c->super=Class<ASObject>::getRef();
+	c->setSuper(Class<ASObject>::getRef());
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
 	c->setDeclaredMethodByQName("exec",AS3,Class<IFunction>::getFunction(exec),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("test",AS3,Class<IFunction>::getFunction(test),NORMAL_METHOD,true);
@@ -2576,9 +2625,9 @@ ASFUNCTIONBODY(RegExp,_constructor)
 	if(argslen>1)
 	{
 		const tiny_string& flags=args[1]->toString();
-		for(int i=0;i<flags.len();i++)
+		for(auto i=flags.begin();i!=flags.end();++i)
 		{
-			switch(flags[i])
+			switch(*i)
 			{
 				case 'g':
 					th->global=true;
@@ -2621,7 +2670,7 @@ ASFUNCTIONBODY(RegExp,exec)
 		options|=PCRE_EXTENDED;
 	if(th->multiline)
 		options|=PCRE_MULTILINE;
-	pcre* pcreRE=pcre_compile(th->re.c_str(), options, &error, &errorOffset,NULL);
+	pcre* pcreRE=pcre_compile(th->re.raw_buf(), options, &error, &errorOffset,NULL);
 	if(error)
 		return new Null;
 	//Verify that 30 for ovector is ok, it must be at least (captGroups+1)*3
@@ -2664,9 +2713,7 @@ ASFUNCTIONBODY(RegExp,exec)
 
 	int ovector[30];
 	int offset=(th->global)?th->lastIndex:0;
-	const char* str=arg0.raw_buf();
-	int strLen=arg0.len();
-	int rc=pcre_exec(pcreRE, NULL, str, strLen, offset, 0, ovector, 30);
+	int rc=pcre_exec(pcreRE, NULL, arg0.raw_buf(), arg0.numBytes(), offset, 0, ovector, 30);
 	if(rc<0)
 	{
 		//No matches or error
@@ -2676,20 +2723,26 @@ ASFUNCTIONBODY(RegExp,exec)
 	Array* a=Class<Array>::getInstanceS();
 	//Push the whole result and the captured strings
 	for(int i=0;i<capturingGroups+1;i++)
-		a->push(Class<ASString>::getInstanceS(str+ovector[i*2],ovector[i*2+1]-ovector[i*2]));
+	{
+		if(ovector[i*2] != -1)
+			a->push(Class<ASString>::getInstanceS( arg0.substr_bytes(ovector[i*2],ovector[i*2+1]-ovector[i*2]) ));
+		else
+			a->push(new Undefined);
+	}
 	args[0]->incRef();
 	a->setVariableByQName("input","",args[0],DYNAMIC_TRAIT);
 	a->setVariableByQName("index","",abstract_i(ovector[0]),DYNAMIC_TRAIT);
 	for(int i=0;i<namedGroups;i++)
 	{
 		nameEntry* entry=(nameEntry*)entries;
-		uint16_t num=BigEndianToHost16(entry->number);
+		uint16_t num=GINT16_FROM_BE(entry->number);
 		ASObject* captured=a->at(num);
 		captured->incRef();
-		a->setVariableByQName(entry->name,"",captured,DYNAMIC_TRAIT);
+		a->setVariableByQName(tiny_string(entry->name, true),"",captured,DYNAMIC_TRAIT);
 		entries+=namedSize;
 	}
 	th->lastIndex=ovector[1];
+	pcre_free(pcreRE);
 	return a;
 }
 
@@ -2709,16 +2762,15 @@ ASFUNCTIONBODY(RegExp,test)
 
 	const char * error;
 	int errorOffset;
-	pcre * pcreRE = pcre_compile(th->re.c_str(), options, &error, &errorOffset, NULL);
+	pcre * pcreRE = pcre_compile(th->re.raw_buf(), options, &error, &errorOffset, NULL);
 	if(error)
 		return new Null;
 
-	const char* str=arg0.raw_buf();
-	int strLen=arg0.len();
 	int ovector[30];
 	int offset=(th->global)?th->lastIndex:0;
-	int rc = pcre_exec(pcreRE, NULL, str, strLen, offset, 0, ovector, 30);
+	int rc = pcre_exec(pcreRE, NULL, arg0.raw_buf(), arg0.numBytes(), offset, 0, ovector, 30);
 	bool ret = (rc >= 0);
+	pcre_free(pcreRE);
 
 	return abstract_b(ret);
 }
@@ -2730,23 +2782,23 @@ ASFUNCTIONBODY(ASString,slice)
 	if(argslen>=1)
 		startIndex=args[0]->toInt();
 	if(startIndex<0) {
-		startIndex=th->data.size()+startIndex;
+		startIndex=th->data.numChars()+startIndex;
 		if(startIndex<0)
 			startIndex=0;
 	}
-	if(startIndex>(int)th->data.size())
-		startIndex=th->data.size();
+	if(startIndex>(int)th->data.numChars())
+		startIndex=th->data.numChars();
 
 	int endIndex=0x7fffffff;
 	if(argslen>=2)
 		endIndex=args[1]->toInt();
 	if(endIndex<0) {
-		endIndex=th->data.size()+endIndex;
+		endIndex=th->data.numChars()+endIndex;
 		if(endIndex<0)
 			endIndex=0;
 	}
-	if(endIndex>(int)th->data.size())
-		endIndex=th->data.size();
+	if(endIndex>(int)th->data.numChars())
+		endIndex=th->data.numChars();
 
 	if(endIndex<=startIndex)
 		return Class<ASString>::getInstanceS("");
@@ -2758,19 +2810,23 @@ ASFUNCTIONBODY(ASString,charAt)
 {
 	ASString* th=static_cast<ASString*>(obj);
 	int index=args[0]->toInt();
-	int maxIndex=th->data.size();
+	int maxIndex=th->data.numChars();
 	if(index<0 || index>=maxIndex)
 		return Class<ASString>::getInstanceS();
-	return Class<ASString>::getInstanceS(th->data.c_str()+index, 1);
+	return Class<ASString>::getInstanceS( tiny_string::fromChar(th->data.charAt(index)) );
 }
 
 ASFUNCTIONBODY(ASString,charCodeAt)
 {
 	ASString* th=static_cast<ASString*>(obj);
 	unsigned int index=args[0]->toInt();
-	assert_and_throw(index<th->data.size());
-	//Character codes are expected to be positive
-	return abstract_i(th->data[index]);
+	if(index<th->data.numChars())
+	{
+		//Character codes are expected to be positive
+		return abstract_i(th->data.charAt(index));
+	}
+	else
+		return abstract_d(Number::NaN);
 }
 
 ASFUNCTIONBODY(ASString,indexOf)
@@ -2826,7 +2882,7 @@ ASFUNCTIONBODY(ASString,fromCharCode)
 	ASString* ret=Class<ASString>::getInstanceS();
 	for(uint32_t i=0;i<argslen;i++)
 	{
-		ret->data+=gunichar(args[i]->toInt());
+		ret->data += tiny_string::fromChar(args[i]->toUInt());
 	}
 	return ret;
 }
@@ -2838,7 +2894,7 @@ ASFUNCTIONBODY(ASString,replace)
 	REPLACE_TYPE type;
 	ASString* ret=Class<ASString>::getInstanceS(th->data);
 
-	string replaceWith;
+	tiny_string replaceWith;
 	if(argslen < 2)
 	{
 		type = STRING;
@@ -2847,7 +2903,7 @@ ASFUNCTIONBODY(ASString,replace)
 	else if(args[1]->getObjectType()!=T_FUNCTION)
 	{
 		type = STRING;
-		replaceWith=args[1]->toString().raw_buf();
+		replaceWith=args[1]->toString();
 	}
 	else
 		type = FUNC;
@@ -2865,7 +2921,7 @@ ASFUNCTIONBODY(ASString,replace)
 			options|=PCRE_EXTENDED;
 		if(re->multiline)
 			options|=PCRE_MULTILINE;
-		pcre* pcreRE=pcre_compile(re->re.c_str(), options, &error, &errorOffset,NULL);
+		pcre* pcreRE=pcre_compile(re->re.raw_buf(), options, &error, &errorOffset,NULL);
 		if(error)
 			return ret;
 		//Verify that 30 for ovector is ok, it must be at least (captGroups+1)*3
@@ -2882,7 +2938,7 @@ ASFUNCTIONBODY(ASString,replace)
 		int retDiff=0;
 		do
 		{
-			int rc=pcre_exec(pcreRE, NULL, ret->data.c_str(), ret->data.bytes(), offset, 0, ovector, 60);
+			int rc=pcre_exec(pcreRE, NULL, ret->data.raw_buf(), ret->data.numBytes(), offset, 0, ovector, 60);
 			if(rc<0)
 			{
 				//No matches or error
@@ -2893,11 +2949,11 @@ ASFUNCTIONBODY(ASString,replace)
 			{
 				//Get the replace for this match
 				IFunction* f=static_cast<IFunction*>(args[1]);
-				ASObject* subargs[3+capturingGroups];
-				//use string interface through raw(), because we index on bytes, not on UTF-8 characters
-				subargs[0]=Class<ASString>::getInstanceS(ret->data.raw().substr(ovector[0],ovector[1]-ovector[0]));
+				ASObject** subargs = g_newa(ASObject*, 3+capturingGroups);
+				//we index on bytes, not on UTF-8 characters
+				subargs[0]=Class<ASString>::getInstanceS(ret->data.substr_bytes(ovector[0],ovector[1]-ovector[0]));
 				for(int i=0;i<capturingGroups;i++)
-					subargs[i+1]=Class<ASString>::getInstanceS(ret->data.raw().substr(ovector[i*2+2],ovector[i*2+3]-ovector[i*2+2]));
+					subargs[i+1]=Class<ASString>::getInstanceS(ret->data.substr_bytes(ovector[i*2+2],ovector[i*2+3]-ovector[i*2+2]));
 				subargs[capturingGroups+1]=abstract_i(ovector[0]-retDiff);
 				th->incRef();
 				subargs[capturingGroups+2]=th;
@@ -2906,37 +2962,39 @@ ASFUNCTIONBODY(ASString,replace)
 				ret->decRef();
 			} else {
 					size_t pos, ipos = 0;
-					string group;
+					tiny_string group;
 					int i, j;
-					while((pos = replaceWith.find("$", ipos)) != string::npos) {
+					while((pos = replaceWith.find("$", ipos)) != tiny_string::npos) {
 						i = 0;
 						ipos = pos;
-						while (++ipos < replaceWith.size()) {
-						j = replaceWith.at(ipos)-'0';
+						while (++ipos < replaceWith.numChars()) {
+						j = replaceWith.charAt(ipos)-'0';
 							if (j <0 || j> 9)
 								break;
 							i = 10*i + j;
 						}
 						if (i == 0)
 							continue;
-						group = ret->data.raw().substr(ovector[i*2], ovector[i*2+1]-ovector[i*2]);
+						group = ret->data.substr_bytes(ovector[i*2], ovector[i*2+1]-ovector[i*2]);
 						replaceWith.replace(pos, ipos-pos, group);
 					}
 			}
 			ret->data.replace(ovector[0],ovector[1]-ovector[0],replaceWith);
-			offset=ovector[0]+replaceWith.size();
-			retDiff+=replaceWith.size()-(ovector[1]-ovector[0]);
+			offset=ovector[0]+replaceWith.numBytes();
+			retDiff+=replaceWith.numBytes()-(ovector[1]-ovector[0]);
 		}
 		while(re->global);
+
+		pcre_free(pcreRE);
 	}
 	else
 	{
 		const tiny_string& s=args[0]->toString();
-		int index=ret->data.find(s.raw_buf(),0);
+		int index=ret->data.find(s,0);
 		if(index==-1) //No result
 			return ret;
 		assert_and_throw(type==STRING);
-		ret->data.replace(index,s.len(),replaceWith);
+		ret->data.replace(index,s.numChars(),replaceWith);
 	}
 
 	return ret;
@@ -2960,7 +3018,6 @@ ASFUNCTIONBODY(ASString,generator)
 
 ASObject* Void::coerce(ASObject* o) const
 {
-	assert(!o->is<Definable>());
 	if(!o->is<Undefined>())
 		throw Class<TypeError>::getInstanceS("Trying to coerce o!=undefined to void");
 	return o;
@@ -2968,29 +3025,27 @@ ASObject* Void::coerce(ASObject* o) const
 
 bool Type::isTypeResolvable(const multiname* mn)
 {
+	assert_and_throw(mn->isQName());
+	assert(mn->name_type == multiname::NAME_STRING);
 	if(mn == 0)
-		return true;
+		return true; //any
 	if(mn->name_type == multiname::NAME_STRING && mn->name_s=="any"
-		&& mn->ns.size() == 1 && mn->ns[0].name == "")
+		&& mn->ns[0].name == "")
 		return true;
 	if(mn->name_type == multiname::NAME_STRING && mn->name_s=="void"
-		&& mn->ns.size() == 1 && mn->ns[0].name == "")
+		&& mn->ns[0].name == "")
 		return true;
 
-	ASObject* target;
-	ASObject* typeObject=getGlobal()->getVariableAndTargetByMultiname(*mn,target);
-	if(!typeObject)
-	{
-		//HACK: until we have implemented all flash classes, we need this hack
-		LOG(LOG_NOT_IMPLEMENTED,"getTypeFromMultiname: could not find " << *mn << ", using AnyType");
-		return true;
-	}
-	if(typeObject->is<Definable>())
-		return false;
-
-	return true;
+	//Check if the class has already been defined
+	auto i = getSys()->classes.find(QName(mn->name_s, mn->ns[0].name));
+	return i != getSys()->classes.end();
 }
 
+/*
+ * This should only be called after all global objects have been created
+ * by running ABCContext::exec() for all ABCContexts.
+ * Therefore, all classes are at least declared.
+ */
 const Type* Type::getTypeFromMultiname(const multiname* mn)
 {
 	if(mn == 0) //multiname idx zero indicates any type
@@ -3004,30 +3059,85 @@ const Type* Type::getTypeFromMultiname(const multiname* mn)
 		&& mn->ns.size() == 1 && mn->ns[0].name == "")
 		return Type::voidType;
 
-	ASObject* target;
-	ASObject* typeObject=getGlobal()->getVariableAndTargetByMultiname(*mn,target);
+	ASObject* typeObject;
+	/*
+	 * During the newClass opcode, the class is added to sys->classes.
+	 * The class variable in the global scope is only set a bit later.
+	 * When the class has to be resolved in between (for example, the
+	 * class has traits of the class's type), then we'll find it in
+	 * sys->classes, but getGlobal()->getVariableAndTargetByMultiname()
+	 * would still return "Undefined".
+	 */
+	auto i = getSys()->classes.find(QName(mn->name_s, mn->ns[0].name));
+	if(i != getSys()->classes.end())
+		typeObject = i->second;
+	else
+	{
+		ASObject* target;
+		typeObject=getGlobal()->getVariableAndTargetByMultiname(*mn,target);
+	}
+
 	if(!typeObject)
 	{
 		//HACK: until we have implemented all flash classes, we need this hack
 		LOG(LOG_NOT_IMPLEMENTED,"getTypeFromMultiname: could not find " << *mn << ", using AnyType");
 		return Type::anyType;
 	}
-	if(typeObject->is<Definable>())
-		typeObject = typeObject->as<Definable>()->define();
 
 	assert_and_throw(typeObject->is<Type>());
 	return typeObject->as<Type>();
 }
 
-Class_base::Class_base(const QName& name):use_protected(false),protected_ns("",NAMESPACE),constructor(NULL),referencedObjectsMutex("referencedObjects"),
-	super(NULL),context(NULL),class_name(name),class_index(-1)
+Class_base::Class_base(const QName& name):use_protected(false),protected_ns("",PACKAGE_NAMESPACE),constructor(NULL),
+	isFinal(false),isSealed(false),context(NULL),class_name(name),class_index(-1)
 {
 	type=T_CLASS;
 }
 
+/*
+ * This copies the non-static traits of the super class to this
+ * class.
+ *
+ * If a property is in the protected namespace of the super class, a copy is
+ * created with the protected namespace of this class.
+ * That is necessary, because superclass methods are called with the protected ns
+ * of the current class.
+ *
+ * use_protns and protectedns must be set before this function is called
+ */
+void Class_base::copyBorrowedTraitsFromSuper()
+{
+	assert(Variables.Variables.empty());
+	variables_map::var_iterator i = super->Variables.Variables.begin();
+	for(;i != super->Variables.Variables.end(); ++i)
+	{
+		const tiny_string& name = i->first;
+		variable& v = i->second;
+		//copy only static and instance methods
+		if(v.kind != BORROWED_TRAIT)
+			continue;
+		if(v.var)
+			v.var->incRef();
+		if(v.getter)
+			v.getter->incRef();
+		if(v.setter)
+			v.setter->incRef();
+		const variables_map::var_iterator ret_end=Variables.Variables.upper_bound(name);
+		variables_map::var_iterator inserted=Variables.Variables.insert(ret_end,make_pair(name,v));
+
+		//Overwrite protected ns
+		if(super->use_protected && v.ns.count(nsNameAndKind(super->protected_ns.name,PROTECTED_NAMESPACE)))
+		{
+			assert(use_protected);
+			//add this classes protected ns
+			inserted->second.ns.insert(nsNameAndKind(protected_ns.name,PROTECTED_NAMESPACE));
+		}
+	}
+}
+
+
 ASObject* Class_base::coerce(ASObject* o) const
 {
-	assert(!o->is<Definable>());
 	if(o->is<Null>())
 		return o;
 	if(o->is<Undefined>())
@@ -3041,12 +3151,12 @@ ASObject* Class_base::coerce(ASObject* o) const
 		|| (class_name.name=="Class" && class_name.ns==""))
 		       return o; /* 'this' is the type of a class */
 	       else
-		       throw Class<TypeError>::getInstanceS("Wrong type");
+		       throw Class<TypeError>::getInstanceS("Error #1034: Wrong type");
 	}
 	//o->getClass() == NULL for primitive types
 	//those are handled in overloads Class<Number>::coerce etc.
 	if(!o->getClass() || !o->getClass()->isSubClass(this))
-		throw Class<TypeError>::getInstanceS("Wrong type");
+		throw Class<TypeError>::getInstanceS("Error #1034: Wrong type");
 	return o;
 }
 
@@ -3075,7 +3185,10 @@ ASFUNCTIONBODY_GETTER(Class_base, prototype);
 
 ASObject* Class_base::generator(ASObject* const* args, const unsigned int argslen)
 {
-	return ASObject::generator(NULL, args, argslen);
+	ASObject *ret=ASObject::generator(NULL, args, argslen);
+	for(unsigned int i=0;i<argslen;i++)
+		args[i]->decRef();
+	return ret;
 }
 
 void Class_base::addImplementedInterface(const multiname& i)
@@ -3101,7 +3214,6 @@ void Class_base::recursiveBuild(ASObject* target)
 	if(super)
 		super->recursiveBuild(target);
 
-	LOG(LOG_TRACE,_("Building traits for ") << class_name);
 	buildInstanceTraits(target);
 }
 
@@ -3113,16 +3225,6 @@ void Class_base::setConstructor(IFunction* c)
 
 void Class_base::handleConstruction(ASObject* target, ASObject* const* args, unsigned int argslen, bool buildAndLink)
 {
-/*	if(getActualClass()->class_index==-2)
-	{
-		abort();
-		//We have to build the method traits
-		SyntheticFunction* sf=static_cast<SyntheticFunction*>(this);
-		LOG(LOG_CALLS,_("Building method traits"));
-		for(int i=0;i<sf->mi->body->trait_count;i++)
-			sf->mi->context->buildTrait(this,&sf->mi->body->traits[i]);
-		sf->call(this,args,max_level);
-	}*/
 	if(buildAndLink)
 	{
 	#ifndef NDEBUG
@@ -3150,7 +3252,6 @@ void Class_base::handleConstruction(ASObject* target, ASObject* const* args, uns
 	//As constructors are not binded, we should change here the level
 	if(constructor)
 	{
-		LOG(LOG_CALLS,_("Calling Instance init ") << class_name);
 		target->incRef();
 		ASObject* ret=constructor->call(target,args,argslen);
 		assert_and_throw(ret->is<Undefined>());
@@ -3217,12 +3318,12 @@ Class_object* Class_object::getClass()
 {
 	//We check if we are registered in the class map
 	//if not we register ourselves (see also Class<T>::getClass)
-	std::map<QName, Class_base*>::iterator it=sys->classes.find(QName("Class",""));
+	std::map<QName, Class_base*>::iterator it=getSys()->classes.find(QName("Class",""));
 	Class_object* ret=NULL;
-	if(it==sys->classes.end()) //This class is not yet in the map, create it
+	if(it==getSys()->classes.end()) //This class is not yet in the map, create it
 	{
 		ret=new Class_object();
-		sys->classes.insert(std::make_pair(QName("Class",""),ret));
+		getSys()->classes.insert(std::make_pair(QName("Class",""),ret));
 	}
 	else
 		ret=static_cast<Class_object*>(it->second);
@@ -3418,11 +3519,12 @@ void Class_base::describeTraits(xmlpp::Element* root,
 			assert(rtname->name_type==multiname::NAME_STRING);
 			node->set_attribute("returnType", rtname->name_s.raw_buf());
 
-			int firstOpt=method.numArgs() - method.option_count;
-			for(int j=0;j<method.numArgs(); j++)
+			assert(method.numArgs() >= method.option_count);
+			uint32_t firstOpt=method.numArgs() - method.option_count;
+			for(uint32_t j=0;j<method.numArgs(); j++)
 			{
 				xmlpp::Element* param=node->add_child("parameter");
-				param->set_attribute("index", tiny_string(j+1).raw_buf());
+				param->set_attribute("index", UInteger::toString(j+1).raw_buf());
 				param->set_attribute("type", method.paramTypeName(j)->name_s.raw_buf());
 				param->set_attribute("optional", j>=firstOpt?"true":"false");
 			}
@@ -3485,7 +3587,7 @@ void Class_base::describeTraits(xmlpp::Element* root,
 
 void ASQName::sinit(Class_base* c)
 {
-	c->super=Class<ASObject>::getRef();
+	c->setSuper(Class<ASObject>::getRef());
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
 	c->setDeclaredMethodByQName("uri","",Class<IFunction>::getFunction(_getURI),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("local_name","",Class<IFunction>::getFunction(_getLocalName),GETTER_METHOD,true);
@@ -3613,7 +3715,7 @@ tiny_string ASQName::toString()
 
 void Namespace::sinit(Class_base* c)
 {
-	c->super=Class<ASObject>::getRef();
+	c->setSuper(Class<ASObject>::getRef());
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
 	c->setDeclaredMethodByQName("uri","",Class<IFunction>::getFunction(_setURI),SETTER_METHOD,true);
 	c->setDeclaredMethodByQName("uri","",Class<IFunction>::getFunction(_getURI),GETTER_METHOD,true);
@@ -3784,30 +3886,12 @@ bool Namespace::isEqual(ASObject* o)
 	return false;
 }
 
-void InterfaceClass::lookupAndLink(Class_base* c, const tiny_string& name, const tiny_string& interfaceNs)
-{
-	variable* var=NULL;
-	Class_base* cur=c;
-	//Find the origin
-	while(cur)
-	{
-		var=cur->Variables.findObjVar(name,nsNameAndKind("",NAMESPACE),NO_CREATE_TRAIT,BORROWED_TRAIT);
-		if(var)
-			break;
-		cur=cur->super.getPtr();
-	}
-	assert_and_throw(var->var && var->var->getObjectType()==T_FUNCTION);
-	IFunction* f=static_cast<IFunction*>(var->var);
-	f->incRef();
-	c->setDeclaredMethodByQName(name,interfaceNs,f,NORMAL_METHOD,true);
-}
-
 void UInteger::sinit(Class_base* c)
 {
 	//TODO: add in the JIT support for unsigned number
 	//Right now we pretend to be signed, to make comparisons work
+	c->setSuper(Class<ASObject>::getRef());
 	c->setVariableByQName("MAX_VALUE","",new UInteger(0x7fffffff),DECLARED_TRAIT);
-	c->super=Class<ASObject>::getRef();
 	c->prototype->setVariableByQName("toString",AS3,Class<IFunction>::getFunction(_toString),DYNAMIC_TRAIT);
 }
 
@@ -3859,21 +3943,28 @@ ASObject* Class<IFunction>::getInstance(bool construct, ASObject* const* args, c
 
 Class<IFunction>* Class<IFunction>::getClass()
 {
-	std::map<QName, Class_base*>::iterator it=sys->classes.find(QName(ClassName<IFunction>::name,ClassName<IFunction>::ns));
+	std::map<QName, Class_base*>::iterator it=getSys()->classes.find(QName(ClassName<IFunction>::name,ClassName<IFunction>::ns));
 	Class<IFunction>* ret=NULL;
-	if(it==sys->classes.end()) //This class is not yet in the map, create it
+	if(it==getSys()->classes.end()) //This class is not yet in the map, create it
 	{
 		ret=new Class<IFunction>;
 		ret->prototype = _MNR(new_asobject());
-		ret->super=Class<ASObject>::getRef();
+		//This function is called from Class<ASObject>::getRef(),
+		//so the Class<ASObject> we obtain will not have any
+		//declared methods yet! Therefore, set super will not copy
+		//up any borrowed traits from there. We do that by ourself.
+		ret->setSuper(Class<ASObject>::getRef());
+
 		ret->prototype->setprop_prototype(ret->super->prototype);
 
-		sys->classes.insert(std::make_pair(QName(ClassName<IFunction>::name,ClassName<IFunction>::ns),ret));
+		getSys()->classes.insert(std::make_pair(QName(ClassName<IFunction>::name,ClassName<IFunction>::ns),ret));
 
 		//we cannot use sinit, as we need to setup 'this_class' before calling
 		//addPrototypeGetter and setDeclaredMethodByQName.
 		//Thus we make sure that everything is in order when getFunction() below is called
 		ret->addPrototypeGetter();
+		//copy borrowed traits from ASObject by ourself
+		ASObject::sinit(ret);
 		ret->setDeclaredMethodByQName("call",AS3,Class<IFunction>::getFunction(IFunction::_call),NORMAL_METHOD,true);
 		ret->setDeclaredMethodByQName("apply",AS3,Class<IFunction>::getFunction(IFunction::apply),NORMAL_METHOD,true);
 		ret->setDeclaredMethodByQName("prototype","",Class<IFunction>::getFunction(IFunction::_getter_prototype),GETTER_METHOD,true);
@@ -3890,7 +3981,21 @@ Class<IFunction>* Class<IFunction>::getClass()
 
 void Global::sinit(Class_base* c)
 {
-	c->super=Class<ASObject>::getRef();
+	c->setSuper(Class<ASObject>::getRef());
+}
+
+_NR<ASObject> Global::getVariableByMultiname(const multiname& name, GET_VARIABLE_OPTION opt)
+{
+	_NR<ASObject> ret = ASObject::getVariableByMultiname(name, opt);
+	/*
+	 * All properties are registered by now, even if the script init has
+	 * not been run. Thus if ret == NULL, we don't have to run the script init.
+	 */
+	if(ret.isNull() || !context || context->hasRunScriptInit[scriptId])
+		return ret;
+	LOG(LOG_CALLS,"Access to " << name << ", running script init");
+	context->runScriptInit(scriptId, this);
+	return ASObject::getVariableByMultiname(name, opt);
 }
 
 void GlobalObject::registerGlobalScope(Global* scope)
@@ -3924,7 +4029,7 @@ ASObject* GlobalObject::getVariableAndTargetByMultiname(const multiname& name, A
 		if(!o.isNull())
 		{
 			target=globalScopes[i];
-			o->incRef();
+			// No incRef, return a reference borrowed from globalScopes
 			return o.getPtr();
 		}
 	}
@@ -3975,7 +4080,7 @@ ASFUNCTIONBODY(lightspark,parseInt)
 
 		errno=0;
 		char *end;
-		long val=strtol(cur, &end, radix);
+		int64_t val=g_ascii_strtoll(cur, &end, radix);
 
 		if(errno==ERANGE)
 		{
@@ -4123,48 +4228,49 @@ ASFUNCTIONBODY(lightspark,print)
 	if(args[0]->getObjectType() == T_STRING)
 	{
 		ASString* str = static_cast<ASString*>(args[0]);
-		cerr << str->data << endl;
+		Log::print(str->data);
 	}
 	else
-		cerr << args[0]->toString() << endl;
+		Log::print(args[0]->toString());
 	return NULL;
 }
 
 ASFUNCTIONBODY(lightspark,trace)
 {
+	stringstream s;
 	for(uint32_t i = 0; i< argslen;i++)
 	{
 		if(i > 0)
-			cerr << " ";
+			s << " ";
 
 		if(args[i]->getObjectType() == T_STRING)
 		{
 			ASString* str = static_cast<ASString*>(args[i]);
-			cerr << str->data.raw();
+			s << str->data;
 		}
 		else
-			cerr << args[i]->toString();
+			s << args[i]->toString();
 	}
-	cerr << endl;
+	Log::print(s.str());
 	return NULL;
 }
 
 bool lightspark::isXMLName(ASObject *obj)
 {
-	ustring name;
+	tiny_string name;
 
 	if(obj->getObjectType()==lightspark::T_QNAME)
 	{
 		ASQName *q=static_cast<ASQName*>(obj);
-		name=ustring(q->getLocalName().raw_buf());
+		name=q->getLocalName();
 	}
 	else if(obj->getObjectType()==lightspark::T_UNDEFINED ||
 		obj->getObjectType()==lightspark::T_NULL)
 		name="";
 	else
-		name=ustring(obj->toString().raw_buf());
+		name=obj->toString();
 
-	if(name.length()==0)
+	if(name.empty())
 		return false;
 
 	// http://www.w3.org/TR/2006/REC-xml-names-20060816/#NT-NCName
@@ -4325,15 +4431,15 @@ bool lightspark::isXMLName(ASObject *obj)
 	  (0x3031 <= x && x <= 0x3035) || (0x309D <= x && x <= 0x309E) || \
 	  (0x30FC <= x && x <= 0x30FE))
 
-	ustring::const_iterator it=name.begin();
+	auto it=name.begin();
 	if(!NC_START_CHAR(*it))
 		return false;
 	++it;
-	while(it!=name.end())
+
+	for(;it!=name.end(); ++it)
 	{
 		if(!(NC_CHAR(*it)))
 			return false;
-		++it;
 	}
 
 	#undef NC_CHAR

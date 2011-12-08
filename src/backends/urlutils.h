@@ -24,7 +24,6 @@
 #include "compat.h"
 #include <iostream>
 #include <string>
-#include <inttypes.h>
 #include "swftypes.h"
 
 namespace lightspark
@@ -99,23 +98,15 @@ public:
 	void setStream(const tiny_string& s) { stream=s; }
 	//ENCODE_SPACES is used for safety, it can run over another ENCODING without corrupting data
 	enum ENCODING { ENCODE_SPACES, ENCODE_FORM, ENCODE_URI, ENCODE_URICOMPONENT, ENCODE_ESCAPE };
-	static tiny_string encode(const tiny_string& u, ENCODING type=ENCODE_URICOMPONENT)
+	static tiny_string encode(const tiny_string& u, ENCODING type=ENCODE_URICOMPONENT);
+	static std::string encode(const std::string& u, ENCODING type=ENCODE_URICOMPONENT)
 	{
-		return tiny_string(encode(std::string(u.raw_buf()), type));
-	};
-	static Glib::ustring encode(const Glib::ustring& u, ENCODING type=ENCODE_URICOMPONENT)
-	{
-		return encode(u.raw(), type);
+		return std::string(encode(tiny_string(u), type));
 	}
-	static std::string encode(const std::string& u, ENCODING type=ENCODE_URICOMPONENT);
 	static tiny_string decode(const tiny_string& u, ENCODING type=ENCODE_URICOMPONENT)
 	{
 		return tiny_string(decode(std::string(u.raw_buf()), type));
 	};
-	static Glib::ustring decode(const Glib::ustring& u, ENCODING type=ENCODE_URICOMPONENT)
-	{
-		return decode(u.raw(), type);
-	}
 	static std::string decode(const std::string& u, ENCODING type=ENCODE_URICOMPONENT);
 };
 

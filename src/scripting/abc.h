@@ -38,12 +38,11 @@
 #include <map>
 #include <set>
 #include "swf.h"
-#include "abcutils.h"
 
 namespace lightspark
 {
 
-extern TLSDATA bool isVmThread;
+bool isVmThread();
 
 class u8
 {
@@ -421,7 +420,7 @@ public:
 	multiname* getMultinameImpl(ASObject* rt1, ASObject* rt2, unsigned int m);
 	void buildInstanceTraits(ASObject* obj, int class_index);
 	ABCContext(std::istream& in) DLL_PUBLIC;
-	void exec();
+	void exec(bool lazy);
 
 	static bool isinstance(ASObject* obj, multiname* name);
 
@@ -437,7 +436,7 @@ friend class method_info;
 private:
 	std::vector<ABCContext*> contexts;
 	SystemState* m_sys;
-	pthread_t t;
+	Thread* t;
 	enum STATUS { CREATED=0, STARTED, TERMINATED };
 	STATUS status;
 
@@ -553,7 +552,7 @@ private:
 	static int32_t multiply_i(ASObject*,ASObject*);
 	static number_t multiply_oi(ASObject*, int32_t);
 	static number_t divide(ASObject*,ASObject*);
-	static int32_t modulo(ASObject*,ASObject*);
+	static number_t modulo(ASObject*,ASObject*);
 	static number_t subtract(ASObject*,ASObject*);
 	static int32_t subtract_i(ASObject*,ASObject*);
 	static number_t subtract_oi(ASObject*, int32_t);
@@ -582,6 +581,8 @@ private:
 	static number_t decrement(ASObject*);
 	static uint32_t decrement_i(ASObject*);
 	static bool strictEquals(ASObject*,ASObject*);
+	static ASObject* esc_xattr(ASObject* o);
+	static bool instanceOf(ASObject* value, ASObject* type);
 	//Utility
 	static void not_impl(int p);
 	static void wrong_exec_pos();
@@ -603,13 +604,14 @@ private:
 	static typed_opcode_handler opcode_table_bool_t[];
 
 	//Synchronization
-	sem_t event_queue_mutex;
-	sem_t sem_event_count;
+	Mutex event_queue_mutex;
+	Cond sem_event_cond;
 
 	//Event handling
-	bool shuttingdown;
+	volatile bool shuttingdown;
 	std::deque<std::pair<_NR<EventDispatcher>,_R<Event> > > events_queue;
 	void handleEvent(std::pair<_NR<EventDispatcher>,_R<Event> > e);
+	void signalEventWaiters();
 	void buildClassAndBindTag(const std::string& s, _R<DictionaryTag> t);
 	void buildClassAndInjectBase(const std::string& s, _R<RootMovieClip> base);
 	Class_inherit* findClassInherit(const std::string& s);
@@ -666,7 +668,6 @@ class DoABCTag: public ControlTag
 {
 private:
 	ABCContext* context;
-	pthread_t thread;
 public:
 	DoABCTag(RECORDHEADER h, std::istream& in);
 	TAGTYPE getType() const{ return ABC_TAG; }
@@ -679,7 +680,6 @@ private:
 	UI32_SWF Flags;
 	STRING Name;
 	ABCContext* context;
-	pthread_t thread;
 public:
 	DoABCDefineTag(RECORDHEADER h, std::istream& in);
 	TAGTYPE getType() const{ return ABC_TAG; }
@@ -702,12 +702,12 @@ ASObject* undefinedFunction(ASObject* obj,ASObject* const* args, const unsigned 
 
 inline GlobalObject* getGlobal()
 {
-	return sys->currentVm->global;
+	return getSys()->currentVm->global;
 }
 
 inline ABCVm* getVm()
 {
-	return sys->currentVm;
+	return getSys()->currentVm;
 }
 
 std::istream& operator>>(std::istream& in, u8& v);

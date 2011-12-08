@@ -24,7 +24,6 @@
 #include "argconv.h"
 
 using namespace std;
-using namespace Glib;
 using namespace lightspark;
 
 SET_NAMESPACE("");
@@ -51,7 +50,7 @@ ASFUNCTIONBODY(ASError,getStackTrace)
 
 tiny_string ASError::toString(bool debugMsg)
 {
-	if( message.len() )
+	if( !message.empty() )
 		return name + ": " + message;
 	else
 		return name;
@@ -80,7 +79,7 @@ ASFUNCTIONBODY(ASError,_constructor)
 
 void ASError::sinit(Class_base* c)
 {
-	c->super=Class<ASObject>::getRef();
+	c->setSuper(Class<ASObject>::getRef());
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
 	c->setDeclaredMethodByQName("getStackTrace",AS3,Class<IFunction>::getFunction(getStackTrace),NORMAL_METHOD,true);
 	c->prototype->setVariableByQName("toString",AS3,Class<IFunction>::getFunction(_toString),DYNAMIC_TRAIT);
@@ -111,7 +110,7 @@ ASFUNCTIONBODY(SecurityError,_constructor)
 void SecurityError::sinit(Class_base* c)
 {
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
-	c->super=Class<ASError>::getRef();
+	c->setSuper(Class<ASError>::getRef());
 }
 
 void SecurityError::buildTraits(ASObject* o)
@@ -132,7 +131,7 @@ ASFUNCTIONBODY(ArgumentError,_constructor)
 void ArgumentError::sinit(Class_base* c)
 {
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
-	c->super=Class<ASError>::getRef();
+	c->setSuper(Class<ASError>::getRef());
 }
 
 void ArgumentError::buildTraits(ASObject* o)
@@ -153,7 +152,7 @@ ASFUNCTIONBODY(DefinitionError,_constructor)
 void DefinitionError::sinit(Class_base* c)
 {
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
-	c->super=Class<ASError>::getRef();
+	c->setSuper(Class<ASError>::getRef());
 }
 
 void DefinitionError::buildTraits(ASObject* o)
@@ -174,7 +173,7 @@ ASFUNCTIONBODY(EvalError,_constructor)
 void EvalError::sinit(Class_base* c)
 {
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
-	c->super=Class<ASError>::getRef();
+	c->setSuper(Class<ASError>::getRef());
 }
 
 void EvalError::buildTraits(ASObject* o)
@@ -195,7 +194,7 @@ ASFUNCTIONBODY(RangeError,_constructor)
 void RangeError::sinit(Class_base* c)
 {
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
-	c->super=Class<ASError>::getRef();
+	c->setSuper(Class<ASError>::getRef());
 }
 
 void RangeError::buildTraits(ASObject* o)
@@ -216,7 +215,7 @@ ASFUNCTIONBODY(ReferenceError,_constructor)
 void ReferenceError::sinit(Class_base* c)
 {
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
-	c->super=Class<ASError>::getRef();
+	c->setSuper(Class<ASError>::getRef());
 }
 
 void ReferenceError::buildTraits(ASObject* o)
@@ -237,7 +236,7 @@ ASFUNCTIONBODY(SyntaxError,_constructor)
 void SyntaxError::sinit(Class_base* c)
 {
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
-	c->super=Class<ASError>::getRef();
+	c->setSuper(Class<ASError>::getRef());
 }
 
 void SyntaxError::buildTraits(ASObject* o)
@@ -258,7 +257,7 @@ ASFUNCTIONBODY(TypeError,_constructor)
 void TypeError::sinit(Class_base* c)
 {
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
-	c->super=Class<ASError>::getRef();
+	c->setSuper(Class<ASError>::getRef());
 }
 
 void TypeError::buildTraits(ASObject* o)
@@ -279,7 +278,7 @@ ASFUNCTIONBODY(URIError,_constructor)
 void URIError::sinit(Class_base* c)
 {
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
-	c->super=Class<ASError>::getRef();
+	c->setSuper(Class<ASError>::getRef());
 }
 
 void URIError::buildTraits(ASObject* o)
@@ -300,10 +299,20 @@ ASFUNCTIONBODY(VerifyError,_constructor)
 void VerifyError::sinit(Class_base* c)
 {
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
-	c->super=Class<ASError>::getRef();
+	c->setSuper(Class<ASError>::getRef());
 }
 
 void VerifyError::buildTraits(ASObject* o)
 {
 }
 
+ASFUNCTIONBODY(UninitializedError,_constructor)
+{
+	assert(argslen<=1);
+	UninitializedError* th=static_cast<UninitializedError*>(obj);
+	if(argslen == 1)
+	{
+		th->message = args[0]->toString();
+	}
+	return NULL;
+}

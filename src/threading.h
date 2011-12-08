@@ -21,60 +21,31 @@
 #define _THREADING_H
 
 #include "compat.h"
-#include <pthread.h>
-#include <semaphore.h>
 #include <stdlib.h>
 #include <assert.h>
 #include <vector>
+#include <glibmm/thread.h>
 
 namespace lightspark
 {
 
-typedef void* (*thread_worker)(void*);
+/* Be aware that on win32, both Mutex and RecMutex are recursive! */
+using Glib::Mutex;
+using Glib::RecMutex;
+using Glib::StaticMutex;
+using Glib::Cond;
+using Glib::Thread;
 
-class Mutex
-{
-friend class Locker;
-private:
-	sem_t sem;
-	const char* name;
-	uint32_t foundBusy;
-public:
-	Mutex(const char* name);
-	~Mutex();
-	void lock();
-	void unlock();
-};
+typedef Glib::Mutex::Lock Locker;
+typedef Mutex Spinlock;
+typedef Mutex::Lock SpinlockLocker;
 
-class IThreadJob
-{
-friend class ThreadPool;
-friend class Condition;
-private:
-	sem_t jobTerminated;
-	bool jobHasTerminated;
-protected:
-	bool destroyMe;
-	bool executing;
-	bool aborting;
-	virtual void execute()=0;
-	virtual void threadAbort()=0;
-	virtual void jobFence()=0;
-public:
-	IThreadJob();
-	virtual ~IThreadJob();
-	void waitForJobTermination();
-	void run();
-	void stop() DLL_PUBLIC;
-};
-
-class Semaphore
+class DLL_PUBLIC Semaphore
 {
 private:
-	sem_t sem;
-	//TODO: use atomic incs and decs
-	//uint32_t blocked;
-	//uint32_t maxBlocked;
+	uint32_t value;
+	Mutex mutex;
+	Cond cond;
 public:
 	Semaphore(uint32_t init);
 	~Semaphore();
@@ -104,33 +75,25 @@ public:
 	}
 };
 
-class Locker
+class IThreadJob
 {
+friend class ThreadPool;
+friend class Condition;
 private:
-	Mutex& _m;
-	bool acquired;
+	Semaphore jobTerminated;
+protected:
+	bool destroyMe;
+	bool executing;
+	bool aborting;
+	virtual void execute()=0;
+	virtual void threadAbort()=0;
+	virtual void jobFence()=0;
 public:
-	Locker(Mutex& m):_m(m),acquired(true)
-	{
-		_m.lock();
-	}
-	~Locker()
-	{
-		if(acquired)
-			_m.unlock();
-	}
-	void lock()
-	{
-		assert(acquired==false);
-		acquired=true;
-		_m.lock();
-	}
-	void unlock()
-	{
-		assert(acquired==true);
-		acquired=false;
-		_m.unlock();
-	}
+	IThreadJob();
+	virtual ~IThreadJob();
+	void waitForJobTermination();
+	void run();
+	void stop() DLL_PUBLIC;
 };
 
 template<class T, uint32_t size>
@@ -204,130 +167,6 @@ public:
 	}
 
 };
-
-class Spinlock
-{
-private:
-	pthread_spinlock_t l;
-public:
-	Spinlock()
-	{
-		pthread_spin_init(&l,0);
-	}
-	~Spinlock()
-	{
-		pthread_spin_destroy(&l);
-	}
-	void lock()
-	{
-		pthread_spin_lock(&l);
-	}
-	bool trylock()
-	{
-		return pthread_spin_trylock(&l)==0;
-	}
-	void unlock()
-	{
-		pthread_spin_unlock(&l);
-	}
 };
 
-class SpinlockLocker
-{
-private:
-	Spinlock& lock;
-public:
-	SpinlockLocker(Spinlock& _l):lock(_l)
-	{
-		lock.lock();
-	}
-	~SpinlockLocker()
-	{
-		lock.unlock();
-	}
-};
-
-class Shepherd;
-
-class Sheep
-{
-friend class Shepherd;
-private:
-	ACQUIRE_RELEASE_FLAG(disable);
-	ACQUIRE_RELEASE_FLAG(executing);
-	Shepherd* owner;
-protected:
-	bool lockOwner()
-	{
-		RELEASE_WRITE(executing,true);
-		if(ACQUIRE_READ(disable))
-		{
-			RELEASE_WRITE(executing,false);
-			return false;
-		}
-		return true;
-	}
-	void unlockOwner()
-	{
-		RELEASE_WRITE(executing,false);
-	}
-public:
-	Sheep(Shepherd* _o):disable(false),executing(false),owner(_o){}
-	~Sheep();
-};
-
-class Shepherd
-{
-private:
-	std::vector<Sheep*> sheeps;
-	Spinlock sheepsLock;
-public:
-	~Shepherd()
-	{
-		sheepsLock.lock();
-		for(uint32_t i=0;i<sheeps.size();i++)
-		{
-			if(sheeps[i])
-			{
-				RELEASE_WRITE(sheeps[i]->disable,true);
-				while(ACQUIRE_READ(sheeps[i]->executing));
-				sheeps[i]->owner=NULL;
-			}
-		}
-		sheepsLock.unlock();
-	}
-	void addSheep(Sheep* s)
-	{
-		sheepsLock.lock();
-		for(uint32_t i=0;i<sheeps.size();i++)
-		{
-			if(sheeps[i]==NULL)
-			{
-				sheeps[i]=s;
-				break;
-			}
-		}
-		sheepsLock.unlock();
-	}
-	bool removeSheep(Sheep* s)
-	{
-		bool ret=sheepsLock.trylock();
-		if(!ret)
-			return false;
-		for(uint32_t i=0;i<sheeps.size();i++)
-		{
-			if(sheeps[i]==s)
-			{
-				sheeps[i]=NULL;
-				break;
-			}
-		}
-		sheepsLock.unlock();
-		return true;
-	}
-};
-
-};
-
-extern TLSDATA lightspark::IThreadJob* thisJob;
 #endif

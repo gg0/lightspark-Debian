@@ -40,7 +40,7 @@ REGISTER_CLASS_NAME(SoundLoaderContext);
 void SoundTransform::sinit(Class_base* c)
 {
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
-	c->super=Class<ASObject>::getRef();
+	c->setSuper(Class<ASObject>::getRef());
 	REGISTER_GETTER_SETTER(c,volume);
 	REGISTER_GETTER_SETTER(c,pan);
 }
@@ -64,7 +64,7 @@ ASFUNCTIONBODY(SoundTransform,_constructor)
 void Video::sinit(Class_base* c)
 {
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
-	c->super=Class<DisplayObject>::getRef();
+	c->setSuper(Class<DisplayObject>::getRef());
 	c->setDeclaredMethodByQName("videoWidth","",Class<IFunction>::getFunction(_getVideoWidth),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("videoHeight","",Class<IFunction>::getFunction(_getVideoHeight),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("width","",Class<IFunction>::getFunction(Video::_getWidth),GETTER_METHOD,true);
@@ -86,17 +86,14 @@ void Video::finalize()
 
 Video::~Video()
 {
-	sem_destroy(&mutex);
 }
 
 void Video::renderImpl(bool maskEnabled, number_t t1,number_t t2,number_t t3,number_t t4) const
 {
-	sem_wait(&mutex);
+	Mutex::Lock l(mutex);
 	if(skipRender(maskEnabled))
-	{
-		sem_post(&mutex);
 		return;
-	}
+
 	if(!netStream.isNull() && netStream->lockIfReady())
 	{
 		//All operations here should be non blocking
@@ -105,7 +102,7 @@ void Video::renderImpl(bool maskEnabled, number_t t1,number_t t2,number_t t3,num
 		videoHeight=netStream->getVideoHeight();
 
 		MatrixApplier ma(getConcatenatedMatrix());
-
+		RenderThread* rt = getRenderThread();
 		//if(!isSimple())
 		//	rt->acquireTempBuffer(0,width,0,height);
 
@@ -122,7 +119,6 @@ void Video::renderImpl(bool maskEnabled, number_t t1,number_t t2,number_t t3,num
 		ma.unapply();
 		netStream->unlock();
 	}
-	sem_post(&mutex);
 }
 
 bool Video::boundsRect(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const
@@ -166,10 +162,9 @@ ASFUNCTIONBODY(Video,_getWidth)
 ASFUNCTIONBODY(Video,_setWidth)
 {
 	Video* th=Class<Video>::cast(obj);
+	Mutex::Lock l(th->mutex);
 	assert_and_throw(argslen==1);
-	sem_wait(&th->mutex);
 	th->width=args[0]->toInt();
-	sem_post(&th->mutex);
 	return NULL;
 }
 
@@ -183,9 +178,8 @@ ASFUNCTIONBODY(Video,_setHeight)
 {
 	Video* th=Class<Video>::cast(obj);
 	assert_and_throw(argslen==1);
-	sem_wait(&th->mutex);
+	Mutex::Lock l(th->mutex);
 	th->height=args[0]->toInt();
-	sem_post(&th->mutex);
 	return NULL;
 }
 
@@ -195,9 +189,8 @@ ASFUNCTIONBODY(Video,attachNetStream)
 	assert_and_throw(argslen==1);
 	if(args[0]->getObjectType()==T_NULL || args[0]->getObjectType()==T_UNDEFINED) //Drop the connection
 	{
-		sem_wait(&th->mutex);
+		Mutex::Lock l(th->mutex);
 		th->netStream=NullRef;
-		sem_post(&th->mutex);
 		return NULL;
 	}
 
@@ -208,15 +201,14 @@ ASFUNCTIONBODY(Video,attachNetStream)
 	//Acquire the netStream
 	args[0]->incRef();
 
-	sem_wait(&th->mutex);
+	Mutex::Lock l(th->mutex);
 	th->netStream=_MR(Class<NetStream>::cast(args[0]));
-	sem_post(&th->mutex);
 	return NULL;
 }
 
 _NR<InteractiveObject> Video::hitTestImpl(_NR<InteractiveObject> last, number_t x, number_t y, DisplayObject::HIT_TYPE type)
 {
-	assert_and_throw(!sys->getInputThread()->isMaskPresent());
+	assert_and_throw(!getSys()->getInputThread()->isMaskPresent());
 	assert_and_throw(mask.isNull());
 	if(x>=0 && x<=width && y>=0 && y<=height)
 		return last;
@@ -224,21 +216,21 @@ _NR<InteractiveObject> Video::hitTestImpl(_NR<InteractiveObject> last, number_t 
 		return NullRef;
 }
 
-Sound::Sound():downloader(NULL),mutex("Sound mutex"),stopped(false),audioDecoder(NULL),audioStream(NULL),
+Sound::Sound():downloader(NULL),stopped(false),audioDecoder(NULL),audioStream(NULL),
 	bytesLoaded(0),bytesTotal(0),length(60*1000)
 {
 }
 
 Sound::~Sound()
 {
-	if(downloader && sys->downloadManager)
-		sys->downloadManager->destroy(downloader);
+	if(downloader && getSys()->downloadManager)
+		getSys()->downloadManager->destroy(downloader);
 }
 
 void Sound::sinit(Class_base* c)
 {
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
-	c->super=Class<EventDispatcher>::getRef();
+	c->setSuper(Class<EventDispatcher>::getRef());
 	c->setDeclaredMethodByQName("load","",Class<IFunction>::getFunction(load),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("play","",Class<IFunction>::getFunction(play),NORMAL_METHOD,true);
 	REGISTER_GETTER(c,bytesLoaded);
@@ -270,7 +262,7 @@ ASFUNCTIONBODY(Sound,load)
 	{
 		//Notify an error during loading
 		th->incRef();
-		sys->currentVm->addEvent(_MR(th),_MR(Class<IOErrorEvent>::getInstanceS()));
+		getVm()->addEvent(_MR(th),_MR(Class<IOErrorEvent>::getInstanceS()));
 		return NULL;
 	}
 
@@ -280,18 +272,18 @@ ASFUNCTIONBODY(Sound,load)
 	{
 		//This is a GET request
 		//Use disk cache our downloaded files
-		th->downloader=sys->downloadManager->download(th->url, true, th);
+		th->downloader=getSys()->downloadManager->download(th->url, true, th);
 	}
 	else
 	{
-		th->downloader=sys->downloadManager->downloadWithData(th->url, th->postData, th);
+		th->downloader=getSys()->downloadManager->downloadWithData(th->url, th->postData, th);
 		//Clean up the postData for the next load
 		th->postData.clear();
 	}
 	if(th->downloader->hasFailed())
 	{
 		th->incRef();
-		sys->currentVm->addEvent(_MR(th),_MR(Class<IOErrorEvent>::getInstanceS()));
+		getVm()->addEvent(_MR(th),_MR(Class<IOErrorEvent>::getInstanceS()));
 	}
 	return NULL;
 }
@@ -307,7 +299,7 @@ ASFUNCTIONBODY(Sound,play)
 	{
 		//Add the object as a job so that playback starts
 		th->incRef();
-		sys->addJob(th);
+		getSys()->addJob(th);
 	}
 
 	return new Undefined;
@@ -338,8 +330,8 @@ void Sound::execute()
 				audioDecoder=streamDecoder->audioDecoder;
 
 			//TODO: Move the audio plugin check before
-			if(audioStream==NULL && audioDecoder && audioDecoder->isValid() && sys->audioManager->pluginLoaded())
-				audioStream=sys->audioManager->createStreamPlugin(audioDecoder);
+			if(audioStream==NULL && audioDecoder && audioDecoder->isValid() && getSys()->audioManager->pluginLoaded())
+				audioStream=getSys()->audioManager->createStreamPlugin(audioDecoder);
 
 			if(audioStream && audioStream->paused() && !audioStream->pause)
 			{
@@ -380,7 +372,7 @@ void Sound::execute()
 		Locker l(mutex);
 		audioDecoder=NULL;
 		if(audioStream)
-			sys->audioManager->freeStreamPlugin(audioStream);
+			getSys()->audioManager->freeStreamPlugin(audioStream);
 		audioStream=NULL;
 	}
 	delete streamDecoder;
@@ -416,11 +408,11 @@ void Sound::setBytesLoaded(uint32_t b)
 	{
 		bytesLoaded=b;
 		this->incRef();
-		sys->currentVm->addEvent(_MR(this),_MR(Class<ProgressEvent>::getInstanceS(bytesLoaded,bytesTotal)));
+		getVm()->addEvent(_MR(this),_MR(Class<ProgressEvent>::getInstanceS(bytesLoaded,bytesTotal)));
 		if(bytesLoaded==bytesTotal)
 		{
 			this->incRef();
-			sys->currentVm->addEvent(_MR(this),_MR(Class<Event>::getInstanceS("complete")));
+			getVm()->addEvent(_MR(this),_MR(Class<Event>::getInstanceS("complete")));
 		}
 	}
 }
@@ -432,7 +424,7 @@ ASFUNCTIONBODY_GETTER(Sound,length);
 void SoundLoaderContext::sinit(Class_base* c)
 {
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
-	c->super=Class<ASObject>::getRef();
+	c->setSuper(Class<ASObject>::getRef());
 	REGISTER_GETTER_SETTER(c,bufferTime);
 	REGISTER_GETTER_SETTER(c,checkPolicyFile);
 }

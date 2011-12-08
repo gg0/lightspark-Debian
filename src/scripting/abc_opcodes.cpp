@@ -22,6 +22,7 @@
 #include "class.h"
 #include "exceptions.h"
 #include "compat.h"
+#include "abcutils.h"
 
 using namespace std;
 using namespace lightspark;
@@ -217,7 +218,6 @@ ASObject* ABCVm::getSlot(ASObject* obj, int n)
 	LOG(LOG_CALLS,"getSlot " << n << " " << ret << "=" << ret->toDebugString());
 	//getSlot can only access properties defined in the current
 	//script, so they should already be defind by this script
-	assert(!ret->is<Definable>());
 	ret->incRef();
 	obj->decRef();
 	return ret;
@@ -279,7 +279,7 @@ uint32_t ABCVm::bitOr(ASObject* val2, ASObject* val1)
 
 void ABCVm::callProperty(call_context* th, int n, int m, method_info** called_mi, bool keepReturn)
 {
-	ASObject** args=new ASObject*[m];
+	ASObject** args=g_newa(ASObject*, m);
 	for(int i=0;i<m;i++)
 		args[m-i-1]=th->runtime_stack_pop();
 
@@ -295,14 +295,6 @@ void ABCVm::callProperty(call_context* th, int n, int m, method_info** called_mi
 
 	if(!o.isNull())
 	{
-		//Run the deferred initialization if needed
-		if(o->is<Definable>())
-		{
-			LOG(LOG_CALLS,_("We got a function not yet valid"));
-			ASObject *defined=o->as<Definable>()->define();
-			defined->incRef();
-			o=_MNR(defined);
-		}
 		o->incRef();
 		callImpl(th, o.getPtr(), obj, args, m, called_mi, keepReturn);
 	}
@@ -324,12 +316,11 @@ void ABCVm::callProperty(call_context* th, int n, int m, method_info** called_mi
 
 				IFunction* f=static_cast<IFunction*>(o.getPtr());
 				//Create a new array
-				ASObject** proxyArgs=new ASObject*[m+1];
+				ASObject** proxyArgs=g_newa(ASObject*, m+1);
 				//Well, I don't how to pass multiname to an as function. I'll just pass the name as a string
 				proxyArgs[0]=Class<ASString>::getInstanceS(name->name_s);
 				for(int i=0;i<m;i++)
 					proxyArgs[i+1]=args[i];
-				delete[] args;
 
 				//We now suppress special handling
 				LOG(LOG_CALLS,_("Proxy::callProperty"));
@@ -347,7 +338,6 @@ void ABCVm::callProperty(call_context* th, int n, int m, method_info** called_mi
 
 				obj->decRef();
 				LOG(LOG_CALLS,_("End of calling ") << *name);
-				delete[] proxyArgs;
 				return;
 			}
 		}
@@ -357,7 +347,8 @@ void ABCVm::callProperty(call_context* th, int n, int m, method_info** called_mi
 			th->runtime_stack_push(new Undefined);
 
 		obj->decRef();
-		delete[] args;
+		for(int i=0;i<m;i++)
+			args[i]->decRef();
 	}
 	LOG(LOG_CALLS,_("End of calling ") << *name);
 }
@@ -387,17 +378,8 @@ ASObject* ABCVm::getProperty(ASObject* obj, multiname* name)
 	}
 	else
 	{
-		if(prop->is<Definable>())
-		{
-			LOG(LOG_CALLS,_("Property ") << name << _(" is not yet valid"));
-			ret=prop->as<Definable>()->define();
-			ret->incRef();
-		}
-		else
-		{
-			prop->incRef();
-			ret=prop.getPtr();
-		}
+		prop->incRef();
+		ret=prop.getPtr();
 	}
 	obj->decRef();
 	return ret;
@@ -649,14 +631,18 @@ ASObject* ABCVm::constructFunction(call_context* th, IFunction* f, ASObject** ar
 	ret->initialized=true;
 #endif
 	//Now add our classdef
-	ret->setClass(new Class_function());
+	Class_function *cf=new Class_function();
+	ret->setClass(cf);
+	//setClass created a new reference, we can release the local
+	//reference
+	cf->decRef();
 	ret->getClass()->prototype = sf->prototype;
 
 	sf->incRef();
 	ret->setVariableByQName("constructor","",sf,DYNAMIC_TRAIT);
 
 	ret->incRef();
-	assert_and_throw(sf->closure_this==NULL);
+	assert_and_throw(!sf->closure_this);
 	sf->incRef();
 	ASObject* ret2=sf->call(ret,args,argslen);
 	sf->decRef();
@@ -676,21 +662,11 @@ ASObject* ABCVm::constructFunction(call_context* th, IFunction* f, ASObject** ar
 void ABCVm::construct(call_context* th, int m)
 {
 	LOG(LOG_CALLS, _("construct ") << m);
-	ASObject** args=new ASObject*[m];
+	ASObject** args=g_newa(ASObject*, m);
 	for(int i=0;i<m;i++)
 		args[m-i-1]=th->runtime_stack_pop();
 
 	ASObject* obj=th->runtime_stack_pop();
-
-	if(obj->getObjectType()==T_DEFINABLE)
-	{
-		throw UnsupportedException("Definable not supported in construct");
-	/*	LOG(LOG_CALLS,_("Deferred definition of property ") << name);
-		Definable* d=static_cast<Definable*>(o);
-		d->define(obj);
-		o=obj->getVariableByMultiname(name,owner);
-		LOG(LOG_CALLS,_("End of deferred definition of property ") << name);*/
-	}
 
 	LOG(LOG_CALLS,_("Constructing"));
 
@@ -738,14 +714,13 @@ void ABCVm::construct(call_context* th, int m)
 	obj->decRef();
 	LOG(LOG_CALLS,_("End of constructing ") << ret);
 	th->runtime_stack_push(ret);
-	delete[] args;
 }
 
 void ABCVm::constructGenericType(call_context* th, int m)
 {
 	LOG(LOG_CALLS, _("constructGenericType ") << m);
 	assert_and_throw(m==1);
-	ASObject** args=new ASObject*[m];
+	ASObject** args=g_newa(ASObject*, m);
 	for(int i=0;i<m;i++)
 		args[m-i-1]=th->runtime_stack_pop();
 
@@ -759,17 +734,30 @@ void ABCVm::constructGenericType(call_context* th, int m)
 		th->runtime_stack_push(obj);
 		for(int i=0;i<m;i++)
 			args[i]->decRef();
-		delete[] args;
 		return;
 	}
 
 	Template_base* o_template=static_cast<Template_base*>(obj);
 
 	/* Instantiate the template to obtain a class */
-	Class_base* o_class = o_template->applyType(args,m);
+
+	std::vector<Type*> t(m);
+	for(int i=0;i<m;++i)
+	{
+		if(args[i]->is<Class_base>())
+			t[i] = args[i]->as<Class_base>();
+		else if(args[i]->is<Null>())
+			t[i] = Type::anyType;
+		else
+			throw Class<TypeError>::getInstanceS("Wrong type in applytype");
+	}
+
+	Class_base* o_class = o_template->applyType(t);
+
+	for(int i=0;i<m;++i)
+		args[i]->decRef();
 
 	th->runtime_stack_push(o_class);
-	delete[] args;
 }
 
 ASObject* ABCVm::typeOf(ASObject* obj)
@@ -822,19 +810,16 @@ bool ABCVm::ifTrue(ASObject* obj1)
 	return ret;
 }
 
-int32_t ABCVm::modulo(ASObject* val1, ASObject* val2)
+number_t ABCVm::modulo(ASObject* val1, ASObject* val2)
 {
-	uint32_t num1=val1->toUInt();
-	uint32_t num2=val2->toUInt();
+	number_t num1=val1->toNumber();
+	number_t num2=val2->toNumber();
 
 	val1->decRef();
 	val2->decRef();
 	LOG(LOG_CALLS,_("modulo ")  << num1 << '%' << num2);
-	//Special case 0%0
-	//TODO: should be NaN
-	if(num1==0 && num2==0)
-		return 0;
-	return num1%num2;
+	/* fmod returns NaN if num2 == 0 as the spec mandates */
+	return ::fmod(num1,num2);
 }
 
 number_t ABCVm::subtract_oi(ASObject* val2, int32_t val1)
@@ -939,12 +924,12 @@ ASObject* ABCVm::add(ASObject* val2, ASObject* val1)
 	}
 	else if(val1->is<ASString>() || val2->is<ASString>())
 	{
-		string a(val1->toString().raw_buf());
-		string b(val2->toString().raw_buf());
+		tiny_string a = val1->toString();
+		tiny_string b = val2->toString();
 		LOG(LOG_CALLS,"add " << a << '+' << b);
 		val1->decRef();
 		val2->decRef();
-		return Class<ASString>::getInstanceS(a+b);
+		return Class<ASString>::getInstanceS(a + b);
 	}
 	else if( (val1->is<XML>() || val1->is<XMLList>()) && (val2->is<XML>() || val2->is<XMLList>()) )
 	{
@@ -1029,7 +1014,7 @@ ASObject* ABCVm::add_oi(ASObject* val2, int32_t val1)
 	else if(val2->getObjectType()==T_STRING)
 	{
 		//Convert argument to int32_t
-		tiny_string a((int32_t)val1);
+		tiny_string a = Integer::toString(val1);
 		const tiny_string& b=val2->toString();
 		val2->decRef();
 		LOG(LOG_CALLS,_("add ") << a << '+' << b);
@@ -1063,7 +1048,7 @@ ASObject* ABCVm::add_od(ASObject* val2, number_t val1)
 	}
 	else if(val2->getObjectType()==T_STRING)
 	{
-		tiny_string a(val1);
+		tiny_string a = Number::toString(val1);
 		const tiny_string& b=val2->toString();
 		val2->decRef();
 		LOG(LOG_CALLS,_("add ") << a << '+' << b);
@@ -1311,15 +1296,6 @@ void ABCVm::getSuper(call_context* th, int n)
 		LOG(LOG_NOT_IMPLEMENTED,"getSuper: " << name->normalizedName() << " not found on " << obj->toDebugString());
 		ret = _MNR(new Undefined);
 	}
-	else
-	{
-		if(ret->is<Definable>())
-		{
-			ASObject *defined = ret->as<Definable>()->define();
-			defined->incRef();
-			ret = _MNR(defined);
-		}
-	}
 
 	obj->decRef();
 	ret->incRef();
@@ -1331,10 +1307,12 @@ void ABCVm::getLex(call_context* th, int n)
 	multiname* name=th->context->getMultiname(n,th);
 	LOG(LOG_CALLS, _("getLex: ") << *name );
 	vector<scope_entry>::reverse_iterator it=th->scope_stack.rbegin();
+	// o will be a reference owned by this function (or NULL). At
+	// the end the reference will be handed over to the runtime
+	// stack.
 	ASObject* o = NULL;
 
 	//Find out the current 'this', when looking up over it, we have to consider all of it
-	ASObject* target;
 	for(;it!=th->scope_stack.rend();++it)
 	{
 		// XML_STRICT flag tells getVariableByMultiname to
@@ -1350,35 +1328,30 @@ void ABCVm::getLex(call_context* th, int n)
 		{
 			prop->incRef();
 			o=prop.getPtr();
-			target=it->object.getPtr();
 			break;
 		}
 	}
 
 	if(o==NULL)
 	{
+		ASObject* target;
 		o=getGlobal()->getVariableAndTargetByMultiname(*name, target);
 		if(o==NULL)
 		{
-			LOG(LOG_NOT_IMPLEMENTED,"getLex: " << *name<< "was not found, pushing Undefined");
-			o=new Undefined;
+			LOG(LOG_NOT_IMPLEMENTED,"getLex: " << *name<< " not found, pushing Undefined");
+			th->runtime_stack_push(new Undefined);
+			return;
 		}
+		o->incRef();
 	}
 
-	if(o->is<Definable>())
-	{
-		LOG(LOG_CALLS,_("Deferred definition of property ") << *name);
-		o=o->as<Definable>()->define();
-		LOG(LOG_CALLS,_("End of deferred definition of property ") << *name);
-	}
 	th->runtime_stack_push(o);
-	o->incRef();
 }
 
 void ABCVm::constructSuper(call_context* th, int m)
 {
 	LOG(LOG_CALLS, _("constructSuper ") << m);
-	ASObject** args=new ASObject*[m];
+	ASObject** args=g_newa(ASObject*, m);
 	for(int i=0;i<m;i++)
 		args[m-i-1]=th->runtime_stack_pop();
 
@@ -1392,8 +1365,6 @@ void ABCVm::constructSuper(call_context* th, int m)
 
 	th->inClass->super->handleConstruction(obj,args, m, false);
 	LOG(LOG_CALLS,_("End super construct "));
-
-	delete[] args;
 }
 
 ASObject* ABCVm::findProperty(call_context* th, multiname* name)
@@ -1458,7 +1429,7 @@ ASObject* ABCVm::findPropStrict(call_context* th, multiname* name)
 		else
 		{
 			LOG(LOG_NOT_IMPLEMENTED,"findPropStrict: " << *name << " not found, pushing Undefined");
-			ret=new Undefined;
+			return new Undefined;
 		}
 	}
 
@@ -1511,7 +1482,7 @@ void ABCVm::initProperty(ASObject* obj, ASObject* value, multiname* name)
 
 void ABCVm::callSuper(call_context* th, int n, int m, method_info** called_mi, bool keepReturn)
 {
-	ASObject** args=new ASObject*[m];
+	ASObject** args=g_newa(ASObject*, m);
 	for(int i=0;i<m;i++)
 		args[m-i-1]=th->runtime_stack_pop();
 
@@ -1742,7 +1713,7 @@ bool ABCVm::ifFalse(ASObject* obj1)
 
 void ABCVm::constructProp(call_context* th, int n, int m)
 {
-	ASObject** args=new ASObject*[m];
+	ASObject** args=g_newa(ASObject*, m);
 	for(int i=0;i<m;i++)
 		args[m-i-1]=th->runtime_stack_pop();
 
@@ -1762,15 +1733,6 @@ void ABCVm::constructProp(call_context* th, int n, int m)
 		throw Class<ReferenceError>::getInstanceS("Error #1065: Variable is not defined.");
 	}
 
-	if(o->is<Definable>())
-	{
-		LOG(LOG_CALLS,_("Deferred definition of property ") << *name);
-		ASObject *defined=o->as<Definable>()->define();
-		defined->incRef();
-		o=_MNR(defined);
-		LOG(LOG_CALLS,_("End of deferred definition of property ") << *name);
-	}
-
 	LOG(LOG_CALLS,_("Constructing"));
 	ASObject* ret;
 	if(o->getObjectType()==T_CLASS)
@@ -1787,7 +1749,6 @@ void ABCVm::constructProp(call_context* th, int n, int m)
 
 	th->runtime_stack_push(ret);
 	obj->decRef();
-	delete[] args;
 	LOG(LOG_CALLS,_("End of constructing ") << ret);
 }
 
@@ -1857,9 +1818,9 @@ void ABCVm::getDescendants(call_context* th, int n)
 		obj->decRef();
 		throw Class<TypeError>::getInstanceS("Only XML and XMLList objects have descendants");
 	}
-	obj->decRef();
 	XMLList* retObj=Class<XMLList>::getInstanceS(ret);
 	th->runtime_stack_push(retObj);
+	obj->decRef();
 }
 
 number_t ABCVm::increment(ASObject* o)
@@ -1921,19 +1882,18 @@ void ABCVm::newClassRecursiveLink(Class_base* target, Class_base* c)
 
 void ABCVm::newClass(call_context* th, int n)
 {
-	LOG(LOG_CALLS, "newClass " << n );
-	method_info* constructor=&th->context->methods[th->context->instances[n].init];
 	int name_index=th->context->instances[n].name;
 	assert_and_throw(name_index);
 	const multiname* mname=th->context->getMultiname(name_index,NULL);
+	LOG(LOG_CALLS, "newClass " << *mname );
 
 	ASObject* baseClass=th->runtime_stack_pop();
 
 	assert_and_throw(mname->ns.size()==1);
 	QName className(mname->name_s,mname->ns[0].name);
 	//Check if this class has been already defined
-	auto oldDefinition=sys->classes.find(className);
-	if(oldDefinition!=sys->classes.end())
+	auto oldDefinition=getSys()->classes.find(className);
+	if(oldDefinition!=getSys()->classes.end())
 	{
 		LOG(LOG_CALLS,_("Class ") << className << _(" already defined. Pushing previous definition"));
 		baseClass->decRef();
@@ -1943,30 +1903,11 @@ void ABCVm::newClass(call_context* th, int n)
 	}
 
 	Class_inherit* ret=new Class_inherit(className);
-#ifdef PROFILING_SUPPORT
-	if(!constructor->validProfName)
-	{
-		constructor->profName=mname->name_s+"::__CONSTRUCTOR__";
-		constructor->validProfName=true;
-	}
-#endif
+	ret->isFinal = th->context->instances[n].isFinal();
+	ret->isSealed = th->context->instances[n].isSealed();
+
 	assert_and_throw(th->context);
 	ret->context=th->context;
-
-	//Null is a "valid" base class
-	if(baseClass->getObjectType()!=T_NULL)
-	{
-		assert_and_throw(baseClass->getObjectType()==T_CLASS);
-		ret->super=_MR(static_cast<Class_base*>(baseClass));
-	}
-
-	ret->class_scope=th->scope_stack;
-	ret->incRef();
-	ret->class_scope.emplace_back(_MR(ret),false);
-
-	LOG(LOG_CALLS,_("Building class traits"));
-	for(unsigned int i=0;i<th->context->classes[n].trait_count;i++)
-		th->context->buildTrait(ret,&th->context->classes[n].traits[i],false);
 
 	//Add protected namespace if needed
 	if(th->context->instances[n].isProtectedNs())
@@ -1976,6 +1917,25 @@ void ABCVm::newClass(call_context* th, int n)
 		const namespace_info& ns_info=th->context->constant_pool.namespaces[ns];
 		ret->protected_ns=nsNameAndKind(th->context->getString(ns_info.name),(NS_KIND)(int)ns_info.kind);
 	}
+
+	//Null is a "valid" base class
+	if(baseClass->getObjectType()!=T_NULL)
+	{
+		assert_and_throw(baseClass->is<Class_base>());
+		Class_base* base = baseClass->as<Class_base>();
+		assert(!base->isFinal);
+		ret->setSuper(_MR(base));
+	}
+
+	ret->setDeclaredMethodByQName("toString",AS3,Class<IFunction>::getFunction(Class_base::_toString),NORMAL_METHOD,false);
+
+	ret->class_scope=th->scope_stack;
+	ret->incRef();
+	ret->class_scope.emplace_back(scope_entry(_MR(ret),false));
+
+	LOG(LOG_CALLS,_("Building class traits"));
+	for(unsigned int i=0;i<th->context->classes[n].trait_count;i++)
+		th->context->buildTrait(ret,&th->context->classes[n].traits[i],false);
 
 	LOG(LOG_CALLS,_("Adding immutable object traits to class"));
 	//Class objects also contains all the methods/getters/setters declared for instances
@@ -1987,11 +1947,22 @@ void ABCVm::newClass(call_context* th, int n)
 			th->context->buildTrait(ret,&cur->traits[i],true);
 	}
 
-	SyntheticFunction* constructorFunc=Class<IFunction>::getSyntheticFunction(constructor);
-	constructorFunc->acquireScope(ret->class_scope);
-	constructorFunc->inClass = ret;
-	//add Constructor the the class methods
-	ret->constructor=constructorFunc;
+	method_info* constructor=&th->context->methods[th->context->instances[n].init];
+	if(constructor->body) /* e.g. interfaces have no valid constructor */
+	{
+#ifdef PROFILING_SUPPORT
+		if(!constructor->validProfName)
+		{
+			constructor->profName=mname->name_s+"::__CONSTRUCTOR__";
+			constructor->validProfName=true;
+		}
+#endif
+		SyntheticFunction* constructorFunc=Class<IFunction>::getSyntheticFunction(constructor);
+		constructorFunc->acquireScope(ret->class_scope);
+		constructorFunc->inClass = ret;
+		//add Constructor the the class methods
+		ret->constructor=constructorFunc;
+	}
 	ret->class_index=n;
 
 	//Add prototype variable
@@ -1999,7 +1970,7 @@ void ABCVm::newClass(call_context* th, int n)
 	//Add the constructor variable to the class prototype
 	ret->incRef();
 	ret->prototype->setVariableByQName("constructor","",ret, DECLARED_TRAIT);
-	if(ret->super != NULL)
+	if(ret->super)
 		ret->prototype->setprop_prototype(ret->super->prototype);
 	ret->addPrototypeGetter();
 
@@ -2017,13 +1988,6 @@ void ABCVm::newClass(call_context* th, int n)
 		if(obj==NULL)
 			continue;
 
-		if(obj->is<Definable>())
-		{
-			LOG(LOG_CALLS,_("Class ") << *name << _(" is not yet valid (as interface)"));
-			obj=obj->as<Definable>()->define();
-			LOG(LOG_CALLS,_("End of deferred init of class ") << *name);
-			assert_and_throw(obj);
-		}
 	}
 	//If the class is not an interface itself, link the traits
 	if(!th->context->instances[n].isInterface())
@@ -2089,7 +2053,7 @@ bool ABCVm::lessThan(ASObject* obj1, ASObject* obj2)
 
 void ABCVm::call(call_context* th, int m, method_info** called_mi)
 {
-	ASObject** args=new ASObject*[m];
+	ASObject** args=g_newa(ASObject*, m);
 	for(int i=0;i<m;i++)
 		args[m-i-1]=th->runtime_stack_pop();
 
@@ -2142,7 +2106,6 @@ void ABCVm::callImpl(call_context* th, ASObject* f, ASObject* obj, ASObject** ar
 			throw Class<TypeError>::getInstanceS("Error #1006: Tried to call something that is not a function");
 	}
 	LOG(LOG_CALLS,_("End of call ") << m << ' ' << f);
-	delete[] args;
 }
 
 bool ABCVm::deleteProperty(ASObject* obj, multiname* name)
@@ -2184,7 +2147,7 @@ ASObject* ABCVm::pushString(call_context* th, int n)
 
 ASObject* ABCVm::newCatch(call_context* th, int n)
 {
-	ASObject* catchScope = new ASObject();
+	ASObject* catchScope = Class<ASObject>::getInstanceS();
 	assert_and_throw(n >= 0 && (unsigned int)n < th->mi->body->exception_count);
 	multiname* name = th->context->getMultiname(th->mi->body->exceptions[n].var_name, th);
 	catchScope->setVariableByMultiname(*name, new Undefined);
@@ -2203,3 +2166,45 @@ void ABCVm::newArray(call_context* th, int n)
 	th->runtime_stack_push(ret);
 }
 
+ASObject* ABCVm::esc_xattr(ASObject* o)
+{
+	/* TODO: implement correct escaping according to E4X
+	 * For now we just cut the string at the first \0 byte, which is wrong
+	 * but suppresses more errors */
+	tiny_string t = o->toString();
+	LOG(LOG_NOT_IMPLEMENTED,"esc_xattr on " << t);
+	o->decRef();
+	auto i=t.begin();
+	for(;i!=t.end();++i)
+	{
+		if(*i == '\0')
+			break;
+	}
+	if(i == t.end())
+		return Class<ASString>::getInstanceS(t);
+	else
+		return Class<ASString>::getInstanceS(t.substr(0,i));
+}
+
+/* This should walk prototype chain of value, trying to find type. See ECMA.
+ * Its usage is disouraged in AS3 in favour of 'is' and 'as' (opcodes isType and asType)
+ */
+bool ABCVm::instanceOf(ASObject* value, ASObject* type)
+{
+	if(value->is<Null>())
+		return false;
+
+	if(type->is<IFunction>())
+	{
+		LOG(LOG_NOT_IMPLEMENTED,"instanceOf opcodes probably does the wrong thing");
+		return false;
+	}
+
+	if(!type->is<Class_base>())
+		throw Class<TypeError>::getInstanceS("Error #1040: instanceOf expects a class of function as second parameter!");
+
+	if(value->is<Class_base>())
+		return value->as<Class_base>()->isSubClass(type->as<Class_base>());
+	else
+		return value->getClass() && value->getClass()->isSubClass(type->as<Class_base>());
+}

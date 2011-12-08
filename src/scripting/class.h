@@ -17,7 +17,6 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
-#include "scripting/abcutils.h"
 #include "scripting/toplevel/Array.h"
 #include "compat.h"
 #include "asobject.h"
@@ -61,8 +60,7 @@ public:
 #ifndef NDEBUG
 		bool ret=
 #endif
-		sys->classes.insert(std::make_pair(name,this)).second;
-		this->setDeclaredMethodByQName("toString",AS3,Class<IFunction>::getFunction(Class_base::_toString),NORMAL_METHOD,false);
+		getSys()->classes.insert(std::make_pair(name,this)).second;
 		assert(ret);
 	}
 	void finalize();
@@ -101,6 +99,61 @@ protected:
 		return ret;
 	}
 public:
+#ifdef _MSC_VER
+	static T* getInstanceS()
+	{
+		Class<T>* c=Class<T>::getClass();
+		T* ret = new T();
+		ret->setClass(c);
+		c->handleConstruction(ret,NULL,0,true);
+		return ret;
+	}
+	template<typename Arg1>
+	static T* getInstanceS(Arg1&& arg1)
+	{
+		Class<T>* c=Class<T>::getClass();
+		T* ret = new T(arg1);
+		ret->setClass(c);
+		c->handleConstruction(ret,NULL,0,true);
+		return ret;
+	}
+	template<typename Arg1, typename Arg2>
+	static T* getInstanceS(Arg1&& arg1, Arg2&& arg2)
+	{
+		Class<T>* c=Class<T>::getClass();
+		T* ret = new T(arg1, arg2);
+		ret->setClass(c);
+		c->handleConstruction(ret,NULL,0,true);
+		return ret;
+	}
+	template<typename Arg1, typename Arg2, typename Arg3>
+	static T* getInstanceS(Arg1&& arg1, Arg2&& arg2, Arg3&& arg3)
+	{
+		Class<T>* c=Class<T>::getClass();
+		T* ret = new T(arg1, arg2, arg3);
+		ret->setClass(c);
+		c->handleConstruction(ret,NULL,0,true);
+		return ret;
+	}
+	template<typename Arg1, typename Arg2, typename Arg3, typename Arg4>
+	static T* getInstanceS(Arg1&& arg1, Arg2&& arg2, Arg3&& arg3, Arg4&& arg4)
+	{
+		Class<T>* c=Class<T>::getClass();
+		T* ret = new T(arg1, arg2, arg3, arg4);
+		ret->setClass(c);
+		c->handleConstruction(ret,NULL,0,true);
+		return ret;
+	}
+	template<typename Arg1, typename Arg2, typename Arg3, typename Arg4, typename Arg5>
+	static T* getInstanceS(Arg1&& arg1, Arg2&& arg2, Arg3&& arg3, Arg4&& arg4, Arg5&& arg5)
+	{
+		Class<T>* c=Class<T>::getClass();
+		T* ret = new T(arg1, arg2, arg3, arg4, arg5);
+		ret->setClass(c);
+		c->handleConstruction(ret,NULL,0,true);
+		return ret;
+	}
+#else
 	template<typename... Args>
 	static T* getInstanceS(Args&&... args)
 	{
@@ -110,21 +163,21 @@ public:
 		c->handleConstruction(ret,NULL,0,true);
 		return ret;
 	}
+#endif
 	static Class<T>* getClass()
 	{
 		QName name(ClassName<T>::name,ClassName<T>::ns);
-		std::map<QName, Class_base*>::iterator it=sys->classes.find(name);
+		std::map<QName, Class_base*>::iterator it=getSys()->classes.find(name);
 		Class<T>* ret=NULL;
-		if(it==sys->classes.end()) //This class is not yet in the map, create it
+		if(it==getSys()->classes.end()) //This class is not yet in the map, create it
 		{
 			ret=new Class<T>(name);
-			sys->classes.insert(std::make_pair(name,ret));
-			ret->setDeclaredMethodByQName("toString",AS3,Class<IFunction>::getFunction(Class_base::_toString),NORMAL_METHOD,false);
+			getSys()->classes.insert(std::make_pair(name,ret));
 			ret->prototype = _MNR(new_asobject());
-
+			T::sinit(ret);
+			ret->setDeclaredMethodByQName("toString",AS3,Class<IFunction>::getFunction(Class_base::_toString),NORMAL_METHOD,false);
 			ret->incRef();
 			ret->prototype->setVariableByQName("constructor","",ret,DYNAMIC_TRAIT);
-			T::sinit(ret);
 			if(ret->super)
 				ret->prototype->setprop_prototype(ret->super->prototype);
 			ret->addPrototypeGetter();
@@ -154,13 +207,19 @@ public:
 	}
 	ASObject* generator(ASObject* const* args, const unsigned int argslen)
 	{
-		return T::generator(NULL, args, argslen);
+		ASObject *ret=T::generator(NULL, args, argslen);
+		for(unsigned int i=0;i<argslen;i++)
+			args[i]->decRef();
+		return ret;
 	}
 	ASObject* coerce(ASObject* o) const
 	{
 		return Class_base::coerce(o);
 	}
 };
+
+template<>
+Global* Class<Global>::getInstance(bool construct, ASObject* const* args, const unsigned int argslen);
 
 template<>
 inline ASObject* Class<Number>::coerce(ASObject* o) const
@@ -236,7 +295,7 @@ public:
 	{
 		Class<ASObject>* ret = new Class<ASObject>(name);
 
-		ret->super = Class<ASObject>::getRef();
+		ret->setSuper(Class<ASObject>::getRef());
 		ret->prototype = _MNR(new_asobject());
 		ret->prototype->setprop_prototype(ret->super->prototype);
 		ret->incRef();
@@ -244,24 +303,25 @@ public:
 		ret->addPrototypeGetter();
 
 		ret->setDeclaredMethodByQName("toString",AS3,Class<IFunction>::getFunction(Class_base::_toString),NORMAL_METHOD,false);
-		sys->classes.insert(std::make_pair(name,ret));
+		getSys()->classes.insert(std::make_pair(name,ret));
 		ret->incRef();
 		return _MR(ret);
 	}
 	static Class<ASObject>* getClass()
 	{
 		QName name(ClassName<ASObject>::name,ClassName<ASObject>::ns);
-		std::map<QName, Class_base*>::iterator it=sys->classes.find(name);
+		std::map<QName, Class_base*>::iterator it=getSys()->classes.find(name);
 		Class<ASObject>* ret=NULL;
-		if(it==sys->classes.end()) //This class is not yet in the map, create it
+		if(it==getSys()->classes.end()) //This class is not yet in the map, create it
 		{
 			ret=new Class<ASObject>(name);
-			sys->classes.insert(std::make_pair(name,ret));
+			getSys()->classes.insert(std::make_pair(name,ret));
 			ret->prototype = _MNR(new_asobject());
+			ASObject::sinit(ret);
 			ret->setDeclaredMethodByQName("toString",AS3,Class<IFunction>::getFunction(Class_base::_toString),NORMAL_METHOD,false);
 			ret->incRef();
 			ret->prototype->setVariableByQName("constructor","",ret,DYNAMIC_TRAIT);
-			ASObject::sinit(ret);
+
 			ret->addPrototypeGetter();
 		}
 		else
@@ -283,7 +343,55 @@ public:
 	{
 		ASObject::buildTraits(o);
 	}
-	ASObject* lazyDefine(const multiname& name);
+};
+
+/* InterfaceClass implements interfaces. E.g., if you declare a variable of type IEventDispatcher in AS3,
+ * then the type in our code will be InterfaceClass<IEventDispatcher>.
+ * All classes that implement an interface in AS3 do so in the C++ code, i.e.
+ * EventDispatcher derives from IEventDispatcher both in AS3 and C++ code.
+ * This makes it possible to use C++ casts similar to their AS3 counterparts.
+ *
+ * TODO: InterfaceClass should derive from Type, not from Class_base!
+ */
+void lookupAndLink(Class_base* c, const tiny_string& name, const tiny_string& interfaceNs);
+template<class T>
+class InterfaceClass: public Class_base
+{
+	virtual ~InterfaceClass() {}
+	void buildInstanceTraits(ASObject*) const {}
+	ASObject* getInstance(bool, ASObject* const*, unsigned int)
+	{
+		assert(false);
+		return NULL;
+	}
+	ASObject* generator(ASObject* const* args, const unsigned int argslen)
+	{
+		assert(argslen == 1);
+		return args[0];
+	}
+	InterfaceClass(const QName& name):Class_base(name) {}
+public:
+	static InterfaceClass<T>* getClass()
+	{
+		QName name(ClassName<T>::name,ClassName<T>::ns);
+		std::map<QName, Class_base*>::iterator it=getSys()->classes.find(name);
+		InterfaceClass<T>* ret=NULL;
+		if(it==getSys()->classes.end())
+		{	//This class is not yet in the map, create it
+			ret=new InterfaceClass<T>(name);
+			getSys()->classes.insert(std::make_pair(name,ret));
+		}
+		else
+			ret=static_cast<InterfaceClass<T>*>(it->second);
+
+		return ret;
+	}
+	static _R<InterfaceClass<T>> getRef()
+	{
+		InterfaceClass<T>* ret = getClass();
+		ret->incRef();
+		return _MR(ret);
+	}
 };
 
 /* This is a class which was instantiated from a Template<T> */
@@ -293,19 +401,11 @@ class TemplatedClass : public Class<T>
 private:
 	/* the Template<T>* this class was generated from */
 	const Template_base* templ;
-	std::vector<Class_base*> types;
+	std::vector<Type*> types;
 public:
-	TemplatedClass(const QName& name, ASObject* const* _types, const unsigned int numtypes, Template_base* _templ)
-		: Class<T>(name), templ(_templ)
+	TemplatedClass(const QName& name, const std::vector<Type*>& _types, Template_base* _templ)
+		: Class<T>(name), templ(_templ), types(_types)
 	{
-		assert(types.empty());
-		types.reserve(numtypes);
-		for(size_t i=0;i<numtypes;++i)
-		{
-			assert_and_throw(_types[i]->getObjectType() == T_CLASS);
-			Class_base* o_class = static_cast<Class_base*>(_types[i]);
-			types.push_back(o_class);
-		}
 	}
 
 	T* getInstance(bool construct, ASObject* const* args, const unsigned int argslen)
@@ -334,7 +434,7 @@ public:
 		return templ;
 	}
 
-	const std::vector<Class_base*> getTypes() const
+	const std::vector<Type*> getTypes() const
 	{
 		return types;
 	}
@@ -347,36 +447,32 @@ class Template : public Template_base
 public:
 	Template(QName name) : Template_base(name) {};
 
-	QName getQName(ASObject* const* types, const unsigned int numtypes)
+	QName getQName(const std::vector<Type*>& types)
 	{
 		//This is the naming scheme that the ABC compiler uses,
 		//and we need to stay in sync here
-		assert_and_throw(numtypes);
 		QName ret(ClassName<T>::name, ClassName<T>::ns);
-		for(size_t i=0;i<numtypes;++i)
+		for(size_t i=0;i<types.size();++i)
 		{
-			assert_and_throw(types[i]->getObjectType() == T_CLASS);
-			Class_base* o_class = static_cast<Class_base*>(types[i]);
 			ret.name += "$";
-			ret.name += o_class->class_name.getQualifiedName();
+			ret.name += types[i]->getName();
 		}
 		return ret;
 	}
 
-	/* this function will take ownership of the types objects */
-	Class_base* applyType(ASObject* const* types, const unsigned int numtypes)
+	Class_base* applyType(const std::vector<Type*>& types)
 	{
-		QName instantiatedQName = getQName(types,numtypes);
+		QName instantiatedQName = getQName(types);
 
-		std::map<QName, Class_base*>::iterator it=sys->classes.find(instantiatedQName);
+		std::map<QName, Class_base*>::iterator it=getSys()->classes.find(instantiatedQName);
 		Class<T>* ret=NULL;
-		if(it==sys->classes.end()) //This class is not yet in the map, create it
+		if(it==getSys()->classes.end()) //This class is not yet in the map, create it
 		{
-			ret=new TemplatedClass<T>(instantiatedQName,types,numtypes,this);
-			sys->classes.insert(std::make_pair(instantiatedQName,ret));
+			ret=new TemplatedClass<T>(instantiatedQName,types,this);
+			getSys()->classes.insert(std::make_pair(instantiatedQName,ret));
 			ret->prototype = _MNR(new_asobject());
 			T::sinit(ret);
-			if(ret->super != NULL)
+			if(ret->super)
 				ret->prototype->setprop_prototype(ret->super->prototype);
 			ret->addPrototypeGetter();
 		}
@@ -387,14 +483,20 @@ public:
 		return ret;
 	}
 
+	static Ref<Class_base> getTemplateInstance(Type* type)
+	{
+		std::vector<Type*> t(1,type);
+		return _MR(getTemplate()->applyType(t));
+	}
+
 	static Template<T>* getTemplate(const QName& name)
 	{
-		std::map<QName, Template_base*>::iterator it=sys->templates.find(name);
+		std::map<QName, Template_base*>::iterator it=getSys()->templates.find(name);
 		Template<T>* ret=NULL;
-		if(it==sys->templates.end()) //This class is not yet in the map, create it
+		if(it==getSys()->templates.end()) //This class is not yet in the map, create it
 		{
 			ret=new Template<T>(name);
-			sys->templates.insert(std::make_pair(name,ret));
+			getSys()->templates.insert(std::make_pair(name,ret));
 		}
 		else
 			ret=static_cast<Template<T>*>(it->second);

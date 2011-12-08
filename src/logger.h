@@ -21,7 +21,6 @@
 #define LOGGER_H
 
 #include "compat.h"
-#include <semaphore.h>
 #include <iostream>
 #include <sstream>
 #include <vector>
@@ -41,21 +40,22 @@ do {							\
 class Log
 {
 private:
-	static sem_t mutex;
-	static bool loggingInited;
 	LOG_LEVEL cur_level;
 	bool valid;
 	static const char* level_names[];
 	static LOG_LEVEL log_level DLL_PUBLIC;
 	std::stringstream message;
 public:
+	static void print(const std::string& s);
 	Log(LOG_LEVEL l) DLL_PUBLIC;
 	~Log() DLL_PUBLIC;
 	std::ostream& operator()() DLL_PUBLIC;
 	operator bool() { return valid; }
-	static void initLogging(LOG_LEVEL l) DLL_PUBLIC;
-	static LOG_LEVEL getLevel() DLL_PUBLIC {return log_level;}
+	static void setLogLevel(LOG_LEVEL l) { log_level = l; };
+	static LOG_LEVEL getLevel() {return log_level;}
 	static int calls_indent;
+	/* redirect logging and print() to that file */
+	static void redirect(std::string filename) DLL_PUBLIC;
 
 };
 

@@ -24,7 +24,6 @@
 #include <fstream>
 #include <list>
 #include <map>
-#include <semaphore.h>
 #include <string>
 #include "swftypes.h"
 #include "scripting/flash/display/flashdisplay.h"
@@ -95,7 +94,7 @@ public:
 	bool boundsRect(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const;
 	void bindToName(const tiny_string& n);
 	void DLL_PUBLIC setOrigin(const tiny_string& u, const tiny_string& filename="");
-	URLInfo& getOrigin() DLL_PUBLIC { return origin; };
+	URLInfo& getOrigin() { return origin; };
 /*	ASObject* getVariableByQName(const tiny_string& name, const tiny_string& ns);
 	void setVariableByQName(const tiny_string& name, const tiny_string& ns, ASObject* o);
 	void setVariableByMultiname(multiname& name, ASObject* o);
@@ -108,6 +107,8 @@ public:
 class ThreadProfile
 {
 private:
+	/* ThreadProfile cannot be copied because Mutex cannot */
+	ThreadProfile(const ThreadProfile&) { assert(false); }
 	Mutex mutex;
 	class ProfilingData
 	{
@@ -122,7 +123,7 @@ private:
 	int32_t len;
 	uint32_t tickCount;
 public:
-	ThreadProfile(const RGB& c,uint32_t l):mutex("ThreadProfile"),color(c),len(l),tickCount(0){}
+	ThreadProfile(const RGB& c,uint32_t l):color(c),len(l),tickCount(0){}
 	void accountTime(uint32_t time);
 	void setTag(const std::string& tag);
 	void tick();
@@ -146,13 +147,14 @@ private:
 	friend class SystemState::EngineCreator;
 	ThreadPool* threadPool;
 	TimerThread* timerThread;
-	sem_t terminated;
+	Semaphore terminated;
 	float renderRate;
 	bool error;
 	bool shutdown;
 	RenderThread* renderThread;
 	InputThread* inputThread;
 	EngineData* engineData;
+	Thread* mainThread;
 	void startRenderTicks();
 	/**
 		Create the rendering and input engines
@@ -160,22 +162,28 @@ private:
 		@pre engine and useAVM2 are known
 	*/
 	void createEngines();
+
+	void launchGnash();
 	/**
 	  	Destroys all the engines used in lightspark: timer, thread pool, vm...
 	*/
 	void stopEngines();
 
-	static void delayedCreation(SystemState* th);
-	static void delayedStopping(SystemState* th);
-	//Useful to wait for complete download of the SWF
-	Semaphore fileDumpAvailable;
+	void delayedCreation();
+	void delayedStopping();
+
+	/* dumpedSWFPathAvailable is signaled after dumpedSWFPath has been set */
+	Semaphore dumpedSWFPathAvailable;
 	tiny_string dumpedSWFPath;
-	bool waitingForDump;
+
 	//Data for handling Gnash fallback
 	enum VMVERSION { VMNONE=0, AVM1, AVM2 };
 	VMVERSION vmVersion;
-	pid_t childPid;
-	bool useGnashFallback;
+#ifdef _WIN32
+	HANDLE childPid;
+#else
+	GPid childPid;
+#endif
 
 	//Parameters/FlashVars
 	_NR<ASObject> parameters;
@@ -187,7 +195,7 @@ private:
 
 	//Cookies for Gnash fallback
 	std::string rawCookies;
-	char cookiesFileName[32]; // "/tmp/lightsparkcookiesXXXXXX"
+	char* cookiesFileName;
 
 	URLInfo url;
 	Spinlock profileDataSpinlock;
@@ -230,12 +238,10 @@ public:
 	bool isOnError() const;
 	void setShutdownFlag() DLL_PUBLIC;
 	void tick();
-	void wait() DLL_PUBLIC;
 	RenderThread* getRenderThread() const { return renderThread; }
 	InputThread* getInputThread() const { return inputThread; }
 	void setParamsAndEngine(EngineData* e, bool s) DLL_PUBLIC;
 	void setDownloadedPath(const tiny_string& p) DLL_PUBLIC;
-	void enableGnashFallback() DLL_PUBLIC;
 	void needsAVM2(bool n);
 	//DisplayObject interface
 	_NR<Stage> getStage() const;
@@ -252,7 +258,7 @@ public:
 	
 	//Performance profiling
 	ThreadProfile* allocateProfiler(const RGB& color);
-	std::list<ThreadProfile> profilingData;
+	std::list<ThreadProfile*> profilingData;
 	
 	Stage* stage;
 	ABCVm* currentVm;
@@ -278,14 +284,15 @@ public:
 	void parseParametersFromFlashvars(const char* vars) DLL_PUBLIC;
 	_NR<ASObject> getParameters() const;
 
-	//Cookies management for Gnash fallback
+	//Cookies management (HTTP downloads and Gnash fallback)
 	void setCookies(const char* c) DLL_PUBLIC;
+	const std::string& getCookies();
 
 	//Interfaces to the internal thread pool and timer thread
 	void addJob(IThreadJob* j) DLL_PUBLIC;
 	void addTick(uint32_t tickTime, ITickJob* job);
 	void addWait(uint32_t waitTime, ITickJob* job);
-	bool removeJob(ITickJob* job);
+	void removeJob(ITickJob* job);
 
 	void setRenderRate(float rate);
 	float getRenderRate();
@@ -339,8 +346,6 @@ class ParseThread: public IThreadJob
 {
 public:
 	int version;
-	bool useAVM2;
-	bool useNetwork;
 	// Parse an object from stream. The type is detected
 	// automatically. After parsing the new object is available
 	// from getParsedObject().
@@ -371,6 +376,12 @@ private:
 	void parseBitmap();
 };
 
+/* Returns the thread-specific SystemState */
+SystemState* getSys() DLL_PUBLIC;
+/* Set thread-specific SystemState to be returned by getSys() */
+void setTLSSys(SystemState* sys) DLL_PUBLIC;
+
+ParseThread* getParseThread();
+
 };
-extern TLSDATA lightspark::SystemState* sys DLL_PUBLIC;
 #endif

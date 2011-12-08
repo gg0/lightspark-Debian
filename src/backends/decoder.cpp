@@ -23,7 +23,6 @@
 #include "decoder.h"
 #include "platforms/fastpaths.h"
 #include "swf.h"
-#include "graphics.h"
 #include "backends/rendering.h"
 
 #if LIBAVUTIL_VERSION_MAJOR < 51
@@ -42,7 +41,7 @@ bool VideoDecoder::setSize(uint32_t w, uint32_t h)
 		frameHeight=h;
 		LOG(LOG_INFO,_("VIDEO DEC: Video frame size ") << frameWidth << 'x' << frameHeight);
 		resizeGLBuffers=true;
-		videoTexture=sys->getRenderThread()->allocateTexture(frameWidth, frameHeight, true);
+		videoTexture=getSys()->getRenderThread()->allocateTexture(frameWidth, frameHeight, true);
 		return true;
 	}
 	else
@@ -106,7 +105,7 @@ bool FFMpegVideoDecoder::fillDataAndCheckValidity()
 }
 
 FFMpegVideoDecoder::FFMpegVideoDecoder(LS_VIDEO_CODEC codecId, uint8_t* initdata, uint32_t datalen, double frameRateHint):
-	curBuffer(0),curBufferOffset(0),codecContext(NULL),ownedContext(true),mutex("VideoDecoder")
+	curBuffer(0),curBufferOffset(0),codecContext(NULL),ownedContext(true)
 {
 	//The tag is the header, initialize decoding
 	codecContext=avcodec_alloc_context();
@@ -160,7 +159,7 @@ FFMpegVideoDecoder::FFMpegVideoDecoder(LS_VIDEO_CODEC codecId, uint8_t* initdata
 }
 
 FFMpegVideoDecoder::FFMpegVideoDecoder(AVCodecContext* _c, double frameRateHint):
-	curBuffer(0),curBufferOffset(0),codecContext(_c),ownedContext(false),mutex("VideoDecoder")
+	curBuffer(0),curBufferOffset(0),codecContext(_c),ownedContext(false)
 {
 	status=INIT;
 	//The tag is the header, initialize decoding
@@ -334,20 +333,16 @@ void FFMpegVideoDecoder::YUVBufferGenerator::init(YUVBuffer& buf) const
 {
 	if(buf.ch[0])
 	{
-		free(buf.ch[0]);
-		free(buf.ch[1]);
-		free(buf.ch[2]);
+		aligned_free(buf.ch[0]);
+		aligned_free(buf.ch[1]);
+		aligned_free(buf.ch[2]);
 	}
-#ifdef WIN32
-	//FIXME!!
-#else
-	int ret=posix_memalign((void**)&buf.ch[0], 16, bufferSize);
+	int ret=aligned_malloc((void**)&buf.ch[0], 16, bufferSize);
 	assert(ret==0);
-	ret=posix_memalign((void**)&buf.ch[1], 16, bufferSize/4);
+	ret=aligned_malloc((void**)&buf.ch[1], 16, bufferSize/4);
 	assert(ret==0);
-	ret=posix_memalign((void**)&buf.ch[2], 16, bufferSize/4);
+	ret=aligned_malloc((void**)&buf.ch[2], 16, bufferSize/4);
 	assert(ret==0);
-#endif
 }
 #endif //ENABLE_LIBAVCODEC
 

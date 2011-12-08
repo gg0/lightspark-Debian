@@ -27,10 +27,8 @@
 #include "scripting/abc.h"
 #include "tags.h"
 #include "backends/geometry.h"
-#include "backends/rendering.h"
 #include "backends/security.h"
 #include "swftypes.h"
-#include "swf.h"
 #include "logger.h"
 #include "compat.h"
 #include "streams.h"
@@ -39,8 +37,6 @@
 
 using namespace std;
 using namespace lightspark;
-
-extern TLSDATA ParseThread* pt;
 
 _NR<Tag> TagFactory::readTag()
 {
@@ -66,7 +62,6 @@ _NR<Tag> TagFactory::readTag()
 	switch(h.getTagType())
 	{
 		case 0:
-			LOG(LOG_INFO,_("End of parsing @ ") << f.tellg());
 			ret=new EndTag(h,f);
 			break;
 		case 1:
@@ -175,11 +170,8 @@ _NR<Tag> TagFactory::readTag()
 			break;
 		case 69:
 			//FileAttributes tag is mandatory on version>=8 and must be the first tag
-			if(pt->version>=8)
-			{
-				if(!firstTag)
-					LOG(LOG_ERROR,_("FileAttributes tag not in the beginning"));
-			}
+			if(!firstTag)
+				LOG(LOG_ERROR,_("FileAttributes tag not in the beginning"));
 			ret=new FileAttributesTag(h,f);
 			break;
 		case 70:
@@ -229,17 +221,6 @@ _NR<Tag> TagFactory::readTag()
 			ret=new UnimplementedTag(h,f);
 	}
 
-	//Check if this clip is the main clip and if AVM2 has been enabled by a FileAttributes tag
-	if(topLevel && firstTag && pt->getRootMovie()==sys)
-	{
-		sys->needsAVM2(pt->useAVM2);
-		if(pt->useNetwork
-		&& sys->securityManager->getSandboxType() == SecurityManager::LOCAL_WITH_FILE)
-		{
-			sys->securityManager->setSandboxType(SecurityManager::LOCAL_WITH_NETWORK);
-			LOG(LOG_INFO, _("Switched to local-with-networking sandbox by FileAttributesTag"));
-		}
-	}
 	firstTag=false;
 
 	unsigned int end=f.tellg();
@@ -359,7 +340,7 @@ DefineSpriteTag::DefineSpriteTag(RECORDHEADER h, std::istream& in):DictionaryTag
 				break;
 			case SHOW_TAG:
 			{
-				frames.emplace_back();
+				frames.emplace_back(Frame());
 				empty=true;
 				break;
 			}
@@ -672,7 +653,8 @@ DefineBitsLosslessTag::DefineBitsLosslessTag(RECORDHEADER h, istream& in, int ve
 			inData[i] = 0xFF;
 	}
 
-	Bitmap::fromRGB(inData, BitmapWidth, BitmapHeight, true);
+	bitmapData->fromRGB(inData, BitmapWidth, BitmapHeight, true);
+	Bitmap::updatedData();
 }
 
 ASObject* DefineBitsLosslessTag::instance() const
@@ -1165,12 +1147,10 @@ ProductInfoTag::ProductInfoTag(RECORDHEADER h, std::istream& in):Tag(h)
 FrameLabelTag::FrameLabelTag(RECORDHEADER h, std::istream& in):Tag(h)
 {
 	in >> Name;
-	if(pt->version>=6)
-	{
-		UI8 NamedAnchor=in.peek();
-		if(NamedAnchor==1)
-			in >> NamedAnchor;
-	}
+	/* We only support SWF version >=6 */
+	UI8 NamedAnchor=in.peek();
+	if(NamedAnchor==1)
+		in >> NamedAnchor;
 }
 
 DefineButton2Tag::DefineButton2Tag(RECORDHEADER h, std::istream& in):DictionaryTag(h)
@@ -1302,11 +1282,6 @@ FileAttributesTag::FileAttributesTag(RECORDHEADER h, std::istream& in):Tag(h)
 	UB(2,bs);
 	UseNetwork=UB(1,bs);
 	UB(24,bs);
-
-	if(ActionScript3)
-		pt->useAVM2=true;
-
-	pt->useNetwork = UseNetwork;
 }
 
 DefineSoundTag::DefineSoundTag(RECORDHEADER h, std::istream& in):DictionaryTag(h)
@@ -1413,7 +1388,8 @@ DefineBitsJPEG2Tag::DefineBitsJPEG2Tag(RECORDHEADER h, std::istream& in):Diction
 	uint8_t* inData=new(nothrow) uint8_t[dataSize];
 	in.read((char*)inData,dataSize);
 
-	Bitmap::fromJPEG(inData,dataSize);
+	bitmapData->fromJPEG(inData,dataSize);
+	Bitmap::updatedData();
 	delete[] inData;
 }
 
@@ -1437,7 +1413,8 @@ DefineBitsJPEG3Tag::DefineBitsJPEG3Tag(RECORDHEADER h, std::istream& in):Diction
 	in.read((char*)inData,dataSize);
 
 	//TODO: check header. Could also be PNG or GIF
-	Bitmap::fromJPEG(inData,dataSize);
+	bitmapData->fromJPEG(inData,dataSize);
+	Bitmap::updatedData();
 	delete[] inData;
 
 	//Read alpha data (if any)

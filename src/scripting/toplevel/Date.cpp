@@ -27,13 +27,19 @@ using namespace lightspark;
 SET_NAMESPACE("");
 REGISTER_CLASS_NAME(Date);
 
-Date::Date():extrayears(0), millisecond(0),datetime(NULL)
+Date::Date():extrayears(0), nan(false), datetime(NULL)
 {
+}
+
+Date::~Date()
+{
+	if(datetime)
+		g_date_time_unref(datetime);
 }
 
 void Date::sinit(Class_base* c)
 {
-	c->super=Class<ASObject>::getRef();
+	c->setSuper(Class<ASObject>::getRef());
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
 	c->setDeclaredMethodByQName("getTimezoneOffset",AS3,Class<IFunction>::getFunction(getTimezoneOffset),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("valueOf",AS3,Class<IFunction>::getFunction(valueOf),NORMAL_METHOD,true);
@@ -68,9 +74,11 @@ void Date::sinit(Class_base* c)
 	c->setDeclaredMethodByQName("setUTCMinutes",AS3,Class<IFunction>::getFunction(setUTCMinutes),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("setUTCSeconds",AS3,Class<IFunction>::getFunction(setUTCSeconds),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("setUTCMilliseconds",AS3,Class<IFunction>::getFunction(setUTCMilliseconds),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("setTime",AS3,Class<IFunction>::getFunction(setTime),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("fullYear","",Class<IFunction>::getFunction(getFullYear),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("timezoneOffset","",Class<IFunction>::getFunction(timezoneOffset),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("UTC","",Class<IFunction>::getFunction(UTC),NORMAL_METHOD,false);
+	c->setDeclaredMethodByQName("toString",AS3,Class<IFunction>::getFunction(_toString),NORMAL_METHOD,true);
 }
 
 void Date::buildTraits(ASObject* o)
@@ -82,6 +90,16 @@ const gint64 MS_IN_400_YEARS = 1.26227808e+13;
 ASFUNCTIONBODY(Date,_constructor)
 {
 	Date* th=static_cast<Date*>(obj);
+	for (uint32_t i = 0; i < argslen; i++) {
+		if(args[i]->getObjectType()==T_NUMBER && std::isnan(args[i]->toNumber())) {
+			th->nan = true;
+			return NULL;
+		}
+	}
+	if (argslen == 0) {
+		th->datetimeUTC = g_date_time_new_now_utc();
+		th->datetime = g_date_time_to_local(th->datetimeUTC);
+	} else
 	if (argslen == 1)
 	{
 	//GLib's GDateTime sensibly does not support and store very large year numbers
@@ -90,25 +108,27 @@ ASFUNCTIONBODY(Date,_constructor)
 		gint64 ms = gint64(args[0]->toNumber());
 		th->extrayears = 400*(ms/MS_IN_400_YEARS);
 		ms %= MS_IN_400_YEARS;
-		th->millisecond = ms%1000;
 		gint64 seconds = ms/1000;
-		th->datetime = g_date_time_new_from_unix_utc(seconds);
-		//If negative date, adjust with the milliseconds value
-		if (th->millisecond < 0) {
-			th->datetime = g_date_time_add(th->datetime, th->millisecond*1000);
-			th->millisecond = 0;
-		}
+		if(th->datetime)
+			g_date_time_unref(th->datetime);
+		th->datetimeUTC = g_date_time_new_from_unix_utc(seconds);
+		th->datetimeUTC = g_date_time_add(th->datetimeUTC, (ms%1000)*1000);
+		th->datetime = g_date_time_to_local(th->datetimeUTC);
 	} else
 	{
 		number_t year, month, day, hour, minute, second, millisecond;
 		ARG_UNPACK (year, 1970) (month, 0) (day, 1) (hour, 0) (minute, 0) (second, 0) (millisecond, 0);
 		th->extrayears = year;
-		year = 1600+int(year)%400;
+		year = 2000+int(year)%400;
 		th->extrayears = th->extrayears-year;
-		th->datetime = g_date_time_new_utc(year, month+1, day, hour, minute, second);
+		if (millisecond < 1000)
+			second += millisecond/1000;
+		if(th->datetime)
+			g_date_time_unref(th->datetime);
+		th->datetime = g_date_time_new_local(year, month+1, day, hour, minute, second);
 		if (millisecond > 999)
 			th->datetime = g_date_time_add(th->datetime, gint64(millisecond)/1000*G_TIME_SPAN_SECOND);
-		th->millisecond = uint64_t(millisecond) % 1000;
+		th->datetimeUTC = g_date_time_to_utc(th->datetime);
 	}
 
 	th->year = g_date_time_get_year(th->datetime);
@@ -117,27 +137,39 @@ ASFUNCTIONBODY(Date,_constructor)
 	th->day_of_week = g_date_time_get_day_of_week(th->datetime);
 	th->hour = g_date_time_get_hour(th->datetime);
 	th->minute = g_date_time_get_minute(th->datetime);
-	th->second = g_date_time_get_second(th->datetime);
+	th->second = g_date_time_get_seconds(th->datetime);
 
 	return NULL;
 }
 
 ASFUNCTIONBODY(Date,UTC)
 {
+	for (uint32_t i = 0; i < argslen; i++) {
+		if(args[i]->getObjectType()==T_NUMBER && std::isnan(args[i]->toNumber())) {
+			return abstract_d(Number::NaN);
+		}
+	}
 	number_t year, month, day, hour, minute, second, millisecond;
 	ARG_UNPACK (year) (month) (day, 1) (hour, 0) (minute, 0) (second, 0) (millisecond, 0);
+	if (millisecond < 1000)
+		second += millisecond/1000;
 	GDateTime *tmp = g_date_time_new_utc(year, month+1, day, hour, minute, second);
 	if (millisecond > 999)
 		tmp = g_date_time_add(tmp, gint64(millisecond)/1000*G_TIME_SPAN_SECOND);
 	millisecond = uint64_t(millisecond) % 1000;
-	return abstract_d(1000*g_date_time_to_unix(tmp) + millisecond);
+	number_t ret=1000*g_date_time_to_unix(tmp) + millisecond;
+	g_date_time_unref(tmp);
+	return abstract_d(ret);
 }
 
 ASFUNCTIONBODY(Date,getTimezoneOffset)
 {
 	Date* th=static_cast<Date*>(obj);
+	if(th->nan) {
+		return abstract_d(Number::NaN);
+	}
 	GTimeSpan diff = g_date_time_get_utc_offset(th->datetime);
-	return abstract_d(diff/1000000);
+	return abstract_d(-diff/G_TIME_SPAN_MINUTE);
 }
 
 ASFUNCTIONBODY(Date,timezoneOffset)
@@ -148,103 +180,154 @@ ASFUNCTIONBODY(Date,timezoneOffset)
 ASFUNCTIONBODY(Date,getUTCFullYear)
 {
 	Date* th=static_cast<Date*>(obj);
-	return abstract_d(th->extrayears + g_date_time_get_year(th->datetime));
+	if(th->nan) {
+		return abstract_d(Number::NaN);
+	}
+	return abstract_d(th->extrayears + g_date_time_get_year(th->datetimeUTC));
 }
 
 ASFUNCTIONBODY(Date,getUTCMonth)
 {
 	Date* th=static_cast<Date*>(obj);
-	return abstract_d(g_date_time_get_month(th->datetime)-1);
+	if(th->nan) {
+		return abstract_d(Number::NaN);
+	}
+	return abstract_d(g_date_time_get_month(th->datetimeUTC)-1);
 }
 
 ASFUNCTIONBODY(Date,getUTCDate)
 {
 	Date* th=static_cast<Date*>(obj);
-	return abstract_d(g_date_time_get_day_of_month(th->datetime));
+	if(th->nan) {
+		return abstract_d(Number::NaN);
+	}
+	return abstract_d(g_date_time_get_day_of_month(th->datetimeUTC));
 }
 
 ASFUNCTIONBODY(Date,getUTCDay)
 {
 	Date* th=static_cast<Date*>(obj);
-	return abstract_d(g_date_time_get_day_of_week(th->datetime)%7);
+	if(th->nan) {
+		return abstract_d(Number::NaN);
+	}
+	return abstract_d(g_date_time_get_day_of_week(th->datetimeUTC)%7);
 }
 
 ASFUNCTIONBODY(Date,getUTCHours)
 {
 	Date* th=static_cast<Date*>(obj);
-	return abstract_d(g_date_time_get_hour(th->datetime));
+	if(th->nan) {
+		return abstract_d(Number::NaN);
+	}
+	return abstract_d(g_date_time_get_hour(th->datetimeUTC));
 }
 
 ASFUNCTIONBODY(Date,getUTCMinutes)
 {
 	Date* th=static_cast<Date*>(obj);
-	return abstract_d(g_date_time_get_minute(th->datetime));
+	if(th->nan) {
+		return abstract_d(Number::NaN);
+	}
+	return abstract_d(g_date_time_get_minute(th->datetimeUTC));
 }
 
 ASFUNCTIONBODY(Date,getUTCSeconds)
 {
 	Date* th=static_cast<Date*>(obj);
-	return abstract_d(g_date_time_get_second(th->datetime));
+	if(th->nan) {
+		return abstract_d(Number::NaN);
+	}
+	return abstract_d(g_date_time_get_second(th->datetimeUTC));
 }
 
 ASFUNCTIONBODY(Date,getUTCMilliseconds)
 {
 	Date* th=static_cast<Date*>(obj);
-	return abstract_d(th->millisecond);
+	if(th->nan) {
+		return abstract_d(Number::NaN);
+	}
+	return abstract_d(g_date_time_get_microsecond(th->datetime)/1000);
 }
 
 ASFUNCTIONBODY(Date,getFullYear)
 {
 	Date* th=static_cast<Date*>(obj);
+	if(th->nan) {
+		return abstract_d(Number::NaN);
+	}
 	return abstract_d(th->extrayears + g_date_time_get_year(th->datetime));
 }
 
 ASFUNCTIONBODY(Date,getMonth)
 {
 	Date* th=static_cast<Date*>(obj);
+	if(th->nan) {
+		return abstract_d(Number::NaN);
+	}
 	return abstract_d(g_date_time_get_month(th->datetime)-1);
 }
 
 ASFUNCTIONBODY(Date,getDate)
 {
 	Date* th=static_cast<Date*>(obj);
+	if(th->nan) {
+		return abstract_d(Number::NaN);
+	}
 	return abstract_d(g_date_time_get_day_of_month(th->datetime));
 }
 
 ASFUNCTIONBODY(Date,getDay)
 {
 	Date* th=static_cast<Date*>(obj);
+	if(th->nan) {
+		return abstract_d(Number::NaN);
+	}
 	return abstract_d(g_date_time_get_day_of_week(th->datetime)%7);
 }
 
 ASFUNCTIONBODY(Date,getHours)
 {
 	Date* th=static_cast<Date*>(obj);
+	if(th->nan) {
+		return abstract_d(Number::NaN);
+	}
 	return abstract_d(g_date_time_get_hour(th->datetime));
 }
 
 ASFUNCTIONBODY(Date,getMinutes)
 {
 	Date* th=static_cast<Date*>(obj);
+	if(th->nan) {
+		return abstract_d(Number::NaN);
+	}
 	return abstract_d(g_date_time_get_minute(th->datetime));
 }
 
 ASFUNCTIONBODY(Date,getSeconds)
 {
 	Date* th=static_cast<Date*>(obj);
+	if(th->nan) {
+		return abstract_d(Number::NaN);
+	}
 	return abstract_d(g_date_time_get_second(th->datetime));
 }
 
 ASFUNCTIONBODY(Date,getMilliseconds)
 {
 	Date* th=static_cast<Date*>(obj);
-	return abstract_d(th->millisecond);
+	if(th->nan) {
+		return abstract_d(Number::NaN);
+	}
+	return abstract_d(g_date_time_get_microsecond(th->datetime)/1000);
 }
 
 ASFUNCTIONBODY(Date,getTime)
 {
 	Date* th=static_cast<Date*>(obj);
-	return abstract_d(th->toNumber());
+	if(th->nan) {
+		return abstract_d(Number::NaN);
+	}
+	return th->msSinceEpoch();
 }
 
 ASFUNCTIONBODY(Date,setFullYear)
@@ -261,9 +344,14 @@ ASFUNCTIONBODY(Date,setFullYear)
 	if (d)
 		th->day = d;
 
+	if(th->datetime)
+		g_date_time_unref(th->datetime);
 	th->datetime = g_date_time_new_local(th->year, th->month, th->day, th->hour, th->minute, th->second);
+	if(th->datetimeUTC)
+		g_date_time_unref(th->datetimeUTC);
+	th->datetimeUTC = g_date_time_to_utc(th->datetime);
 
-	return abstract_d(1000*g_date_time_to_unix(th->datetime) + th->millisecond);
+	return abstract_d(1000*g_date_time_to_unix(th->datetime));
 }
 
 ASFUNCTIONBODY(Date,setMonth)
@@ -277,9 +365,14 @@ ASFUNCTIONBODY(Date,setMonth)
 	if (d)
 		th->day = d;
 
+	if(th->datetime)
+		g_date_time_unref(th->datetime);
 	th->datetime = g_date_time_new_local(th->year, th->month, th->day, th->hour, th->minute, th->second);
+	if(th->datetimeUTC)
+		g_date_time_unref(th->datetimeUTC);
+	th->datetimeUTC = g_date_time_to_utc(th->datetime);
 
-	return abstract_d(1000*g_date_time_to_unix(th->datetime) + th->millisecond);
+	return abstract_d(1000*g_date_time_to_unix(th->datetime));
 }
 
 ASFUNCTIONBODY(Date,setDate)
@@ -290,9 +383,14 @@ ASFUNCTIONBODY(Date,setDate)
 
 	th->day = d;
 
+	if(th->datetime)
+		g_date_time_unref(th->datetime);
 	th->datetime = g_date_time_new_local(th->year, th->month, th->day, th->hour, th->minute, th->second);
+	if(th->datetimeUTC)
+		g_date_time_unref(th->datetimeUTC);
+	th->datetimeUTC = g_date_time_to_utc(th->datetime);
 
-	return abstract_d(1000*g_date_time_to_unix(th->datetime) + th->millisecond);
+	return abstract_d(1000*g_date_time_to_unix(th->datetime));
 }
 
 ASFUNCTIONBODY(Date,setHours)
@@ -307,11 +405,16 @@ ASFUNCTIONBODY(Date,setHours)
 	if (sec)
 		th->second = sec;
 	if (ms)
-		th->millisecond = ms;
+		th->second += ms/1000;
 
+	if(th->datetime)
+		g_date_time_unref(th->datetime);
 	th->datetime = g_date_time_new_local(th->year, th->month, th->day, th->hour, th->minute, th->second);
+	if(th->datetimeUTC)
+		g_date_time_unref(th->datetimeUTC);
+	th->datetimeUTC = g_date_time_to_utc(th->datetime);
 
-	return abstract_d(1000*g_date_time_to_unix(th->datetime) + th->millisecond);
+	return abstract_d(1000*g_date_time_to_unix(th->datetime));
 }
 
 ASFUNCTIONBODY(Date,setMinutes)
@@ -324,11 +427,16 @@ ASFUNCTIONBODY(Date,setMinutes)
 	if (sec)
 		th->second = sec;
 	if (ms)
-		th->millisecond = ms;
+		th->second += ms/1000;
 
+	if(th->datetime)
+		g_date_time_unref(th->datetime);
 	th->datetime = g_date_time_new_local(th->year, th->month, th->day, th->hour, th->minute, th->second);
+	if(th->datetimeUTC)
+		g_date_time_unref(th->datetimeUTC);
+	th->datetimeUTC = g_date_time_to_utc(th->datetime);
 
-	return abstract_d(1000*g_date_time_to_unix(th->datetime) + th->millisecond);
+	return abstract_d(1000*g_date_time_to_unix(th->datetime));
 }
 
 ASFUNCTIONBODY(Date,setSeconds)
@@ -340,10 +448,16 @@ ASFUNCTIONBODY(Date,setSeconds)
 
 	th->second = sec;
 	if (ms)
-		th->millisecond = ms;
-	th->datetime = g_date_time_new_local(th->year, th->month, th->day, th->hour, th->minute, th->second);
+		th->second += ms/1000;
 
-	return abstract_d(1000*g_date_time_to_unix(th->datetime) + th->millisecond);
+	if(th->datetime)
+		g_date_time_unref(th->datetime);
+	th->datetime = g_date_time_new_local(th->year, th->month, th->day, th->hour, th->minute, th->second);
+	if(th->datetimeUTC)
+		g_date_time_unref(th->datetimeUTC);
+	th->datetimeUTC = g_date_time_to_utc(th->datetime);
+
+	return abstract_d(1000*g_date_time_to_unix(th->datetime));
 }
 
 ASFUNCTIONBODY(Date,setMilliseconds)
@@ -352,10 +466,16 @@ ASFUNCTIONBODY(Date,setMilliseconds)
 	number_t ms;
 	ARG_UNPACK (ms);
 
-	th->datetime = g_date_time_add(th->datetime, gint64(ms)/1000*G_TIME_SPAN_SECOND);
-	th->millisecond = uint64_t(ms) % 1000;
+	th->second = floor(th->second) + ms/1000;
 
-	return abstract_d(1000*g_date_time_to_unix(th->datetime) + th->millisecond);
+	if(th->datetime)
+		g_date_time_unref(th->datetime);
+	th->datetime = g_date_time_new_local(th->year, th->month, th->day, th->hour, th->minute, th->second);
+	if(th->datetimeUTC)
+		g_date_time_unref(th->datetimeUTC);
+	th->datetimeUTC = g_date_time_to_utc(th->datetime);
+
+	return abstract_d(1000*g_date_time_to_unix(th->datetime));
 }
 
 ASFUNCTIONBODY(Date,setUTCFullYear)
@@ -372,9 +492,14 @@ ASFUNCTIONBODY(Date,setUTCFullYear)
 	if (d)
 		th->day = d;
 
-	th->datetime = g_date_time_new_utc(th->year, th->month, th->day, th->hour, th->minute, th->second);
+	if(th->datetimeUTC)
+		g_date_time_unref(th->datetimeUTC);
+	th->datetimeUTC = g_date_time_new_utc(th->year, th->month, th->day, th->hour, th->minute, th->second);
+	if(th->datetime)
+		g_date_time_unref(th->datetime);
+	th->datetime = g_date_time_to_local(th->datetimeUTC);
 
-	return abstract_d(1000*g_date_time_to_unix(th->datetime) + th->millisecond);
+	return abstract_d(1000*g_date_time_to_unix(th->datetime));
 }
 
 ASFUNCTIONBODY(Date,setUTCMonth)
@@ -388,9 +513,14 @@ ASFUNCTIONBODY(Date,setUTCMonth)
 	if (d)
 		th->day = d;
 
-	th->datetime = g_date_time_new_utc(th->year, th->month, th->day, th->hour, th->minute, th->second);
+	if(th->datetimeUTC)
+		g_date_time_unref(th->datetimeUTC);
+	th->datetimeUTC = g_date_time_new_utc(th->year, th->month, th->day, th->hour, th->minute, th->second);
+	if(th->datetime)
+		g_date_time_unref(th->datetime);
+	th->datetime = g_date_time_to_local(th->datetimeUTC);
 
-	return abstract_d(1000*g_date_time_to_unix(th->datetime) + th->millisecond);
+	return abstract_d(1000*g_date_time_to_unix(th->datetime));
 }
 
 ASFUNCTIONBODY(Date,setUTCDate)
@@ -401,9 +531,14 @@ ASFUNCTIONBODY(Date,setUTCDate)
 
 	th->day = d;
 
-	th->datetime = g_date_time_new_utc(th->year, th->month, th->day, th->hour, th->minute, th->second);
+	if(th->datetimeUTC)
+		g_date_time_unref(th->datetimeUTC);
+	th->datetimeUTC = g_date_time_new_utc(th->year, th->month, th->day, th->hour, th->minute, th->second);
+	if(th->datetime)
+		g_date_time_unref(th->datetime);
+	th->datetime = g_date_time_to_local(th->datetimeUTC);
 
-	return abstract_d(1000*g_date_time_to_unix(th->datetime) + th->millisecond);
+	return abstract_d(1000*g_date_time_to_unix(th->datetime));
 }
 
 ASFUNCTIONBODY(Date,setUTCHours)
@@ -418,11 +553,16 @@ ASFUNCTIONBODY(Date,setUTCHours)
 	if (sec)
 		th->second = sec;
 	if (ms)
-		th->millisecond = ms;
+		th->second += ms/1000;
 
-	th->datetime = g_date_time_new_utc(th->year, th->month, th->day, th->hour, th->minute, th->second);
+	if(th->datetimeUTC)
+		g_date_time_unref(th->datetimeUTC);
+	th->datetimeUTC = g_date_time_new_utc(th->year, th->month, th->day, th->hour, th->minute, th->second);
+	if(th->datetime)
+		g_date_time_unref(th->datetime);
+	th->datetime = g_date_time_to_local(th->datetimeUTC);
 
-	return abstract_d(1000*g_date_time_to_unix(th->datetime) + th->millisecond);
+	return abstract_d(1000*g_date_time_to_unix(th->datetime));
 }
 
 ASFUNCTIONBODY(Date,setUTCMinutes)
@@ -435,11 +575,16 @@ ASFUNCTIONBODY(Date,setUTCMinutes)
 	if (sec)
 		th->second = sec;
 	if (ms)
-		th->millisecond = ms;
+		th->second += ms/1000;
 
-	th->datetime = g_date_time_new_utc(th->year, th->month, th->day, th->hour, th->minute, th->second);
+	if(th->datetimeUTC)
+		g_date_time_unref(th->datetimeUTC);
+	th->datetimeUTC = g_date_time_new_utc(th->year, th->month, th->day, th->hour, th->minute, th->second);
+	if(th->datetime)
+		g_date_time_unref(th->datetime);
+	th->datetime = g_date_time_to_local(th->datetimeUTC);
 
-	return abstract_d(1000*g_date_time_to_unix(th->datetime) + th->millisecond);
+	return abstract_d(1000*g_date_time_to_unix(th->datetime));
 }
 
 ASFUNCTIONBODY(Date,setUTCSeconds)
@@ -451,10 +596,16 @@ ASFUNCTIONBODY(Date,setUTCSeconds)
 
 	th->second = sec;
 	if (ms)
-		th->millisecond = ms;
-	th->datetime = g_date_time_new_utc(th->year, th->month, th->day, th->hour, th->minute, th->second);
+		th->second += ms/1000;
 
-	return abstract_d(1000*g_date_time_to_unix(th->datetime) + th->millisecond);
+	if(th->datetimeUTC)
+		g_date_time_unref(th->datetimeUTC);
+	th->datetimeUTC = g_date_time_new_utc(th->year, th->month, th->day, th->hour, th->minute, th->second);
+	if(th->datetime)
+		g_date_time_unref(th->datetime);
+	th->datetime = g_date_time_to_local(th->datetimeUTC);
+
+	return abstract_d(1000*g_date_time_to_unix(th->datetime));
 }
 
 ASFUNCTIONBODY(Date,setUTCMilliseconds)
@@ -463,24 +614,57 @@ ASFUNCTIONBODY(Date,setUTCMilliseconds)
 	number_t ms;
 	ARG_UNPACK (ms);
 
-	th->datetime = g_date_time_add(th->datetime, gint64(ms)/1000*G_TIME_SPAN_SECOND);
-	th->millisecond = uint64_t(ms) % 1000;
+	th->second = floor(th->second) + ms/1000;
 
-	return abstract_d(1000*g_date_time_to_unix(th->datetime) + th->millisecond);
+	if(th->datetimeUTC)
+		g_date_time_unref(th->datetimeUTC);
+	th->datetimeUTC = g_date_time_new_utc(th->year, th->month, th->day, th->hour, th->minute, th->second);
+	if(th->datetime)
+		g_date_time_unref(th->datetime);
+	th->datetime = g_date_time_to_local(th->datetimeUTC);
+
+	return abstract_d(1000*g_date_time_to_unix(th->datetime));
+}
+
+ASFUNCTIONBODY(Date,setTime)
+{
+	Date* th=static_cast<Date*>(obj);
+	if(th->nan) {
+		return abstract_d(Number::NaN);
+	}
+	number_t ms;
+	ARG_UNPACK (ms);
+	gint64 m = gint64(ms);
+
+	th->extrayears = 400*(m/MS_IN_400_YEARS);
+	m %= MS_IN_400_YEARS;
+	if(th->datetimeUTC)
+		g_date_time_unref(th->datetimeUTC);
+	th->datetimeUTC = g_date_time_new_from_unix_utc(m/1000);
+	th->datetimeUTC = g_date_time_add(th->datetimeUTC, (m%1000)*1000);
+	if(th->datetime)
+		g_date_time_unref(th->datetime);
+	th->datetime = g_date_time_to_local(th->datetimeUTC);
+	return abstract_d(ms);
 }
 
 ASFUNCTIONBODY(Date,valueOf)
 {
 	Date* th=static_cast<Date*>(obj);
+	if(th->nan) {
+		return abstract_d(Number::NaN);
+	}
 	return th->msSinceEpoch();
 }
 
 ASObject* Date::msSinceEpoch()
 {
-	return abstract_d(1000*g_date_time_to_unix(datetime) + extrayears/400*MS_IN_400_YEARS + millisecond);
+	return abstract_d(1000*g_date_time_to_unix(datetime) +
+						extrayears/400*MS_IN_400_YEARS +
+						g_date_time_get_microsecond(datetime)/1000);
 }
 
-tiny_string Date::toString(bool debugMsg)
+tiny_string Date::toString()
 {
 	assert_and_throw(implEnable);
 	return toString_priv();
@@ -489,6 +673,12 @@ tiny_string Date::toString(bool debugMsg)
 tiny_string Date::toString_priv() const
 {
 	return g_date_time_format(datetime, "%a %b %e %H:%M:%S %Z%z %Y");
+}
+
+ASFUNCTIONBODY(Date,_toString)
+{
+	Date* th=static_cast<Date*>(obj);
+	return Class<ASString>::getInstanceS(th->toString());
 }
 
 void Date::serialize(ByteArray* out, std::map<tiny_string, uint32_t>& stringMap,

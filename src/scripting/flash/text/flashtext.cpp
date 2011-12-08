@@ -20,7 +20,6 @@
 #include "flashtext.h"
 #include "class.h"
 #include "compat.h"
-#include "backends/rendering.h"
 #include "backends/geometry.h"
 #include "backends/graphics.h"
 #include "argconv.h"
@@ -54,7 +53,7 @@ ASFUNCTIONBODY(lightspark::Font,enumerateFonts)
 void TextField::sinit(Class_base* c)
 {
 	c->setConstructor(NULL);
-	c->super=Class<DisplayObject>::getRef();
+	c->setSuper(Class<DisplayObject>::getRef());
 	c->setDeclaredMethodByQName("width","",Class<IFunction>::getFunction(TextField::_getWidth),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("width","",Class<IFunction>::getFunction(TextField::_setWidth),SETTER_METHOD,true);
 	c->setDeclaredMethodByQName("height","",Class<IFunction>::getFunction(TextField::_getHeight),GETTER_METHOD,true);
@@ -242,7 +241,7 @@ ASFUNCTIONBODY(TextField,_setTextFormat)
 	if(tf->getObjectType() == T_NULL)
 		return NULL;
 
-	if(tf->color != NULL)
+	if(tf->color)
 		th->textColor = tf->color->toUInt();
 
 	LOG(LOG_NOT_IMPLEMENTED,"setTextFormat does not read all fields of TextFormat");
@@ -276,7 +275,7 @@ void TextField::requestInvalidation()
 {
 	incRef();
 	updateSizes();
-	sys->addToInvalidateQueue(_MR(this));
+	getSys()->addToInvalidateQueue(_MR(this));
 }
 
 void TextField::invalidate()
@@ -304,7 +303,7 @@ void TextField::invalidate()
 	CairoPangoRenderer* r=new CairoPangoRenderer(this, cachedSurface, *this,
 				getConcatenatedMatrix(), x, y, width, height, 1.0f,
 				getConcatenatedAlpha());
-	sys->addJob(r);
+	getSys()->addJob(r);
 }
 
 void TextField::renderImpl(bool maskEnabled, number_t t1, number_t t2, number_t t3, number_t t4) const
@@ -343,7 +342,7 @@ void TextFormatAlign ::sinit(Class_base* c)
 void TextFormat::sinit(Class_base* c)
 {
 	c->setConstructor(NULL);
-	c->super=Class<ASObject>::getRef();
+	c->setSuper(Class<ASObject>::getRef());
 	REGISTER_GETTER_SETTER(c,color);
 }
 
@@ -362,7 +361,7 @@ void StyleSheet::finalize()
 void StyleSheet::sinit(Class_base* c)
 {
 	c->setConstructor(NULL);
-	c->super=Class<EventDispatcher>::getRef();
+	c->setSuper(Class<EventDispatcher>::getRef());
 	c->setDeclaredMethodByQName("styleNames","",Class<IFunction>::getFunction(_getStyleNames),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("setStyle","",Class<IFunction>::getFunction(setStyle),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("getStyle","",Class<IFunction>::getFunction(getStyle),NORMAL_METHOD,true);
@@ -419,7 +418,7 @@ void StaticText::sinit(Class_base* c)
 {
 	//TODO: spec says that constructor should throw ArgumentError
 	c->setConstructor(NULL);
-	c->super=Class<InteractiveObject>::getRef();
+	c->setSuper(Class<InteractiveObject>::getRef());
 	c->setDeclaredMethodByQName("text","",Class<IFunction>::getFunction(_getText),GETTER_METHOD,true);
 }
 

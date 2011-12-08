@@ -28,7 +28,7 @@ namespace lightspark
 template<class T> class TemplatedClass;
 class Vector: public ASObject
 {
-	Class_base* vec_type;
+	Type* vec_type;
 	bool fixed;
 	std::vector<ASObject*> vec;
 public:
@@ -37,10 +37,12 @@ public:
 	static void buildTraits(ASObject* o) {};
 	static ASObject* generator(TemplatedClass<Vector>* o_class, ASObject* const* args, const unsigned int argslen);
 
-	void setTypes(const std::vector<Class_base*>& types);
+	void setTypes(const std::vector<Type*>& types);
 
 	//Overloads
 	tiny_string toString(bool debugMsg=false);
+	void setVariableByMultiname(const multiname& name, ASObject* o);
+	bool hasPropertyByMultiname(const multiname& name, bool considerDynamic);
 	_NR<ASObject> getVariableByMultiname(const multiname& name, GET_VARIABLE_OPTION opt);
 
 	//TODO: do we need to implement generator?
@@ -48,6 +50,9 @@ public:
 	ASFUNCTION(_applytype);
 
 	ASFUNCTION(push);
+	ASFUNCTION(getLength);
+	ASFUNCTION(setLength);
+	ASFUNCTION(_toString);
 };
 
 

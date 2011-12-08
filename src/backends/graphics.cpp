@@ -32,35 +32,9 @@
 
 using namespace lightspark;
 
-void lightspark::cleanGLErrors()
-{
-#ifdef EXPENSIVE_DEBUG
-	int errorCount = 0;
-	GLenum err;
-	while(1)
-	{
-		err=glGetError();
-		if(err!=GL_NO_ERROR)
-		{
-			errorCount++;
-			LOG(LOG_ERROR,_("GL error ")<< err);
-		}
-		else
-			break;
-	}
-
-	if(errorCount)
-	{
-		LOG(LOG_ERROR,_("Ignoring ") << errorCount << _(" openGL errors"));
-	}
-#else
-	while(glGetError()!=GL_NO_ERROR);
-#endif
-}
-
 void TextureBuffer::setAllocSize(uint32_t w, uint32_t h)
 {
-	if(rt->hasNPOTTextures)
+	if(getRenderThread()->hasNPOTTextures)
 	{
 		allocWidth=w;
 		allocHeight=h;
@@ -107,7 +81,6 @@ void TextureBuffer::init(uint32_t w, uint32_t h, GLenum f)
 {
 	assert(!inited);
 	inited=true;
-	cleanGLErrors();
 
 	setAllocSize(w,h);
 	width=w;
@@ -117,7 +90,6 @@ void TextureBuffer::init(uint32_t w, uint32_t h, GLenum f)
 	assert(texId==0);
 	glGenTextures(1,&texId);
 	assert(texId!=0);
-	assert(glGetError()!=GL_INVALID_OPERATION);
 	
 	assert(filtering==GL_NEAREST || filtering==GL_LINEAR);
 	
@@ -130,19 +102,14 @@ void TextureBuffer::init(uint32_t w, uint32_t h, GLenum f)
 	
 	//Allocate the texture
 	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, allocWidth, allocHeight, 0, GL_BGRA, GL_UNSIGNED_BYTE, 0);
-	GLenum err=glGetError();
-	assert(err!=GL_INVALID_OPERATION);
-	if(err==GL_INVALID_VALUE)
-	{
-		LOG(LOG_ERROR,_("GL_INVALID_VALUE after glTexImage2D, width=") << allocWidth << _(" height=") << allocHeight);
-		throw RunTimeException("GL_INVALID_VALUE in TextureBuffer::init");
-	}
 	
 	glBindTexture(GL_TEXTURE_2D,0);
 	
-#ifdef EXPENSIVE_DEBUG
-	cleanGLErrors();
-#endif
+	if(RenderThread::handleGLErrors())
+	{
+		LOG(LOG_ERROR,_("OpenGL error in TextureBuffer::init"));
+		throw RunTimeException("OpenGL error in TextureBuffer::init");
+	}
 }
 
 void TextureBuffer::resize(uint32_t w, uint32_t h)
@@ -154,21 +121,15 @@ void TextureBuffer::resize(uint32_t w, uint32_t h)
 			glBindTexture(GL_TEXTURE_2D,texId);
 			LOG(LOG_CALLS,_("Reallocating texture to size ") << w << 'x' << h);
 			setAllocSize(w,h);
-			while(glGetError()!=GL_NO_ERROR);
 			glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, allocWidth, allocHeight, 0, GL_BGRA, GL_UNSIGNED_BYTE, 0);
-			GLenum err=glGetError();
-			assert(err!=GL_INVALID_OPERATION);
-			if(err==GL_INVALID_VALUE)
+			if(RenderThread::handleGLErrors())
 			{
-				LOG(LOG_ERROR,_("GL_INVALID_VALUE after glTexImage2D, width=") << allocWidth << _(" height=") << allocHeight);
-				throw RunTimeException("GL_INVALID_VALUE in TextureBuffer::resize");
+				LOG(LOG_ERROR,_("OpenGL error in TextureBuffer::resize"));
+				throw RunTimeException("OpenGL error in TextureBuffer::resize");
 			}
 		}
 		width=w;
 		height=h;
-#ifdef EXPENSIVE_DEBUG
-		cleanGLErrors();
-#endif
 	}
 }
 
@@ -181,8 +142,6 @@ void TextureBuffer::setRequestedAlignment(uint32_t w, uint32_t h)
 
 void TextureBuffer::setTexScale(GLuint uniformLocation)
 {
-	cleanGLErrors();
-
 	float v1=width;
 	float v2=height;
 	v1/=allocWidth;
@@ -192,18 +151,12 @@ void TextureBuffer::setTexScale(GLuint uniformLocation)
 
 void TextureBuffer::bind()
 {
-	cleanGLErrors();
-
 	glBindTexture(GL_TEXTURE_2D,texId);
-	assert(glGetError()==GL_NO_ERROR);
 }
 
 void TextureBuffer::unbind()
 {
-	cleanGLErrors();
-
 	glBindTexture(GL_TEXTURE_2D,0);
-	assert(glGetError()==GL_NO_ERROR);
 }
 
 void TextureBuffer::shutdown()
@@ -239,7 +192,7 @@ MatrixApplier::MatrixApplier(const MATRIX& m)
 	float matrix[16];
 	m.get4DMatrix(matrix);
 	lsglMultMatrixf(matrix);
-	rt->setMatrixUniform(LSGL_MODELVIEW);
+	getRenderThread()->setMatrixUniform(LSGL_MODELVIEW);
 }
 
 void MatrixApplier::concat(const MATRIX& m)
@@ -247,13 +200,13 @@ void MatrixApplier::concat(const MATRIX& m)
 	float matrix[16];
 	m.get4DMatrix(matrix);
 	lsglMultMatrixf(matrix);
-	rt->setMatrixUniform(LSGL_MODELVIEW);
+	getRenderThread()->setMatrixUniform(LSGL_MODELVIEW);
 }
 
 void MatrixApplier::unapply()
 {
 	lsglPopMatrix();
-	rt->setMatrixUniform(LSGL_MODELVIEW);
+	getRenderThread()->setMatrixUniform(LSGL_MODELVIEW);
 }
 
 TextureChunk::TextureChunk(uint32_t w, uint32_t h)
@@ -272,9 +225,7 @@ TextureChunk::TextureChunk(uint32_t w, uint32_t h)
 
 TextureChunk::TextureChunk(const TextureChunk& r):texId(0),chunks(NULL),width(r.width),height(r.height)
 {
-	assert(chunks==NULL);
-	assert(width==0 && height==0);
-	assert(texId==0);
+	*this = r;
 	return;
 }
 
@@ -283,7 +234,7 @@ TextureChunk& TextureChunk::operator=(const TextureChunk& r)
 	if(chunks)
 	{
 		//We were already initialized, so first clean up
-		sys->getRenderThread()->releaseTexture(*this);
+		getSys()->getRenderThread()->releaseTexture(*this);
 		delete[] chunks;
 	}
 	width=r.width;
@@ -320,7 +271,7 @@ bool TextureChunk::resizeIfLargeEnough(uint32_t w, uint32_t h)
 	if(w==0 || h==0)
 	{
 		//The texture collapsed, release the resources
-		sys->getRenderThread()->releaseTexture(*this);
+		getSys()->getRenderThread()->releaseTexture(*this);
 		delete[] chunks;
 		chunks=NULL;
 		width=w;
@@ -370,7 +321,7 @@ const TextureChunk& CairoRenderer::getTexture()
 	 * so we need no locking for surface */
 	//Verify that the texture is large enough
 	if(!surface.tex.resizeIfLargeEnough(width, height))
-		surface.tex=sys->getRenderThread()->allocateTexture(width, height,false);
+		surface.tex=getSys()->getRenderThread()->allocateTexture(width, height,false);
 	surface.xOffset=xOffset;
 	surface.yOffset=yOffset;
 	surface.alpha=alpha;
@@ -404,7 +355,7 @@ void CairoRenderer::jobFence()
 	//If the data must be uploaded (there were no errors) the Job add itself to the upload queue.
 	//Otherwise it destroys itself
 	if(uploadNeeded)
-		sys->getRenderThread()->addUploadJob(this);
+		getSys()->getRenderThread()->addUploadJob(this);
 	else
 		delete this;
 }
@@ -497,11 +448,9 @@ cairo_pattern_t* CairoTokenRenderer::FILLSTYLEToCairo(const FILLSTYLE& style, do
 			if(style.bitmap==NULL)
 				throw RunTimeException("Invalid bitmap");
 
-			IntSize size = style.bitmap->getBitmapSize();
-
 			cairo_surface_t* surface = cairo_image_surface_create_for_data (style.bitmap->data,
-										CAIRO_FORMAT_ARGB32, size.width, size.height,
-										cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, size.width));
+										CAIRO_FORMAT_ARGB32, style.bitmap->width, style.bitmap->height,
+										cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, style.bitmap->width));
 
 			pattern = cairo_pattern_create_for_surface(surface);
 			cairo_surface_destroy(surface);
@@ -549,9 +498,15 @@ bool CairoTokenRenderer::cairoPathFromTokens(cairo_t* cr, const std::vector<Geom
 	cairo_set_operator(stroke_cr, CAIRO_OPERATOR_DEST);
 	cairo_set_operator(cr, CAIRO_OPERATOR_DEST);
 
+#ifdef _MSC_VER
+	#define PATH(operation, ...) \
+		operation(cr, __VA_ARGS__); \
+		operation(stroke_cr, __VA_ARGS__);
+#else
 	#define PATH(operation, args...) \
 		operation(cr, ## args); \
 		operation(stroke_cr, ## args);
+#endif
 
 	for(uint32_t i=0;i<tokens.size();i++)
 	{
@@ -707,8 +662,8 @@ void CairoRenderer::execute()
 		return;
 	}
 
-	int32_t windowWidth=sys->getRenderThread()->windowWidth;
-	int32_t windowHeight=sys->getRenderThread()->windowHeight;
+	int32_t windowWidth=getSys()->getRenderThread()->windowWidth;
+	int32_t windowHeight=getSys()->getRenderThread()->windowHeight;
 	//Discard stuff that it's outside the visible part
 	if(xOffset >= windowWidth || yOffset >= windowHeight
 		|| xOffset + width <= 0 || yOffset + height <= 0)
@@ -773,7 +728,7 @@ bool CairoTokenRenderer::isOpaque(const std::vector<GeomToken>& tokens, float sc
 {
 	//We render the alpha value of a single pixel, hopefully this is not too slow
 	int32_t cairoWidthStride=cairo_format_stride_for_width(CAIRO_FORMAT_A8, 1);
-	uint8_t* pixelBytes=new uint8_t[cairoWidthStride];
+	uint8_t* pixelBytes=g_newa(uint8_t, cairoWidthStride);
 	cairo_surface_t* cairoSurface=cairo_image_surface_create_for_data(pixelBytes, CAIRO_FORMAT_A8, 1, 1, cairoWidthStride);
 
 	cairo_t* cr=cairo_create(cairoSurface);
@@ -793,10 +748,11 @@ bool CairoTokenRenderer::isOpaque(const std::vector<GeomToken>& tokens, float sc
 	return pixelBytes[0]!=0x00;
 }
 
-uint8_t* CairoRenderer::convertBitmapWithAlphaToCairo(uint8_t* inData, uint32_t width, uint32_t height)
+uint8_t* CairoRenderer::convertBitmapWithAlphaToCairo(uint8_t* inData, uint32_t width, uint32_t height, size_t* dataSize)
 {
 	uint32_t stride = cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, width);
-	uint8_t* outData = new uint8_t[stride * height];
+	*dataSize = stride * height;
+	uint8_t* outData = new uint8_t[*dataSize];
 	uint32_t* inData32 = (uint32_t*)inData;
 
 	for(uint32_t i = 0; i < height; i++)
@@ -804,16 +760,17 @@ uint8_t* CairoRenderer::convertBitmapWithAlphaToCairo(uint8_t* inData, uint32_t 
 		for(uint32_t j = 0; j < width; j++)
 		{
 			uint32_t* outDataPos = (uint32_t*)(outData+i*stride) + j;
-			*outDataPos = BigEndianToHost32( *(inData32+(i*width+j)) );
+			*outDataPos = GINT32_FROM_BE( *(inData32+(i*width+j)) );
 		}
 	}
 	return outData;
 }
 
-uint8_t* CairoRenderer::convertBitmapToCairo(uint8_t* inData, uint32_t width, uint32_t height)
+uint8_t* CairoRenderer::convertBitmapToCairo(uint8_t* inData, uint32_t width, uint32_t height, size_t* dataSize)
 {
 	uint32_t stride = cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, width);
-	uint8_t* outData = new uint8_t[stride * height];
+	*dataSize = stride * height;
+	uint8_t* outData = new uint8_t[*dataSize];
 	for(uint32_t i = 0; i < height; i++)
 	{
 		for(uint32_t j = 0; j < width; j++)
@@ -825,13 +782,13 @@ uint8_t* CairoRenderer::convertBitmapToCairo(uint8_t* inData, uint32_t width, ui
 			/* copy the RGB bytes to rgbData */
 			memcpy(rgbData, inData+(i*width+j)*3, 3);
 			/* cairo needs this in host endianess */
-			*outDataPos = BigEndianToHost32(pdata);
+			*outDataPos = GINT32_FROM_BE(pdata);
 		}
 	}
 	return outData;
 }
 
-Mutex CairoPangoRenderer::pangoMutex("pangoMutex");
+StaticMutex CairoPangoRenderer::pangoMutex = GLIBMM_STATIC_MUTEX_INIT;
 
 void CairoPangoRenderer::pangoLayoutFromData(PangoLayout* layout, const TextData& tData)
 {

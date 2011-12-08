@@ -64,6 +64,8 @@ public:
 	ASFUNCTION(readInt);
 	ASFUNCTION(readUnsignedInt);
 	ASFUNCTION(readObject);
+	ASFUNCTION(readUTF);
+	ASFUNCTION(readUTFBytes);
 	ASFUNCTION(writeByte);
 	ASFUNCTION(writeBytes);
 	ASFUNCTION(writeDouble);
@@ -71,6 +73,7 @@ public:
 	ASFUNCTION(writeInt);
 	ASFUNCTION(writeUnsignedInt);
 	ASFUNCTION(writeObject);
+	ASFUNCTION(writeUTF);
 	ASFUNCTION(writeUTFBytes);
 	ASFUNCTION(_toString);
 
@@ -210,7 +213,7 @@ public:
 class IntervalManager
 {
 private:
-	sem_t mutex;
+	Mutex mutex;
 	std::map<uint32_t,IntervalRunner*> runners;
 	uint32_t currentID;
 public:

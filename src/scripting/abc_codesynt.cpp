@@ -78,7 +78,6 @@ typed_opcode_handler ABCVm::opcode_table_uint32_t[]={
 	{"bitOr_oi",(void*)&ABCVm::bitOr_oi,ARGS_OBJ_INT},
 	{"lShift",(void*)&ABCVm::lShift,ARGS_OBJ_OBJ},
 	{"lShift_io",(void*)&ABCVm::lShift_io,ARGS_INT_OBJ},
-	{"modulo",(void*)&ABCVm::modulo,ARGS_OBJ_OBJ},
 	{"urShift",(void*)&ABCVm::urShift,ARGS_OBJ_OBJ},
 	{"rShift",(void*)&ABCVm::rShift,ARGS_OBJ_OBJ},
 	{"urShift_io",(void*)&ABCVm::urShift_io,ARGS_INT_OBJ},
@@ -178,7 +177,8 @@ typed_opcode_handler ABCVm::opcode_table_voidptr[]={
 	{"getScopeObject",(void*)&ABCVm::getScopeObject,ARGS_CONTEXT_INT},
 	{"getSlot",(void*)&ABCVm::getSlot,ARGS_OBJ_INT},
 	{"convert_s",(void*)&ABCVm::convert_s,ARGS_OBJ},
-	{"coerce_s",(void*)&ABCVm::coerce_s,ARGS_OBJ}
+	{"coerce_s",(void*)&ABCVm::coerce_s,ARGS_OBJ},
+	{"esc_xattr",(void*)&ABCVm::esc_xattr,ARGS_OBJ},
 };
 
 typed_opcode_handler ABCVm::opcode_table_bool_t[]={
@@ -213,6 +213,7 @@ typed_opcode_handler ABCVm::opcode_table_bool_t[]={
 	{"convert_b",(void*)&ABCVm::convert_b,ARGS_OBJ},
 	{"hasNext2",(void*)ABCVm::hasNext2,ARGS_CONTEXT_INT_INT},
 	{"deleteProperty",(void*)&ABCVm::deleteProperty,ARGS_OBJ_OBJ},
+	{"instanceOf",(void*)&ABCVm::instanceOf,ARGS_OBJ_OBJ},
 };
 
 void ABCVm::registerFunctions()
@@ -231,7 +232,6 @@ void ABCVm::registerFunctions()
 	void_type=llvm::Type::getVoidTy(llvm_context);
 	int_type=llvm::IntegerType::get(getVm()->llvm_context,32);
 	intptr_type=int_type->getPointerTo();
-	assert(int_type != ptr_type); //needed in stackTypeFromLLVMType()
 
 	//All the opcodes needs a pointer to the context
 	std::vector<const llvm::Type*> struct_elems;
@@ -498,7 +498,7 @@ static llvm::Value* llvm_stack_pop(llvm::IRBuilder<>& builder,llvm::Value* dynam
 {
 	//decrement stack index
 	llvm::Value* index=builder.CreateLoad(dynamic_stack_index);
-	llvm::Constant* constant = llvm::ConstantInt::get(llvm::IntegerType::get(sys->currentVm->llvm_context,32), 1);
+	llvm::Constant* constant = llvm::ConstantInt::get(llvm::IntegerType::get(getVm()->llvm_context,32), 1);
 	llvm::Value* index2=builder.CreateSub(index,constant);
 	builder.CreateStore(index2,dynamic_stack_index);
 
@@ -702,6 +702,23 @@ void method_info::consumeStackForRTMultiname(static_stack_types_vector& stack, i
 			stack.pop_back();
 		else
 			break;
+	}
+}
+
+/* Implements ECMA's ToNumber algorith */
+static llvm::Value* llvm_ToNumber(llvm::ExecutionEngine* ex, llvm::IRBuilder<>& Builder, stack_entry& e)
+{
+	switch(e.second)
+	{
+	case STACK_BOOLEAN:
+	case STACK_INT:
+		return Builder.CreateSIToFP(e.first,number_type);
+	case STACK_UINT:
+		return Builder.CreateUIToFP(e.first,number_type);
+	case STACK_NUMBER:
+		return e.first;
+	default:
+		return Builder.CreateCall(ex->FindFunctionNamed("convert_d"), e.first);
 	}
 }
 
@@ -1276,6 +1293,7 @@ void method_info::doAnalysis(std::map<unsigned int,block_info>& blocks, llvm::IR
 					popTypeFromStack(static_stack_types,local_ip);
 					break;
 				}
+				case 0x72: //esc_xattr
 				case 0x70: //convert_s
 				{
 					popTypeFromStack(static_stack_types,local_ip);
@@ -1400,18 +1418,11 @@ void method_info::doAnalysis(std::map<unsigned int,block_info>& blocks, llvm::IR
 						static_stack_types.push_back(make_pair(local_ip,STACK_OBJECT));
 						cur_block->checkProactiveCasting(local_ip,STACK_OBJECT);
 					}
-					else if(t1==STACK_INT && t2==STACK_INT)
-					{
-						static_stack_types.push_back(make_pair(local_ip,STACK_INT));
-						cur_block->checkProactiveCasting(local_ip,STACK_INT);
-					}
-					else if(t1==STACK_NUMBER || t2==STACK_NUMBER)
+					else /* both t1 and t2 are UINT or INT or NUMBER or BOOLEAN */
 					{
 						static_stack_types.push_back(make_pair(local_ip,STACK_NUMBER));
 						cur_block->checkProactiveCasting(local_ip,STACK_NUMBER);
 					}
-					else
-						throw UnsupportedException("Unsuppoted types for add");
 
 					break;
 				}
@@ -1445,23 +1456,10 @@ void method_info::doAnalysis(std::map<unsigned int,block_info>& blocks, llvm::IR
 				}
 				case 0xa4: //modulo
 				{
-					STACK_TYPE t1,t2;
-					t1=popTypeFromStack(static_stack_types,local_ip).second;
-					t2=popTypeFromStack(static_stack_types,local_ip).second;
+					popTypeFromStack(static_stack_types,local_ip).second;
+					popTypeFromStack(static_stack_types,local_ip).second;
 
-					if(t1==STACK_OBJECT || t2==STACK_OBJECT)
-						static_stack_types.push_back(make_pair(local_ip,STACK_INT));
-					else if(t1==STACK_INT && t2==STACK_NUMBER)
-						static_stack_types.push_back(make_pair(local_ip,STACK_INT));
-					else if(t1==STACK_NUMBER && t2==STACK_INT)
-						static_stack_types.push_back(make_pair(local_ip,STACK_INT));
-					else if(t1==STACK_INT && t2==STACK_INT)
-						static_stack_types.push_back(make_pair(local_ip,STACK_INT));
-					else if(t1==STACK_NUMBER && t2==STACK_NUMBER)
-						static_stack_types.push_back(make_pair(local_ip,STACK_INT));
-					else
-						throw UnsupportedException("Unsuppoted types for modulo");
-					cur_block->checkProactiveCasting(local_ip,STACK_INT);
+					cur_block->checkProactiveCasting(local_ip,STACK_NUMBER);
 					break;
 				}
 				case 0xa5: //lshift
@@ -1488,6 +1486,7 @@ void method_info::doAnalysis(std::map<unsigned int,block_info>& blocks, llvm::IR
 				case 0xae: //lessequals
 				case 0xaf: //greaterthan
 				case 0xb0: //greaterequals
+				case 0xb1: //instanceOf
 				case 0xb3: //istypelate
 				case 0xb4: //in
 				{
@@ -1813,7 +1812,7 @@ SyntheticFunction::synt_function method_info::synt_method()
 	llvm::Value* t=Builder.CreateGEP(locals,constant); /*Compute locals[i] = locals + i*/ \
         t=Builder.CreateLoad(t,"Primitive*"); /*Load Primitive* n = locals[i]*/
 
-	for(int i=0;i<paramTypes.size();++i)
+	for(unsigned i=0;i<paramTypes.size();++i)
 	{
 		if(paramTypes[i] == Class<Number>::getClass())
 		{
@@ -3342,6 +3341,14 @@ SyntheticFunction::synt_function method_info::synt_method()
 				static_stack_push(static_stack,stack_entry(value,STACK_OBJECT));
 				break;
 			}
+			case 0x72: //esc_xattr
+			{
+				LOG(LOG_TRACE, _("synt esc_xattr") );
+				stack_entry v1=static_stack_pop(Builder,static_stack,dynamic_stack,dynamic_stack_index);
+				abstract_value(ex,Builder,v1);
+				value=Builder.CreateCall(ex->FindFunctionNamed("esc_xattr"), v1.first);
+				static_stack_push(static_stack,stack_entry(value,STACK_OBJECT));
+			}
 			case 0x73:
 			{
 				//convert_i
@@ -3377,13 +3384,7 @@ SyntheticFunction::synt_function method_info::synt_method()
 				//convert_d
 				LOG(LOG_TRACE, _("synt convert_d") );
 				stack_entry v1=static_stack_pop(Builder,static_stack,dynamic_stack,dynamic_stack_index);
-				if(v1.second==STACK_INT)
-					value=Builder.CreateSIToFP(v1.first,number_type);
-				else if(v1.second==STACK_NUMBER)
-					value=v1.first;
-				else
-					value=Builder.CreateCall(ex->FindFunctionNamed("convert_d"), v1.first);
-
+				value = llvm_ToNumber(ex, Builder, v1);
 				static_stack_push(static_stack,stack_entry(value,STACK_NUMBER));
 				break;
 			}
@@ -3473,25 +3474,11 @@ SyntheticFunction::synt_function method_info::synt_method()
 				//increment
 				stack_entry v1=static_stack_pop(Builder,static_stack,dynamic_stack,dynamic_stack_index);
 				LOG(LOG_TRACE, "synt increment " << v1.second);
-				if(v1.second==STACK_INT)
-				{
-					constant = llvm::ConstantInt::get(int_type, 1);
-					value=Builder.CreateAdd(v1.first,constant);
-					static_stack_push(static_stack,stack_entry(value,STACK_INT));
-				}
-				else if(v1.second==STACK_NUMBER)
-				{
-					constant = llvm::ConstantInt::get(int_type, 1);
-					//convert constant to float and add
-					value=Builder.CreateFAdd(v1.first,Builder.CreateSIToFP(constant,number_type));
-					static_stack_push(static_stack,stack_entry(value,STACK_NUMBER));
-				}
-				else
-				{
-					abstract_value(ex,Builder,v1);
-					value=Builder.CreateCall(ex->FindFunctionNamed("increment"), v1.first);
-					static_stack_push(static_stack,stack_entry(value,STACK_NUMBER));
-				}
+				value = llvm_ToNumber(ex, Builder, v1);
+				//Create floating point '1' by converting an int '1'
+				constant = llvm::ConstantInt::get(int_type, 1);
+				value=Builder.CreateFAdd(value, Builder.CreateSIToFP(constant, number_type));
+				static_stack_push(static_stack,stack_entry(value,STACK_NUMBER));
 				break;
 			}
 			case 0x93:
@@ -3499,18 +3486,11 @@ SyntheticFunction::synt_function method_info::synt_method()
 				//decrement
 				LOG(LOG_TRACE, _("synt decrement") );
 				stack_entry v1=static_stack_pop(Builder,static_stack,dynamic_stack,dynamic_stack_index);
-				if(v1.second==STACK_INT)
-				{
-					constant = llvm::ConstantInt::get(int_type, 1);
-					value=Builder.CreateSub(v1.first,constant);
-					static_stack_push(static_stack,stack_entry(value,STACK_INT));
-				}
-				else
-				{
-					abstract_value(ex,Builder,v1);
-					value=Builder.CreateCall(ex->FindFunctionNamed("decrement"), v1.first);
-					static_stack_push(static_stack,stack_entry(value,STACK_NUMBER));
-				}
+				value = llvm_ToNumber(ex, Builder, v1);
+				//Create floating point '1' by converting an int '1'
+				constant = llvm::ConstantInt::get(int_type, 1);
+				value=Builder.CreateFSub(value, Builder.CreateSIToFP(constant, number_type));
+				static_stack_push(static_stack,stack_entry(value,STACK_NUMBER));
 				break;
 			}
 			case 0x95:
@@ -3561,12 +3541,7 @@ SyntheticFunction::synt_function method_info::synt_method()
 				LOG(LOG_TRACE, _("synt add") );
 				stack_entry v1=static_stack_pop(Builder,static_stack,dynamic_stack,dynamic_stack_index);
 				stack_entry v2=static_stack_pop(Builder,static_stack,dynamic_stack,dynamic_stack_index);
-				if(v1.second==STACK_INT && v2.second==STACK_OBJECT)
-				{
-					value=Builder.CreateCall2(ex->FindFunctionNamed("add_oi"), v2.first, v1.first);
-					static_stack_push(static_stack,stack_entry(value,STACK_OBJECT));
-				}
-				else if(v1.second==STACK_OBJECT && v2.second==STACK_INT)
+				if(v1.second==STACK_OBJECT && v2.second==STACK_INT)
 				{
 					value=Builder.CreateCall2(ex->FindFunctionNamed("add_oi"), v1.first, v2.first);
 					static_stack_push(static_stack,stack_entry(value,STACK_OBJECT));
@@ -3576,51 +3551,18 @@ SyntheticFunction::synt_function method_info::synt_method()
 					value=Builder.CreateCall2(ex->FindFunctionNamed("add_od"), v1.first, v2.first);
 					static_stack_push(static_stack,stack_entry(value,STACK_OBJECT));
 				}
-				else if(v1.second==STACK_NUMBER && v2.second==STACK_OBJECT)
-				{
-					value=Builder.CreateCall2(ex->FindFunctionNamed("add_od"), v2.first, v1.first);
-					static_stack_push(static_stack,stack_entry(value,STACK_OBJECT));
-				}
-				else if(v1.second==STACK_INT && v2.second==STACK_INT)
-				{
-					value=Builder.CreateAdd(v1.first, v2.first);
-					static_stack_push(static_stack,stack_entry(value,STACK_INT));
-				}
-				else if(v1.second==STACK_INT && v2.second==STACK_NUMBER)
-				{
-					v1.first=Builder.CreateSIToFP(v1.first,number_type);
-					value=Builder.CreateFAdd(v1.first, v2.first);
-					static_stack_push(static_stack,stack_entry(value,STACK_NUMBER));
-				}
-				else if(v1.second==STACK_NUMBER && v2.second==STACK_INT)
-				{
-					v2.first=Builder.CreateSIToFP(v2.first,number_type);
-					value=Builder.CreateFAdd(v1.first, v2.first);
-					static_stack_push(static_stack,stack_entry(value,STACK_NUMBER));
-				}
-				else if(v1.second==STACK_NUMBER && v2.second==STACK_UINT)
-				{
-					v2.first=Builder.CreateUIToFP(v2.first,number_type);
-					value=Builder.CreateFAdd(v1.first, v2.first);
-					static_stack_push(static_stack,stack_entry(value,STACK_NUMBER));
-				}
-				else if(v1.second==STACK_UINT && v2.second==STACK_NUMBER)
-				{
-					v1.first=Builder.CreateUIToFP(v1.first,number_type);
-					value=Builder.CreateFAdd(v1.first, v2.first);
-					static_stack_push(static_stack,stack_entry(value,STACK_NUMBER));
-				}
-				else if(v1.second==STACK_NUMBER && v2.second==STACK_NUMBER)
-				{
-					value=Builder.CreateFAdd(v1.first, v2.first);
-					static_stack_push(static_stack,stack_entry(value,STACK_NUMBER));
-				}
-				else
+				else if(v1.second==STACK_OBJECT || v2.second==STACK_OBJECT)
 				{
 					abstract_value(ex,Builder,v1);
 					abstract_value(ex,Builder,v2);
 					value=Builder.CreateCall2(ex->FindFunctionNamed("add"), v1.first, v2.first);
 					static_stack_push(static_stack,stack_entry(value,STACK_OBJECT));
+				}
+				else /* v1 and v2 are BOOLEAN, UINT, INT or NUMBER */
+				{
+					/* adding promotes everything to NUMBER */
+					value=Builder.CreateFAdd(llvm_ToNumber(ex, Builder, v1), llvm_ToNumber(ex, Builder, v2));
+					static_stack_push(static_stack,stack_entry(value,STACK_NUMBER));
 				}
 				break;
 			}
@@ -3761,31 +3703,10 @@ SyntheticFunction::synt_function method_info::synt_method()
 				LOG(LOG_TRACE, _("synt modulo") );
 				stack_entry v2=static_stack_pop(Builder,static_stack,dynamic_stack,dynamic_stack_index);
 				stack_entry v1=static_stack_pop(Builder,static_stack,dynamic_stack,dynamic_stack_index);
-				if(v1.second==STACK_NUMBER && v2.second==STACK_INT)
-				{
-					v1.first=Builder.CreateFPToSI(v1.first,int_type);
-					value=Builder.CreateSRem(v1.first, v2.first);
-					static_stack_push(static_stack,stack_entry(value,STACK_INT));
-				}
-				else if(v1.second==STACK_NUMBER && v2.second==STACK_NUMBER)
-				{
-					v1.first=Builder.CreateFPToSI(v1.first,int_type);
-					v2.first=Builder.CreateFPToSI(v2.first,int_type);
-					value=Builder.CreateSRem(v1.first, v2.first);
-					static_stack_push(static_stack,stack_entry(value,STACK_INT));
-				}
-				else if(v1.second==STACK_INT && v2.second==STACK_INT)
-				{
-					value=Builder.CreateSRem(v1.first, v2.first);
-					static_stack_push(static_stack,stack_entry(value,STACK_INT));
-				}
-				else
-				{
-					abstract_value(ex,Builder,v1);
-					abstract_value(ex,Builder,v2);
-					value=Builder.CreateCall2(ex->FindFunctionNamed("modulo"), v1.first, v2.first);
-					static_stack_push(static_stack,stack_entry(value,STACK_INT));
-				}
+				v1.first = llvm_ToNumber(ex, Builder, v1);
+				v2.first = llvm_ToNumber(ex, Builder, v2);
+				value=Builder.CreateFRem(v1.first, v2.first);
+				static_stack_push(static_stack,stack_entry(value,STACK_NUMBER));
 				break;
 			}
 			case 0xa5:
@@ -4010,6 +3931,19 @@ SyntheticFunction::synt_function method_info::synt_method()
 				static_stack_push(static_stack,stack_entry(value,STACK_BOOLEAN));
 				break;
 			}
+			case 0xb1:
+			{
+				//instanceOf
+				LOG(LOG_TRACE, _("synt instanceof") );
+				stack_entry v2=static_stack_pop(Builder,static_stack,dynamic_stack,dynamic_stack_index);
+				stack_entry v1=static_stack_pop(Builder,static_stack,dynamic_stack,dynamic_stack_index);
+
+				abstract_value(ex,Builder,v1);
+				abstract_value(ex,Builder,v2);
+				value=Builder.CreateCall2(ex->FindFunctionNamed("instanceOf"), v1.first, v2.first);
+				static_stack_push(static_stack,stack_entry(value,STACK_BOOLEAN));
+				break;
+			}
 			case 0xb3:
 			{
 				//istypelate
@@ -4166,7 +4100,7 @@ SyntheticFunction::synt_function method_info::synt_method()
 	{
 		if(it2->second.BB->getTerminator()==NULL)
 		{
-			cout << "start at " << it2->first << endl;
+			LOG(LOG_ERROR, "start at " << it2->first);
 			throw RunTimeException("Missing terminator");
 		}
 	}

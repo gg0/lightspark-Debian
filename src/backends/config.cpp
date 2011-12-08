@@ -19,7 +19,6 @@
 
 #include <glib.h>
 
-#include "swf.h"
 #include "compat.h"
 #include <string>
 #include <boost/filesystem.hpp>
@@ -29,6 +28,42 @@
 using namespace lightspark;
 using namespace std;
 using namespace boost::filesystem;
+
+#ifdef WIN32
+const std::string LS_REG_KEY = "SOFTWARE\\MozillaPlugins\\@lightspark.github.com/Lightspark;version=1";
+std::string readRegistryEntry(std::string name)
+{
+	char lszValue[255];
+	HKEY hKey;
+	LONG returnStatus;
+	DWORD dwType=REG_SZ;
+	DWORD dwSize=sizeof(lszValue);;
+	returnStatus = RegOpenKeyEx(HKEY_CURRENT_USER, LS_REG_KEY.c_str(), 0L, KEY_QUERY_VALUE, &hKey);
+	if(returnStatus != ERROR_SUCCESS)
+	{
+		LOG(LOG_ERROR,"Could not open registry key " << LS_REG_KEY);
+		return "";
+	}
+	returnStatus = RegQueryValueEx(hKey, name.c_str(), NULL, &dwType, (LPBYTE)&lszValue, &dwSize);
+	if(returnStatus != ERROR_SUCCESS)
+	{
+		LOG(LOG_ERROR,"Could not read registry key value " << LS_REG_KEY << "\\" << name);
+		return "";
+	}
+	if(dwType != REG_SZ)
+	{
+		LOG(LOG_ERROR,"Registry key" << LS_REG_KEY << "\\" << name << " has unexpected type");
+		return "";
+	}
+	RegCloseKey(hKey);
+	if(dwSize == 0)
+		return "";
+	/* strip terminating '\0' - string may or may not have one */
+	if(lszValue[dwSize] == '\0')
+		dwSize--;
+	return std::string(lszValue,dwSize);
+}
+#endif
 
 Config::Config():
 	parser(NULL),
@@ -42,8 +77,22 @@ Config::Config():
 {
 	audioBackendNames[0] = "pulseaudio";
 	audioBackendNames[1] = "openal";
-	audioBackendNames[2] = "alsa";
-	audioBackendNames[3] = "sdl";
+	audioBackendNames[2] = "sdl";
+#ifdef AUDIO_BACKEND
+	/* AUDIO_BACKEND is defined by cmake, lets find its index.
+	 * AUDIO_BACKEND may consist of multiple backends,
+	 * then we just leave the default (see above)
+	 */
+	audioBackendName = AUDIO_BACKEND;
+	for(int i=0;i<3;++i)
+	{
+		if(audioBackendName == audioBackendNames[i])
+		{
+			audioBackend = (AUDIOBACKEND)i;
+			break;
+		}
+	}
+#endif
 }
 
 Config::~Config()
@@ -76,7 +125,7 @@ void Config::load()
 	delete parser;
 	parser = NULL;
 
-#ifndef WIN32
+#ifndef _WIN32
 	//Expand tilde in path
 	if(cacheDirectory.length() > 0 && cacheDirectory[0] == '~')
 		cacheDirectory.replace(0, 1, getenv("HOME"));
@@ -101,6 +150,38 @@ void Config::load()
 
 	//Set the audio backend name
 	audioBackendName = audioBackendNames[audioBackend];
+
+#ifdef WIN32
+	std::string regGnashPath = readRegistryEntry("GnashPath");
+	if(regGnashPath.empty())
+	{
+		const char* s = getExectuablePath();
+		if(!s)
+			LOG(LOG_ERROR,"Could not get executable path!");
+		else
+		{
+			path gnash_exec_path = s;
+			gnash_exec_path /= "sdl-gnash.exe";
+			if(is_regular_file(gnash_exec_path))
+			{
+				LOG(LOG_INFO,"Found gnash at " << gnash_exec_path);
+				gnashPath = gnash_exec_path.string();
+			}
+			else
+				LOG(LOG_ERROR, "Could not find gnash in " << gnash_exec_path);
+		}
+	}
+	else
+	{
+		LOG(LOG_INFO, "Read gnash's path from registry: " << regGnashPath);
+		gnashPath = regGnashPath;
+	}
+#else
+#	ifndef GNASH_PATH
+#	error No GNASH_PATH defined
+#	endif
+	gnashPath = GNASH_PATH;
+#endif
 }
 
 void Config::handleEntry()
@@ -113,8 +194,6 @@ void Config::handleEntry()
 		audioBackend = PULSEAUDIO;
 	else if(group == "audio" && key == "backend" && value == audioBackendNames[OPENAL])
 		audioBackend = OPENAL;
-	else if(group == "audio" && key == "backend" && value == audioBackendNames[ALSA])
-		audioBackend = ALSA;
 	else if(group == "audio" && key == "backend" && value == audioBackendNames[SDL])
 		audioBackend = SDL;
 	//Cache directory

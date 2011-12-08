@@ -34,12 +34,12 @@ class RenderThread: public ITickJob
 friend class DisplayObject;
 private:
 	SystemState* m_sys;
-	pthread_t t;
+	Thread* t;
 	enum STATUS { CREATED=0, STARTED, TERMINATED };
 	STATUS status;
 
-	const EngineData* engineData;
-	static void* worker(RenderThread*);
+	EngineData* engineData;
+	static void worker(RenderThread*);
 
 	void commonGLInit(int width, int height);
 	void commonGLResize();
@@ -75,7 +75,7 @@ private:
 	void handleNewTexture();
 	void finalizeUpload();
 	void handleUpload();
-	sem_t event;
+	Semaphore event;
 	std::string fontPath;
 	uint32_t newWidth;
 	uint32_t newHeight;
@@ -84,7 +84,7 @@ private:
 	int offsetX;
 	int offsetY;
 
-#ifndef WIN32
+#ifndef _WIN32
 	Display* mDisplay;
 #ifndef ENABLE_GLES2
 	GLXFBConfig mFBConfig;
@@ -95,7 +95,8 @@ private:
 #endif
 	Window mWindow;
 #endif
-	uint64_t time_s, time_d;
+	Glib::TimeVal time_s, time_d;
+	static Glib::TimeVal FPS_time;
 
 	bool loadShaderPrograms();
 	bool tempBufferAcquired;
@@ -130,7 +131,7 @@ public:
 	/**
 	   The EngineData object must survive for the whole life of this RenderThread
 	*/
-	void start(const EngineData* data);
+	void start(EngineData* data);
 	/*
 	   The stop function should be call on exit even if the thread is not started
 	*/
@@ -170,7 +171,7 @@ public:
 	*/
 	void pushMask(DisplayObject* d, const MATRIX& m)
 	{
-		maskStack.emplace_back(d,m);
+		maskStack.push_back(MaskData(d,m));
 	}
 	/**
 	  	Remove the last pushed mask
@@ -220,8 +221,10 @@ public:
 	void mapCairoTexture(int w, int h);
 	void renderText(cairo_t *cr, const char *text, int x, int y);
 	void setMatrixUniform(LSGL_MATRIX m) const;
+	static bool handleGLErrors();
 };
 
+RenderThread* getRenderThread();
+
 };
-extern TLSDATA lightspark::RenderThread* rt DLL_PUBLIC;
 #endif

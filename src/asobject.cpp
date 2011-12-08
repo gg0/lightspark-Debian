@@ -30,7 +30,7 @@ using namespace std;
 
 REGISTER_CLASS_NAME2(ASObject,"Object","");
 
-string ASObject::toDebugString() const
+string ASObject::toDebugString()
 {
 	check();
 	string ret;
@@ -107,13 +107,12 @@ _R<ASObject> ASObject::nextValue(uint32_t index)
 {
 	assert_and_throw(implEnable);
 
-	ASObject* out = getValueAt(index-1);
-	out->incRef();
-	return _MR(out);
+	return getValueAt(index-1);
 }
 
 void ASObject::sinit(Class_base* c)
 {
+	c->setDeclaredMethodByQName("hasOwnProperty",AS3,Class<IFunction>::getFunction(hasOwnProperty),NORMAL_METHOD,true);
 	c->prototype->setVariableByQName("toString","",Class<IFunction>::getFunction(_toString),DYNAMIC_TRAIT);
 }
 
@@ -304,7 +303,7 @@ variable* variables_map::findObjVar(const tiny_string& n, const nsNameAndKind& n
 		if(!(ret->second.kind & traitKinds))
 			continue;
 
-		if(ret->second.ns==ns)
+		if(ret->second.ns.count(ns))
 			return &ret->second;
 	}
 
@@ -326,13 +325,8 @@ bool ASObject::hasPropertyByMultiname(const multiname& name, bool considerDynami
 	if(Variables.findObjVar(name, NO_CREATE_TRAIT, validTraits)!=NULL)
 		return true;
 
-	Class_base* cur=classdef;
-	while(cur)
-	{
-		if(cur->Variables.findObjVar(name, NO_CREATE_TRAIT, BORROWED_TRAIT)!=NULL)
-			return true;
-		cur=cur->super.getPtr();
-	}
+	if(classdef && classdef->Variables.findObjVar(name, NO_CREATE_TRAIT, BORROWED_TRAIT)!=NULL)
+		return true;
 
 	//Check prototype inheritance chain
 	if(getClass())
@@ -345,9 +339,6 @@ bool ASObject::hasPropertyByMultiname(const multiname& name, bool considerDynami
 			proto = proto->getprop_prototype();
 		}
 	}
-
-	if(Class<ASObject>::getClass()->lazyDefine(name)!=NULL)
-		return true;
 
 	//Must not ask for non borrowed traits as static class member are not valid
 	return false;
@@ -383,34 +374,20 @@ void ASObject::setDeclaredMethodByQName(const tiny_string& name, const nsNameAnd
 	{
 		case NORMAL_METHOD:
 		{
-			if(obj->var!=NULL)
-			{
-				//This happens when interfaces are declared multiple times
-				assert_and_throw(o==obj->var);
-				return;
-			}
 			obj->setVar(o);
 			break;
 		}
 		case GETTER_METHOD:
 		{
 			if(obj->getter!=NULL)
-			{
-				//This happens when interfaces are declared multiple times
-				assert_and_throw(o==obj->getter);
-				return;
-			}
+				obj->getter->decRef();
 			obj->getter=o;
 			break;
 		}
 		case SETTER_METHOD:
 		{
 			if(obj->setter!=NULL)
-			{
-				//This happens when interfaces are declared multiple times
-				assert_and_throw(o==obj->setter);
-				return;
-			}
+				obj->setter->decRef();
 			obj->setter=o;
 			break;
 		}
@@ -474,14 +451,7 @@ void ASObject::setVariableByMultiname(const multiname& name, ASObject* o, Class_
 		//It's valid to override only a getter, so keep
 		//looking for a settable even if a super class sets
 		//has_getter to true.
-		Class_base* cur=cls;
-		while(cur)
-		{
-			obj=cur->findSettable(name,true,&has_getter);
-			if(obj)
-				break;
-			cur=cur->super.getPtr();
-		}
+		obj=cls->findSettable(name,true,&has_getter);
 	}
 
 	if(!obj && cls)
@@ -574,6 +544,28 @@ void variable::setVar(ASObject* v)
 	var=v;
 }
 
+template<class Set1, class Set2>
+bool is_disjoint(const Set1 &set1, const Set2 &set2)
+{
+	if(set1.empty() || set2.empty()) return true;
+
+	typename Set1::const_iterator
+		it1 = set1.begin(),
+		it1End = set1.end();
+	typename Set2::const_iterator
+		it2 = set2.begin(),
+		it2End = set2.end();
+	if(*it1 > *set2.rbegin() || *it2 > *set1.rbegin()) return true;
+
+	while(it1 != it1End && it2 != it2End)
+	{
+		if(*it1 == *it2) return false;
+		if(*it1 < *it2) { it1++; }
+		else { it2++; }
+	}
+	return true;
+}
+
 void variables_map::killObjVar(const multiname& mname)
 {
 	tiny_string name=mname.normalizedName();
@@ -581,18 +573,13 @@ void variables_map::killObjVar(const multiname& mname)
 	assert_and_throw(ret.first!=ret.second);
 
 	//Find the namespace
-	assert_and_throw(!mname.ns.empty());
-	for(unsigned int i=0;i<mname.ns.size();i++)
+	var_iterator start=ret.first;
+	for(;start!=ret.second;++start)
 	{
-		const nsNameAndKind& ns=mname.ns[i];
-		var_iterator start=ret.first;
-		for(;start!=ret.second;++start)
+		if(!is_disjoint(mname.ns,start->second.ns))
 		{
-			if(start->second.ns==ns)
-			{
-				Variables.erase(start);
-				return;
-			}
+			Variables.erase(start);
+			return;
 		}
 	}
 
@@ -616,7 +603,7 @@ variable* variables_map::findObjVar(const multiname& mname, TRAIT_KIND createKin
 			continue;
 		//Check if one the namespace is already present
 		//We can use binary search, as the namespace are ordered
-		if(binary_search(mname.ns.begin(),mname.ns.end(),ret->second.ns))
+		if(!is_disjoint(mname.ns,ret->second.ns))
 			return &ret->second;
 	}
 
@@ -642,10 +629,9 @@ void variables_map::initializeVar(const multiname& mname, ASObject* obj, multina
 	tiny_string name=mname.normalizedName();
 
 	const Type* type = NULL;
-	/* The typename may be T_DEFINABLE at this point. Then we only allow obj to be Null
-	 * and proceed.
-	 * If typename is resolvable right now, we coerce obj
-	 */
+	 /* If typename is resolvable right now, we coerce obj.
+	  * It it's not resolvable, then it must be a user defined class,
+	  * so we only allow Null and Undefined (which are both coerced to Null) */
 	if(!Type::isTypeResolvable(typemname))
 	{
 		assert_and_throw(obj->is<Null>() || obj->is<Undefined>());
@@ -713,10 +699,6 @@ ASFUNCTIONBODY(ASObject,_constructor)
 
 void ASObject::initSlot(unsigned int n, const multiname& name)
 {
-	//Should be correct to use the level on the classdef chain
-#ifndef NDEBUG
-	assert(!initialized);
-#endif
 	Variables.initSlot(n,name.name_s,name.ns[0]);
 }
 
@@ -752,14 +734,7 @@ _NR<ASObject> ASObject::getVariableByMultiname(const multiname& name, GET_VARIAB
 	if(!obj && cls)
 	{
 		//Look for borrowed traits before
-		Class_base* cur=cls;
-		while(cur)
-		{
-			obj=cur->findGettable(name,true);
-			if(obj)
-				break;
-			cur=cur->super.getPtr();
-		}
+		obj=cls->findGettable(name,true);
 	}
 
 	if(!obj && cls)
@@ -779,10 +754,7 @@ _NR<ASObject> ASObject::getVariableByMultiname(const multiname& name, GET_VARIAB
 	}
 
 	if(!obj)
-	{
-		//Check if we can lazily define the requested property
-		return _MNR(Class<ASObject>::getClass()->lazyDefine(name));
-	}
+		return NullRef;
 
 	if(obj->getter)
 	{
@@ -809,11 +781,6 @@ _NR<ASObject> ASObject::getVariableByMultiname(const multiname& name, GET_VARIAB
 		assert_and_throw(obj->var);
 		if(obj->var->getObjectType()==T_FUNCTION && obj->var->as<IFunction>()->isMethod())
 		{
-			//TODO: this creates a memory leak!
-			//Functions defined on prototypes or on global objects
-			//become function closures (instead of method closures):
-			//they do not remember their 'this' pointer
-			//TODO: maybe also the level should be binded
 			LOG(LOG_CALLS,"Attaching this " << this << " to function " << name);
 			//the obj reference is acquired by the smart reference
 			this->incRef();
@@ -851,17 +818,20 @@ void variables_map::check() const
 			if(it->second.var==NULL && next->second.var==NULL)
 				continue;
 
+			if((it->second.kind == BORROWED_TRAIT && next->second.kind != BORROWED_TRAIT)
+				|| (it->second.kind != BORROWED_TRAIT && next->second.kind == BORROWED_TRAIT))
+				continue;
 			if(it->second.var==NULL || next->second.var==NULL)
 			{
-				cout << it->first << endl;
-				cout << it->second.var << ' ' << it->second.setter << ' ' << it->second.getter << endl;
-				cout << next->second.var << ' ' << next->second.setter << ' ' << next->second.getter << endl;
+				LOG(LOG_INFO, it->first << " " << it->second.ns);
+				LOG(LOG_INFO, it->second.var << ' ' << it->second.setter << ' ' << it->second.getter);
+				LOG(LOG_INFO, next->second.var << ' ' << next->second.setter << ' ' << next->second.getter);
 				abort();
 			}
 
 			if(it->second.var->getObjectType()!=T_FUNCTION || next->second.var->getObjectType()!=T_FUNCTION)
 			{
-				cout << it->first << endl;
+				LOG(LOG_INFO, it->first);
 				abort();
 			}
 		}
@@ -890,7 +860,7 @@ void variables_map::dumpVariables()
 				kind="NoCreate: ";
 				assert(false);
 		}
-		LOG(LOG_INFO, kind <<  '[' << it->second.ns.name << "] "<< it->first << ' ' <<
+		LOG(LOG_INFO, kind <<  '[' << it->second.ns << "] "<< it->first << ' ' <<
 			it->second.var << ' ' << it->second.setter << ' ' << it->second.getter);
 	}
 }
@@ -976,17 +946,13 @@ void variables_map::initSlot(unsigned int n, const tiny_string& name, const nsNa
 		slots_vars.resize(n,Variables.end());
 
 	pair<var_iterator, var_iterator> ret=Variables.equal_range(name);
-	if(ret.first!=ret.second)
+	var_iterator start=ret.first;
+	for(;start!=ret.second;++start)
 	{
-		//Check if this namespace is already present
-		var_iterator start=ret.first;
-		for(;start!=ret.second;++start)
+		if(start->second.ns.count(ns))
 		{
-			if(start->second.ns==ns)
-			{
-				slots_vars[n-1]=start;
-				return;
-			}
+			slots_vars[n-1]=start;
+			return;
 		}
 	}
 
@@ -1023,25 +989,25 @@ variable* variables_map::getValueAt(unsigned int index)
 		throw RunTimeException("getValueAt out of bounds");
 }
 
-ASObject* ASObject::getValueAt(int index)
+_R<ASObject> ASObject::getValueAt(int index)
 {
 	variable* obj=Variables.getValueAt(index);
 	assert_and_throw(obj);
-	ASObject* ret;
 	if(obj->getter)
 	{
 		//Call the getter
 		LOG(LOG_CALLS,_("Calling the getter"));
 		IFunction* getter=obj->getter;
 		incRef();
-		ret=getter->call(this,NULL,0);
-		ret->fake_decRef();
+		_R<ASObject> ret(getter->call(this,NULL,0));
 		LOG(LOG_CALLS,_("End of getter"));
+		return ret;
 	}
 	else
-		ret=obj->var;
-
-	return ret;
+	{
+		obj->var->incRef();
+		return _MR(obj->var);
+	}
 }
 
 tiny_string variables_map::getNameAt(unsigned int index) const
@@ -1083,7 +1049,8 @@ void variables_map::serialize(ByteArray* out, std::map<tiny_string, uint32_t>& s
 	auto it=Variables.begin();
 	for(;it!=Variables.end();it++)
 	{
-		assert_and_throw(it->second.ns.name=="");
+		assert_and_throw(it->second.ns.size() == 1)
+		assert_and_throw(it->second.ns.begin()->name=="");
 		out->writeStringVR(stringMap,it->first);
 		it->second.var->serialize(out, stringMap, objMap);
 	}

@@ -27,30 +27,25 @@
 using namespace lightspark;
 
 //NOTE: thread jobs can be run only once
-IThreadJob::IThreadJob():jobHasTerminated(false),destroyMe(false),executing(false),aborting(false)
+IThreadJob::IThreadJob():jobTerminated(0),destroyMe(false),executing(false),aborting(false)
 {
-	sem_init(&jobTerminated, 0, 0);
 }
 
 IThreadJob::~IThreadJob()
 {
 	if(executing)
 		waitForJobTermination();
-	sem_destroy(&jobTerminated);
 }
 
 void IThreadJob::waitForJobTermination()
 {
-	if(!jobHasTerminated)
-		sem_wait(&jobTerminated);
-	jobHasTerminated = true;
+	jobTerminated.wait();
 }
 
 void IThreadJob::run()
 {
 	try
 	{
-		assert(thisJob);
 		execute();
 	}
 	catch(JobTerminationException& ex)
@@ -58,7 +53,7 @@ void IThreadJob::run()
 		LOG(LOG_NOT_IMPLEMENTED,_("Job terminated"));
 	}
 
-	sem_post(&jobTerminated);
+	jobTerminated.signal();
 }
 
 void IThreadJob::stop()
@@ -70,73 +65,40 @@ void IThreadJob::stop()
 	}
 }
 
-Mutex::Mutex(const char* n):name(n),foundBusy(0)
+Semaphore::Semaphore(uint32_t init):value(init)
 {
-	sem_init(&sem,0,1);
-}
-
-Mutex::~Mutex()
-{
-	if(name)
-		LOG(LOG_TRACE,_("Mutex ") << name << _(" waited ") << foundBusy << _(" times"));
-	sem_destroy(&sem);
-}
-
-void Mutex::lock()
-{
-	if(name)
-	{
-		//If the semaphore can be acquired immediately just return
-		if(sem_trywait(&sem)==0)
-			return;
-
-		//Otherwise log the busy event and do a real wait
-		foundBusy++;
-	}
-
-	sem_wait(&sem);
-}
-
-void Mutex::unlock()
-{
-	sem_post(&sem);
-}
-
-Semaphore::Semaphore(uint32_t init)//:blocked(0),maxBlocked(max)
-{
-	sem_init(&sem,0,init);
 }
 
 Semaphore::~Semaphore()
 {
-	//On destrucion unblocks the blocked thread
-	signal();
-	sem_destroy(&sem);
+	//On destrucion unblocks all blocked threads
+	value = 4096;
+	cond.broadcast();
 }
 
 void Semaphore::wait()
 {
-	sem_wait(&sem);
+	Mutex::Lock lock(mutex);
+	while(value == 0)
+		cond.wait(mutex);
+	value--;
 }
 
 bool Semaphore::try_wait()
 {
-	return sem_trywait(&sem)==0;
+	Mutex::Lock lock(mutex);
+	if(value == 0)
+		return false;
+	else
+	{
+		value--;
+		return true;
+	}
 }
 
 void Semaphore::signal()
 {
-	sem_post(&sem);
-}
-
-
-Sheep::~Sheep()
-{
-	if(lockOwner())
-	{
-		//The owner will not be destroyed until unlocked
-		if(owner)
-			owner->removeSheep(this);
-	}
-	unlockOwner();
+	Mutex::Lock lock(mutex);
+	value++;
+	cond.signal();
 }

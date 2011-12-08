@@ -28,7 +28,6 @@
 #include <libxml/tree.h>
 #include <libxml++/parsers/domparser.h>
 #include "scripting/abcutils.h"
-#include <glibmm/ustring.h>
 #include "Boolean.h"
 #include "Error.h"
 
@@ -47,6 +46,8 @@ class Void;
 /* This abstract class represents a type, i.e. something that a value can be coerced to.
  * Currently Class_base and Template_base implement this interface.
  * If you let another class implement this interface, change ASObject->is<Type>(), too!
+ * You never take ownership of a type, so there is no need to incRef/decRef them.
+ * Types are guaranteed to survive until SystemState::destroy().
  */
 class Type
 {
@@ -54,30 +55,30 @@ protected:
 	/* this is private because one never deletes a Type */
 	~Type() {}
 public:
-	static const Any* const anyType;
-	static const Void* const voidType;
+	static Any* const anyType;
+	static Void* const voidType;
 	/*
 	 * This returns the Type for the given multiname.
 	 * It searches for the and object of the type in global object.
 	 * If no object of that name is found or it is not a Type,
 	 * then an exception is thrown.
-	 * If the object is a Definable and 'resolve' is true,
-	 * then it is defined prior returning, else the Definable
-	 * is returned as is.
 	 * The caller does not own the object returned.
 	 */
 	static const Type* getTypeFromMultiname(const multiname* mn);
 	/*
-	 * Checks if the type can be found and is not T_DEFINABLE
+	 * Checks if the type is already in sys->classes
 	 */
 	static bool isTypeResolvable(const multiname* mn);
 	/*
-         * Converts the given object to an object of this type.
-         * It consumes one reference of 'o'.
-         * The returned object must be decRef'ed by caller.
+	 * Converts the given object to an object of this type.
+	 * It consumes one reference of 'o'.
+	 * The returned object must be decRef'ed by caller.
 	 * If the argument cannot be converted, it throws a TypeError
-         */
-        virtual ASObject* coerce(ASObject* o) const=0;
+	 */
+	virtual ASObject* coerce(ASObject* o) const=0;
+
+	/* Return "any" for anyType, "void" for voidType and class_name.name for Class_base */
+	virtual tiny_string getName() const=0;
 };
 template<> inline Type* ASObject::as<Type>() { return dynamic_cast<Type*>(this); }
 template<> inline const Type* ASObject::as<Type>() const { return dynamic_cast<const Type*>(this); }
@@ -85,8 +86,9 @@ template<> inline const Type* ASObject::as<Type>() const { return dynamic_cast<c
 class Any: public Type
 {
 public:
-	ASObject* coerce(ASObject* o) const { assert(!o->is<Definable>()); return o; }
+	ASObject* coerce(ASObject* o) const { return o; }
 	virtual ~Any() {};
+	tiny_string getName() const { return "any"; }
 };
 
 class Void: public Type
@@ -94,18 +96,14 @@ class Void: public Type
 public:
 	ASObject* coerce(ASObject* o) const;
 	virtual ~Void() {};
-};
-
-class InterfaceClass: public ASObject
-{
-protected:
-	static void lookupAndLink(Class_base* c, const tiny_string& name, const tiny_string& interfaceNs);
+	tiny_string getName() const { return "void"; }
 };
 
 class Class_base: public ASObject, public Type
 {
 friend class ABCVm;
 friend class ABCContext;
+template<class T> friend class Template;
 private:
 	mutable std::vector<multiname> interfaces;
 	mutable std::vector<Class_base*> interfaces_added;
@@ -119,8 +117,11 @@ private:
 	std::set<ASObject*> referencedObjects;
 	void finalizeObjects() const;
 protected:
+	void copyBorrowedTraitsFromSuper();
 	ASFUNCTION(_toString);
 public:
+	bool isFinal:1;
+	bool isSealed:1;
 	void addPrototypeGetter();
 	ASPROPERTY_GETTER(_NR<ASObject>,prototype);
 	_NR<Class_base> super;
@@ -145,6 +146,7 @@ public:
 	 */
 	bool isSubClass(const Class_base* cls) const;
 	tiny_string getQualifiedClassName() const;
+	tiny_string getName() const { return class_name.name; }
 	tiny_string toString();
 	virtual ASObject* generator(ASObject* const* args, const unsigned int argslen);
 	ASObject *describeType() const;
@@ -159,6 +161,13 @@ public:
 	 * The returned object must be decRef'ed by caller.
 	 */
 	virtual ASObject* coerce(ASObject* o) const;
+
+	void setSuper(_R<Class_base> super_)
+	{
+		assert(!super);
+		super = super_;
+		copyBorrowedTraitsFromSuper();
+	}
 };
 
 class Template_base : public ASObject
@@ -167,7 +176,7 @@ private:
 	QName template_name;
 public:
 	Template_base(QName name);
-	virtual Class_base* applyType(ASObject* const* args, const unsigned int argslen)=0;
+	virtual Class_base* applyType(const std::vector<Type*>& t)=0;
 };
 
 class Class_object: public Class_base
@@ -247,7 +256,7 @@ public:
 	Class_base* inClass;
 	/* returns wether this is this a method of a function */
 	bool isMethod() const { return inClass != NULL; }
-	bool isBound() const { return closure_this != NULL; }
+	bool isBound() const { return closure_this; }
 	void finalize();
 	ASFUNCTION(apply);
 	ASFUNCTION(_call);
@@ -266,7 +275,7 @@ public:
 		if(!isBound())
 		{
 			IFunction* ret=NULL;
-			if(c==NULL)
+			if(!c)
 			{
 				//If binding with null we are generated from newFunction, don't copy
 				ret=this;
@@ -415,12 +424,11 @@ private:
 	tiny_string toString_priv() const;
 	ASString();
 	ASString(const std::string& s);
-	ASString(const Glib::ustring& s);
 	ASString(const tiny_string& s);
 	ASString(const char* s);
 	ASString(const char* s, uint32_t len);
 public:
-	Glib::ustring data;
+	tiny_string data;
 	static void sinit(Class_base* c);
 	static void buildTraits(ASObject* o);
 	ASFUNCTION(_constructor);
@@ -450,7 +458,7 @@ public:
 	//Serialization interface
 	void serialize(ByteArray* out, std::map<tiny_string, uint32_t>& stringMap,
 			std::map<const ASObject*, uint32_t>& objMap) const;
-	std::string toDebugString() const { return std::string("\"") + data.raw() + "\""; }
+	std::string toDebugString() { return std::string("\"") + std::string(data) + "\""; }
 };
 
 class Null: public ASObject
@@ -528,6 +536,7 @@ public:
 	static void sinit(Class_base* c);
 	ASFUNCTION(_toString);
 	tiny_string toString();
+	static tiny_string toString(int32_t val);
 	int32_t toInt()
 	{
 		return val;
@@ -535,6 +544,7 @@ public:
 	TRISTATE isLess(ASObject* r);
 	bool isEqual(ASObject* o);
 	ASFUNCTION(generator);
+	std::string toDebugString() { return toString()+"i"; }
 	//Serialization interface
 	void serialize(ByteArray* out, std::map<tiny_string, uint32_t>& stringMap,
 			std::map<const ASObject*, uint32_t>& objMap) const;
@@ -551,6 +561,7 @@ public:
 
 	static void sinit(Class_base* c);
 	tiny_string toString();
+	static tiny_string toString(uint32_t val);
 	int32_t toInt()
 	{
 		return val;
@@ -563,6 +574,7 @@ public:
 	bool isEqual(ASObject* o);
 	ASFUNCTION(generator);
 	ASFUNCTION(_toString);
+	std::string toDebugString() { return toString()+"ui"; }
 	//CHECK: should this have a special serialization?
 };
 
@@ -582,6 +594,11 @@ public:
 	ASFUNCTION(_constructor);
 	ASFUNCTION(_toString);
 	tiny_string toString();
+	static tiny_string toString(number_t val);
+	static bool isInteger(number_t val)
+	{
+		return floor(val) == val;
+	}
 	unsigned int toUInt()
 	{
 		return (unsigned int)(val);
@@ -601,11 +618,13 @@ public:
 	static void buildTraits(ASObject* o){};
 	static void sinit(Class_base* c);
 	ASFUNCTION(generator);
+	std::string toDebugString() { return toString()+"d"; }
 	//Serialization interface
 	void serialize(ByteArray* out, std::map<tiny_string, uint32_t>& stringMap,
 			std::map<const ASObject*, uint32_t>& objMap) const;
 };
 
+class XMLList;
 class XML: public ASObject
 {
 private:
@@ -621,6 +640,7 @@ private:
 	void buildFromString(const std::string& str);
 	bool constructed;
 	bool nodesEqual(xmlpp::Node *a, xmlpp::Node *b) const;
+	XMLList* getAllAttributes();
 public:
 	XML();
 	XML(const std::string& str);
@@ -633,6 +653,7 @@ public:
 	ASFUNCTION(nodeKind);
 	ASFUNCTION(children);
 	ASFUNCTION(attributes);
+	ASFUNCTION(attribute);
 	ASFUNCTION(appendChild);
 	ASFUNCTION(localName);
 	ASFUNCTION(name);
@@ -703,40 +724,12 @@ public:
 	_R<ASObject> nextValue(uint32_t index);
 };
 
-/*
- * They are used as placeholders in Class traits.
- *
- * When one accesses a e.g. Class trait from a different script
- * and obtains a Definable, then one calls define() which executes
- * the associated script init. This script init function should
- * replace the Definable with the actual value (which is returned by define()).
- *
- */
-class Definable: public ASObject
-{
-private:
-	ABCContext* context; //context of scriptid
-	unsigned int scriptid; //which script does define this class
-	ASObject* global; //which global object belongs to that script
-	QName name; //the name of the class
-public:
-	Definable(ABCContext* c, unsigned int s, ASObject* g, multiname* n)
-		: context(c), scriptid(s), global(g), name(n->normalizedName(), n->ns[0].name)
-	{
-		type=T_DEFINABLE;
-		assert(n->isQName());
-	}
-	//The caller must incRef the returned object to keep it
-	//calling define will also cause a decRef on this
-	Class_base* define();
-};
-
 class RegExp: public ASObject
 {
 CLASSBUILDABLE(RegExp);
 friend class ASString;
 private:
-	Glib::ustring re;
+	tiny_string re;
 	bool global;
 	bool ignoreCase;
 	bool extended;
@@ -756,8 +749,13 @@ class Global : public ASObject
 {
 CLASSBUILDABLE(Global);
 private:
+	Global(ABCContext* c, int s): context(c), scriptId(s) {}
 	static void sinit(Class_base* c);
 	static void buildTraits(ASObject* o) {};
+	ABCContext* context;
+	int scriptId;
+public:
+	_NR<ASObject> getVariableByMultiname(const multiname& name, GET_VARIABLE_OPTION opt=NONE);
 };
 
 class GlobalObject

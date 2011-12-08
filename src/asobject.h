@@ -137,7 +137,7 @@ enum TRAIT_KIND { NO_CREATE_TRAIT=0, DECLARED_TRAIT=1, DYNAMIC_TRAIT=2, BORROWED
 
 struct variable
 {
-	nsNameAndKind ns;
+	std::set<nsNameAndKind> ns;
 	ASObject* var;
 	multiname* typemname;
 	const Type* type;
@@ -146,15 +146,15 @@ struct variable
 	TRAIT_KIND kind;
 	//obj_var(ASObject* _v, Class_base* _t):var(_v),type(_t),{}
 	variable(const nsNameAndKind& _ns, TRAIT_KIND _k)
-		:ns(_ns),var(NULL),typemname(NULL),type(NULL),setter(NULL),getter(NULL),kind(_k){}
+		: var(NULL),typemname(NULL),type(NULL),setter(NULL),getter(NULL),kind(_k) { ns.insert(_ns); }
 	variable(const nsNameAndKind& _ns, TRAIT_KIND _k, ASObject* _v, multiname* _t, const Type* type)
-		:ns(_ns),var(_v),typemname(_t),type(type),setter(NULL),getter(NULL),kind(_k){}
+		: var(_v),typemname(_t),type(type),setter(NULL),getter(NULL),kind(_k) { ns.insert(_ns); }
 	void setVar(ASObject* v);
 };
 
 class variables_map
 {
-private:
+public:
 	std::multimap<tiny_string,variable> Variables;
 	typedef std::multimap<tiny_string,variable>::iterator var_iterator;
 	typedef std::multimap<tiny_string,variable>::const_iterator const_var_iterator;
@@ -224,7 +224,7 @@ friend class Manager;
 friend class ABCVm;
 friend class ABCContext;
 friend class Class_base; //Needed for forced cleanup
-friend class InterfaceClass;
+friend void lookupAndLink(Class_base* c, const tiny_string& name, const tiny_string& interfaceNs);
 friend class IFunction; //Needed for clone
 CLASSBUILDABLE(ASObject);
 protected:
@@ -360,7 +360,7 @@ public:
 	{
 		return Variables.getNameAt(i);
 	}
-	ASObject* getValueAt(int i);
+	_R<ASObject> getValueAt(int i);
 	SWFOBJECT_TYPE getObjectType() const
 	{
 		return type;
@@ -425,7 +425,7 @@ public:
 	template<class T> T* as() { return static_cast<T*>(this); }
 
 	/* Returns a debug string identifying this object */
-	virtual std::string toDebugString() const;
+	virtual std::string toDebugString();
 };
 
 class Number;
@@ -436,7 +436,6 @@ class Template_base;
 class ASString;
 class Function;
 class Array;
-class Definable;
 class Null;
 class Undefined;
 class Type;
@@ -448,7 +447,6 @@ template<> inline bool ASObject::is<ASString>() const { return type==T_STRING; }
 template<> inline bool ASObject::is<Function>() const { return type==T_FUNCTION; }
 template<> inline bool ASObject::is<Undefined>() const { return type==T_UNDEFINED; }
 template<> inline bool ASObject::is<Null>() const { return type==T_NULL; }
-template<> inline bool ASObject::is<Definable>() const { return type==T_DEFINABLE; }
 template<> inline bool ASObject::is<Array>() const { return type==T_ARRAY; }
 template<> inline bool ASObject::is<Class_base>() const { return type==T_CLASS; }
 template<> inline bool ASObject::is<Template_base>() const { return type==T_TEMPLATE; }

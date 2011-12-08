@@ -28,21 +28,6 @@ ASObject* lightspark::new_asobject()
 	return Class<ASObject>::getInstanceS();
 }
 
-ASObject* Class<ASObject>::lazyDefine(const multiname& name)
-{
-	if(name.ns.empty())
-		return NULL;
-
-	if(binary_search(name.ns.begin(),name.ns.end(),nsNameAndKind(AS3,NAMESPACE)) && name.name_s=="hasOwnProperty")
-	{
-		ASObject* ret=Class<IFunction>::getFunction(ASObject::hasOwnProperty);
-		setVariableByQName("hasOwnProperty",AS3,ret,BORROWED_TRAIT);
-		return ret;
-	}
-	else
-		return NULL;
-}
-
 void Class_inherit::finalize()
 {
 	Class_base::finalize();
@@ -80,3 +65,26 @@ void Class_inherit::buildInstanceTraits(ASObject* o) const
 	context->buildInstanceTraits(o,class_index);
 }
 
+template<>
+Global* Class<Global>::getInstance(bool construct, ASObject* const* args, const unsigned int argslen)
+{
+	throw Class<TypeError>::getInstanceS("Error #1007: Cannot construct global object");
+}
+
+void lightspark::lookupAndLink(Class_base* c, const tiny_string& name, const tiny_string& interfaceNs)
+{
+	variable* var=NULL;
+	Class_base* cur=c;
+	//Find the origin
+	while(cur)
+	{
+		var=cur->Variables.findObjVar(name,nsNameAndKind("",NAMESPACE),NO_CREATE_TRAIT,BORROWED_TRAIT);
+		if(var)
+			break;
+		cur=cur->super.getPtr();
+	}
+	assert_and_throw(var->var && var->var->getObjectType()==T_FUNCTION);
+	IFunction* f=static_cast<IFunction*>(var->var);
+	f->incRef();
+	c->setDeclaredMethodByQName(name,interfaceNs,f,NORMAL_METHOD,true);
+}

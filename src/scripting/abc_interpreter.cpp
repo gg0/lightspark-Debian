@@ -20,6 +20,7 @@
 #include "abc.h"
 #include "compat.h"
 #include "exceptions.h"
+#include "abcutils.h"
 #include <string>
 #include <sstream>
 
@@ -943,7 +944,7 @@ ASObject* ABCVm::executeFunction(const SyntheticFunction* function, call_context
 				//FIXME: Properly escape as described in ECMA-357 section 10.2
 				//esc_xattr
 				ASObject* val=context->runtime_stack_pop();
-				context->runtime_stack_push(convert_s(val));
+				context->runtime_stack_push(esc_xattr(val));
 				break;
 			}case 0x73:
 			{
@@ -1035,7 +1036,7 @@ ASObject* ABCVm::executeFunction(const SyntheticFunction* function, call_context
 			{
 				//increment
 				ASObject* val=context->runtime_stack_pop();
-				ASObject* ret=abstract_i(increment(val));
+				ASObject* ret=abstract_d(increment(val));
 				context->runtime_stack_push(ret);
 				break;
 			}
@@ -1051,7 +1052,7 @@ ASObject* ABCVm::executeFunction(const SyntheticFunction* function, call_context
 			{
 				//decrement
 				ASObject* val=context->runtime_stack_pop();
-				ASObject* ret=abstract_i(decrement(val));
+				ASObject* ret=abstract_d(decrement(val));
 				context->runtime_stack_push(ret);
 				break;
 			}
@@ -1134,7 +1135,7 @@ ASObject* ABCVm::executeFunction(const SyntheticFunction* function, call_context
 				ASObject* v2=context->runtime_stack_pop();
 				ASObject* v1=context->runtime_stack_pop();
 
-				ASObject* ret=abstract_i(modulo(v1, v2));
+				ASObject* ret=abstract_d(modulo(v1, v2));
 				context->runtime_stack_push(ret);
 				break;
 			}
@@ -1256,6 +1257,15 @@ ASObject* ABCVm::executeFunction(const SyntheticFunction* function, call_context
 
 				ASObject* ret=abstract_b(greaterEquals(v1, v2));
 				context->runtime_stack_push(ret);
+				break;
+			}
+			case 0xb1:
+			{
+				//instanceof
+				ASObject* type=context->runtime_stack_pop();
+				ASObject* value=context->runtime_stack_pop();
+				bool ret=instanceOf(value, type);
+				context->runtime_stack_push(abstract_b(ret));
 				break;
 			}
 			case 0xb2:

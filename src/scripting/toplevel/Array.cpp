@@ -37,7 +37,7 @@ void Array::sinit(Class_base* c)
 {
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
 	// public constants
-	c->super=Class<ASObject>::getRef();
+	c->setSuper(Class<ASObject>::getRef());
 
 	c->setVariableByQName("CASEINSENSITIVE","",abstract_d(CASEINSENSITIVE),DECLARED_TRAIT);
 	c->setVariableByQName("DESCENDING","",abstract_d(DESCENDING),DECLARED_TRAIT);
@@ -85,6 +85,8 @@ ASFUNCTIONBODY(Array,_constructor)
 	if(argslen==1 && args[0]->getObjectType()==T_INTEGER)
 	{
 		int size=args[0]->toInt();
+		if(size < 0)
+			throw Class<RangeError>::getInstanceS("Array constructor with negative size");
 		LOG(LOG_CALLS,_("Creating array of length ") << size);
 		th->resize(size);
 	}
@@ -280,15 +282,18 @@ ASFUNCTIONBODY(Array,forEach)
 		params[2] = th;
 		th->incRef();
 
+		ASObject *funcret;
 		if( argslen == 1 )
 		{
-			f->call(new Null, params, 3);
+			funcret=f->call(new Null, params, 3);
 		}
 		else
 		{
 			args[1]->incRef();
-			f->call(args[1], params, 3);
+			funcret=f->call(args[1], params, 3);
 		}
+		if(funcret)
+			funcret->decRef();
 	}
 
 	return NULL;
@@ -525,13 +530,13 @@ bool Array::sortComparatorDefault::operator()(const data_slot& d1, const data_sl
 		tiny_string s1;
 		tiny_string s2;
 		if(d1.type==DATA_INT)
-			s1=tiny_string(d1.data_i);
+			s1=Integer::toString(d1.data_i);
 		else if(d1.type==DATA_OBJECT && d1.data)
 			s1=d1.data->toString();
 		else
 			s1="undefined";
 		if(d2.type==DATA_INT)
-			s2=tiny_string(d2.data_i);
+			s2=Integer::toString(d2.data_i);
 		else if(d2.type==DATA_OBJECT && d2.data)
 			s2=d2.data->toString();
 		else
@@ -539,7 +544,7 @@ bool Array::sortComparatorDefault::operator()(const data_slot& d1, const data_sl
 
 		//TODO: unicode support
 		if(isCaseInsensitive)
-			return strcasecmp(s1.raw_buf(),s2.raw_buf())<0;
+			return s1.strcasecmp(s2)<0;
 		else
 			return s1<s2;
 	}
@@ -569,7 +574,7 @@ bool Array::sortComparatorWrapper::operator()(const data_slot& d1, const data_sl
 		objs[1]=new Undefined;
 
 	assert(comparator);
-	ASObject* ret=comparator->call(new Null, objs, 2);
+	_NR<ASObject> ret=_MNR(comparator->call(new Null, objs, 2));
 	assert_and_throw(ret);
 	return (ret->toInt()<0); //Less
 }
@@ -797,30 +802,31 @@ bool Array::isValidMultiname(const multiname& name, unsigned int& index)
 		return false;
 
 	index=0;
-	int len;
 	switch(name.name_type)
 	{
 		//We try to convert this to an index, otherwise bail out
 		case multiname::NAME_STRING:
-			len=name.name_s.len();
-			if(!len)
+			if(name.name_s.empty())
 				return false;
-			for(int i=0;i<len;i++)
+			for(auto i=name.name_s.begin(); i!=name.name_s.end(); ++i)
 			{
-				if(name.name_s[i]<'0' || name.name_s[i]>'9')
+				if(!i.isdigit())
 					return false;
 
 				index*=10;
-				index+=(name.name_s[i]-'0');
+				index+=i.digit_value();
 			}
 			break;
 		//This is already an int, so its good enough
 		case multiname::NAME_INT:
+			if(name.name_i < 0)
+				return false;
 			index=name.name_i;
 			break;
 		case multiname::NAME_NUMBER:
-			//TODO: check that this is really an integer
-			index=name.name_d;
+			if(!Number::isInteger(name.name_d))
+				return false;
+			index = name.name_d;
 			break;
 		case multiname::NAME_OBJECT:
 			//TODO: should be use toPrimitive here?
@@ -868,17 +874,17 @@ bool Array::isValidQName(const tiny_string& name, const tiny_string& ns, unsigne
 {
 	if(ns!="")
 		return false;
-	assert_and_throw(name.len()!=0);
+	assert_and_throw(!name.empty());
 	index=0;
 	//First we try to convert the string name to an index, at the first non-digit
 	//we bail out
-	for(int i=0;i<name.len();i++)
+	for(auto i=name.begin(); i!=name.end(); ++i)
 	{
-		if(!isdigit(name[i]))
+		if(!i.isdigit())
 			return false;
 
 		index*=10;
-		index+=(name[i]-'0');
+		index+=i.digit_value();
 	}
 	return true;
 }

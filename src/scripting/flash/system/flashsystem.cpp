@@ -41,6 +41,7 @@ void Capabilities::sinit(Class_base* c)
 {
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
 	c->setDeclaredMethodByQName("language","",Class<IFunction>::getFunction(_getLanguage),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("playerType","",Class<IFunction>::getFunction(playerType),GETTER_METHOD,true);
 	c->setVariableByQName("version","",Class<ASString>::getInstanceS("UNIX 10,0,0,0"),DECLARED_TRAIT);
 	c->setVariableByQName("serverString","",Class<ASString>::getInstanceS(""),DECLARED_TRAIT);
 }
@@ -49,6 +50,11 @@ ASFUNCTIONBODY(Capabilities,_constructor)
 {
 	obj->setVariableByQName("playerType","",Class<ASString>::getInstanceS("AVMPlus"),DECLARED_TRAIT);
 	return NULL;
+}
+
+ASFUNCTIONBODY(Capabilities,playerType)
+{
+	return Class<ASString>::getInstanceS("PlugIn");
 }
 
 ASFUNCTIONBODY(Capabilities,_getLanguage)
@@ -98,13 +104,6 @@ ASFUNCTIONBODY(ApplicationDomain,hasDefinition)
 		return abstract_b(false);
 	else
 	{
-		//Check if the object has to be defined
-		if(o->is<Definable>())
-		{
-			LOG(LOG_CALLS,_("We got an object not yet valid"));
-			o=o->as<Definable>()->define();
-		}
-
 		if(o->getObjectType()!=T_CLASS)
 			return abstract_b(false);
 
@@ -128,14 +127,6 @@ ASFUNCTIONBODY(ApplicationDomain,getDefinition)
 	ASObject* target;
 	ASObject* o=getGlobal()->getVariableAndTargetByMultiname(name,target);
 	assert_and_throw(o);
-
-	//Check if the object has to be defined
-	if(o->is<Definable>())
-	{
-		LOG(LOG_CALLS,_("Deferred definition of property ") << name);
-		o=o->as<Definable>()->define();
-		LOG(LOG_CALLS,_("End of deferred definition of property ") << name);
-	}
 
 	//TODO: specs says that also namespaces and function may be returned
 	assert_and_throw(o->getObjectType()==T_CLASS);
@@ -174,47 +165,47 @@ void Security::sinit(Class_base* c)
 	c->setDeclaredMethodByQName("exactSettings","",Class<IFunction>::getFunction(_setExactSettings),SETTER_METHOD,false);
 	c->setDeclaredMethodByQName("sandboxType","",Class<IFunction>::getFunction(_getSandboxType),GETTER_METHOD,false);
 	c->setVariableByQName("LOCAL_TRUSTED","",
-			Class<ASString>::getInstanceS(sys->securityManager->getSandboxName(SecurityManager::LOCAL_TRUSTED)),DECLARED_TRAIT);
+			Class<ASString>::getInstanceS(getSys()->securityManager->getSandboxName(SecurityManager::LOCAL_TRUSTED)),DECLARED_TRAIT);
 	c->setVariableByQName("LOCAL_WITH_FILE","",
-			Class<ASString>::getInstanceS(sys->securityManager->getSandboxName(SecurityManager::LOCAL_WITH_FILE)),DECLARED_TRAIT);
+			Class<ASString>::getInstanceS(getSys()->securityManager->getSandboxName(SecurityManager::LOCAL_WITH_FILE)),DECLARED_TRAIT);
 	c->setVariableByQName("LOCAL_WITH_NETWORK","",
-			Class<ASString>::getInstanceS(sys->securityManager->getSandboxName(SecurityManager::LOCAL_WITH_NETWORK)),DECLARED_TRAIT);
+			Class<ASString>::getInstanceS(getSys()->securityManager->getSandboxName(SecurityManager::LOCAL_WITH_NETWORK)),DECLARED_TRAIT);
 	c->setVariableByQName("REMOTE","",
-			Class<ASString>::getInstanceS(sys->securityManager->getSandboxName(SecurityManager::REMOTE)),DECLARED_TRAIT);
+			Class<ASString>::getInstanceS(getSys()->securityManager->getSandboxName(SecurityManager::REMOTE)),DECLARED_TRAIT);
 	c->setDeclaredMethodByQName("allowDomain","",Class<IFunction>::getFunction(allowDomain),NORMAL_METHOD,false);
 	c->setDeclaredMethodByQName("allowInsecureDomain","",Class<IFunction>::getFunction(allowInsecureDomain),NORMAL_METHOD,false);
 	c->setDeclaredMethodByQName("loadPolicyFile","",Class<IFunction>::getFunction(loadPolicyFile),NORMAL_METHOD,false);
 	c->setDeclaredMethodByQName("showSettings","",Class<IFunction>::getFunction(showSettings),NORMAL_METHOD,false);
 
-	sys->securityManager->setExactSettings(true, false);
+	getSys()->securityManager->setExactSettings(true, false);
 }
 
 ASFUNCTIONBODY(Security,_getExactSettings)
 {
-	return abstract_b(sys->securityManager->getExactSettings());
+	return abstract_b(getSys()->securityManager->getExactSettings());
 }
 
 ASFUNCTIONBODY(Security,_setExactSettings)
 {
 	assert(args && argslen==1);
-	if(sys->securityManager->getExactSettingsLocked())
+	if(getSys()->securityManager->getExactSettingsLocked())
 	{
 		throw Class<SecurityError>::getInstanceS("SecurityError: Security.exactSettings already set");
 	}
-	sys->securityManager->setExactSettings(Boolean_concrete(args[0]));
+	getSys()->securityManager->setExactSettings(Boolean_concrete(args[0]));
 	return NULL;
 }
 
 ASFUNCTIONBODY(Security,_getSandboxType)
 {
-	if(sys->securityManager->getSandboxType() == SecurityManager::REMOTE)
-		return Class<ASString>::getInstanceS(sys->securityManager->getSandboxName(SecurityManager::REMOTE));
-	else if(sys->securityManager->getSandboxType() == SecurityManager::LOCAL_TRUSTED)
-		return Class<ASString>::getInstanceS(sys->securityManager->getSandboxName(SecurityManager::LOCAL_TRUSTED));
-	else if(sys->securityManager->getSandboxType() == SecurityManager::LOCAL_WITH_FILE)
-		return Class<ASString>::getInstanceS(sys->securityManager->getSandboxName(SecurityManager::LOCAL_WITH_FILE));
-	else if(sys->securityManager->getSandboxType() == SecurityManager::LOCAL_WITH_NETWORK)
-		return Class<ASString>::getInstanceS(sys->securityManager->getSandboxName(SecurityManager::LOCAL_WITH_NETWORK));
+	if(getSys()->securityManager->getSandboxType() == SecurityManager::REMOTE)
+		return Class<ASString>::getInstanceS(getSys()->securityManager->getSandboxName(SecurityManager::REMOTE));
+	else if(getSys()->securityManager->getSandboxType() == SecurityManager::LOCAL_TRUSTED)
+		return Class<ASString>::getInstanceS(getSys()->securityManager->getSandboxName(SecurityManager::LOCAL_TRUSTED));
+	else if(getSys()->securityManager->getSandboxType() == SecurityManager::LOCAL_WITH_FILE)
+		return Class<ASString>::getInstanceS(getSys()->securityManager->getSandboxName(SecurityManager::LOCAL_WITH_FILE));
+	else if(getSys()->securityManager->getSandboxType() == SecurityManager::LOCAL_WITH_NETWORK)
+		return Class<ASString>::getInstanceS(getSys()->securityManager->getSandboxName(SecurityManager::LOCAL_WITH_NETWORK));
 	assert(false);
 	return NULL;
 }
@@ -233,8 +224,8 @@ ASFUNCTIONBODY(Security, allowInsecureDomain)
 
 ASFUNCTIONBODY(Security, loadPolicyFile)
 {
-	LOG(LOG_INFO, "Loading policy file: " << sys->getOrigin().goToURL(args[0]->toString()));
-	sys->securityManager->addPolicyFile(sys->getOrigin().goToURL(args[0]->toString()));
+	LOG(LOG_INFO, "Loading policy file: " << getSys()->getOrigin().goToURL(args[0]->toString()));
+	getSys()->securityManager->addPolicyFile(getSys()->getOrigin().goToURL(args[0]->toString()));
 	assert_and_throw(argslen == 1);
 	return NULL;
 }
@@ -252,7 +243,7 @@ ASFUNCTIONBODY(lightspark, fscommand)
 	tiny_string command = Class<ASString>::cast(args[0])->toString();
 	if(command == "quit")
 	{
-		sys->setShutdownFlag();
+		getSys()->setShutdownFlag();
 	}
 	return NULL;
 }

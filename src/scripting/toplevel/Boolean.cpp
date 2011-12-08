@@ -52,7 +52,7 @@ bool lightspark::Boolean_concrete(const ASObject* o)
 	case T_UINTEGER:
 		return o->as<UInteger>()->val != 0;
 	case T_STRING:
-		return o->as<ASString>()->data.size() > 0;
+		return !o->as<ASString>()->data.empty();
 	default:
 		//everything else is an Object regarding to the spec
 		return true;
@@ -71,7 +71,7 @@ ASFUNCTIONBODY(Boolean,generator)
 void Boolean::sinit(Class_base* c)
 {
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
-	c->super=Class<ASObject>::getRef();
+	c->setSuper(Class<ASObject>::getRef());
 	c->prototype->setVariableByQName("toString",AS3,Class<IFunction>::getFunction(_toString),DYNAMIC_TRAIT);
 	c->prototype->setVariableByQName("valueOf",AS3,Class<IFunction>::getFunction(_valueOf),DYNAMIC_TRAIT);
 }
@@ -94,7 +94,7 @@ ASFUNCTIONBODY(Boolean,_toString)
 		throw Class<TypeError>::getInstanceS("");
 
 	Boolean* th=static_cast<Boolean*>(obj);
-	return Class<ASString>::getInstanceS(th->toString(false));
+	return Class<ASString>::getInstanceS(th->toString());
 }
 
 ASFUNCTIONBODY(Boolean,_valueOf)
@@ -114,11 +114,6 @@ void Boolean::serialize(ByteArray* out, std::map<tiny_string, uint32_t>& stringM
 				std::map<const ASObject*, uint32_t>& objMap) const
 {
 	throw UnsupportedException("Boolean:serialize not implemented");
-}
-
-tiny_string Boolean::toString(bool debugMsg)
-{
-	return (val)?"true":"false";
 }
 
 bool Boolean::isEqual(ASObject* r)

@@ -23,6 +23,7 @@
 #include "class.h"
 #include "compat.h"
 #include "parsing/amf3_generator.h"
+#include "argconv.h"
 #include <sstream>
 
 using namespace std;
@@ -60,7 +61,7 @@ void ByteArray::sinit(Class_base* c)
 	c->setDeclaredMethodByQName("position","",Class<IFunction>::getFunction(_setPosition),SETTER_METHOD,true);
 	c->setDeclaredMethodByQName("defaultObjectEncoding","",Class<IFunction>::getFunction(_getDefaultObjectEncoding),GETTER_METHOD,false);
 	c->setDeclaredMethodByQName("defaultObjectEncoding","",Class<IFunction>::getFunction(_setDefaultObjectEncoding),SETTER_METHOD,false);
-	sys->staticByteArrayDefaultObjectEncoding = ObjectEncoding::DEFAULT;
+	getSys()->staticByteArrayDefaultObjectEncoding = ObjectEncoding::DEFAULT;
 	c->setDeclaredMethodByQName("readBytes","",Class<IFunction>::getFunction(readBytes),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("readByte","",Class<IFunction>::getFunction(readByte),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("readDouble","",Class<IFunction>::getFunction(readDouble),NORMAL_METHOD,true);
@@ -68,6 +69,9 @@ void ByteArray::sinit(Class_base* c)
 	c->setDeclaredMethodByQName("readInt","",Class<IFunction>::getFunction(readInt),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("readUnsignedInt","",Class<IFunction>::getFunction(readInt),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("readObject","",Class<IFunction>::getFunction(readObject),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("readUTF","",Class<IFunction>::getFunction(readUTF),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("readUTFBytes","",Class<IFunction>::getFunction(readUTFBytes),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("writeUTF","",Class<IFunction>::getFunction(writeUTF),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("writeUTFBytes","",Class<IFunction>::getFunction(writeUTFBytes),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("writeBytes","",Class<IFunction>::getFunction(writeBytes),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("writeByte","",Class<IFunction>::getFunction(writeByte),NORMAL_METHOD,true);
@@ -122,7 +126,7 @@ ASFUNCTIONBODY(ByteArray,_setPosition)
 
 ASFUNCTIONBODY(ByteArray,_getDefaultObjectEncoding)
 {
-	return abstract_i(sys->staticNetConnectionDefaultObjectEncoding);
+	return abstract_i(getSys()->staticNetConnectionDefaultObjectEncoding);
 }
 
 ASFUNCTIONBODY(ByteArray,_setDefaultObjectEncoding)
@@ -130,9 +134,9 @@ ASFUNCTIONBODY(ByteArray,_setDefaultObjectEncoding)
 	assert_and_throw(argslen == 1);
 	int32_t value = args[0]->toInt();
 	if(value == 0)
-		sys->staticByteArrayDefaultObjectEncoding = ObjectEncoding::AMF0;
+		getSys()->staticByteArrayDefaultObjectEncoding = ObjectEncoding::AMF0;
 	else if(value == 3)
-		sys->staticByteArrayDefaultObjectEncoding = ObjectEncoding::AMF3;
+		getSys()->staticByteArrayDefaultObjectEncoding = ObjectEncoding::AMF3;
 	else
 		throw RunTimeException("Invalid object encoding");
 	return NULL;
@@ -209,6 +213,66 @@ ASFUNCTIONBODY(ByteArray,readBytes)
 	return NULL;
 }
 
+ASFUNCTIONBODY(ByteArray,readUTF)
+{
+	ByteArray* th=static_cast<ByteArray*>(obj);
+
+	if(th->len < th->position+2)
+	{
+		LOG(LOG_ERROR,"ByteArray::readUTF not enough data");
+		//TODO: throw AS exceptions
+		return NULL;
+	}
+
+	uint16_t length;
+	memcpy(&length,th->bytes+th->position,2);
+	th->position+=2;
+
+	if(th->position+length > th->len)
+	{
+		LOG(LOG_ERROR,"ByteArray::readUTF not enough data");
+		//TODO: throw AS exceptions
+		return NULL;
+	}
+
+	uint8_t *bufStart=th->bytes+th->position;
+	th->position+=length;
+	return Class<ASString>::getInstanceS((char *)bufStart,length);
+}
+
+ASFUNCTIONBODY(ByteArray,readUTFBytes)
+{
+	ByteArray* th=static_cast<ByteArray*>(obj);
+	uint32_t length;
+
+	ARG_UNPACK (length);
+	if(th->position+length > th->len)
+	{
+		LOG(LOG_ERROR,"ByteArray::readUTFBytes not enough data");
+		//TODO: throw AS exceptions
+		return NULL;
+	}
+
+	uint8_t *bufStart=th->bytes+th->position;
+	th->position+=length;
+	return Class<ASString>::getInstanceS((char *)bufStart,length);
+}
+
+ASFUNCTIONBODY(ByteArray,writeUTF)
+{
+	ByteArray* th=static_cast<ByteArray*>(obj);
+	//Validate parameters
+	assert_and_throw(argslen==1);
+	assert_and_throw(args[0]->getObjectType()==T_STRING);
+	ASString* str=Class<ASString>::cast(args[0]);
+	th->getBuffer(th->position+str->data.numBytes()+3,true);
+	uint16_t bytes=(uint16_t)str->data.numBytes();
+	memcpy(th->bytes+th->position,&bytes,2);
+	memcpy(th->bytes+th->position+2,str->data.raw_buf(),bytes+1);
+
+	return NULL;
+}
+
 ASFUNCTIONBODY(ByteArray,writeUTFBytes)
 {
 	ByteArray* th=static_cast<ByteArray*>(obj);
@@ -216,8 +280,8 @@ ASFUNCTIONBODY(ByteArray,writeUTFBytes)
 	assert_and_throw(argslen==1);
 	assert_and_throw(args[0]->getObjectType()==T_STRING);
 	ASString* str=Class<ASString>::cast(args[0]);
-	th->getBuffer(th->position+str->data.size()+1,true);
-	memcpy(th->bytes+th->position,str->data.c_str(),str->data.size()+1);
+	th->getBuffer(th->position+str->data.numBytes()+1,true);
+	memcpy(th->bytes+th->position,str->data.raw_buf(),str->data.numBytes()+1);
 
 	return NULL;
 }
@@ -564,6 +628,8 @@ void ByteArray::setVariableByMultiname(const multiname& name, ASObject* o)
 		bytes[index]=o->toInt();
 	else
 		bytes[index]=0;
+
+	o->decRef();
 }
 
 void ByteArray::setVariableByMultiname_i(const multiname& name, int32_t value)
@@ -607,7 +673,7 @@ void ByteArray::writeU29(int32_t val)
 void ByteArray::writeStringVR(map<tiny_string, uint32_t>& stringMap, const tiny_string& s)
 {
 	//TODO: use U29 format
-	const uint32_t len=s.len();
+	const uint32_t len=s.numBytes();
 	assert_and_throw(len<0x40);
 
 	if(len!=0)
@@ -626,7 +692,7 @@ void Timer::tick()
 	//This will be executed once if repeatCount was originally 1
 	//Otherwise it's executed until stopMe is set to true
 	this->incRef();
-	sys->currentVm->addEvent(_MR(this),_MR(Class<TimerEvent>::getInstanceS("timer")));
+	getVm()->addEvent(_MR(this),_MR(Class<TimerEvent>::getInstanceS("timer")));
 
 	if(repeatCount!=0)
 	{
@@ -634,7 +700,7 @@ void Timer::tick()
 		if(repeatCount<currentCount)
 		{
 			this->incRef();
-			sys->currentVm->addEvent(_MR(this),_MR(Class<TimerEvent>::getInstanceS("timerComplete")));
+			getVm()->addEvent(_MR(this),_MR(Class<TimerEvent>::getInstanceS("timerComplete")));
 			stopMe=true;
 			running=false;
 		}
@@ -644,7 +710,7 @@ void Timer::tick()
 void Timer::sinit(Class_base* c)
 {
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
-	c->super=Class<EventDispatcher>::getRef();
+	c->setSuper(Class<EventDispatcher>::getRef());
 	c->setDeclaredMethodByQName("currentCount","",Class<IFunction>::getFunction(_getCurrentCount),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("repeatCount","",Class<IFunction>::getFunction(_getRepeatCount),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("repeatCount","",Class<IFunction>::getFunction(_setRepeatCount),SETTER_METHOD,true);
@@ -688,7 +754,7 @@ ASFUNCTIONBODY(Timer,_setRepeatCount)
 	th->repeatCount=count;
 	if(th->repeatCount>0 && th->repeatCount<=th->currentCount)
 	{
-		sys->removeJob(th);
+		getSys()->removeJob(th);
 		th->decRef();
 		th->running=false;
 	}
@@ -729,9 +795,9 @@ ASFUNCTIONBODY(Timer,start)
 	th->stopMe=false;
 	th->incRef();
 	if(th->repeatCount==1)
-		sys->addWait(th->delay,th);
+		getSys()->addWait(th->delay,th);
 	else
-		sys->addTick(th->delay,th);
+		getSys()->addTick(th->delay,th);
 	return NULL;
 }
 
@@ -741,7 +807,7 @@ ASFUNCTIONBODY(Timer,reset)
 	if(th->running)
 	{
 		//This spin waits if the timer is running right now
-		sys->removeJob(th);
+		getSys()->removeJob(th);
 		//NOTE: although no new events will be sent now there might be old events in the queue.
 		//Is this behaviour right?
 		th->currentCount=0;
@@ -758,7 +824,7 @@ ASFUNCTIONBODY(Timer,stop)
 	if(th->running)
 	{
 		//This spin waits if the timer is running right now
-		sys->removeJob(th);
+		getSys()->removeJob(th);
 		//NOTE: although no new events will be sent now there might be old events in the queue.
 		//Is this behaviour right?
 
@@ -824,13 +890,6 @@ ASFUNCTIONBODY(lightspark,getDefinitionByName)
 		return new Undefined;
 	}
 
-	//Check if the object has to be defined
-	if(o->is<Definable>())
-	{
-		LOG(LOG_CALLS,_("We got an object not yet valid"));
-		o=o->as<Definable>()->define();
-	}
-
 	assert_and_throw(o->getObjectType()==T_CLASS);
 
 	LOG(LOG_CALLS,_("Getting definition for ") << name);
@@ -846,7 +905,7 @@ ASFUNCTIONBODY(lightspark,describeType)
 
 ASFUNCTIONBODY(lightspark,getTimer)
 {
-	uint64_t ret=compat_msectiming() - sys->startTime;
+	uint64_t ret=compat_msectiming() - getSys()->startTime;
 	return abstract_i(ret);
 }
 
@@ -859,7 +918,7 @@ void Dictionary::finalize()
 void Dictionary::sinit(Class_base* c)
 {
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
-	c->super=Class<ASObject>::getRef();
+	c->setSuper(Class<ASObject>::getRef());
 }
 
 void Dictionary::buildTraits(ASObject* o)
@@ -1212,7 +1271,7 @@ ASFUNCTIONBODY(lightspark,setInterval)
 	assert_and_throw(argslen >= 2 && args[0]->getObjectType()==T_FUNCTION);
 
 	//Build arguments array
-	ASObject* callbackArgs[argslen-2];
+	ASObject** callbackArgs = g_newa(ASObject*,argslen-2);
 	uint32_t i;
 	for(i=0; i<argslen-2; i++)
 	{
@@ -1225,7 +1284,7 @@ ASFUNCTIONBODY(lightspark,setInterval)
 	args[0]->incRef();
 	IFunction* callback=static_cast<IFunction*>(args[0]);
 	//Add interval through manager
-	uint32_t id = sys->intervalManager->setInterval(_MR(callback), callbackArgs, argslen-2, _MR(new Null), args[1]->toInt());
+	uint32_t id = getSys()->intervalManager->setInterval(_MR(callback), callbackArgs, argslen-2, _MR(new Null), args[1]->toInt());
 	return abstract_i(id);
 }
 
@@ -1234,7 +1293,7 @@ ASFUNCTIONBODY(lightspark,setTimeout)
 	assert_and_throw(argslen >= 2);
 
 	//Build arguments array
-	ASObject* callbackArgs[argslen-2];
+	ASObject** callbackArgs = g_newa(ASObject*,argslen-2);
 	uint32_t i;
 	for(i=0; i<argslen-2; i++)
 	{
@@ -1247,21 +1306,21 @@ ASFUNCTIONBODY(lightspark,setTimeout)
 	args[0]->incRef();
 	IFunction* callback=static_cast<IFunction*>(args[0]);
 	//Add timeout through manager
-	uint32_t id = sys->intervalManager->setTimeout(_MR(callback), callbackArgs, argslen-2, _MR(new Null), args[1]->toInt());
+	uint32_t id = getSys()->intervalManager->setTimeout(_MR(callback), callbackArgs, argslen-2, _MR(new Null), args[1]->toInt());
 	return abstract_i(id);
 }
 
 ASFUNCTIONBODY(lightspark,clearInterval)
 {
 	assert_and_throw(argslen == 1);
-	sys->intervalManager->clearInterval(args[0]->toInt(), IntervalRunner::INTERVAL, true);
+	getSys()->intervalManager->clearInterval(args[0]->toInt(), IntervalRunner::INTERVAL, true);
 	return NULL;
 }
 
 ASFUNCTIONBODY(lightspark,clearTimeout)
 {
 	assert_and_throw(argslen == 1);
-	sys->intervalManager->clearInterval(args[0]->toInt(), IntervalRunner::TIMEOUT, true);
+	getSys()->intervalManager->clearInterval(args[0]->toInt(), IntervalRunner::TIMEOUT, true);
 	return NULL;
 }
 
@@ -1295,14 +1354,13 @@ void IntervalRunner::tick()
 	{
 		//TODO: IntervalRunner deletes itself. Is this allowed?
 		//Delete ourselves from the active intervals list
-		sys->intervalManager->clearInterval(id, TIMEOUT, false);
+		getSys()->intervalManager->clearInterval(id, TIMEOUT, false);
 		//No actions may be performed after this point
 	}
 }
 
 IntervalManager::IntervalManager() : currentID(1)
 {
-	sem_init(&mutex, 0, 1);
 }
 
 IntervalManager::~IntervalManager()
@@ -1311,45 +1369,42 @@ IntervalManager::~IntervalManager()
 	std::map<uint32_t,IntervalRunner*>::iterator it = runners.begin();
 	while(it != runners.end())
 	{
-		sys->removeJob((*it).second);
+		getSys()->removeJob((*it).second);
 		delete((*it).second);
 		runners.erase(it++);
 	}
-	sem_destroy(&mutex);
 }
 
 uint32_t IntervalManager::setInterval(_R<IFunction> callback, ASObject** args, const unsigned int argslen, _R<ASObject> obj, uint32_t interval)
 {
-	sem_wait(&mutex);
+	Mutex::Lock l(mutex);
 
 	uint32_t id = getFreeID();
 	IntervalRunner* runner = new IntervalRunner(IntervalRunner::INTERVAL, id, callback, args, argslen, obj, interval);
 
 	//Add runner as tickjob
-	sys->addTick(interval, runner);
+	getSys()->addTick(interval, runner);
 	//Add runner to map
 	runners[id] = runner;
 	//Increment currentID
 	currentID++;
 
-	sem_post(&mutex);
 	return currentID-1;
 }
 uint32_t IntervalManager::setTimeout(_R<IFunction> callback, ASObject** args, const unsigned int argslen, _R<ASObject> obj, uint32_t interval)
 {
-	sem_wait(&mutex);
+	Mutex::Lock l(mutex);
 
 	uint32_t id = getFreeID();
 	IntervalRunner* runner = new IntervalRunner(IntervalRunner::TIMEOUT, id, callback, args, argslen, obj, interval);
 
 	//Add runner as waitjob
-	sys->addWait(interval, runner);
+	getSys()->addWait(interval, runner);
 	//Add runner to map
 	runners[id] = runner;
 	//increment currentID
 	currentID++;
 
-	sem_post(&mutex);
 	return currentID-1;
 }
 
@@ -1364,19 +1419,17 @@ uint32_t IntervalManager::getFreeID()
 
 void IntervalManager::clearInterval(uint32_t id, IntervalRunner::INTERVALTYPE type, bool removeJob)
 {
-	sem_wait(&mutex);
-	
+	Mutex::Lock l(mutex);
+
 	std::map<uint32_t,IntervalRunner*>::iterator it = runners.find(id);
 	//If the entry exists and the types match, remove its tickjob, delete its intervalRunner and erase their entry
 	if(it != runners.end() && (*it).second->getType() == type)
 	{
 		if(removeJob)
 		{
-			sys->removeJob((*it).second);
+			getSys()->removeJob((*it).second);
 		}
 		delete (*it).second;
 		runners.erase(it);
 	}
-
-	sem_post(&mutex);
 }

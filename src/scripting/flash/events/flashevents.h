@@ -24,7 +24,6 @@
 #include "asobject.h"
 #include "toplevel/toplevel.h"
 #include <string>
-#include <semaphore.h>
 
 #undef MOUSE_EVENT
 
@@ -44,7 +43,7 @@ class Event: public ASObject
 {
 public:
 	Event(const tiny_string& t = "Event", bool b=false, bool c=false)
-		: type(t),target(NULL),currentTarget(NULL),bubbles(b),cancelable(c),
+		: type(t),target(),currentTarget(),bubbles(b),cancelable(c),
 		  eventPhase(0),defaultPrevented(false) {}
 	void finalize();
 	static void sinit(Class_base*);
@@ -65,6 +64,15 @@ public:
 	ASPROPERTY_GETTER(bool,cancelable);
 	ASPROPERTY_GETTER(uint32_t,eventPhase);
 	bool defaultPrevented;
+};
+
+/* Base class for all events that the one can wait on */
+class WaitableEvent : public Event
+{
+public:
+	WaitableEvent(const tiny_string& t = "Event", bool b=false, bool c=false)
+		: Event(t,b,c), done(0) {}
+	Semaphore done;
 };
 
 class EventPhase: public ASObject
@@ -262,13 +270,13 @@ public:
 	}
 };
 
-class IEventDispatcher: public InterfaceClass
+class IEventDispatcher
 {
 public:
 	static void linkTraits(Class_base* c);
 };
 
-class EventDispatcher: public ASObject
+class EventDispatcher: public ASObject, public IEventDispatcher
 {
 private:
 	Mutex handlersMutex;
@@ -313,9 +321,8 @@ public:
 	EVENT_TYPE getEventType() const { return SHUTDOWN; }
 };
 
-class SynchronizationEvent;
 
-class FunctionEvent: public Event
+class FunctionEvent: public WaitableEvent
 {
 friend class ABCVm;
 private:
@@ -325,33 +332,12 @@ private:
 	unsigned int numArgs;
 	ASObject** result;
 	ASObject** exception;
-	_NR<SynchronizationEvent> sync;
 public:
 	FunctionEvent(_R<IFunction> _f, _NR<ASObject> _obj=NullRef, ASObject** _args=NULL, uint32_t _numArgs=0, 
-			ASObject** _result=NULL, ASObject** _exception=NULL, _NR<SynchronizationEvent> _sync=NullRef);
+			ASObject** _result=NULL, ASObject** _exception=NULL);
 	~FunctionEvent();
 	static void sinit(Class_base*);
 	EVENT_TYPE getEventType() const { return FUNCTION; }
-};
-
-class SynchronizationEvent: public Event
-{
-private:
-	sem_t s;
-public:
-	SynchronizationEvent():Event("SynchronizationEvent"){sem_init(&s,0,0);}
-	SynchronizationEvent(const tiny_string& _s):Event(_s){sem_init(&s,0,0);}
-	static void sinit(Class_base*);
-	~SynchronizationEvent(){sem_destroy(&s);}
-	EVENT_TYPE getEventType() const { return SYNC; }
-	void sync()
-	{
-		sem_post(&s);
-	}
-	void wait()
-	{
-		sem_wait(&s);
-	}
 };
 
 class ABCContextInitEvent: public Event
@@ -359,8 +345,9 @@ class ABCContextInitEvent: public Event
 friend class ABCVm;
 private:
 	ABCContext* context;
+	bool lazy;
 public:
-	ABCContextInitEvent(ABCContext* c) DLL_PUBLIC;
+	ABCContextInitEvent(ABCContext* c, bool lazy) DLL_PUBLIC;
 	static void sinit(Class_base*);
 	EVENT_TYPE getEventType() const { return CONTEXT_INIT; }
 };
@@ -378,11 +365,10 @@ public:
 	EVENT_TYPE getEventType() const { return INIT_FRAME; }
 };
 
-class AdvanceFrameEvent: public Event
+class AdvanceFrameEvent: public WaitableEvent
 {
 public:
-	Semaphore done;
-	AdvanceFrameEvent(): Event("AdvanceFrameEvent"), done(0) {}
+	AdvanceFrameEvent(): WaitableEvent("AdvanceFrameEvent") {}
 	EVENT_TYPE getEventType() const { return ADVANCE_FRAME; }
 };
 

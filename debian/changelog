@@ -1,3 +1,9 @@
+lightspark (0.5.3-1) unstable; urgency=low
+
+  * New 0.5.3 upstream release.
+
+ -- Didier Raboud <odyx@debian.org>  Thu, 08 Dec 2011 09:38:52 +0100
+
 lightspark (0.5.2.1-1) unstable; urgency=low
 
   * New 0.5.2.1 upstream release.

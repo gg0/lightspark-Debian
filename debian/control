@@ -23,6 +23,7 @@ Build-Depends: debhelper (>= 8.9.0~),
   libavformat-dev,
   libgtk2.0-dev,
   libjpeg-dev,
+  librtmp-dev,
   libxml++2.6-dev (>= 2.33.1),
 Standards-Version: 3.9.2
 Homepage: http://lightspark.sf.net

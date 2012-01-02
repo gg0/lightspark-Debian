@@ -5,7 +5,8 @@
 
 override_dh_auto_configure:
 	dh_auto_configure -- \
-	    -DENABLE_RTMP=1
+	    -DENABLE_RTMP=1 \
+	    -DAUDIO_BACKEND="pulse sdl"
 
 override_dh_strip:
 	dh_strip --dbg-package=lightspark-dbg

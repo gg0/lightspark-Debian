@@ -133,6 +133,7 @@ public:
 
 class TextureChunk
 {
+friend class RenderContext;
 friend class RenderThread;
 private:
 	uint32_t texId;
@@ -222,6 +223,14 @@ protected:
 	*/
 	const float scaleFactor;
 	bool uploadNeeded;
+	/*
+	 * There are reports (http://lists.freedesktop.org/archives/cairo/2011-September/022247.html)
+	 * that cairo is not threadsafe, and I have encountered some spurious crashes, too.
+	 * So we use a global lock for all cairo calls until this issue is sorted out.
+	 * TODO: CairoRenderes are enqueued as IThreadJobs, therefore this mutex
+	 *       will serialize the thread pool when all thread pool workers are executing CairoRenderers!
+	 */
+	static StaticMutex cairoMutex;
 	static cairo_matrix_t MATRIXToCairo(const MATRIX& matrix);
 	static void cairoClean(cairo_t* cr);
 	cairo_surface_t* allocateSurface();

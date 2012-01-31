@@ -99,6 +99,21 @@ ASObject* ABCVm::executeFunction(const SyntheticFunction* function, call_context
 				setSuper(context,t);
 				break;
 			}
+			case 0x06:
+			{
+				//dxns
+				u30 t;
+				code >> t;
+				dxns(context,t);
+				break;
+			}
+			case 0x07:
+			{
+				//dxnslate
+				ASObject* v=context->runtime_stack_pop();
+				dxnslate(context, v);
+				break;
+			}
 			case 0x08:
 			{
 				//kill
@@ -600,6 +615,14 @@ ASObject* ABCVm::executeFunction(const SyntheticFunction* function, call_context
 			{
 				//pushscope
 				pushScope(context);
+				break;
+			}
+			case 0x31:
+			{
+				//pushnamespace
+				u30 t;
+				code >> t;
+				context->runtime_stack_push( pushNamespace(context, t) );
 				break;
 			}
 			case 0x32:

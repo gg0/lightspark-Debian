@@ -29,6 +29,13 @@ using namespace lightspark;
 using namespace std;
 using namespace boost::filesystem;
 
+Config* Config::getConfig()
+{
+	static Config conf;
+	return &conf;
+
+}
+
 #ifdef WIN32
 const std::string LS_REG_KEY = "SOFTWARE\\MozillaPlugins\\@lightspark.github.com/Lightspark;version=1";
 std::string readRegistryEntry(std::string name)
@@ -73,36 +80,18 @@ Config::Config():
 	//DEFAULT SETTINGS
 	defaultCacheDirectory((string) g_get_user_cache_dir() + "/lightspark"),
 	cacheDirectory(defaultCacheDirectory),cachePrefix("cache"),
-	audioBackend(PULSEAUDIO),audioBackendName("")
+	audioBackend(INVALID),audioBackendName(""),
+	renderingEnabled(true)
 {
-	audioBackendNames[0] = "pulseaudio";
-	audioBackendNames[1] = "openal";
-	audioBackendNames[2] = "sdl";
-#ifdef AUDIO_BACKEND
-	/* AUDIO_BACKEND is defined by cmake, lets find its index.
-	 * AUDIO_BACKEND may consist of multiple backends,
-	 * then we just leave the default (see above)
-	 */
-	audioBackendName = AUDIO_BACKEND;
-	for(int i=0;i<3;++i)
-	{
-		if(audioBackendName == audioBackendNames[i])
-		{
-			audioBackend = (AUDIOBACKEND)i;
-			break;
-		}
-	}
+#ifdef _WIN32
+	const char* exePath = getExectuablePath();
+	if(exePath)
+		userConfigDirectory = exePath;
 #endif
-}
+	audioBackendNames[PULSEAUDIO] = "pulseaudio";
+	audioBackendNames[SDL] = "sdl";
+	audioBackendNames[WINMM] = "winmm";
 
-Config::~Config()
-{
-	if(parser != NULL)
-		delete parser;
-}
-
-void Config::load()
-{
 	//Try system configs first
 	string sysDir;
 	const char* const* cursor = systemConfigDirectories;
@@ -148,10 +137,19 @@ void Config::load()
 		}
 	}
 
+	/* If no audio backend was specified, use a default */
+	if(audioBackend == INVALID)
+	{
+#ifdef _WIN32
+		audioBackend = WINMM;
+#else
+		audioBackend = PULSEAUDIO;
+#endif
+	}
 	//Set the audio backend name
 	audioBackendName = audioBackendNames[audioBackend];
 
-#ifdef WIN32
+#ifdef _WIN32
 	std::string regGnashPath = readRegistryEntry("GnashPath");
 	if(regGnashPath.empty())
 	{
@@ -184,6 +182,13 @@ void Config::load()
 #endif
 }
 
+Config::~Config()
+{
+	if(parser != NULL)
+		delete parser;
+}
+
+/* This is called by the parser for each entry in the configuration file */
 void Config::handleEntry()
 {
 	string group = parser->getGroup();
@@ -192,10 +197,13 @@ void Config::handleEntry()
 	//Audio backend
 	if(group == "audio" && key == "backend" && value == audioBackendNames[PULSEAUDIO])
 		audioBackend = PULSEAUDIO;
-	else if(group == "audio" && key == "backend" && value == audioBackendNames[OPENAL])
-		audioBackend = OPENAL;
 	else if(group == "audio" && key == "backend" && value == audioBackendNames[SDL])
 		audioBackend = SDL;
+	else if(group == "audio" && key == "backend" && value == audioBackendNames[WINMM])
+		 audioBackend = WINMM;
+	//Rendering
+	else if(group == "rendering" && key == "enabled")
+		renderingEnabled = atoi(value.c_str());
 	//Cache directory
 	else if(group == "cache" && key == "directory")
 		cacheDirectory = value;

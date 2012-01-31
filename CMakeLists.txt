@@ -25,22 +25,56 @@ CMAKE_MINIMUM_REQUIRED(VERSION 2.6)
 PROJECT(LIGHTSPARK)
 SET(MAJOR_VERSION "0")
 SET(MINOR_VERSION "5")
-SET(PATCH_VERSION "3")
+SET(PATCH_VERSION "4")
 SET(SUBPATCH_VERSION "0")
 
 IF(EXISTS "${CMAKE_SOURCE_DIR}/.git/")
 	SET(GIT_VERSION "-git")
+
+	#Find out if we are exactly at a tag. Then the version
+	#is enough. Only consider the official release tags like
+	#'lightspark-0.5.3'
+	EXECUTE_PROCESS(COMMAND git describe --match "lightspark-*" --tags
+			WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+			OUTPUT_VARIABLE GIT_DESC
+			ERROR_QUIET
+			OUTPUT_STRIP_TRAILING_WHITESPACE)
+	#Check if that command failed (maybe git is not installed at all)
+	IF(GIT_DESC)
+		EXECUTE_PROCESS(COMMAND git describe --match "lightspark-*" --tags --abbrev=0
+				WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+				OUTPUT_VARIABLE GIT_DESC_ABBREV
+				ERROR_QUIET
+				OUTPUT_STRIP_TRAILING_WHITESPACE)
+
+		IF(${GIT_DESC} STREQUAL ${GIT_DESC_ABBREV})
+			#We are exactly at a tag
+			SET(GIT_VERSION "")
+		ELSE()
+			#Append to GIT_VERSION
+			#GIT_DESC_ABBREV is of the form lightspark-0.5.3 (the name of the previous tag)
+			#GIT_DESC is of the form lightspark-0.5.3-69-gf49ec56 (tag-numberOfCommits-currentHash)
+			#We want GIT_REVISION to be 69-gf49ec56
+			#which denotes the number of commits since the last tag (=release)
+			#and the current commit's hash
+			STRING(REPLACE "${GIT_DESC_ABBREV}-" "" GIT_REVISION "${GIT_DESC}")
+			SET(GIT_VERSION "-${GIT_REVISION}")
+		ENDIF()
+	ENDIF()
 ELSE(EXISTS "${CMAKE_SOURCE_DIR}/.git/")
 	SET(GIT_VERSION "")
 ENDIF(EXISTS "${CMAKE_SOURCE_DIR}/.git/")
 
 IF(SUBPATCH_VERSION EQUAL "0")
-	ADD_DEFINITIONS(-DVERSION="${MAJOR_VERSION}.${MINOR_VERSION}.${PATCH_VERSION}${GIT_VERSION}")
+	SET(FULLVERSION "${MAJOR_VERSION}.${MINOR_VERSION}.${PATCH_VERSION}${GIT_VERSION}")
 ELSE(SUBPATCH_VERSION EQUAL "0")
-	ADD_DEFINITIONS(-DVERSION="${MAJOR_VERSION}.${MINOR_VERSION}.${PATCH_VERSION}.${SUBPATCH_VERSION}${GIT_VERSION}")
+	SET(FULLVERSION "${MAJOR_VERSION}.${MINOR_VERSION}.${PATCH_VERSION}.${SUBPATCH_VERSION}${GIT_VERSION}")
 ENDIF(SUBPATCH_VERSION EQUAL "0")
 
-ADD_DEFINITIONS(-DSHORTVERSION="${MINOR_VERSION}${PATCH_VERSION}${SUBPATCH_VERSION}")
+SET(SHORTVERSION "${MINOR_VERSION}${PATCH_VERSION}${SUBPATCH_VERSION}")
+
+CONFIGURE_FILE("${CMAKE_SOURCE_DIR}/src/version.h.in" "${CMAKE_CURRENT_BINARY_DIR}/version.h" @ONLY)
+INCLUDE_DIRECTORIES(${CMAKE_CURRENT_BINARY_DIR})
 
 # GCC 4.4+ is required, GCC_VERSION macro taken from GCC manual
 INCLUDE(CheckCSourceCompiles)
@@ -152,7 +186,7 @@ ENDIF(UNIX)
 
 # Setting variables
 IF(WIN32)
-  SET(AUDIO_BACKEND "sdl" CACHE STRING "Which audio backends should be built?")
+  SET(AUDIO_BACKEND "winmm" CACHE STRING "Which audio backends should be built?")
 ELSE()
   SET(AUDIO_BACKEND "pulseaudio" CACHE STRING "Which audio backends should be built?")
 ENDIF()
@@ -194,6 +228,9 @@ ENDIF(${LLVM_STRING_VERSION} VERSION_EQUAL 2.9)
 IF(${LLVM_STRING_VERSION} VERSION_EQUAL 2.8)
 	ADD_DEFINITIONS(-DLLVM_28)
 ENDIF(${LLVM_STRING_VERSION} VERSION_EQUAL 2.8)
+IF(${LLVM_STRING_VERSION} VERSION_GREATER 2.9)
+	ADD_DEFINITIONS(-DLLVM_3)
+ENDIF(${LLVM_STRING_VERSION} VERSION_GREATER 2.9)
 INCLUDE(FindZLIB REQUIRED)
 INCLUDE(FindFreetype REQUIRED)
 IF(NOT(ENABLE_GLES2))
@@ -254,6 +291,7 @@ IF(ENABLE_LIBAVCODEC)
 ENDIF(ENABLE_LIBAVCODEC)
 
 pkg_check_modules(GLIB REQUIRED glib-2.0)
+pkg_check_modules(GTHREAD REQUIRED gthread-2.0)
 pkg_check_modules(GLIBMM REQUIRED glibmm-2.4)
 INCLUDE_DIRECTORIES(${GLIBMM_INCLUDE_DIRS})
 pkg_check_modules(GTK REQUIRED gtk+-2.0)
@@ -281,12 +319,14 @@ ENDIF(ENABLE_LIBAVCODEC)
 
 IF(CMAKE_COMPILER_IS_GNUCC)
   IF(MINGW)
-    SET(CMAKE_EXE_LINKER_FLAGS "-Wl,--as-needed,--no-undefined -mthreads -s ${CMAKE_EXE_LINKER_FLAGS}")
-    SET(CMAKE_SHARED_LINKER_FLAGS "-Wl,--as-needed,--no-undefined,--enable-stdcall-fixup -mthreads -s ${CMAKE_SHARED_LINKER_FLAGS}")
+    SET(CMAKE_EXE_LINKER_FLAGS "-Wl,--as-needed,--no-undefined -mthreads ${CMAKE_EXE_LINKER_FLAGS}")
+    SET(CMAKE_SHARED_LINKER_FLAGS "-Wl,--as-needed,--no-undefined,--enable-stdcall-fixup -mthreads ${CMAKE_SHARED_LINKER_FLAGS}")
   ELSE()
     SET(CMAKE_EXE_LINKER_FLAGS "-Wl,--as-needed -Wl,--no-undefined ${CMAKE_EXE_LINKER_FLAGS}")
     SET(CMAKE_SHARED_LINKER_FLAGS "-Wl,--as-needed,-z,noexecstack,--no-undefined ${CMAKE_SHARED_LINKER_FLAGS}")
   ENDIF()
+  SET(CMAKE_EXE_LINKER_FLAGS_RELEASE "-s")
+  SET(CMAKE_SHARED_LINKER_FLAGS_RELEASE "-s")
 ENDIF(CMAKE_COMPILER_IS_GNUCC)
 
 LINK_DIRECTORIES(${LLVM_LIB_DIR})
@@ -400,6 +440,7 @@ SET(CPACK_NSIS_HELP_LINK "http:////www.lightspark.org")
 SET(CPACK_NSIS_URL_INFO_ABOUT "http:////www.lightspark.org")
 SET(CPACK_PACKAGE_ICON ${PROJECT_SOURCE_DIR}/media/lightspark-logo.svg)
 IF(WIN32)
+  SET(CPACK_PACKAGE_INSTALL_DIRECTORY "Lightspark")
   SET(CPACK_NSIS_EXTRA_INSTALL_COMMANDS "
   WriteRegStr HKCU 'Software\\\\MozillaPlugins\\\\@lightspark.github.com/Lightspark;version=1' 'Description' 'Lightspark'
   WriteRegStr HKCU 'Software\\\\MozillaPlugins\\\\@lightspark.github.com/Lightspark;version=1' 'ProductName' 'Lightspark'

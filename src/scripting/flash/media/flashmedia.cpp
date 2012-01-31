@@ -88,7 +88,7 @@ Video::~Video()
 {
 }
 
-void Video::renderImpl(bool maskEnabled, number_t t1,number_t t2,number_t t3,number_t t4) const
+void Video::renderImpl(RenderContext& ctxt, bool maskEnabled, number_t t1,number_t t2,number_t t3,number_t t4) const
 {
 	Mutex::Lock l(mutex);
 	if(skipRender(maskEnabled))
@@ -102,16 +102,15 @@ void Video::renderImpl(bool maskEnabled, number_t t1,number_t t2,number_t t3,num
 		videoHeight=netStream->getVideoHeight();
 
 		MatrixApplier ma(getConcatenatedMatrix());
-		RenderThread* rt = getRenderThread();
 		//if(!isSimple())
 		//	rt->acquireTempBuffer(0,width,0,height);
 
 		//Enable texture lookup and YUV to RGB conversion
-		glUniform1f(rt->maskUniform, 0);
-		glUniform1f(rt->yuvUniform, 1);
-		glUniform1f(rt->alphaUniform, alpha);
+		glUniform1f(ctxt.maskUniform, 0);
+		glUniform1f(ctxt.yuvUniform, 1);
+		glUniform1f(ctxt.alphaUniform, alpha);
 		//width and height will not change now (the Video mutex is acquired)
-		rt->renderTextured(netStream->getTexture(), 0, 0, width, height);
+		ctxt.renderTextured(netStream->getTexture(), 0, 0, width, height);
 
 		//if(!isSimple())
 		//	rt->blitTempBuffer(0,width,0,height);
@@ -333,14 +332,7 @@ void Sound::execute()
 			if(audioStream==NULL && audioDecoder && audioDecoder->isValid() && getSys()->audioManager->pluginLoaded())
 				audioStream=getSys()->audioManager->createStreamPlugin(audioDecoder);
 
-			if(audioStream && audioStream->paused() && !audioStream->pause)
-			{
-				//The audio stream is paused but should not!
-				//As we have new data fill the stream
-				audioStream->fill();
-			}
-
-			if(aborting)
+			if(threadAborting)
 				throw JobTerminationException();
 		}
 	}
@@ -371,8 +363,7 @@ void Sound::execute()
 	{
 		Locker l(mutex);
 		audioDecoder=NULL;
-		if(audioStream)
-			getSys()->audioManager->freeStreamPlugin(audioStream);
+		delete audioStream;
 		audioStream=NULL;
 	}
 	delete streamDecoder;

@@ -17,6 +17,7 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
+#include "version.h"
 #include "swf.h"
 #include "logger.h"
 #include "backends/security.h"
@@ -40,10 +41,21 @@ public:
 		visual = XVisualIDFromVisual(gdk_x11_visual_get_xvisual(gdk_visual_get_system()));
 #endif
 	}
+	static void destroyWidget(GtkWidget* widget)
+	{
+		gdk_threads_enter();
+		gtk_widget_destroy(widget);
+		gdk_threads_leave();
+	}
 	~StandaloneEngineData()
 	{
-		if(destroyHandlerId && widget)
-			g_signal_handler_disconnect(widget, destroyHandlerId);
+		if(widget)
+		{
+			if(destroyHandlerId)
+				g_signal_handler_disconnect(widget, destroyHandlerId);
+
+			runInGtkThread(sigc::bind(&destroyWidget,widget));
+		}
 	}
 	static void StandaloneDestroy(GtkWidget *widget, gpointer data)
 	{
@@ -209,7 +221,7 @@ int main(int argc, char* argv[])
 
 	if(fileName==NULL)
 	{
-		LOG(LOG_ERROR, endl << "Usage: " << argv[0] << " [--url|-u http://loader.url/file.swf]" <<
+		LOG(LOG_ERROR, "Usage: " << argv[0] << " [--url|-u http://loader.url/file.swf]" <<
 			" [--disable-interpreter|-ni] [--enable-jit|-j] [--log-level|-l 0-4]" <<
 			" [--parameters-file|-p params-file] [--security-sandbox|-s sandbox]" <<
 			" [--exit-on-error] [--HTTP-cookies cookie]" <<
@@ -244,6 +256,7 @@ int main(int argc, char* argv[])
 	cerr.exceptions( ios::failbit | ios::badbit);
 	ParseThread* pt = new ParseThread(f);
 	SystemState::staticInit();
+	EngineData::startGTKMain();
 	//NOTE: see SystemState declaration
 	SystemState* sys =new SystemState(pt, fileSize);
 	setTLSSys(sys);
@@ -308,14 +321,14 @@ int main(int argc, char* argv[])
 	//Start the parser
 	sys->addJob(pt);
 
-	gdk_threads_enter();
-	gtk_main();
-	gdk_threads_leave();
-
+	/* Destroy blocks until the 'terminated' flag is set by
+	 * SystemState::setShutdownFlag.
+	 */
 	sys->destroy();
 	delete pt;
 
 	SystemState::staticDeinit();
+	EngineData::quitGTKMain();
 	return 0;
 }
 

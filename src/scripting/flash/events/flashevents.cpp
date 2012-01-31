@@ -46,6 +46,8 @@ REGISTER_CLASS_NAME(TextEvent);
 REGISTER_CLASS_NAME(ErrorEvent);
 REGISTER_CLASS_NAME(SecurityErrorEvent);
 REGISTER_CLASS_NAME(AsyncErrorEvent);
+REGISTER_CLASS_NAME(StatusEvent);
+REGISTER_CLASS_NAME(DataEvent);
 
 void IEventDispatcher::linkTraits(Class_base* c)
 {
@@ -74,6 +76,7 @@ void Event::sinit(Class_base* c)
 	c->setVariableByQName("INIT","",Class<ASString>::getInstanceS("init"),DECLARED_TRAIT);
 	c->setVariableByQName("OPEN","",Class<ASString>::getInstanceS("open"),DECLARED_TRAIT);
 	c->setVariableByQName("CLOSE","",Class<ASString>::getInstanceS("close"),DECLARED_TRAIT);
+	c->setVariableByQName("CANCEL","",Class<ASString>::getInstanceS("cancel"),DECLARED_TRAIT);
 	c->setVariableByQName("ADDED","",Class<ASString>::getInstanceS("added"),DECLARED_TRAIT);
 	c->setVariableByQName("COMPLETE","",Class<ASString>::getInstanceS("complete"),DECLARED_TRAIT);
 	c->setVariableByQName("REMOVED","",Class<ASString>::getInstanceS("removed"),DECLARED_TRAIT);
@@ -221,9 +224,12 @@ void ProgressEvent::sinit(Class_base* c)
 	c->setSuper(Class<Event>::getRef());
 
 	c->setVariableByQName("PROGRESS","",Class<ASString>::getInstanceS("progress"),DECLARED_TRAIT);
-	c->setDeclaredMethodByQName("bytesLoaded","",Class<IFunction>::getFunction(_getBytesLoaded),GETTER_METHOD,true);
-	c->setDeclaredMethodByQName("bytesTotal","",Class<IFunction>::getFunction(_getBytesTotal),GETTER_METHOD,true);
+	REGISTER_GETTER_SETTER(c,bytesLoaded);
+	REGISTER_GETTER_SETTER(c,bytesTotal);
 }
+
+ASFUNCTIONBODY_GETTER_SETTER(ProgressEvent,bytesLoaded);
+ASFUNCTIONBODY_GETTER_SETTER(ProgressEvent,bytesTotal);
 
 void ProgressEvent::buildTraits(ASObject* o)
 {
@@ -238,18 +244,6 @@ ASFUNCTIONBODY(ProgressEvent,_constructor)
 		th->bytesTotal=args[4]->toInt();
 
 	return NULL;
-}
-
-ASFUNCTIONBODY(ProgressEvent,_getBytesLoaded)
-{
-	ProgressEvent* th=static_cast<ProgressEvent*>(obj);
-	return abstract_d(th->bytesLoaded);
-}
-
-ASFUNCTIONBODY(ProgressEvent,_getBytesTotal)
-{
-	ProgressEvent* th=static_cast<ProgressEvent*>(obj);
-	return abstract_d(th->bytesTotal);
 }
 
 void TimerEvent::sinit(Class_base* c)
@@ -792,4 +786,24 @@ BindClassEvent::BindClassEvent(_R<RootMovieClip> b, const tiny_string& c)
 BindClassEvent::BindClassEvent(_R<DictionaryTag> t, const tiny_string& c)
 	: Event("bindClass"),tag(t),class_name(c)
 {
+}
+
+void StatusEvent::sinit(Class_base* c)
+{
+	c->setConstructor(Class<IFunction>::getFunction(_constructor));
+	c->setSuper(Class<Event>::getRef());
+
+	/* TODO: dispatch this event */
+	c->setVariableByQName("STATUS","",Class<ASString>::getInstanceS("status"),DECLARED_TRAIT);
+}
+
+void DataEvent::sinit(Class_base* c)
+{
+	c->setConstructor(Class<IFunction>::getFunction(_constructor));
+	c->setSuper(Class<Event>::getRef());
+
+	/* TODO: dispatch this event */
+	c->setVariableByQName("DATA","",Class<ASString>::getInstanceS("data"),DECLARED_TRAIT);
+	/* TODO: dispatch this event */
+	c->setVariableByQName("UPLOAD_COMPLETE_DATA","",Class<ASString>::getInstanceS("uploadCompleteData"),DECLARED_TRAIT);
 }

@@ -223,6 +223,7 @@ public:
 			createBuffer(stringSize);
 		memcpy(buf,r.c_str(),stringSize);
 	}
+	tiny_string(const Glib::ustring& r);
 	~tiny_string()
 	{
 		resetToStatic();
@@ -259,13 +260,29 @@ public:
 		makePrivateCopy(s);
 		return *this;
 	}
+	tiny_string& operator=(const Glib::ustring& s);
 	tiny_string& operator+=(const char* s);
 	tiny_string& operator+=(const tiny_string& r);
+	tiny_string& operator+=(const std::string& s)
+	{
+		//TODO: optimize
+		return *this += tiny_string(s);
+	}
+	tiny_string& operator+=(const Glib::ustring& s);
 	tiny_string& operator+=(uint32_t c)
 	{
 		return (*this += tiny_string::fromChar(c));
 	}
 	const tiny_string operator+(const tiny_string& r) const;
+	const tiny_string operator+(const char* s) const
+	{
+		return *this + tiny_string(s);
+	}
+	const tiny_string operator+(const std::string& r) const
+	{
+		return *this + tiny_string(r);
+	}
+	const tiny_string operator+(const Glib::ustring& r) const;
 	bool operator<(const tiny_string& r) const
 	{
 		//don't check trailing \0
@@ -399,6 +416,7 @@ public:
 			return g_utf8_pointer_to_offset(buf,buf+bytepos);
 	}
 	tiny_string& replace(uint32_t pos1, uint32_t n1, const tiny_string& o);
+	tiny_string& replace_bytes(uint32_t bytestart, uint32_t bytenum, const tiny_string& o);
 	tiny_string lowercase() const
 	{
 		//TODO: omit copy, handle \0 in string

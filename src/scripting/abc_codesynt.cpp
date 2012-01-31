@@ -32,16 +32,16 @@
 using namespace std;
 using namespace lightspark;
 
-static const llvm::Type* void_type = NULL;
-static const llvm::Type* int_type = NULL;
-static const llvm::Type* intptr_type = NULL;
-static const llvm::Type* voidptr_type = NULL;
-static const llvm::Type* number_type = NULL;
-static const llvm::Type* numberptr_type = NULL;
-static const llvm::Type* bool_type = NULL;
-static const llvm::Type* boolptr_type = NULL;
-static const llvm::Type* ptr_type = NULL;
-static const llvm::Type* context_type = NULL;
+static LLVMTYPE void_type = NULL;
+static LLVMTYPE int_type = NULL;
+static LLVMTYPE intptr_type = NULL;
+static LLVMTYPE voidptr_type = NULL;
+static LLVMTYPE number_type = NULL;
+static LLVMTYPE numberptr_type = NULL;
+static LLVMTYPE bool_type = NULL;
+static LLVMTYPE boolptr_type = NULL;
+static LLVMTYPE ptr_type = NULL;
+static LLVMTYPE context_type = NULL;
 
 void debug_d(number_t f)
 {
@@ -146,7 +146,9 @@ typed_opcode_handler ABCVm::opcode_table_void[]={
 	{"incRef",(void*)&ASObject::s_incRef,ARGS_OBJ},
 	{"decRef",(void*)&ASObject::s_decRef,ARGS_OBJ},
 	{"decRef_safe",(void*)&ASObject::s_decRef_safe,ARGS_OBJ_OBJ},
-	{"wrong_exec_pos",(void*)&ABCVm::wrong_exec_pos,ARGS_NONE}
+	{"wrong_exec_pos",(void*)&ABCVm::wrong_exec_pos,ARGS_NONE},
+	{"dxns",(void*)&ABCVm::dxns,ARGS_CONTEXT_INT},
+	{"dxnslate",(void*)&ABCVm::dxnslate,ARGS_CONTEXT_OBJ},
 };
 
 typed_opcode_handler ABCVm::opcode_table_voidptr[]={
@@ -162,6 +164,7 @@ typed_opcode_handler ABCVm::opcode_table_voidptr[]={
 	{"pushNaN",(void*)&ABCVm::pushNaN,ARGS_NONE},
 	{"pushNull",(void*)&ABCVm::pushNull,ARGS_NONE},
 	{"pushUndefined",(void*)&ABCVm::pushUndefined,ARGS_NONE},
+	{"pushNamespace",(void*)&ABCVm::pushNamespace,ARGS_CONTEXT_INT},
 	{"getProperty",(void*)&ABCVm::getProperty,ARGS_OBJ_OBJ},
 	{"asTypelate",(void*)&ABCVm::asTypelate,ARGS_OBJ_OBJ},
 	{"getGlobalScope",(void*)&ABCVm::getGlobalScope,ARGS_CONTEXT},
@@ -218,7 +221,7 @@ typed_opcode_handler ABCVm::opcode_table_bool_t[]={
 
 void ABCVm::registerFunctions()
 {
-	vector<const llvm::Type*> sig;
+	vector<LLVMTYPE> sig;
 	llvm::FunctionType* FT=NULL;
 
 	//Create types
@@ -234,17 +237,17 @@ void ABCVm::registerFunctions()
 	intptr_type=int_type->getPointerTo();
 
 	//All the opcodes needs a pointer to the context
-	std::vector<const llvm::Type*> struct_elems;
+	std::vector<LLVMTYPE> struct_elems;
 	struct_elems.push_back(voidptr_type->getPointerTo());
 	struct_elems.push_back(voidptr_type->getPointerTo());
 	struct_elems.push_back(int_type);
 	struct_elems.push_back(int_type);
-	context_type=llvm::PointerType::getUnqual(llvm::StructType::get(llvm_context,struct_elems,true));
+	context_type=llvm::PointerType::getUnqual(llvm::StructType::get(llvm_context,LLVMMAKEARRAYREF(struct_elems),true));
 
 	//newActivation needs both method_info and the context
 	sig.push_back(context_type);
 	sig.push_back(voidptr_type);
-	FT=llvm::FunctionType::get(voidptr_type, sig, false);
+	FT=llvm::FunctionType::get(voidptr_type, LLVMMAKEARRAYREF(sig), false);
 	llvm::Function* F=llvm::Function::Create(FT,llvm::Function::ExternalLinkage,"newActivation",module);
 	ex->addGlobalMapping(F,(void*)&ABCVm::newActivation);
 
@@ -300,103 +303,103 @@ void ABCVm::registerFunctions()
 	register_table(bool_type,opcode_table_bool_t,sizeof(opcode_table_bool_t)/sizeof(typed_opcode_handler));
 }
 
-void ABCVm::register_table(const llvm::Type* ret_type,typed_opcode_handler* table, int table_len)
+void ABCVm::register_table(LLVMTYPE ret_type,typed_opcode_handler* table, int table_len)
 {
-	vector<const llvm::Type*> sig_obj_obj;
+	vector<LLVMTYPE> sig_obj_obj;
 	sig_obj_obj.push_back(voidptr_type);
 	sig_obj_obj.push_back(voidptr_type);
 
-	vector<const llvm::Type*> sig_obj_obj_obj;
+	vector<LLVMTYPE> sig_obj_obj_obj;
 	sig_obj_obj_obj.push_back(voidptr_type);
 	sig_obj_obj_obj.push_back(voidptr_type);
 	sig_obj_obj_obj.push_back(voidptr_type);
 
-	vector<const llvm::Type*> sig_obj_int;
+	vector<LLVMTYPE> sig_obj_int;
 	sig_obj_int.push_back(voidptr_type);
 	sig_obj_int.push_back(int_type);
 
-	vector<const llvm::Type*> sig_int_obj;
+	vector<LLVMTYPE> sig_int_obj;
 	sig_int_obj.push_back(int_type);
 	sig_int_obj.push_back(voidptr_type);
 
-	vector<const llvm::Type*> sig_obj_number;
+	vector<LLVMTYPE> sig_obj_number;
 	sig_obj_number.push_back(voidptr_type);
 	sig_obj_number.push_back(number_type);
 
-	vector<const llvm::Type*> sig_bool;
+	vector<LLVMTYPE> sig_bool;
 	sig_bool.push_back(bool_type);
 
-	vector<const llvm::Type*> sig_int;
+	vector<LLVMTYPE> sig_int;
 	sig_int.push_back(int_type);
 
-	vector<const llvm::Type*> sig_number;
+	vector<LLVMTYPE> sig_number;
 	sig_number.push_back(number_type);
 
-	vector<const llvm::Type*> sig_obj;
+	vector<LLVMTYPE> sig_obj;
 	sig_obj.push_back(voidptr_type);
 
-	vector<const llvm::Type*> sig_none;
+	vector<LLVMTYPE> sig_none;
 
-	vector<const llvm::Type*> sig_obj_obj_int;
+	vector<LLVMTYPE> sig_obj_obj_int;
 	sig_obj_obj_int.push_back(voidptr_type);
 	sig_obj_obj_int.push_back(voidptr_type);
 	sig_obj_obj_int.push_back(int_type);
 
-	vector<const llvm::Type*> sig_obj_obj_obj_int;
+	vector<LLVMTYPE> sig_obj_obj_obj_int;
 	sig_obj_obj_obj_int.push_back(voidptr_type);
 	sig_obj_obj_obj_int.push_back(voidptr_type);
 	sig_obj_obj_obj_int.push_back(voidptr_type);
 	sig_obj_obj_obj_int.push_back(int_type);
 
-	vector<const llvm::Type*> sig_number_obj;
+	vector<LLVMTYPE> sig_number_obj;
 	sig_number_obj.push_back(number_type);
 	sig_number_obj.push_back(voidptr_type);
 
-	vector<const llvm::Type*> sig_int_int;
+	vector<LLVMTYPE> sig_int_int;
 	sig_int_int.push_back(int_type);
 	sig_int_int.push_back(int_type);
 
-	vector<const llvm::Type*> sig_context;
+	vector<LLVMTYPE> sig_context;
 	sig_context.push_back(context_type);
 
-	vector<const llvm::Type*> sig_context_int;
+	vector<LLVMTYPE> sig_context_int;
 	sig_context_int.push_back(context_type);
 	sig_context_int.push_back(int_type);
 
-	vector<const llvm::Type*> sig_context_int_int;
+	vector<LLVMTYPE> sig_context_int_int;
 	sig_context_int_int.push_back(context_type);
 	sig_context_int_int.push_back(int_type);
 	sig_context_int_int.push_back(int_type);
 
-	vector<const llvm::Type*> sig_context_int_int_int;
+	vector<LLVMTYPE> sig_context_int_int_int;
 	sig_context_int_int_int.push_back(context_type);
 	sig_context_int_int_int.push_back(int_type);
 	sig_context_int_int_int.push_back(int_type);
 	sig_context_int_int_int.push_back(int_type);
 
-	vector<const llvm::Type*> sig_context_int_int_int_bool;
+	vector<LLVMTYPE> sig_context_int_int_int_bool;
 	sig_context_int_int_int_bool.push_back(context_type);
 	sig_context_int_int_int_bool.push_back(int_type);
 	sig_context_int_int_int_bool.push_back(int_type);
 	sig_context_int_int_int_bool.push_back(int_type);
 	sig_context_int_int_int_bool.push_back(bool_type);
 
-	vector<const llvm::Type*> sig_context_obj;
+	vector<LLVMTYPE> sig_context_obj;
 	sig_context_obj.push_back(context_type);
 	sig_context_obj.push_back(voidptr_type);
 
-	vector<const llvm::Type*> sig_context_obj_obj;
+	vector<LLVMTYPE> sig_context_obj_obj;
 	sig_context_obj_obj.push_back(context_type);
 	sig_context_obj_obj.push_back(voidptr_type);
 	sig_context_obj_obj.push_back(voidptr_type);
 
-	vector<const llvm::Type*> sig_context_obj_obj_obj;
+	vector<LLVMTYPE> sig_context_obj_obj_obj;
 	sig_context_obj_obj_obj.push_back(context_type);
 	sig_context_obj_obj_obj.push_back(voidptr_type);
 	sig_context_obj_obj_obj.push_back(voidptr_type);
 	sig_context_obj_obj_obj.push_back(voidptr_type);
 
-	vector<const llvm::Type*> sig_context_obj_obj_int;
+	vector<LLVMTYPE> sig_context_obj_obj_int;
 	sig_context_obj_obj_int.push_back(context_type);
 	sig_context_obj_obj_int.push_back(voidptr_type);
 	sig_context_obj_obj_int.push_back(voidptr_type);
@@ -408,73 +411,73 @@ void ABCVm::register_table(const llvm::Type* ret_type,typed_opcode_handler* tabl
 		switch(table[i].type)
 		{
 			case ARGS_OBJ_OBJ:
-				FT=llvm::FunctionType::get(ret_type, sig_obj_obj, false);
+				FT=llvm::FunctionType::get(ret_type, LLVMMAKEARRAYREF(sig_obj_obj), false);
 				break;
 			case ARGS_OBJ_OBJ_OBJ:
-				FT=llvm::FunctionType::get(ret_type, sig_obj_obj_obj, false);
+				FT=llvm::FunctionType::get(ret_type, LLVMMAKEARRAYREF(sig_obj_obj_obj), false);
 				break;
 			case ARGS_NONE:
-				FT=llvm::FunctionType::get(ret_type, sig_none, false);
+				FT=llvm::FunctionType::get(ret_type, LLVMMAKEARRAYREF(sig_none), false);
 				break;
 			case ARGS_INT_OBJ:
-				FT=llvm::FunctionType::get(ret_type, sig_int_obj, false);
+				FT=llvm::FunctionType::get(ret_type, LLVMMAKEARRAYREF(sig_int_obj), false);
 				break;
 			case ARGS_OBJ_INT:
-				FT=llvm::FunctionType::get(ret_type, sig_obj_int, false);
+				FT=llvm::FunctionType::get(ret_type, LLVMMAKEARRAYREF(sig_obj_int), false);
 				break;
 			case ARGS_OBJ_NUMBER:
-				FT=llvm::FunctionType::get(ret_type, sig_obj_number, false);
+				FT=llvm::FunctionType::get(ret_type, LLVMMAKEARRAYREF(sig_obj_number), false);
 				break;
 			case ARGS_INT:
-				FT=llvm::FunctionType::get(ret_type, sig_int, false);
+				FT=llvm::FunctionType::get(ret_type, LLVMMAKEARRAYREF(sig_int), false);
 				break;
 			case ARGS_NUMBER:
-				FT=llvm::FunctionType::get(ret_type, sig_number, false);
+				FT=llvm::FunctionType::get(ret_type, LLVMMAKEARRAYREF(sig_number), false);
 				break;
 			case ARGS_BOOL:
-				FT=llvm::FunctionType::get(ret_type, sig_bool, false);
+				FT=llvm::FunctionType::get(ret_type, LLVMMAKEARRAYREF(sig_bool), false);
 				break;
 			case ARGS_OBJ:
-				FT=llvm::FunctionType::get(ret_type, sig_obj, false);
+				FT=llvm::FunctionType::get(ret_type, LLVMMAKEARRAYREF(sig_obj), false);
 				break;
 			case ARGS_OBJ_OBJ_INT:
-				FT=llvm::FunctionType::get(ret_type, sig_obj_obj_int, false);
+				FT=llvm::FunctionType::get(ret_type, LLVMMAKEARRAYREF(sig_obj_obj_int), false);
 				break;
 			case ARGS_OBJ_OBJ_OBJ_INT:
-				FT=llvm::FunctionType::get(ret_type, sig_obj_obj_obj_int, false);
+				FT=llvm::FunctionType::get(ret_type, LLVMMAKEARRAYREF(sig_obj_obj_obj_int), false);
 				break;
 			case ARGS_NUMBER_OBJ:
-				FT=llvm::FunctionType::get(ret_type, sig_number_obj, false);
+				FT=llvm::FunctionType::get(ret_type, LLVMMAKEARRAYREF(sig_number_obj), false);
 				break;
 			case ARGS_INT_INT:
-				FT=llvm::FunctionType::get(ret_type, sig_int_int, false);
+				FT=llvm::FunctionType::get(ret_type, LLVMMAKEARRAYREF(sig_int_int), false);
 				break;
 			case ARGS_CONTEXT:
-				FT=llvm::FunctionType::get(ret_type, sig_context, false);
+				FT=llvm::FunctionType::get(ret_type, LLVMMAKEARRAYREF(sig_context), false);
 				break;
 			case ARGS_CONTEXT_INT:
-				FT=llvm::FunctionType::get(ret_type, sig_context_int, false);
+				FT=llvm::FunctionType::get(ret_type, LLVMMAKEARRAYREF(sig_context_int), false);
 				break;
 			case ARGS_CONTEXT_INT_INT:
-				FT=llvm::FunctionType::get(ret_type, sig_context_int_int, false);
+				FT=llvm::FunctionType::get(ret_type, LLVMMAKEARRAYREF(sig_context_int_int), false);
 				break;
 			case ARGS_CONTEXT_INT_INT_INT:
-				FT=llvm::FunctionType::get(ret_type, sig_context_int_int_int, false);
+				FT=llvm::FunctionType::get(ret_type, LLVMMAKEARRAYREF(sig_context_int_int_int), false);
 				break;
 			case ARGS_CONTEXT_INT_INT_INT_BOOL:
-				FT=llvm::FunctionType::get(ret_type, sig_context_int_int_int_bool, false);
+				FT=llvm::FunctionType::get(ret_type, LLVMMAKEARRAYREF(sig_context_int_int_int_bool), false);
 				break;
 			case ARGS_CONTEXT_OBJ_OBJ_INT:
-				FT=llvm::FunctionType::get(ret_type, sig_context_obj_obj_int, false);
+				FT=llvm::FunctionType::get(ret_type, LLVMMAKEARRAYREF(sig_context_obj_obj_int), false);
 				break;
 			case ARGS_CONTEXT_OBJ:
-				FT=llvm::FunctionType::get(ret_type, sig_context_obj, false);
+				FT=llvm::FunctionType::get(ret_type, LLVMMAKEARRAYREF(sig_context_obj), false);
 				break;
 			case ARGS_CONTEXT_OBJ_OBJ:
-				FT=llvm::FunctionType::get(ret_type, sig_context_obj_obj, false);
+				FT=llvm::FunctionType::get(ret_type, LLVMMAKEARRAYREF(sig_context_obj_obj), false);
 				break;
 			case ARGS_CONTEXT_OBJ_OBJ_OBJ:
-				FT=llvm::FunctionType::get(ret_type, sig_context_obj_obj_obj, false);
+				FT=llvm::FunctionType::get(ret_type, LLVMMAKEARRAYREF(sig_context_obj_obj_obj), false);
 				break;
 		}
 
@@ -553,7 +556,7 @@ static stack_entry static_stack_peek(llvm::IRBuilder<>& builder, vector<stack_en
 }
 
 /* Checks if both types correspond */
-inline void checkStackTypeFromLLVMType(const llvm::Type* type, STACK_TYPE st)
+inline void checkStackTypeFromLLVMType(LLVMTYPE type, STACK_TYPE st)
 {
 	assert(st != STACK_NONE);
 	assert(st != STACK_NUMBER || type == number_type);
@@ -687,10 +690,10 @@ STACK_TYPE block_info::checkProactiveCasting(int local_ip,STACK_TYPE type)
 llvm::FunctionType* method_info::synt_method_prototype(llvm::ExecutionEngine* ex)
 {
 	//Initialize LLVM representation of method
-	vector<const llvm::Type*> sig;
+	vector<LLVMTYPE> sig;
 	sig.push_back(context_type);
 
-	return llvm::FunctionType::get(voidptr_type, sig, false);
+	return llvm::FunctionType::get(voidptr_type, LLVMMAKEARRAYREF(sig), false);
 }
 
 void method_info::consumeStackForRTMultiname(static_stack_types_vector& stack, int multinameIndex) const
@@ -912,6 +915,17 @@ void method_info::doAnalysis(std::map<unsigned int,block_info>& blocks, llvm::IR
 					static_stack_types.clear();
 					break;
 				}
+				case 0x06: //dxns
+				{
+					u30 t;
+					code >> t;
+					break;
+				}
+				case 0x07: //dxnslate
+				{
+					popTypeFromStack(static_stack_types,local_ip);
+					break;
+				}
 				case 0x08: //kill
 				{
 					LOG(LOG_TRACE, _("block analysis: kill") );
@@ -1026,6 +1040,13 @@ void method_info::doAnalysis(std::map<unsigned int,block_info>& blocks, llvm::IR
 				case 0x30: //pushscope
 				{
 					static_stack_types.clear();
+					break;
+				}
+				case 0x31: //pushnamespace
+				{
+					u30 t;
+					code >> t;
+					static_stack_types.push_back(make_pair(local_ip,STACK_OBJECT));
 					break;
 				}
 				case 0x1d: //popscope
@@ -2012,6 +2033,25 @@ SyntheticFunction::synt_function method_info::synt_method()
 				Builder.CreateCall2(ex->FindFunctionNamed("setSuper"), context, constant);
 				break;
 			}
+			case 0x06:
+			{
+				//dxns
+				LOG(LOG_TRACE, _("synt dxns") );
+				u30 t;
+				code >> t;
+				constant = llvm::ConstantInt::get(int_type, t);
+				Builder.CreateCall2(ex->FindFunctionNamed("dxns"), context, constant);
+				break;
+			}
+			case 0x07:
+			{
+				//dxnslate
+				LOG(LOG_TRACE, _("synt dxnslate") );
+				stack_entry v=static_stack_pop(Builder,static_stack,dynamic_stack,dynamic_stack_index);
+				abstract_value(ex,Builder,v);
+				Builder.CreateCall2(ex->FindFunctionNamed("dxns"), context, v.first);
+				break;
+			}
 			case 0x08:
 			{
 				//kill
@@ -2838,6 +2878,17 @@ SyntheticFunction::synt_function method_info::synt_method()
 				LOG(LOG_TRACE, _("synt pushscope") );
 				syncStacks(ex,Builder,static_stack,dynamic_stack,dynamic_stack_index);
 				Builder.CreateCall(ex->FindFunctionNamed("pushScope"), context);
+				break;
+			}
+			case 0x31:
+			{
+				//pushnamespace
+				LOG(LOG_TRACE, _("synt pushnamespace") );
+				u30 t;
+				code >> t;
+				constant = llvm::ConstantInt::get(int_type, t);
+				value = Builder.CreateCall2(ex->FindFunctionNamed("pushNamespace"), context, constant);
+				static_stack_push(static_stack, stack_entry(value,STACK_OBJECT));
 				break;
 			}
 			case 0x32:

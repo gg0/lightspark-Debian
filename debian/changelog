@@ -1,3 +1,10 @@
+lightspark (0.5.4-1) unstable; urgency=low
+
+  * New 0.5.4 upstream release
+    - ENABLE_RTMP=1 by default (#647149 fixed upstream)
+
+ -- Didier Raboud <odyx@debian.org>  Tue, 31 Jan 2012 13:54:07 +0100
+
 lightspark (0.5.3-2) unstable; urgency=low
 
   [ Kai Wasserbäch ]

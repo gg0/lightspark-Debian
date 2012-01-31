@@ -34,13 +34,13 @@ SET(LIBSPARK_SOURCES
   backends/decoder.cpp
   backends/extscriptobject.cpp
   backends/geometry.cpp
-  backends/glmatrices.cpp
   backends/graphics.cpp
   backends/image.cpp
   backends/input.cpp
   backends/netutils.cpp
   backends/pluginmanager.cpp
   backends/rendering.cpp
+  backends/rendering_context.cpp
   backends/rtmputils.cpp
   backends/security.cpp
   backends/urlutils.cpp
@@ -70,13 +70,15 @@ SET(LIBSPARK_SOURCES
   scripting/flash/utils/flashutils.cpp
   scripting/flash/xml/flashxml.cpp
   scripting/toplevel/Array.cpp
+  scripting/toplevel/ASString.cpp
   scripting/toplevel/Boolean.cpp
   scripting/toplevel/Date.cpp
   scripting/toplevel/Error.cpp
   scripting/toplevel/Math.cpp
   scripting/toplevel/Vector.cpp
   scripting/class.cpp
-  scripting/toplevel/toplevel.cpp)
+  scripting/toplevel/toplevel.cpp
+  platforms/engineutils.cpp)
 IF(MINGW)
   SET(LIBSPARK_SOURCES ${LIBSPARK_SOURCES} platforms/slowpaths_generic.cpp)
 ELSE()
@@ -136,7 +138,7 @@ IF(COMPILE_LIGHTSPARK)
   TARGET_LINK_LIBRARIES(lightspark spark)
   #With STATICDEPS, all deps are compiled into spark
   IF(NOT STATICDEPS)
-    TARGET_LINK_LIBRARIES(lightspark ${Boost_LIBRARIES} ${X11_LIBRARIES} ${GTK_LIBRARIES} ${GLIBMM_LIBRARIES})
+    TARGET_LINK_LIBRARIES(lightspark ${Boost_LIBRARIES} ${X11_LIBRARIES} ${GTK_LIBRARIES} ${GLIBMM_LIBRARIES} ${GTHREAD_LIBRARIES})
   ENDIF()
 
   PACK_EXECUTABLE(lightspark)
@@ -155,7 +157,7 @@ IF(COMPILE_TIGHTSPARK)
   TARGET_LINK_LIBRARIES(tightspark spark)
   #With STATICDEPS, all deps are compiled into spark
   IF(NOT STATICDEPS)
-    TARGET_LINK_LIBRARIES(tightspark ${Boost_LIBRARIES} ${GLIBMM_LIBRARIES})
+    TARGET_LINK_LIBRARIES(tightspark ${Boost_LIBRARIES} ${GLIBMM_LIBRARIES} ${GTHREAD_LIBRARIES})
   ENDIF()
 
   INSTALL(TARGETS tightspark RUNTIME DESTINATION ${BINDIR})

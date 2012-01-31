@@ -34,6 +34,11 @@ SDLPlugin::SDLPlugin(string init_Name, string init_audiobackend, bool init_stopp
 		sdl_available = !SDL_InitSubSystem ( SDL_INIT_AUDIO );
 	else
 		sdl_available = !SDL_Init ( SDL_INIT_AUDIO );
+
+	/* We use SDL_OpenAudio/SDL_CloseAudio in SDLAudioStream's constructor/destructor
+	 * to access the device directly. We _should_ use SDL_mixer instead.
+	 */
+	LOG(LOG_NOT_IMPLEMENTED,"The SDL audio plugin does only support one concurrent stream!");
 }
 
 void SDLPlugin::set_device(std::string desiredDevice,
@@ -47,7 +52,7 @@ AudioStream* SDLPlugin::createStream(AudioDecoder* decoder)
 	if (!sdl_available)
 		return NULL;
 
-    SDLAudioStream *stream = new SDLAudioStream();
+    SDLAudioStream *stream = new SDLAudioStream(this);
     stream->decoder = decoder;
     if (!stream->init())
     {
@@ -57,28 +62,6 @@ AudioStream* SDLPlugin::createStream(AudioDecoder* decoder)
     streams.push_back(stream);
     return stream;
 }
-
-void SDLPlugin::freeStream(AudioStream *stream)
-{
-	assert(stream);
-
-	SDLAudioStream *s = static_cast<SDLAudioStream *>(stream);
-	streams.remove(s);
-
-	delete stream;
-}
-void SDLPlugin::pauseStream(AudioStream *audioStream)
-{
-	SDLAudioStream *s = static_cast<SDLAudioStream *>(audioStream);
-	s->SetPause(true);
-}
-
-void SDLPlugin::resumeStream(AudioStream *audioStream)
-{
-	SDLAudioStream *s = static_cast<SDLAudioStream *>(audioStream);
-	s->SetPause(false);
-}
-
 
 SDLPlugin::~SDLPlugin()
 {
@@ -170,13 +153,9 @@ void SDLAudioStream::async_callback(void *unused, uint8_t *stream, int len)
 	SDL_UnlockAudio();
 	delete[] buf;
 }
-void SDLAudioStream::fill ()
+
+void SDLAudioStream::SetPause(bool pause_on)
 {
-	// this method is called nowhere ????
-}
-void SDLAudioStream::SetPause(bool pause_on) 
-{
-	pause = pause_on;
 	if (pause_on)
 	{
 		playedtime = getPlayedTime();
@@ -187,9 +166,10 @@ void SDLAudioStream::SetPause(bool pause_on)
 	}
 	SDL_PauseAudio(pause_on);
 }
-bool SDLAudioStream::paused()
+
+bool SDLAudioStream::ispaused()
 {
-	return pause;
+	return SDL_GetAudioStatus() != SDL_AUDIO_PLAYING;
 }
 
 bool SDLAudioStream::isValid()
@@ -209,7 +189,10 @@ void SDLAudioStream::setVolume(double volume)
 {
 	curvolume = SDL_MIX_MAXVOLUME * volume; 
 }
-SDLAudioStream::~SDLAudioStream() {
+
+SDLAudioStream::~SDLAudioStream()
+{
+	manager->streams.remove(this);
 	SDL_CloseAudio();
 }
 

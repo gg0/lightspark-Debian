@@ -605,7 +605,6 @@ void NetStream::finalize()
 
 NetStream::~NetStream()
 {
-	assert(!executing);
 	if(tickStarted)
 		getSys()->removeJob(this);
 	delete videoDecoder;
@@ -798,7 +797,7 @@ ASFUNCTIONBODY(NetStream,resume)
 		{
 			Mutex::Lock l(th->mutex);
 			if(th->audioStream)
-				getSys()->audioManager->resumeStreamPlugin(th->audioStream);
+				th->audioStream->resume();
 		}
 		th->incRef();
 		getVm()->addEvent(_MR(th), _MR(Class<NetStatusEvent>::getInstanceS("status", "NetStream.Unpause.Notify")));
@@ -815,7 +814,7 @@ ASFUNCTIONBODY(NetStream,pause)
 		{
 			Mutex::Lock l(th->mutex);
 			if(th->audioStream)
-				getSys()->audioManager->pauseStreamPlugin(th->audioStream);
+				th->audioStream->pause();
 		}
 		th->incRef();
 		getVm()->addEvent(_MR(th),_MR(Class<NetStatusEvent>::getInstanceS("status", "NetStream.Pause.Notify")));
@@ -973,13 +972,6 @@ void NetStream::execute()
 			if(audioStream==NULL && audioDecoder && audioDecoder->isValid() && getSys()->audioManager->pluginLoaded())
 				audioStream=getSys()->audioManager->createStreamPlugin(audioDecoder);
 
-			if(audioStream && audioStream->paused() && !paused)
-			{
-				//The audio stream is paused but should not!
-				//As we have new data fill the stream
-				audioStream->fill();
-			}
-
 			if(!tickStarted && isReady())
 			{
 				multiname onMetaDataName;
@@ -1035,7 +1027,7 @@ void NetStream::execute()
 				getSys()->setRenderRate(localRenderRate);
 			}
 			profile->accountTime(chronometer.checkpoint());
-			if(aborting)
+			if(threadAborting)
 				throw JobTerminationException();
 		}
 
@@ -1084,8 +1076,7 @@ void NetStream::execute()
 	getSys()->downloadManager->destroy(downloader);
 	//This transition is critical, so the mutex is needed
 	downloader=NULL;
-	if(audioStream)
-		getSys()->audioManager->freeStreamPlugin(audioStream);
+	delete audioStream;
 	audioStream=NULL;
 	delete streamDecoder;
 }

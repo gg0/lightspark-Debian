@@ -23,7 +23,11 @@
 #include <llvm/ExecutionEngine/JIT.h>
 #include <llvm/LLVMContext.h>
 #include <llvm/Target/TargetData.h>
+#ifdef LLVM_3
+#include <llvm/Support/TargetSelect.h>
+#else
 #include <llvm/Target/TargetSelect.h>
+#endif
 #include <llvm/Target/TargetOptions.h>
 #include <llvm/Analysis/Verifier.h>
 #include <llvm/Transforms/Scalar.h> 
@@ -33,6 +37,7 @@
 #include <limits>
 #include <cmath>
 #include "swf.h"
+#include "toplevel/ASString.h"
 #include "toplevel/Date.h"
 #include "toplevel/Math.h"
 #include "toplevel/Vector.h"
@@ -60,10 +65,6 @@ bool lightspark::isVmThread()
 {
 	return g_static_private_get(&is_vm_thread);
 }
-
-uint32_t ABCVm::cur_recursion = 0;
-//these limits can be overwritten by a ScriptLimitsTag
-ABCVm::abc_limits ABCVm::limits = { /*max_recursion=*/ 256, /*max_timeout=*/ 20 };
 
 DoABCTag::DoABCTag(RECORDHEADER h, std::istream& in):ControlTag(h)
 {
@@ -152,8 +153,8 @@ void SymbolClassTag::execute(RootMovieClip* root)
 
 void ScriptLimitsTag::execute(RootMovieClip* root)
 {
-	ABCVm::limits.max_recursion = MaxRecursionDepth;
-	ABCVm::limits.script_timeout = ScriptTimeoutSeconds;
+	getVm()->limits.max_recursion = MaxRecursionDepth;
+	getVm()->limits.script_timeout = ScriptTimeoutSeconds;
 }
 
 void ABCVm::registerClasses()
@@ -315,6 +316,8 @@ void ABCVm::registerClasses()
 	builtin->setVariableByQName("NetStatusEvent","flash.events",Class<NetStatusEvent>::getRef(),DECLARED_TRAIT);
 	builtin->setVariableByQName("HTTPStatusEvent","flash.events",Class<HTTPStatusEvent>::getRef(),DECLARED_TRAIT);
 	builtin->setVariableByQName("KeyboardEvent","flash.events",Class<KeyboardEvent>::getRef(),DECLARED_TRAIT);
+	builtin->setVariableByQName("StatusEvent","flash.events",Class<StatusEvent>::getRef(),DECLARED_TRAIT);
+	builtin->setVariableByQName("DataEvent","flash.events",Class<DataEvent>::getRef(),DECLARED_TRAIT);
 
 	builtin->setVariableByQName("sendToURL","flash.net",Class<IFunction>::getFunction(sendToURL),DECLARED_TRAIT);
 	builtin->setVariableByQName("LocalConnection","flash.net",Class<ASObject>::getStubClass(QName("LocalConnection","flash.net")),DECLARED_TRAIT);
@@ -795,8 +798,11 @@ void ABCContext::dumpProfilingData(ostream& f) const
 }
 #endif
 
-ABCVm::ABCVm(SystemState* s):m_sys(s),status(CREATED),shuttingdown(false),curGlobalObj(NULL)
+ABCVm::ABCVm(SystemState* s):m_sys(s),status(CREATED),shuttingdown(false),currentCallContext(NULL),
+	cur_recursion(0)
 {
+	limits.max_recursion = 256;
+	limits.script_timeout = 20;
 	m_sys=s;
 	int_manager=new Manager(15);
 	uint_manager=new Manager(15);
@@ -1031,14 +1037,14 @@ void ABCVm::handleEvent(std::pair<_NR<EventDispatcher>, _R<Event> > e)
 					{
 						//Exception unhandled, report up
 						ev->done.signal();
-						throw e;
+						throw;
 					}
 				}
 				catch(LightsparkException& e)
 				{
 					//An internal error happended, sync and rethrow
 					ev->done.signal();
-					throw e;
+					throw;
 				}
 				break;
 			}

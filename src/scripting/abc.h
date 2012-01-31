@@ -23,6 +23,13 @@
 #ifdef LLVM_28
 #define alignof alignOf
 #endif
+#ifdef LLVM_3
+#define LLVMTYPE llvm::Type*
+#define LLVMMAKEARRAYREF(T) makeArrayRef(T)
+#else
+#define LLVMTYPE const llvm::Type*
+#define LLVMMAKEARRAYREF(T) T
+#endif
 
 #include "compat.h"
 #include <cstddef>
@@ -204,7 +211,7 @@ friend std::istream& operator>>(std::istream& in, method_info& v);
 friend struct block_info;
 friend class SyntheticFunction;
 private:
-	enum { NEED_ARGUMENTS=1,NEED_REST=4, HAS_OPTIONAL=8};
+	enum { NEED_ARGUMENTS=0x01, NEED_ACTIVATION=0x02, NEED_REST=0x04, HAS_OPTIONAL=0x08, SET_DXNS=0x40, HAS_PARAM_NAMES=0x80 };
 	u30 param_count;
 	u30 return_type;
 	std::vector<u30> param_type;
@@ -249,6 +256,7 @@ public:
 	bool needsArgs() { return (flags & NEED_ARGUMENTS) != 0;}
 	bool needsRest() { return (flags & NEED_REST) != 0;}
 	bool hasOptional() { return (flags & HAS_OPTIONAL) != 0;}
+	bool hasDXNS() { return (flags & SET_DXNS) != 0;}
 	ASObject* getOptional(unsigned int i);
 	uint32_t numArgs() { return param_count; }
 	const multiname* paramTypeName(uint32_t i) const;
@@ -583,6 +591,9 @@ private:
 	static bool strictEquals(ASObject*,ASObject*);
 	static ASObject* esc_xattr(ASObject* o);
 	static bool instanceOf(ASObject* value, ASObject* type);
+	static Namespace* pushNamespace(call_context* th, int n);
+	static void dxns(call_context* th, int n);
+	static void dxnslate(call_context* th, ASObject* value);
 	//Utility
 	static void not_impl(int p);
 	static void wrong_exec_pos();
@@ -593,7 +604,7 @@ private:
 	static ASObject* constructFunction(call_context* th, IFunction* f, ASObject** args, int argslen);
 
 	//Opcode tables
-	void register_table(const llvm::Type* ret_type,typed_opcode_handler* table, int table_len);
+	void register_table(LLVMTYPE ret_type,typed_opcode_handler* table, int table_len);
 	static opcode_handler opcode_table_args_pointer_2int[];
 	static opcode_handler opcode_table_args_pointer_number_int[];
 	static opcode_handler opcode_table_args3_pointers[];
@@ -619,7 +630,7 @@ private:
 	//Profiling support
 	static uint64_t profilingCheckpoint(uint64_t& startTime);
 public:
-	Global* curGlobalObj;
+	call_context* currentCallContext;
 	GlobalObject* global;
 	Manager* int_manager;
 	Manager* uint_manager;
@@ -653,9 +664,9 @@ public:
 
 	/* The current recursion level. Each call increases this by one,
 	 * each return from a call decreases this. */
-	static uint32_t cur_recursion;
+	uint32_t cur_recursion;
 
-	static struct abc_limits {
+	struct abc_limits {
 		/* maxmium number of recursion allowed. See ScriptLimitsTag */
 		uint32_t max_recursion;
 		/* maxmium number of seconds for script execution. See ScriptLimitsTag */

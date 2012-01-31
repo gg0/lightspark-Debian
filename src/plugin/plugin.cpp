@@ -18,6 +18,7 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
+#include "version.h"
 #include "plugin.h"
 #include "logger.h"
 #include "compat.h"
@@ -33,7 +34,7 @@
 #define PLUGIN_NAME    "Shockwave Flash"
 #define FAKE_PLUGIN_NAME    "Lightspark player"
 #define MIME_TYPES_DESCRIPTION  MIME_TYPES_HANDLED":swf:"PLUGIN_NAME";"FAKE_MIME_TYPE":swfls:"FAKE_PLUGIN_NAME
-#define PLUGIN_DESCRIPTION "Shockwave Flash 10.2 r"SHORTVERSION
+#define PLUGIN_DESCRIPTION "Shockwave Flash 11.1 r"SHORTVERSION
 
 using namespace std;
 using namespace lightspark;
@@ -194,28 +195,23 @@ char* NPP_GetMIMEDescription(void)
 	return (char*)(MIME_TYPES_DESCRIPTION);
 }
 
-#ifdef _WIN32
-static void gtk_main_runner()
-{
-	gdk_threads_enter();
-	gtk_main();
-	gdk_threads_leave();
-}
-#endif
-
 /////////////////////////////////////
 // general initialization and shutdown
 //
-static Thread* gtkThread = NULL;
 NPError NS_PluginInitialize()
 {
 	LOG_LEVEL log_level = LOG_NOT_IMPLEMENTED;
 
 	/* setup glib/gtk, this is already done on firefox/linux, but needs to be done
-	 * on firefox/windows */
-	g_thread_init(NULL);
+	 * on firefox/windows (because there we statically link to gtk) */
+	if(!g_thread_supported())
+		g_thread_init(NULL);
+#ifdef _WIN32
+	//Calling gdk_threads_init multiple times (once by firefox, once by us)
+	//will break in various different ways (hangs, segfaults, etc.)
 	gdk_threads_init();
 	gtk_init(NULL, NULL);
+#endif
 
 	char *envvar = getenv("LIGHTSPARK_PLUGIN_LOGLEVEL");
 	if (envvar)
@@ -227,12 +223,13 @@ NPError NS_PluginInitialize()
 
 	Log::setLogLevel(log_level);
 	lightspark::SystemState::staticInit();
-#ifdef _WIN32
-	/* On win32, we link statically to gtk. Therefore we need to run
-	 * our own gtk main loop.
-	 * On linux, this is done by the firefox process.
+
+	/* On linux, firefox runs its own gtk main loop
+	 * which we can utilise through g_add_idle
+	 * but we must not create our own gtk_main.
 	 */
-	gtkThread = Thread::create(sigc::ptr_fun(&gtk_main_runner), true);
+#ifdef _WIN32
+	EngineData::startGTKMain();
 #endif
 	return NPERR_NO_ERROR;
 }
@@ -240,14 +237,10 @@ NPError NS_PluginInitialize()
 void NS_PluginShutdown()
 {
 	LOG(LOG_INFO,"Lightspark plugin shutdown");
-	if(gtkThread)
-	{
-		gdk_threads_enter();
-		gtk_main_quit();
-		gdk_threads_leave();
-		gtkThread->join();
-	}
 	lightspark::SystemState::staticDeinit();
+#ifdef _WIN32
+	EngineData::quitGTKMain();
+#endif
 }
 
 // get values per plugin
@@ -290,6 +283,7 @@ nsPluginInstanceBase * NS_NewPluginInstance(nsPluginCreateData * aCreateDataStru
 
 void NS_DestroyPluginInstance(nsPluginInstanceBase * aPlugin)
 {
+	LOG(LOG_INFO,"NS_DestroyPluginInstance " << aPlugin);
 	if(aPlugin)
 		delete (nsPluginInstance *)aPlugin;
 	setTLSSys( NULL );
@@ -338,6 +332,7 @@ nsPluginInstance::nsPluginInstance(NPP aInstance, int16_t argc, char** argn, cha
 
 nsPluginInstance::~nsPluginInstance()
 {
+	LOG(LOG_INFO, "~nsPluginInstance " << this);
 	//Shutdown the system
 	setTLSSys(m_sys);
 	if(mainDownloader)
@@ -346,8 +341,6 @@ nsPluginInstance::~nsPluginInstance()
 	// Kill all stuff relating to NPScriptObject which is still running
 	static_cast<NPScriptObject*>(m_sys->extScriptObject)->destroy();
 
-	if(m_pt)
-		m_pt->stop();
 	m_sys->setShutdownFlag();
 
 	m_sys->destroy();
@@ -468,11 +461,6 @@ NPError nsPluginInstance::SetWindow(NPWindow* aWindow)
 	mY = aWindow->y;
 	uint32_t width = aWindow->width;
 	uint32_t height = aWindow->height;
-	if(width==0 || height==0)
-	{
-		LOG(LOG_ERROR,_("No size in SetWindow"));
-		return NPERR_GENERIC_ERROR;
-	}
 	if (mWindow == (NativeWindow) aWindow->window)
 	{
 		// The page with the plugin is being resized.
@@ -575,7 +563,7 @@ NPError nsPluginInstance::NewStream(NPMIMEType type, NPStream* stream, NPBool se
 
 		if(strcmp(stream->url, dl->getURL().raw_buf()) != 0)
 		{
-			LOG(LOG_INFO, _("NET: PLUGIN: redirect detected"));
+			LOG(LOG_INFO, "NET: PLUGIN: redirect detected from " << dl->getURL() << " to " << stream->url);
 			dl->setRedirected(lightspark::tiny_string(stream->url));
 		}
 		if(NP_VERSION_MINOR >= NPVERS_HAS_RESPONSE_HEADERS)
@@ -671,37 +659,33 @@ NPError nsPluginInstance::DestroyStream(NPStream *stream, NPError reason)
 		return NPERR_NO_ERROR;
 	}
 	dl->state=NPDownloader::STREAM_DESTROYED;
-	if(stream->notifyData)
-	{
-		//URLNotify will be called later
-		return NPERR_NO_ERROR;
-	}
+
 	//Notify our downloader of what happened
-	URLNotify(stream->url, reason, stream->pdata);
+	switch(reason)
+	{
+		case NPRES_DONE:
+			LOG(LOG_INFO,_("Download complete ") << stream->url);
+			dl->setFinished();
+			break;
+		case NPRES_USER_BREAK:
+			LOG(LOG_ERROR,_("Download stopped ") << stream->url);
+			dl->setFailed();
+			break;
+		case NPRES_NETWORK_ERR:
+			LOG(LOG_ERROR,_("Download error ") << stream->url);
+			dl->setFailed();
+			break;
+	}
 	setTLSSys(NULL);
 	return NPERR_NO_ERROR;
 }
 
 void nsPluginInstance::URLNotify(const char* url, NPReason reason, void* notifyData)
 {
-	//If the download was successful, termination is handle in DestroyStream
-	NPDownloader* dl=static_cast<NPDownloader*>(notifyData);
-	assert(dl);
-	switch(reason)
-	{
-		case NPRES_DONE:
-			LOG(LOG_INFO,_("Download complete ") << url);
-			dl->setFinished();
-			break;
-		case NPRES_USER_BREAK:
-			LOG(LOG_ERROR,_("Download stopped ") << url);
-			dl->setFailed();
-			break;
-		case NPRES_NETWORK_ERR:
-			LOG(LOG_ERROR,_("Download error ") << url);
-			dl->setFailed();
-			break;
-	}
+	/* This is called after DestroyStream, which may have already deleted the
+	 * NPDownloader (by calling asyncDownloaderDestruction), which 'notifyData' points to.
+	 * Therefore, we cannot do anything here.
+	 */
 }
 
 void PluginEngineData::stopMainDownload()

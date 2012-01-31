@@ -22,6 +22,7 @@
 #include "scripting/abc.h"
 #include "scripting/flash/events/flashevents.h"
 #include "scripting/flash/utils/flashutils.h"
+#include "scripting/toplevel/ASString.h"
 #include "logger.h"
 #include "parsing/streams.h"
 #include "asobject.h"
@@ -180,8 +181,6 @@ SystemState::SystemState(ParseThread* parseThread, uint32_t fileSize):
 		parseThread->setRootMovie(this);
 	threadPool=new ThreadPool(this);
 	timerThread=new TimerThread(this);
-	config=new Config;
-	config->load();
 	pluginManager = new PluginManager;
 	audioManager=new AudioManager(pluginManager);
 	intervalManager=new IntervalManager();
@@ -292,7 +291,12 @@ void SystemState::parseParametersFromFlashvars(const char* v)
 			//cout << varName << ' ' << varValue << endl;
 			if(pfile)
 				f << varName << endl << varValue << endl;
-			params->setVariableByQName(varName,"",
+
+			/* That does occur in the wild */
+			if(params->hasPropertyByMultiname(QName(varName,""), true))
+				LOG(LOG_ERROR,"Flash parameters has duplicate key '" << varName << "' - ignoring");
+			else
+				params->setVariableByQName(varName,"",
 					lightspark::Class<lightspark::ASString>::getInstanceS(varValue),DYNAMIC_TRAIT);
 		}
 		cur=n2+1;
@@ -344,8 +348,6 @@ void SystemState::stopEngines()
 	downloadManager=NULL;
 	delete securityManager;
 	securityManager=NULL;
-	delete config;
-	config=NULL;
 	delete threadPool;
 	threadPool=NULL;
 	//Now stop the managers
@@ -525,14 +527,6 @@ void SystemState::setShutdownFlag()
 	shutdown=true;
 
 	terminated.signal();
-	if(standalone)
-	{
-		if(Thread::self() != mainThread)
-			gdk_threads_enter();
-		gtk_main_quit();
-		if(Thread::self() != mainThread)
-			 gdk_threads_leave();
-	}
 }
 
 float SystemState::getRenderRate()
@@ -574,13 +568,22 @@ void SystemState::delayedCreation()
 
 	engineData->showWindow(reqWidth, reqHeight);
 
-	//The lock is needed to avoid thread creation/destruction races
-	Locker l(mutex);
-	if(shutdown)
-		return;
-	renderThread->start(engineData);
 	inputThread->start(engineData);
-	//If the render rate is known start the render ticks
+
+	if(Config::getConfig()->isRenderingEnabled())
+	{
+		renderThread->start(engineData);
+	}
+	else
+	{
+		getRenderThread()->windowWidth = reqWidth;
+		getRenderThread()->windowHeight = reqHeight;
+		resizeCompleted();
+		//This just signals the 'initalized' semaphore
+		renderThread->forceInitialization();
+		LOG(LOG_INFO,"Rendering is disabled by configuration");
+	}
+
 	if(renderRate)
 		startRenderTicks();
 	gdk_threads_leave();
@@ -606,27 +609,30 @@ void SystemState::createEngines()
 	//Check if we should fall back on gnash
 	if(vmVersion!=AVM2)
 	{
+		l.release();
 		launchGnash();
 
 		//Engines should not be started, stop everything
-		l.release();
 		//We cannot stop the engines now, as this is inside a ThreadPool job
 		//Running this in the Gtk thread is unnecessary, though. Any other thread
 		//would be okey.
-		engineData->runInGtkThread(sigc::mem_fun(this, &SystemState::delayedStopping));
+		//TODO: delayedStopping may be scheduled after SystemState::destroy has finished
+		//      and this SystemState object has been deleted.
+		//      We cannot wait for that function to finish, because we run in a ThreadPool
+		//      and the function will wait for all ThreadPool jobs to finish.
+		//engineData->runInGtkThread(sigc::mem_fun(this, &SystemState::delayedStopping));
 		return;
 	}
 
-	l.release();
 	//The engines must be created in the context of the main thread
 	engineData->runInGtkThread(sigc::mem_fun(this, &SystemState::delayedCreation));
 
+	//Wait for delayedCreation to finish so it is protected by our 'mutex'
+	//Otherwise SystemState::destroy may delete this object before delayedCreation is scheduled.
 	renderThread->waitForInitialization();
 
 	// If the SWF file is AVM1 and Gnash fallback isn't enabled, just shut down.
 
-
-	l.acquire();
 	//As we lost the lock the shutdown procesure might have started
 	if(shutdown)
 		return;
@@ -636,15 +642,21 @@ void SystemState::createEngines()
 
 void SystemState::launchGnash()
 {
-	if(config->getGnashPath().empty())
+	Locker l(mutex);
+	if(Config::getConfig()->getGnashPath().empty())
 	{
 		LOG(LOG_INFO, "Unsupported flash file (AVM1), and no gnash found");
+		l.release();
 		setShutdownFlag();
+		l.acquire();
 		return;
 	}
 
 	/* wait for dumpedSWFPath */
+	l.release();
 	dumpedSWFPathAvailable.wait();
+	l.acquire();
+
 	if(dumpedSWFPath.empty())
 		return;
 
@@ -684,12 +696,21 @@ void SystemState::launchGnash()
 	/* Use swf dimensions in standalone mode and window dimensions in plugin mode */
 	snprintf(bufWidth,32,"%u",standalone ? getFrameSize().Xmax/20 : engineData->width);
 	snprintf(bufHeight,32,"%u",standalone ? getFrameSize().Ymax/20 : engineData->height);
+	/* renderMode: 0: disable sound and rendering
+	 *             1: enable rendering and disable sound
+	 *             2: enable sound and disable rendering
+	 *             3: enable sound and rendering
+	 */
+	const char* renderMode = "3";
+	if(!Config::getConfig()->isRenderingEnabled())
+		renderMode = "2";
+
 	string params("FlashVars=");
 	params+=rawParameters;
 	/* TODO: pass -F hostFD to assist in loading urls */
 	char* args[] =
 	{
-		strdup(config->getGnashPath().c_str()),
+		strdup(Config::getConfig()->getGnashPath().c_str()),
 		strdup("-x"), //Xid
 		bufXid,
 		strdup("-j"), //Width
@@ -700,6 +721,8 @@ void SystemState::launchGnash()
 		strdup(origin.getParsedURL().raw_buf()),
 		strdup("-P"), //SWF parameters
 		strdup(params.c_str()),
+		strdup("--render-mode"),
+		strdup(renderMode),
 		strdup("-vv"),
 		strdup("-"),
 		NULL
@@ -731,7 +754,7 @@ void SystemState::launchGnash()
 		return;
 	}
 #else
-	GError* errmsg;
+	GError* errmsg = NULL;
 	if(!g_spawn_async_with_pipes(NULL, args, NULL, (GSpawnFlags)0, NULL, NULL, &childPid,
 			&gnash_stdin, NULL, NULL, &errmsg))
 	{
@@ -770,13 +793,25 @@ void SystemState::launchGnash()
 }
 
 
-void SystemState::needsAVM2(bool n)
+void SystemState::needsAVM2(bool avm2)
 {
 	Locker l(mutex);
-	assert(currentVm==NULL);
-	//Create the virtual machine if needed
-	if(n)
+
+	/* Check if we already loaded another swf. If not, then
+	 * vmVersion is VMNONE.
+	 */
+	if((vmVersion == AVM1 && avm2)
+	|| (vmVersion == AVM2 && !avm2))
 	{
+		LOG(LOG_NOT_IMPLEMENTED,"Cannot embed AVM1 media into AVM2 media and vice versa!");
+		return;
+	}
+
+	//Create the virtual machine if needed
+	if(avm2)
+	{
+		//needsAVM2 is only called for the SystemState movie
+		assert(!currentVm);
 		vmVersion=AVM2;
 		LOG(LOG_INFO,_("Creating VM"));
 		currentVm=new ABCVm(this);
@@ -1210,7 +1245,7 @@ void ParseThread::parseSWF(UI8 ver)
 					//Not yet implemented tag, ignore it
 					break;
 			}
-			if(getSys()->shouldTerminate() || aborting)
+			if(getSys()->shouldTerminate() || threadAborting)
 				break;
 		}
 	}

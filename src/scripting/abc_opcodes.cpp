@@ -23,6 +23,7 @@
 #include "exceptions.h"
 #include "compat.h"
 #include "abcutils.h"
+#include "scripting/toplevel/ASString.h"
 
 using namespace std;
 using namespace lightspark;
@@ -546,67 +547,33 @@ int32_t ABCVm::multiply_i(ASObject* val2, ASObject* val1)
 void ABCVm::incLocal(call_context* th, int n)
 {
 	LOG(LOG_CALLS, _("incLocal ") << n );
-	if(th->locals[n]->getObjectType()==T_NUMBER)
-	{
-		th->locals[n]->as<Number>()->val++;
-	}
-	else
-	{
-		number_t tmp=th->locals[n]->toNumber();
-		th->locals[n]->decRef();
-		th->locals[n]=abstract_d(tmp+1);
-	}
-
+	number_t tmp=th->locals[n]->toNumber();
+	th->locals[n]->decRef();
+	th->locals[n]=abstract_d(tmp+1);
 }
 
 void ABCVm::incLocal_i(call_context* th, int n)
 {
 	LOG(LOG_CALLS, _("incLocal_i ") << n );
-	if(th->locals[n]->getObjectType()==T_INTEGER)
-	{
-		Integer* i=static_cast<Integer*>(th->locals[n]);
-		i->val++;
-	}
-	else
-	{
-		int32_t tmp=th->locals[n]->toInt();
-		th->locals[n]->decRef();
-		th->locals[n]=abstract_i(tmp+1);
-	}
-
+	int32_t tmp=th->locals[n]->toInt();
+	th->locals[n]->decRef();
+	th->locals[n]=abstract_i(tmp+1);
 }
 
 void ABCVm::decLocal(call_context* th, int n)
 {
 	LOG(LOG_CALLS, _("decLocal ") << n );
-	if(th->locals[n]->getObjectType()==T_NUMBER)
-	{
-		th->locals[n]->as<Number>()->val--;
-	}
-	else
-	{
-		number_t tmp=th->locals[n]->toNumber();
-		th->locals[n]->decRef();
-		th->locals[n]=abstract_d(tmp-1);
-	}
-
+	number_t tmp=th->locals[n]->toNumber();
+	th->locals[n]->decRef();
+	th->locals[n]=abstract_d(tmp-1);
 }
 
 void ABCVm::decLocal_i(call_context* th, int n)
 {
 	LOG(LOG_CALLS, _("decLocal_i ") << n );
-	if(th->locals[n]->getObjectType()==T_INTEGER)
-	{
-		Integer* i=static_cast<Integer*>(th->locals[n]);
-		i->val--;
-	}
-	else
-	{
-		int32_t tmp=th->locals[n]->toInt();
-		th->locals[n]->decRef();
-		th->locals[n]=abstract_i(tmp-1);
-	}
-
+	int32_t tmp=th->locals[n]->toInt();
+	th->locals[n]->decRef();
+	th->locals[n]=abstract_i(tmp-1);
 }
 
 /* This is called for expressions like
@@ -770,6 +737,12 @@ ASObject* ABCVm::typeOf(ASObject* obj)
 			ret="undefined";
 			break;
 		case T_OBJECT:
+			if(obj->is<XML>() || obj->is<XMLList>())
+			{
+				ret = "xml";
+				break;
+			}
+			//fallthrough
 		case T_NULL:
 		case T_ARRAY:
 		case T_CLASS: //this is not clear from spec, but was tested
@@ -987,7 +960,7 @@ int32_t ABCVm::add_i(ASObject* val2, ASObject* val1)
 
 	val1->decRef();
 	val2->decRef();
-	LOG(LOG_CALLS,_("add_i ") << num1 << '-' << num2);
+	LOG(LOG_CALLS,_("add_i ") << num1 << '+' << num2);
 	return num1+num2;
 }
 
@@ -2207,4 +2180,31 @@ bool ABCVm::instanceOf(ASObject* value, ASObject* type)
 		return value->as<Class_base>()->isSubClass(type->as<Class_base>());
 	else
 		return value->getClass() && value->getClass()->isSubClass(type->as<Class_base>());
+}
+
+Namespace* ABCVm::pushNamespace(call_context* th, int n)
+{
+	const namespace_info& ns_info=th->context->constant_pool.namespaces[n];
+	assert(ns_info.kind == NAMESPACE);
+	LOG(LOG_CALLS, _("pushNamespace ") << th->context->getString(ns_info.name) );
+	return Class<Namespace>::getInstanceS(th->context->getString(ns_info.name));
+}
+
+/* @spec-checked avm2overview */
+void ABCVm::dxns(call_context* th, int n)
+{
+	if(!th->mi->hasDXNS())
+		throw Class<VerifyError>::getInstanceS("dxns without SET_DXNS");
+
+	th->defaultNamespaceUri = th->context->getString(n);
+}
+
+/* @spec-checked avm2overview */
+void ABCVm::dxnslate(call_context* th, ASObject* o)
+{
+	if(!th->mi->hasDXNS())
+		throw Class<VerifyError>::getInstanceS("dxnslate without SET_DXNS");
+
+	th->defaultNamespaceUri = o->toString();
+	o->decRef();
 }

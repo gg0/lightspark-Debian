@@ -20,6 +20,7 @@
 #include "amf3_generator.h"
 #include "scripting/toplevel/toplevel.h"
 #include "scripting/toplevel/Array.h"
+#include "scripting/toplevel/ASString.h"
 #include "scripting/class.h"
 #include <iostream>
 #include <fstream>
@@ -244,6 +245,16 @@ ValueType Amf3Deserializer::parseValue() const
 
 	switch(marker)
 	{
+		case false_marker:
+		{
+			ret=BoolType(false);
+			break;
+		}
+		case true_marker:
+		{
+			ret=BoolType(true);
+			break;
+		}
 		case integer_marker:
 		{
 			ret=parseInteger();

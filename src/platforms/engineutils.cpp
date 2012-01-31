@@ -2,6 +2,7 @@
     Lightspark, a free flash player implementation
 
     Copyright (C) 2009-2011  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2011       Matthias Gehre (M.Gehre@gmx.de)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -17,22 +18,47 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
-#ifndef GLMATRICES_H
-#define GLMATRICES_H
+#include "engineutils.h"
 
-#include "lsopengl.h"
+using namespace std;
+using namespace lightspark;
 
-#define LSGL_MATRIX_SIZE (16*sizeof(GLfloat))
+EngineData::EngineData() : widget(0), inputHandlerId(0), sizeHandlerId(0), width(0), height(0), window(0)
+{
+}
 
-extern GLfloat lsIdentityMatrix[16];
-extern GLfloat lsMVPMatrix[16];
-void lsglLoadMatrixf(const GLfloat *m);
-void lsglLoadIdentity();
-void lsglPushMatrix();
-void lsglPopMatrix();
-void lsglMultMatrixf(const GLfloat *m);
-void lsglScalef(GLfloat scaleX, GLfloat scaleY, GLfloat scaleZ);
-void lsglTranslatef(GLfloat translateX, GLfloat translateY, GLfloat translateZ);
-void lsglOrtho(GLfloat l, GLfloat r, GLfloat b, GLfloat t, GLfloat n, GLfloat f);
+EngineData::~EngineData()
+{
+	RecMutex::Lock l(mutex);
+	removeSizeChangeHandler();
+	removeInputHandler();
+}
 
-#endif
+/* gtk main loop handling */
+static void gtk_main_runner()
+{
+	gdk_threads_enter();
+	gtk_main();
+	gdk_threads_leave();
+}
+
+Thread* EngineData::gtkThread = NULL;
+
+/* This is not run in the linux plugin, as firefox
+ * runs its own gtk_main, which we must not interfere with.
+ */
+void EngineData::startGTKMain()
+{
+	assert(!gtkThread);
+	gtkThread = Thread::create(sigc::ptr_fun(&gtk_main_runner), true);
+}
+
+void EngineData::quitGTKMain()
+{
+	assert(gtkThread);
+	gdk_threads_enter();
+	gtk_main_quit();
+	gdk_threads_leave();
+	gtkThread->join();
+	gtkThread = NULL;
+}

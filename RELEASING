@@ -10,7 +10,7 @@ When you consider the tree good to release and have the changelog updated go to 
 
 $cd lightspark
 
-Bump version in CMakeFile and commit the change
+Bump version in CMakeLists.txt and commit the change
 
 tag it
 
@@ -24,6 +24,9 @@ $git archive --format tar --prefix=lightspark-0.5.2/ lightspark-0.5.2 |gzip -9 >
 sign the tarball for publishing on Launchpad
 $gpg --armor --sign --detach-sig lightspark-0.5.2.tar.gz
 
+Bump debian/changelog version as that is used by the daily Ubuntu package builds in Launchpad.
+$dch -i
+
 Upload to Launchpad
 --------------------
 
@@ -34,3 +37,8 @@ Create milestone and release in this interface, name both lightspark-0.5.2
 https://launchpad.net/lightspark/trunk
 
 LP will prompt for descriptions, changelogs and uploads of .tar.gz and .asc files.
+
+Mark bugs from "Fix committed" to "Fix released"
+--------------------
+See
+https://bugs.launchpad.net/lightspark/+bugs?field.searchtext=&field.status%3Alist=FIXCOMMITTED

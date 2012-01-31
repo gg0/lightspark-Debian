@@ -20,7 +20,6 @@
 #include "scripting/abc.h"
 #include "parsing/textfile.h"
 #include "rendering.h"
-#include "glmatrices.h"
 #include "compat.h"
 #include <sstream>
 
@@ -34,8 +33,8 @@
 using namespace lightspark;
 using namespace std;
 
-/* calulcate FPS every second */
-Glib::TimeVal RenderThread::FPS_time(/*seconds*/1,/*microseconds*/0);
+/* calculate FPS every second */
+const Glib::TimeVal RenderThread::FPS_time(/*seconds*/1,/*microseconds*/0);
 
 static GStaticPrivate renderThread = G_STATIC_PRIVATE_INIT; /* TLS */
 RenderThread* lightspark::getRenderThread()
@@ -55,21 +54,17 @@ void RenderThread::wait()
 		//Signal potentially blocking semaphore
 		event.signal();
 		t->join();
-		status=TERMINATED;
 	}
 }
 
 RenderThread::RenderThread(SystemState* s):
 	m_sys(s),status(CREATED),currentPixelBuffer(0),currentPixelBufferOffset(0),
-	pixelBufferWidth(0),pixelBufferHeight(0),prevUploadJob(NULL),largeTextureSize(0),
+	pixelBufferWidth(0),pixelBufferHeight(0),prevUploadJob(NULL),
 	renderNeeded(false),uploadNeeded(false),resizeNeeded(false),newTextureNeeded(false),event(0),newWidth(0),newHeight(0),scaleX(1),scaleY(1),
 	offsetX(0),offsetY(0),tempBufferAcquired(false),frameCount(0),secsCount(0),initialized(0),
 	tempTex(false),hasNPOTTextures(false),cairoTextureContext(NULL)
 {
 	LOG(LOG_INFO,_("RenderThread this=") << this);
-	
-	m_sys=s;
-
 #ifdef _WIN32
 	fontPath = "TimesNewRoman.ttf";
 #else
@@ -85,7 +80,7 @@ void RenderThread::start(EngineData* data)
 	engineData=data;
 	/* this function must be called in the gtk main thread */
 	engineData->setSizeChangeHandler(sigc::mem_fun(this,&RenderThread::requestResize));
-	t = Thread::create(sigc::bind<0>(&RenderThread::worker,this), true);
+	t = Thread::create(sigc::mem_fun(this, &RenderThread::worker), true);
 }
 
 void RenderThread::stop()
@@ -221,21 +216,17 @@ void RenderThread::handleUpload()
 	prevUploadJob=u;
 }
 
-void RenderThread::worker(RenderThread* th)
+/*
+ * Create an OpenGL context, load shaders and setup FBO
+ */
+void RenderThread::init()
 {
-	setTLSSys(th->m_sys);
-	/* set TLS variable for getRenderThread() */
-	g_static_private_set(&renderThread,th,NULL);
+	/* This will call initialized.signal() when lighter goes out of scope */
+	SemaphoreLighter lighter(initialized);
 
-	EngineData* e=th->engineData;
-	SemaphoreLighter lighter(th->initialized);
-
-	th->windowWidth=e->width;
-	th->windowHeight=e->height;
-
+	windowWidth=engineData->width;
+	windowHeight=engineData->height;
 #if defined(_WIN32)
-	HGLRC           hRC=NULL;                           // Permanent Rendering Context
-	HDC             hDC=NULL;                           // Private GDI Device Context
 	PIXELFORMATDESCRIPTOR pfd =
 		{
 			sizeof(PIXELFORMATDESCRIPTOR),
@@ -255,242 +246,228 @@ void RenderThread::worker(RenderThread* th)
 			0,
 			0, 0, 0
 		};
-	if(!(hDC = GetDC(e->window)))
-	{
-		LOG(LOG_ERROR,"GetDC failed");
-		return;
-	}
+	if(!(mDC = GetDC(engineData->window)))
+		throw RunTimeException("GetDC failed");
 	int PixelFormat;
-	if (!(PixelFormat=ChoosePixelFormat(hDC,&pfd)))
-	{
-		LOG(LOG_ERROR,"ChoosePixelFormat failed");
-		return;
-	}
-	if(!SetPixelFormat(hDC,PixelFormat,&pfd))
-	{
-		LOG(LOG_ERROR,"SetPixelFormat failed");
-		return;
-	}
-	if (!(hRC=wglCreateContext(hDC)))
-	{
-		LOG(LOG_ERROR,"wglCreateContext failed");
-		return;
-	}
-	if(!wglMakeCurrent(hDC,hRC))
-	{
-		LOG(LOG_ERROR,"wglMakeCurrent failed");
-		return;
-	}
+	if (!(PixelFormat=ChoosePixelFormat(mDC,&pfd)))
+		throw RunTimeException("ChoosePixelFormat failed");
+	if(!SetPixelFormat(mDC,PixelFormat,&pfd))
+		throw RunTimeException("SetPixelFormat failed");
+	if (!(mRC=wglCreateContext(mDC)))
+		throw RunTimeException("wglCreateContext failed");
+	if(!wglMakeCurrent(mDC,mRC))
+		throw RunTimeException("wglMakeCurrent failed");
 #elif !defined(ENABLE_GLES2)
-	Display* d=XOpenDisplay(NULL);
+	mDisplay = XOpenDisplay(NULL);
 	int a,b;
-	Bool glx_present=glXQueryVersion(d,&a,&b);
+	Bool glx_present=glXQueryVersion(mDisplay, &a, &b);
 	if(!glx_present)
-	{
-		LOG(LOG_ERROR,_("glX not present"));
-		return;
-	}
+		throw RunTimeException("glX not present");
+
 	int attrib[10]={GLX_RED_SIZE, 8, GLX_GREEN_SIZE, 8, GLX_BLUE_SIZE, 8, GLX_DOUBLEBUFFER, True, None};
-	GLXFBConfig* fb=glXChooseFBConfig(d, 0, attrib, &a);
+	GLXFBConfig* fb=glXChooseFBConfig(mDisplay, 0, attrib, &a);
 	if(!fb)
 	{
 		attrib[6]=None;
 		LOG(LOG_ERROR,_("Falling back to no double buffering"));
-		fb=glXChooseFBConfig(d, 0, attrib, &a);
+		fb=glXChooseFBConfig(mDisplay, 0, attrib, &a);
 	}
 	if(!fb)
-	{
-		LOG(LOG_ERROR,_("Could not find any GLX configuration"));
-		::abort();
-	}
+		throw RunTimeException(_("Could not find any GLX configuration"));
 	int i;
 	for(i=0;i<a;i++)
 	{
 		int id;
-		glXGetFBConfigAttrib(d,fb[i],GLX_VISUAL_ID,&id);
-		if(id==(int)e->visual)
+		glXGetFBConfigAttrib(mDisplay, fb[i],GLX_VISUAL_ID,&id);
+		if(id==(int)engineData->visual)
 			break;
 	}
 	if(i==a)
 	{
 		//No suitable id found
-		LOG(LOG_ERROR,_("No suitable graphics configuration available"));
-		return;
+		throw RunTimeException(_("No suitable graphics configuration available"));
 	}
-	th->mFBConfig=fb[i];
+	mFBConfig=fb[i];
 	LOG(LOG_INFO, "Chosen config " << hex << fb[i] << dec);
 	XFree(fb);
-
-	th->mContext = glXCreateNewContext(d,th->mFBConfig,GLX_RGBA_TYPE ,NULL,1);
-	GLXWindow glxWin=e->window;
-	glXMakeCurrent(d, glxWin,th->mContext);
-	if(!glXIsDirect(d,th->mContext))
+		mContext = glXCreateNewContext(mDisplay, mFBConfig,GLX_RGBA_TYPE ,NULL,1);
+	glXMakeCurrent(mDisplay, engineData->window, mContext);
+	if(!glXIsDirect(mDisplay, mContext))
 		LOG(LOG_INFO, "Indirect!!");
 #else //egl
-	Display* d=XOpenDisplay(NULL);
+	mDisplay = XOpenDisplay(NULL);
 	int a;
 	eglBindAPI(EGL_OPENGL_ES_API);
-	EGLDisplay ed = EGL_NO_DISPLAY;
-	ed = eglGetDisplay(d);
+	mEGLDisplay = eglGetDisplay(mDisplay);
+	if (mEGLDisplay == EGL_NO_DISPLAY)
+		throw RunTimeException(_("EGL not present"));
+		EGLint major, minor;
+	if (eglInitialize(mEGLDisplay, &major, &minor) == EGL_FALSE)
+		throw RunTimeException(_("EGL initialization failed"));
 
-	if (ed == EGL_NO_DISPLAY) {
-		LOG(LOG_ERROR, _("EGL not present"));
-		return;
-	}
-
-	EGLint major, minor;
-	if (eglInitialize(ed, &major, &minor) == EGL_FALSE) {
-		LOG(LOG_ERROR, _("EGL initialization failed"));
-		return;
-	}
-
-	LOG(LOG_INFO, _("EGL version: ") << eglQueryString(ed, EGL_VERSION));
-
+	LOG(LOG_INFO, _("EGL version: ") << eglQueryString(mEGLDisplay, EGL_VERSION));
 	EGLint config_attribs[] = {
-				EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
-				EGL_RED_SIZE, 8,
-				EGL_GREEN_SIZE, 8,
-				EGL_BLUE_SIZE, 8,
-				EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT,
-				EGL_NONE
-	};
-
+		EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
+		EGL_RED_SIZE, 8,
+		EGL_GREEN_SIZE, 8,
+		EGL_BLUE_SIZE, 8,
+		EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT,
+		EGL_NONE
+		};
 	EGLint context_attribs[] = {
 		EGL_CONTEXT_CLIENT_VERSION, 2,
 		EGL_NONE
 	};
-
-	if (!eglChooseConfig(ed, config_attribs, 0, 0, &a)) {
-		LOG(LOG_ERROR,_("Could not get number of EGL configurations"));
-	} else {
-	    LOG(LOG_INFO, "Number of EGL configurations: " << a);
-	}
+	if (!eglChooseConfig(mEGLDisplay, config_attribs, 0, 0, &a))
+		throw RunTimeException(_("Could not get number of EGL configurations"));
+	else
+		LOG(LOG_INFO, "Number of EGL configurations: " << a);
 	EGLConfig *conf = new EGLConfig[a];
-	if (!eglChooseConfig(ed, config_attribs, conf, a, &a))
-	{
-		LOG(LOG_ERROR,_("Could not find any EGL configuration"));
-		::abort();
-	}
+	if (!eglChooseConfig(mEGLDisplay, config_attribs, conf, a, &a))
+		throw RunTimeException(_("Could not find any EGL configuration"));
 
 	int i;
 	for(i=0;i<a;i++)
 	{
 		EGLint id;
-		eglGetConfigAttrib(ed, conf[i], EGL_NATIVE_VISUAL_ID, &id);
-		if(id==(int)e->visual)
+		eglGetConfigAttrib(mEGLDisplay, conf[i], EGL_NATIVE_VISUAL_ID, &id);
+		if(id==(int)engineData->visual)
 			break;
 	}
 	if(i==a)
 	{
 		//No suitable id found
-		LOG(LOG_ERROR,_("No suitable graphics configuration available"));
-		return;
+		throw RunTimeException(_("No suitable graphics configuration available"));
 	}
-	th->mEGLConfig=conf[i];
+	mEGLConfig=conf[i];
 	LOG(LOG_INFO, "Chosen config " << hex << conf[i] << dec);
-
-	th->mEGLContext = eglCreateContext(ed, th->mEGLConfig, EGL_NO_CONTEXT, context_attribs);
-	if (th->mEGLContext == EGL_NO_CONTEXT) {
-		LOG(LOG_ERROR,_("Could not create EGL context"));
-		return;
-	}
-	EGLSurface win = eglCreateWindowSurface(ed, th->mEGLConfig, e->window, NULL);
-	if (win == EGL_NO_SURFACE) {
-		LOG(LOG_ERROR,_("Could not create EGL surface"));
-		return;
-	}
-	eglMakeCurrent(ed, win, win, th->mEGLContext);
+	mEGLContext = eglCreateContext(mEGLDisplay, mEGLConfig, EGL_NO_CONTEXT, context_attribs);
+	if (mEGLContext == EGL_NO_CONTEXT)
+		throw RunTimeException(_("Could not create EGL context"));
+	mEGLSurface = eglCreateWindowSurface(mEGLDisplay, mEGLConfig, engineData->window, NULL);
+	if (mEGLSurface == EGL_NO_SURFACE)
+		throw RunTimeException(_("Could not create EGL surface"));
+	eglMakeCurrent(mEGLDisplay, mEGLSurface, mEGLSurface, mEGLContext);
 #endif
 
-	th->commonGLInit(th->windowWidth, th->windowHeight);
-	th->commonGLResize();
-	lighter.light();
-	
-	ThreadProfile* profile=th->m_sys->allocateProfiler(RGB(200,0,0));
-	profile->setTag("Render");
+	commonGLInit(windowWidth, windowHeight);
+	commonGLResize();
+}
 
-	glEnable(GL_TEXTURE_2D);
+void RenderThread::worker()
+{
+	setTLSSys(m_sys);
+	/* set TLS variable for getRenderThread() */
+	g_static_private_set(&renderThread, this, NULL);
+
+	ThreadProfile* profile=m_sys->allocateProfiler(RGB(200,0,0));
+	profile->setTag("Render");
 	try
 	{
+		init();
+
+		ThreadProfile* profile=m_sys->allocateProfiler(RGB(200,0,0));
+		profile->setTag("Render");
+
+		glEnable(GL_TEXTURE_2D);
+
 		Chronometer chronometer;
 		while(1)
 		{
-			th->event.wait();
-			if(th->m_sys->isShuttingDown())
+			event.wait();
+			if(m_sys->isShuttingDown())
 				break;
 			chronometer.checkpoint();
-			
-			if(th->resizeNeeded)
+
+			if(resizeNeeded)
 			{
-				th->windowWidth=th->newWidth;
-				th->windowHeight=th->newHeight;
-				th->newWidth=0;
-				th->newHeight=0;
-				th->resizeNeeded=false;
-				LOG(LOG_INFO,_("Window resized to ") << th->windowWidth << 'x' << th->windowHeight);
-				th->commonGLResize();
-				th->m_sys->resizeCompleted();
+				windowWidth=newWidth;
+				windowHeight=newHeight;
+				newWidth=0;
+				newHeight=0;
+				resizeNeeded=false;
+				LOG(LOG_INFO,_("Window resized to ") << windowWidth << 'x' << windowHeight);
+				commonGLResize();
+				m_sys->resizeCompleted();
 				profile->accountTime(chronometer.checkpoint());
 				continue;
 			}
 
-			if(th->newTextureNeeded)
-				th->handleNewTexture();
+			if(newTextureNeeded)
+				handleNewTexture();
 
-			if(th->prevUploadJob)
-				th->finalizeUpload();
+			if(prevUploadJob)
+				finalizeUpload();
 
-			if(th->uploadNeeded)
+			if(uploadNeeded)
 			{
-				th->handleUpload();
+				handleUpload();
 				profile->accountTime(chronometer.checkpoint());
 				continue;
 			}
 
-			if(th->m_sys->isOnError())
+			if(m_sys->isOnError())
 			{
-				th->renderErrorPage(th, th->m_sys->standalone);
+				renderErrorPage(this, m_sys->standalone);
 			}
 
 #if defined(_WIN32)
-			SwapBuffers(hDC);
+			SwapBuffers(mDC);
 #elif !defined(ENABLE_GLES2)
-			glXSwapBuffers(d,glxWin);
+			glXSwapBuffers(mDisplay, engineData->window);
 #else
-			eglSwapBuffers(ed, win);
+			eglSwapBuffers(mEGLDisplay, mEGLSurface);
 #endif
-			if(!th->m_sys->isOnError())
+			if(!m_sys->isOnError())
 			{
-				th->coreRendering();
+				coreRendering();
 				//Call glFlush to offload work on the GPU
 				glFlush();
 			}
 			profile->accountTime(chronometer.checkpoint());
-			th->renderNeeded=false;
+			renderNeeded=false;
 		}
+
+		deinit();
 	}
 	catch(LightsparkException& e)
 	{
-		LOG(LOG_ERROR,_("Exception in RenderThread ") << e.what());
-		th->m_sys->setError(e.cause);
+		LOG(LOG_ERROR,_("Exception in RenderThread, stopping rendering: ") << e.what());
+		//TODO: add a comandline switch to disable rendering. Then add that commandline switch
+		//to the test runner script and uncomment the next line
+		//m_sys->setError(e.cause);
 	}
+
+	/* cleanup */
+	//Keep addUploadJob from enqueueing
+	status=TERMINATED;
+	//Fence existing jobs
+	Locker l(mutexUploadJobs);
+	if(prevUploadJob)
+		prevUploadJob->uploadFence();
+	for(auto i=uploadJobs.begin(); i != uploadJobs.end(); ++i)
+		(*i)->uploadFence();
+}
+
+void RenderThread::deinit()
+{
 	glDisable(GL_TEXTURE_2D);
-	th->commonGLDeinit();
+	commonGLDeinit();
 
 #if defined(_WIN32)
 	wglMakeCurrent(NULL,NULL);
-	wglDeleteContext(hRC);
+	wglDeleteContext(mRC);
 	/* Do not ReleaseDC(e->window,hDC); as our window does not have CS_OWNDC */
 #elif !defined(ENABLE_GLES2)
-	glXMakeCurrent(d,None,NULL);
-	glXDestroyContext(d,th->mContext);
-	XCloseDisplay(d);
+	glXMakeCurrent(mDisplay, None, NULL);
+	glXDestroyContext(mDisplay, mContext);
+	XCloseDisplay(mDisplay);
 #else
-	eglMakeCurrent(ed, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
-	eglDestroyContext(ed, th->mEGLContext);
-	XCloseDisplay(d);
+	eglMakeCurrent(mEGLDisplay, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+	eglDestroyContext(mEGLDisplay, mEGLContext);
+	XCloseDisplay(mDisplay);
 #endif
-	e->removeSizeChangeHandler();
+	engineData->removeSizeChangeHandler();
 	return;
 }
 
@@ -605,13 +582,6 @@ bool RenderThread::loadShaderPrograms()
 
 void RenderThread::commonGLDeinit()
 {
-	//Fence any object that is still waiting for upload
-	Locker l(mutexUploadJobs);
-	deque<ITextureUploadable*>::iterator it=uploadJobs.begin();
-	if(prevUploadJob)
-		prevUploadJob->uploadFence();
-	for(;it!=uploadJobs.end();it++)
-		(*it)->uploadFence();
 	glBindFramebuffer(GL_FRAMEBUFFER,0);
 	glDeleteFramebuffers(1,&fboId);
 	tempTex.shutdown();
@@ -634,20 +604,21 @@ void RenderThread::commonGLInit(int width, int height)
 	err = glewInit();
 	if (GLEW_OK != err)
 	{
-		LOG(LOG_ERROR,_("Cannot initialize GLEW: cause ") << glewGetErrorString(err));;
-		::abort();
+		LOG(LOG_ERROR,_("Cannot initialize GLEW: cause ") << glewGetErrorString(err));
+		throw RunTimeException("Rendering: Cannot initialize GLEW!");
 	}
+
 	if(!GLEW_VERSION_2_0)
 	{
 		LOG(LOG_ERROR,_("Video card does not support OpenGL 2.0... Aborting"));
-		::abort();
+		throw RunTimeException("Rendering: OpenGL driver does not support OpenGL 2.0");
 	}
 	if(GLEW_ARB_texture_non_power_of_two)
 		hasNPOTTextures=true;
 	if(!GLEW_ARB_framebuffer_object)
 	{
 		LOG(LOG_ERROR,"OpenGL does not support framebuffer objects!");
-		::abort();
+		throw RunTimeException("Rendering: OpenGL driver does not support framebuffer objects");
 	}
 #else
 		//Open GLES 2.0 has NPOT textures
@@ -721,7 +692,7 @@ void RenderThread::commonGLInit(int width, int height)
 	if(status != GL_FRAMEBUFFER_COMPLETE)
 	{
 		LOG(LOG_ERROR,_("Incomplete FBO status ") << status << _("... Aborting"));
-		::abort();
+		throw RunTimeException("Rendering: Could not initialize OpenGL framebuffer object");
 	}
 	glGenTextures(1, &cairoTextureID);
 
@@ -841,26 +812,6 @@ void RenderThread::resizePixelBuffers(uint32_t w, uint32_t h)
 #endif
 }
 
-void RenderThread::renderMaskToTmpBuffer() const
-{
-	assert(!maskStack.empty());
-	//Clear the tmp buffer
-	glBindFramebuffer(GL_FRAMEBUFFER, fboId);
-	glDrawBuffer(GL_COLOR_ATTACHMENT0);
-	glClearColor(0,0,0,0);
-	glClear(GL_COLOR_BUFFER_BIT);
-	for(uint32_t i=0;i<maskStack.size();i++)
-	{
-		float matrix[16];
-		maskStack[i].m.get4DMatrix(matrix);
-		lsglLoadMatrixf(matrix);
-		setMatrixUniform(LSGL_MODELVIEW);
-		maskStack[i].d->Render(true);
-	}
-	glBindFramebuffer(GL_FRAMEBUFFER, 0);
-	glDrawBuffer(GL_BACK);
-}
-
 cairo_t* RenderThread::getCairoContext(int w, int h)
 {
 	if (!cairoTextureContext) {
@@ -967,7 +918,7 @@ void RenderThread::coreRendering()
 	lsglLoadIdentity();
 	setMatrixUniform(LSGL_MODELVIEW);
 
-	m_sys->getStage()->Render(false);
+	m_sys->getStage()->Render(*this, false);
 	assert(maskStack.empty());
 
 	if(m_sys->showProfilingData)
@@ -1023,7 +974,7 @@ void RenderThread::renderErrorPage(RenderThread *th, bool standalone)
 void RenderThread::addUploadJob(ITextureUploadable* u)
 {
 	Locker l(mutexUploadJobs);
-	if(m_sys->isShuttingDown() || status==TERMINATED)
+	if(m_sys->isShuttingDown() || status!=STARTED)
 	{
 		u->uploadFence();
 		return;
@@ -1248,96 +1199,6 @@ TextureChunk RenderThread::allocateTexture(uint32_t w, uint32_t h, bool compact)
 	return ret;
 }
 
-void RenderThread::renderTextured(const TextureChunk& chunk, int32_t x, int32_t y, uint32_t w, uint32_t h)
-{
-	glBindTexture(GL_TEXTURE_2D, largeTextures[chunk.texId].id);
-	const uint32_t blocksPerSide=largeTextureSize/CHUNKSIZE;
-	uint32_t startX, startY, endX, endY;
-	assert(chunk.getNumberOfChunks()==((chunk.width+CHUNKSIZE-1)/CHUNKSIZE)*((chunk.height+CHUNKSIZE-1)/CHUNKSIZE));
-	
-	uint32_t curChunk=0;
-	//The 4 corners of each texture are specified as the vertices of 2 triangles,
-	//so there are 6 vertices per quad, two of them duplicated (the diagonal)
-	GLfloat *vertex_coords = new GLfloat[chunk.getNumberOfChunks()*12];
-	GLfloat *texture_coords = new GLfloat[chunk.getNumberOfChunks()*12];
-	for(uint32_t i=0, k=0;i<chunk.height;i+=CHUNKSIZE)
-	{
-		startY=h*i/chunk.height;
-		endY=min(h*(i+CHUNKSIZE)/chunk.height,h);
-		//Take yOffset into account
-		startY = (y<0)?startY:y+startY;
-		endY = (y<0)?endY:y+endY;
-		for(uint32_t j=0;j<chunk.width;j+=CHUNKSIZE)
-		{
-			startX=w*j/chunk.width;
-			endX=min(w*(j+CHUNKSIZE)/chunk.width,w);
-			//Take xOffset into account
-			startX = (x<0)?startX:x+startX;
-			endX = (x<0)?endX:x+endX;
-			const uint32_t curChunkId=chunk.chunks[curChunk];
-			const uint32_t blockX=((curChunkId%blocksPerSide)*CHUNKSIZE);
-			const uint32_t blockY=((curChunkId/blocksPerSide)*CHUNKSIZE);
-			const uint32_t availX=min(int(chunk.width-j),CHUNKSIZE);
-			const uint32_t availY=min(int(chunk.height-i),CHUNKSIZE);
-			float startU=blockX;
-			startU/=largeTextureSize;
-			float startV=blockY;
-			startV/=largeTextureSize;
-			float endU=blockX+availX;
-			endU/=largeTextureSize;
-			float endV=blockY+availY;
-			endV/=largeTextureSize;
-
-			//Upper-right triangle of the quad
-			texture_coords[k] = startU;
-			texture_coords[k+1] = startV;
-			vertex_coords[k] = startX;
-			vertex_coords[k+1] = startY;
-			k+=2;
-			texture_coords[k] = endU;
-			texture_coords[k+1] = startV;
-			vertex_coords[k] = endX;
-			vertex_coords[k+1] = startY;
-			k+=2;
-			texture_coords[k] = endU;
-			texture_coords[k+1] = endV;
-			vertex_coords[k] = endX;
-			vertex_coords[k+1] = endY;
-			k+=2;
-
-			//Lower-left triangle of the quad
-			texture_coords[k] = startU;
-			texture_coords[k+1] = startV;
-			vertex_coords[k] = startX;
-			vertex_coords[k+1] = startY;
-			k+=2;
-			texture_coords[k] = endU;
-			texture_coords[k+1] = endV;
-			vertex_coords[k] = endX;
-			vertex_coords[k+1] = endY;
-			k+=2;
-			texture_coords[k] = startU;
-			texture_coords[k+1] = endV;
-			vertex_coords[k] = startX;
-			vertex_coords[k+1] = endY;
-			k+=2;
-
-			curChunk++;
-		}
-	}
-
-	glVertexAttribPointer(VERTEX_ATTRIB, 2, GL_FLOAT, GL_FALSE, 0, vertex_coords);
-	glVertexAttribPointer(TEXCOORD_ATTRIB, 2, GL_FLOAT, GL_FALSE, 0, texture_coords);
-	glEnableVertexAttribArray(VERTEX_ATTRIB);
-	glEnableVertexAttribArray(TEXCOORD_ATTRIB);
-	glDrawArrays(GL_TRIANGLES, 0, curChunk*6);
-	glDisableVertexAttribArray(VERTEX_ATTRIB);
-	glDisableVertexAttribArray(TEXCOORD_ATTRIB);
-	delete[] vertex_coords;
-	delete[] texture_coords;
-	handleGLErrors();
-}
-
 void RenderThread::loadChunkBGRA(const TextureChunk& chunk, uint32_t w, uint32_t h, uint8_t* data)
 {
 	//Fast bailout if the TextureChunk is not valid
@@ -1379,34 +1240,4 @@ void RenderThread::loadChunkBGRA(const TextureChunk& chunk, uint32_t w, uint32_t
 	glPixelStorei(GL_UNPACK_SKIP_PIXELS,0);
 	glPixelStorei(GL_UNPACK_SKIP_ROWS,0);
 	glPixelStorei(GL_UNPACK_ROW_LENGTH,0);
-}
-
-void RenderThread::setMatrixUniform(LSGL_MATRIX m) const
-{
-	GLint uni = (m == LSGL_MODELVIEW) ? modelviewMatrixUniform:projectionMatrixUniform;
-
-	glUniformMatrix4fv(uni, 1, GL_FALSE, lsMVPMatrix);
-}
-
-bool RenderThread::handleGLErrors()
-{
-	int errorCount = 0;
-	GLenum err;
-	while(1)
-	{
-		err=glGetError();
-		if(err!=GL_NO_ERROR)
-		{
-			errorCount++;
-			LOG(LOG_ERROR,_("GL error ")<< err);
-		}
-		else
-			break;
-	}
-
-	if(errorCount)
-	{
-		LOG(LOG_ERROR,_("Ignoring ") << errorCount << _(" openGL errors"));
-	}
-	return errorCount;
 }

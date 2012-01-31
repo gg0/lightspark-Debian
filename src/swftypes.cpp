@@ -26,11 +26,33 @@
 #include <stdlib.h>
 #include <cmath>
 #include <glibmm/ustring.h>
+
 #include "exceptions.h"
 #include "compat.h"
+#include "scripting/toplevel/ASString.h"
 
 using namespace std;
 using namespace lightspark;
+
+/* Implementation of Glib::ustring conversion for libxml++.
+ * We implement them in the source file to not pollute the header with glib.h
+ */
+tiny_string::tiny_string(const Glib::ustring& r):buf(_buf_static),stringSize(r.bytes()+1),type(STATIC)
+{
+	if(stringSize > STATIC_SIZE)
+		createBuffer(stringSize);
+	memcpy(buf,r.c_str(),stringSize);
+}
+
+tiny_string& tiny_string::operator=(const Glib::ustring& r)
+{
+	resetToStatic();
+	stringSize = r.bytes()+1;
+	if(stringSize > STATIC_SIZE)
+		createBuffer(stringSize);
+	memcpy(buf,r.c_str(),stringSize);
+	return *this;
+}
 
 tiny_string::operator Glib::ustring() const
 {
@@ -45,6 +67,17 @@ bool tiny_string::operator==(const Glib::ustring& u) const
 bool tiny_string::operator!=(const Glib::ustring& u) const
 {
 	return *this != u.raw();
+}
+
+const tiny_string tiny_string::operator+(const Glib::ustring& r) const
+{
+	return *this + tiny_string(r);
+}
+
+tiny_string& tiny_string::operator+=(const Glib::ustring& s)
+{
+	//TODO: optimize
+	return *this += tiny_string(s);
 }
 
 tiny_string& tiny_string::operator+=(const char* s)
@@ -106,8 +139,13 @@ tiny_string& tiny_string::replace(uint32_t pos1, uint32_t n1, const tiny_string&
 	if(pos1 + n1 > numChars())
 		n1 = numChars()-pos1;
 	uint32_t byteend = g_utf8_offset_to_pointer(buf,pos1+n1)-buf;
+	return replace_bytes(bytestart, byteend-bytestart, o);
+}
+
+tiny_string& tiny_string::replace_bytes(uint32_t bytestart, uint32_t bytenum, const tiny_string& o)
+{
 	//TODO avoid copy into std::string
-	*this = std::string(*this).replace(bytestart,byteend-bytestart,std::string(o));
+	*this = std::string(*this).replace(bytestart,bytenum,std::string(o));
 	return *this;
 }
 
@@ -734,12 +772,13 @@ std::istream& lightspark::operator>>(std::istream& s, FILLSTYLE& v)
 			try
 			{
 				_R<DictionaryTag> dict=getParseThread()->getRootMovie()->dictionaryLookup(bitmapId);
-				v.bitmap=dynamic_cast<Bitmap*>(dict.getPtr())->bitmapData.getPtr();
-				if(v.bitmap==NULL)
+				Bitmap* b = dynamic_cast<Bitmap*>(dict.getPtr());
+				if(!b)
 				{
 					LOG(LOG_ERROR,"Invalid bitmap ID " << bitmapId);
 					throw ParseException("Invalid ID for bitmap");
 				}
+				v.bitmap = b->bitmapData.getPtr();
 			}
 			catch(RunTimeException& e)
 			{

@@ -31,7 +31,6 @@
 #include "backends/rendering.h"
 #include "backends/geometry.h"
 #include "backends/image.h"
-#include "backends/glmatrices.h"
 #include "compat.h"
 #include "flash/accessibility/flashaccessibility.h"
 #include "argconv.h"
@@ -372,7 +371,7 @@ void Loader::execute()
 		getVm()->addEvent(contentLoaderInfo,_MR(Class<Event>::getInstanceS("open")));
 		istream s(downloader);
 		ParseThread local_pt(s,this,url.getParsedURL());
-		local_pt.run();
+		local_pt.execute();
 		{
 			//Acquire the lock to ensure consistency in threadAbort
 			SpinlockLocker l(downloaderLock);
@@ -390,10 +389,10 @@ void Loader::execute()
 
 		// Wait until the object is constructed before adding
 		// to the Loader
-		while (!obj->isConstructed() && !aborting)
+		while (!obj->isConstructed() && !threadAborting)
 			/* TODO: use a Cond or Semaphore here */;
 
-		if(aborting)
+		if(threadAborting)
 			return;
 
 		setContent(obj);
@@ -411,7 +410,7 @@ void Loader::execute()
 		istream s(&bb);
 
 		ParseThread local_pt(s,this);
-		local_pt.run();
+		local_pt.execute();
 		bytes->decRef();
 		//Add a complete event for this object
 		getVm()->addEvent(contentLoaderInfo,_MR(Class<Event>::getInstanceS("complete")));
@@ -527,7 +526,6 @@ bool DisplayObjectContainer::boundsRect(number_t& xmin, number_t& xmax, number_t
 		return false;
 
 	Locker l(mutexDisplayList);
-	//TODO: Check bounds calculation
 	list<_R<DisplayObject>>::const_iterator it=dynamicDisplayList.begin();
 	for(;it!=dynamicDisplayList.end();++it)
 	{
@@ -538,7 +536,7 @@ bool DisplayObjectContainer::boundsRect(number_t& xmin, number_t& xmax, number_t
 			{
 				xmin = imin(xmin,txmin);
 				xmax = imax(xmax,txmax);
-				ymin = imin(ymin,txmin);
+				ymin = imin(ymin,tymin);
 				ymax = imax(ymax,tymax);
 			}
 			else
@@ -623,43 +621,43 @@ void Sprite::requestInvalidation()
 	TokenContainer::requestInvalidation();
 }
 
-void DisplayObject::renderPrologue() const
+void DisplayObject::renderPrologue(RenderContext& ctxt) const
 {
 	if(!mask.isNull())
 	{
 		if(mask->parent.isNull())
-			getRenderThread()->pushMask(mask.getPtr(),MATRIX());
+			ctxt.pushMask(mask.getPtr(),MATRIX());
 		else
-			getRenderThread()->pushMask(mask.getPtr(),mask->parent->getConcatenatedMatrix());
+			ctxt.pushMask(mask.getPtr(),mask->parent->getConcatenatedMatrix());
 	}
 }
 
-void DisplayObject::renderEpilogue() const
+void DisplayObject::renderEpilogue(RenderContext& ctxt) const
 {
 	if(!mask.isNull())
-		getRenderThread()->popMask();
+		ctxt.popMask();
 }
 
-void DisplayObjectContainer::renderImpl(bool maskEnabled, number_t t1,number_t t2,number_t t3,number_t t4) const
+void DisplayObjectContainer::renderImpl(RenderContext& ctxt, bool maskEnabled, number_t t1,number_t t2,number_t t3,number_t t4) const
 {
 	Locker l(mutexDisplayList);
 	//Now draw also the display list
 	list<_R<DisplayObject>>::const_iterator it=dynamicDisplayList.begin();
 	for(;it!=dynamicDisplayList.end();++it)
-		(*it)->Render(maskEnabled);
+		(*it)->Render(ctxt, maskEnabled);
 }
 
-void Sprite::renderImpl(bool maskEnabled, number_t t1,number_t t2,number_t t3,number_t t4) const
+void Sprite::renderImpl(RenderContext& ctxt, bool maskEnabled, number_t t1,number_t t2,number_t t3,number_t t4) const
 {
 	//Draw the dynamically added graphics, if any
 	//Should clean only the bounds of the graphics
 	if(!tokensEmpty())
-		defaultRender(maskEnabled);
+		defaultRender(ctxt, maskEnabled);
 
-	DisplayObjectContainer::renderImpl(maskEnabled, t1, t2, t3, t4);
+	DisplayObjectContainer::renderImpl(ctxt, maskEnabled, t1, t2, t3, t4);
 }
 
-void DisplayObject::Render(bool maskEnabled)
+void DisplayObject::Render(RenderContext& ctxt, bool maskEnabled)
 {
 	if(!isConstructed() || skipRender(maskEnabled))
 		return;
@@ -669,11 +667,11 @@ void DisplayObject::Render(bool maskEnabled)
 	if(!notEmpty)
 		return;
 
-	renderPrologue();
+	renderPrologue(ctxt);
 
-	renderImpl(maskEnabled,t1,t2,t3,t4);
+	renderImpl(ctxt, maskEnabled,t1,t2,t3,t4);
 
-	renderEpilogue();
+	renderEpilogue(ctxt);
 }
 
 void DisplayObject::hitTestPrologue() const
@@ -1360,29 +1358,29 @@ bool DisplayObject::skipRender(bool maskEnabled) const
 	return visible==false || alpha==0.0 || (!maskEnabled && !maskOf.isNull());
 }
 
-void DisplayObject::defaultRender(bool maskEnabled) const
+void DisplayObject::defaultRender(RenderContext& ctxt, bool maskEnabled) const
 {
 	/* cachedSurface is only modified from within the render thread
 	 * so we need no locking here */
 	if(!cachedSurface.tex.isValid())
 		return;
-	RenderThread* rt = getRenderThread();
+
 	float enableMaskLookup=0.0f;
 	//If the maskEnabled is already set we are the mask!
-	if(!maskEnabled && rt->isMaskPresent())
+	if(!maskEnabled && ctxt.isMaskPresent())
 	{
-		rt->renderMaskToTmpBuffer();
+		ctxt.renderMaskToTmpBuffer();
 		enableMaskLookup=1.0f;
 	}
-	lsglPushMatrix();
-	lsglLoadIdentity();
-	rt->setMatrixUniform(LSGL_MODELVIEW);
-	glUniform1f(rt->maskUniform, enableMaskLookup);
-	glUniform1f(rt->yuvUniform, 0);
-	glUniform1f(rt->alphaUniform, cachedSurface.alpha);
-	rt->renderTextured(cachedSurface.tex, cachedSurface.xOffset, cachedSurface.yOffset, cachedSurface.tex.width, cachedSurface.tex.height);
-	lsglPopMatrix();
-	rt->setMatrixUniform(LSGL_MODELVIEW);
+	ctxt.lsglPushMatrix();
+	ctxt.lsglLoadIdentity();
+	ctxt.setMatrixUniform(LSGL_MODELVIEW);
+	glUniform1f(ctxt.maskUniform, enableMaskLookup);
+	glUniform1f(ctxt.yuvUniform, 0);
+	glUniform1f(ctxt.alphaUniform, cachedSurface.alpha);
+	ctxt.renderTextured(cachedSurface.tex, cachedSurface.xOffset, cachedSurface.yOffset, cachedSurface.tex.width, cachedSurface.tex.height);
+	ctxt.lsglPopMatrix();
+	ctxt.setMatrixUniform(LSGL_MODELVIEW);
 }
 
 void DisplayObject::computeDeviceBoundsForRect(number_t xmin, number_t xmax, number_t ymin, number_t ymax,
@@ -2562,12 +2560,12 @@ bool DisplayObjectContainer::isOpaque(number_t x, number_t y) const
 	return false;
 }
 
-void TokenContainer::renderImpl(bool maskEnabled, number_t t1, number_t t2, number_t t3, number_t t4) const
+void TokenContainer::renderImpl(RenderContext& ctxt, bool maskEnabled, number_t t1, number_t t2, number_t t3, number_t t4) const
 {
 	//if(!owner->isSimple())
 	//	rt->acquireTempBuffer(t1,t2,t3,t4);
 
-	owner->defaultRender(maskEnabled);
+	owner->defaultRender(ctxt, maskEnabled);
 
 	//if(!owner->isSimple())
 	//	rt->blitTempBuffer(t1,t2,t3,t4);

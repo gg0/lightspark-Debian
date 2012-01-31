@@ -100,10 +100,10 @@ void StandaloneDownloadManager::destroy(Downloader* downloader)
 	if(removeDownloader(downloader))
 	{
 		downloader->waitForTermination();
-		//NOTE: the following static cast should be safe. we now the type of created objects
-		ThreadedDownloader* thd=static_cast<ThreadedDownloader*>(downloader);
-		thd->waitFencing();
-		delete thd;
+		ThreadedDownloader* thd=dynamic_cast<ThreadedDownloader*>(downloader);
+		if(thd)
+			thd->waitFencing();
+		delete downloader;
 	}
 }
 
@@ -647,7 +647,7 @@ void Downloader::openCache()
 	if(cached && !cache.is_open())
 	{
 		//Create a temporary file(name)
-		std::string cacheFilenameS = getSys()->config->getCacheDirectory() + "/" + getSys()->config->getCachePrefix() + "XXXXXX";
+		std::string cacheFilenameS = Config::getConfig()->getCacheDirectory() + "/" + Config::getConfig()->getCachePrefix() + "XXXXXX";
 		char* cacheFilenameC = g_newa(char,cacheFilenameS.length()+1);
 		strncpy(cacheFilenameC, cacheFilenameS.c_str(), cacheFilenameS.length());
 		cacheFilenameC[cacheFilenameS.length()] = '\0';
@@ -1148,7 +1148,7 @@ void CurlDownloader::execute()
 int CurlDownloader::progress_callback(void *clientp, double dltotal, double dlnow, double ultotal, double ulnow)
 {
 	CurlDownloader* th=static_cast<CurlDownloader*>(clientp);
-	return th->aborting || th->failed;
+	return th->threadAborting || th->failed;
 }
 
 /**

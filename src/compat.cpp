@@ -80,9 +80,10 @@ uint64_t compat_get_thread_cputime_us()
 	return timespecToUsecs(tp);
 }
 
-int aligned_malloc(void **memptr, size_t alignment, size_t size)
+void aligned_malloc(void **memptr, size_t alignment, size_t size)
 {
-	return posix_memalign(memptr, alignment, size);
+	if(posix_memalign(memptr, alignment, size))
+		throw std::bad_alloc();
 }
 void aligned_free(void *mem)
 {
@@ -120,6 +121,7 @@ DEFDLLMAIN(atk);
 DEFDLLMAIN(pango);
 DEFDLLMAIN(gdk);
 DEFDLLMAIN(gtk);
+DEFDLLMAIN(cairo);
 
 #define RUNDLLMAIN(x) x##_DllMain(hinstDLL, fdwReason, lpvReserved)
 extern "C"
@@ -127,6 +129,7 @@ BOOL WINAPI DllMain (HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved)
 {
 	RUNDLLMAIN(gio);
 	RUNDLLMAIN(glib);
+	RUNDLLMAIN(cairo);
 	RUNDLLMAIN(atk);
 	RUNDLLMAIN(pango);
 	RUNDLLMAIN(gdk);

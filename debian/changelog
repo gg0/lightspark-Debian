@@ -1,3 +1,12 @@
+lightspark (0.5.4.1-1) unstable; urgency=low
+
+  * New 0.5.4.1 upstream release
+    - Support also targets without 8 bit per pixel depth
+      (Closes: #647257, LP: #910837)
+  * Build against LLVM-3.0.
+
+ -- Didier Raboud <odyx@debian.org>  Thu, 02 Feb 2012 10:25:56 +0100
+
 lightspark (0.5.4-1) unstable; urgency=low
 
   * New 0.5.4 upstream release

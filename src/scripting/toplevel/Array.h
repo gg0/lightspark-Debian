@@ -45,7 +45,8 @@ class Array: public ASObject
 friend class ABCVm;
 CLASSBUILDABLE(Array);
 protected:
-	std::vector<data_slot> data;
+	uint64_t currentsize;
+	std::map<uint32_t,data_slot> data;
 	void outofbounds() const;
 	Array();
 private:
@@ -72,7 +73,7 @@ private:
 public:
 	void finalize();
 	//These utility methods are also used by ByteArray
-	static bool isValidMultiname(const multiname& name, unsigned int& index);
+	static bool isValidMultiname(const multiname& name, uint32_t& index);
 	static bool isValidQName(const tiny_string& name, const tiny_string& ns, unsigned int& index);
 
 	static void sinit(Class_base*);
@@ -92,6 +93,7 @@ public:
 	ASFUNCTION(filter);
 	ASFUNCTION(indexOf);
 	ASFUNCTION(_getLength);
+	ASFUNCTION(_setLength);
 	ASFUNCTION(forEach);
 	ASFUNCTION(_reverse);
 	ASFUNCTION(lastIndexOf);
@@ -104,26 +106,37 @@ public:
 	ASObject* at(unsigned int index) const;
 	void set(unsigned int index, ASObject* o)
 	{
-		if(index<data.size())
+		if(index<currentsize)
 		{
-			assert_and_throw(data[index].data==NULL);
+			if(!data.count(index))
+				data[index]=data_slot();
 			data[index].data=o;
 			data[index].type=DATA_OBJECT;
 		}
 		else
 			outofbounds();
 	}
-	int size() const
+	uint64_t size() const
 	{
-		return data.size();
+		return currentsize;
 	}
 	void push(ASObject* o)
 	{
-		data.push_back(data_slot(o,DATA_OBJECT));
+		data[currentsize] = data_slot(o,DATA_OBJECT);
+		currentsize++;
 	}
-	void resize(int n)
+	void resize(uint64_t n)
 	{
-		data.resize(n);
+		for (uint32_t i = n; i < currentsize; i++)
+		{
+			if(data.count(i))
+			{
+				if (data[i].type==DATA_OBJECT && data[i].data)
+					data[i].data->decRef();
+				data.erase(i);
+			}
+		}
+		currentsize = n;
 	}
 	_NR<ASObject> getVariableByMultiname(const multiname& name, GET_VARIABLE_OPTION opt);
 	int32_t getVariableByMultiname_i(const multiname& name);

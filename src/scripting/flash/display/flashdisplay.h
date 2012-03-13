@@ -387,6 +387,7 @@ public:
 	ASFUNCTION(drawRect);
 	ASFUNCTION(drawRoundRect);
 	ASFUNCTION(drawCircle);
+	ASFUNCTION(drawTriangles);
 	ASFUNCTION(moveTo);
 	ASFUNCTION(lineTo);
 	ASFUNCTION(curveTo);
@@ -434,7 +435,6 @@ class Loader;
 
 class LoaderInfo: public EventDispatcher, public ILoadable
 {
-friend class RootMovieClip;
 private:
 	uint32_t bytesLoaded;
 	uint32_t bytesTotal;
@@ -471,6 +471,8 @@ public:
 		bytesTotal=b;
 	}
 	void setBytesLoaded(uint32_t b);
+	void setURL(const tiny_string& _url) { url=_url; }
+	void setLoaderURL(const tiny_string& _url) { loaderURL=_url; }
 };
 
 class Loader: public IThreadJob, public DisplayObjectContainer
@@ -759,19 +761,27 @@ class BitmapData: public ASObject, public IBitmapDrawable
 {
 CLASSBUILDABLE(BitmapData);
 private:
+	size_t stride;
+	size_t dataSize;
 	static void sinit(Class_base* c);
 	uint8_t* getData() { return data; }
 	int getWidth() { return width; }
 	int getHeight() { return height; }
+	uint32_t getPixelPriv(uint32_t x, uint32_t y);
 public:
-	BitmapData() : data(NULL), dataSize(0), width(0), height(0) {}
+	BitmapData() : stride(0), dataSize(0), data(NULL), width(0), height(0) {}
 	~BitmapData();
-	/* the bitmaps data in cairo's internal representation */
+	/* the bitmaps data in premultiplied, native-endian 32 bit
+	 * ARGB format. stride is the number of bytes per row, may be
+	 * larger than width. dataSize is the total allocated size of
+	 * data (=stride*height) */
 	uint8_t* data;
-	size_t dataSize;
 	ASPROPERTY_GETTER(int32_t, width);
 	ASPROPERTY_GETTER(int32_t, height);
+	ASFUNCTION(_constructor);
 	ASFUNCTION(draw);
+	ASFUNCTION(getPixel);
+	ASFUNCTION(getPixel32);
 	bool fromRGB(uint8_t* rgb, uint32_t width, uint32_t height, bool hasAlpha);
 	bool fromJPEG(uint8_t* data, int len);
 	bool fromJPEG(std::istream& s);
@@ -780,14 +790,17 @@ public:
 class Bitmap: public DisplayObject, public TokenContainer
 {
 friend class CairoTokenRenderer;
+private:
+	void onBitmapData(_NR<BitmapData>);
 protected:
 	void renderImpl(RenderContext& ctxt, bool maskEnabled, number_t t1, number_t t2, number_t t3, number_t t4) const
 		{ TokenContainer::renderImpl(ctxt, maskEnabled,t1,t2,t3,t4); }
 public:
-	ASPROPERTY_GETTER(_NR<BitmapData>,bitmapData);
+	ASPROPERTY_GETTER_SETTER(_NR<BitmapData>,bitmapData);
 	/* Call this after updating any member of 'data' */
 	void updatedData();
 	Bitmap(std::istream *s = NULL, FILE_TYPE type=FT_UNKNOWN);
+	Bitmap(_R<BitmapData> data);
 	static void sinit(Class_base* c);
 	bool boundsRect(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const;
 	_NR<InteractiveObject> hitTestImpl(_NR<InteractiveObject> last, number_t x, number_t y, DisplayObject::HIT_TYPE type);

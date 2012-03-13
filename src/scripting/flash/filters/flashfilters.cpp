@@ -17,42 +17,33 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
-#ifndef _STREAMS_H
-#define _STREAMS_H
+#include "flashfilters.h"
+#include "class.h"
 
-#include "compat.h"
-#include <streambuf>
-#include <fstream>
-#include <inttypes.h>
-#include "zlib.h"
+using namespace std;
+using namespace lightspark;
 
-class zlib_filter: public std::streambuf
+SET_NAMESPACE("flash.filters");
+
+REGISTER_CLASS_NAME(BitmapFilter);
+REGISTER_CLASS_NAME(GlowFilter);
+REGISTER_CLASS_NAME(DropShadowFilter);
+
+void BitmapFilter::sinit(Class_base* c)
 {
-private:
-	std::streambuf* backend;
-	int consumed;
-	z_stream strm;
-	char buffer[4096];
-	bool eof;
-protected:
-	char in_buf[4096];
-	virtual int_type underflow();
-	virtual pos_type seekoff(off_type, std::ios_base::seekdir, std::ios_base::openmode);
-public:
-	zlib_filter(std::streambuf* b);
-	~zlib_filter();
-};
+//	c->constructor=Class<IFunction>::getFunction(_constructor);
+	c->setConstructor(NULL);
+}
 
-
-class bytes_buf:public std::streambuf
+void GlowFilter::sinit(Class_base* c)
 {
-private:
-	const uint8_t* buf;
-	int offset;
-	int len;
-public:
-	bytes_buf(const uint8_t* b, int l);
-	virtual pos_type seekoff(off_type, std::ios_base::seekdir, std::ios_base::openmode);
-};
+	c->setConstructor(NULL);
+	c->setSuper(Class<BitmapFilter>::getRef());
+}
 
-#endif
+void DropShadowFilter::sinit(Class_base* c)
+{
+	c->setConstructor(NULL);
+	c->setSuper(Class<BitmapFilter>::getRef());
+}
+

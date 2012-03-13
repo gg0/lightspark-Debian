@@ -39,6 +39,8 @@ private:
 	_NR<ASObject> data;
 	enum METHOD { GET=0, POST };
 	METHOD method;
+	tiny_string validatedContentType() const;
+	ASPROPERTY_GETTER_SETTER(tiny_string,contentType);
 public:
 	URLRequest();
 	void finalize();
@@ -121,6 +123,18 @@ public:
 	ASFUNCTION(_setDataFormat);
 };
 
+class Responder: public ASObject
+{
+private:
+	_NR<IFunction> result;
+	_NR<IFunction> status;
+public:
+	static void sinit(Class_base*);
+	void finalize();
+	ASFUNCTION(_constructor);
+	ASFUNCTION(onResult);
+};
+
 class NetConnection: public EventDispatcher
 {
 friend class NetStream;
@@ -133,6 +147,7 @@ private:
 	URLInfo uri;
 public:
 	NetConnection();
+	void finalize();
 	static void sinit(Class_base*);
 	static void buildTraits(ASObject* o);
 	ASFUNCTION(_constructor);
@@ -144,6 +159,7 @@ public:
 	ASFUNCTION(_setObjectEncoding);
 	ASFUNCTION(_getProtocol);
 	ASFUNCTION(_getURI);
+	ASPROPERTY_GETTER_SETTER(NullableRef<ASObject>,client);
 };
 
 class SoundTransform;

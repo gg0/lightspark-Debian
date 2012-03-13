@@ -41,9 +41,12 @@
 #include "toplevel/Date.h"
 #include "toplevel/Math.h"
 #include "toplevel/Vector.h"
+#include "toplevel/XML.h"
+#include "toplevel/XMLList.h"
 #include "flash/accessibility/flashaccessibility.h"
-#include "flash/events/flashevents.h"
 #include "flash/display/flashdisplay.h"
+#include "flash/events/flashevents.h"
+#include "flash/filters/flashfilters.h"
 #include "flash/net/flashnet.h"
 #include "flash/net/URLStream.h"
 #include "flash/system/flashsystem.h"
@@ -53,6 +56,7 @@
 #include "flash/external/ExternalInterface.h"
 #include "flash/media/flashmedia.h"
 #include "flash/xml/flashxml.h"
+#include "flash/errors/flasherrors.h"
 #include "class.h"
 #include "exceptions.h"
 #include "compat.h"
@@ -192,11 +196,13 @@ void ABCVm::registerClasses()
 	builtin->setVariableByQName("SyntaxError","",Class<SyntaxError>::getRef(),DECLARED_TRAIT);
 	builtin->setVariableByQName("TypeError","",Class<TypeError>::getRef(),DECLARED_TRAIT);
 	builtin->setVariableByQName("URIError","",Class<URIError>::getRef(),DECLARED_TRAIT);
+	builtin->setVariableByQName("UninitializedError","",Class<UninitializedError>::getRef(),DECLARED_TRAIT);
 	builtin->setVariableByQName("VerifyError","",Class<VerifyError>::getRef(),DECLARED_TRAIT);
 	builtin->setVariableByQName("XML","",Class<XML>::getRef(),DECLARED_TRAIT);
 	builtin->setVariableByQName("XMLList","",Class<XMLList>::getRef(),DECLARED_TRAIT);
 	builtin->setVariableByQName("int","",Class<Integer>::getRef(),DECLARED_TRAIT);
 
+	builtin->setVariableByQName("eval","",Class<IFunction>::getFunction(eval),DECLARED_TRAIT);
 	builtin->setVariableByQName("print","",Class<IFunction>::getFunction(print),DECLARED_TRAIT);
 	builtin->setVariableByQName("trace","",Class<IFunction>::getFunction(trace),DECLARED_TRAIT);
 	builtin->setVariableByQName("parseInt","",Class<IFunction>::getFunction(parseInt),DECLARED_TRAIT);
@@ -247,12 +253,9 @@ void ABCVm::registerClasses()
 	builtin->setVariableByQName("AVM1Movie","flash.display",Class<AVM1Movie>::getRef(),DECLARED_TRAIT);
 	builtin->setVariableByQName("Shader","flash.display",Class<Shader>::getRef(),DECLARED_TRAIT);
 
-	builtin->setVariableByQName("DropShadowFilter","flash.filters",
-			Class<ASObject>::getStubClass(QName("DropShadowFilter","flash.filters")),DECLARED_TRAIT);
-	builtin->setVariableByQName("BitmapFilter","flash.filters",
-			Class<ASObject>::getStubClass(QName("BitmapFilter","flash.filters")),DECLARED_TRAIT);
-	builtin->setVariableByQName("GlowFilter","flash.filters",
-			Class<ASObject>::getStubClass(QName("GlowFilter","flash.filters")),DECLARED_TRAIT);
+	builtin->setVariableByQName("BitmapFilter","flash.filters",Class<BitmapFilter>::getRef(),DECLARED_TRAIT);
+	builtin->setVariableByQName("DropShadowFilter","flash.filters",Class<DropShadowFilter>::getRef(),DECLARED_TRAIT);
+	builtin->setVariableByQName("GlowFilter","flash.filters",Class<GlowFilter>::getRef(),DECLARED_TRAIT);
 	builtin->setVariableByQName("BevelFilter","flash.filters",
 			Class<ASObject>::getStubClass(QName("BevelFilter","flash.filters")),DECLARED_TRAIT);
 	builtin->setVariableByQName("ColorMatrixFilter","flash.filters",
@@ -274,6 +277,7 @@ void ABCVm::registerClasses()
 
 	builtin->setVariableByQName("ExternalInterface","flash.external",Class<ExternalInterface>::getRef(),DECLARED_TRAIT);
 
+	builtin->setVariableByQName("Endian","flash.utils",Class<Endian>::getRef(),DECLARED_TRAIT);
 	builtin->setVariableByQName("ByteArray","flash.utils",Class<ByteArray>::getRef(),DECLARED_TRAIT);
 	builtin->setVariableByQName("Dictionary","flash.utils",Class<Dictionary>::getRef(),DECLARED_TRAIT);
 	builtin->setVariableByQName("Proxy","flash.utils",Class<Proxy>::getRef(),DECLARED_TRAIT);
@@ -290,6 +294,8 @@ void ABCVm::registerClasses()
 	builtin->setVariableByQName("clearTimeout","flash.utils",Class<IFunction>::getFunction(clearTimeout),DECLARED_TRAIT);
 	builtin->setVariableByQName("describeType","flash.utils",Class<IFunction>::getFunction(describeType),DECLARED_TRAIT);
 	builtin->setVariableByQName("IExternalizable","flash.utils",Class<ASObject>::getStubClass(QName("IExternalizable","flash.utils")),DECLARED_TRAIT);
+	builtin->setVariableByQName("IDataInput","flash.utils",InterfaceClass<IDataInput>::getRef(),DECLARED_TRAIT);
+	builtin->setVariableByQName("IDataOutput","flash.utils",InterfaceClass<IDataOutput>::getRef(),DECLARED_TRAIT);
 
 	builtin->setVariableByQName("ColorTransform","flash.geom",Class<ColorTransform>::getRef(),DECLARED_TRAIT);
 	builtin->setVariableByQName("Rectangle","flash.geom",Class<Rectangle>::getRef(),DECLARED_TRAIT);
@@ -333,7 +339,7 @@ void ABCVm::registerClasses()
 	builtin->setVariableByQName("SharedObject","flash.net",Class<SharedObject>::getRef(),DECLARED_TRAIT);
 	builtin->setVariableByQName("ObjectEncoding","flash.net",Class<ObjectEncoding>::getRef(),DECLARED_TRAIT);
 	builtin->setVariableByQName("Socket","flash.net",Class<ASObject>::getStubClass(QName("Socket","flash.net")),DECLARED_TRAIT);
-	builtin->setVariableByQName("Responder","flash.net",Class<ASObject>::getStubClass(QName("Responder","flash.net")),DECLARED_TRAIT);
+	builtin->setVariableByQName("Responder","flash.net",Class<Responder>::getRef(),DECLARED_TRAIT);
 
 	builtin->setVariableByQName("fscommand","flash.system",Class<IFunction>::getFunction(fscommand),DECLARED_TRAIT);
 	builtin->setVariableByQName("Capabilities","flash.system",Class<Capabilities>::getRef(),DECLARED_TRAIT);
@@ -352,6 +358,14 @@ void ABCVm::registerClasses()
 	builtin->setVariableByQName("ContextMenuItem","flash.ui",Class<ASObject>::getStubClass(QName("ContextMenuItem","flash.ui")),DECLARED_TRAIT);
 
 	builtin->setVariableByQName("Accelerometer", "flash.sensors", Class<Accelerometer>::getRef(), DECLARED_TRAIT);
+
+	builtin->setVariableByQName("IOError","flash.errors",Class<IOError>::getRef(),DECLARED_TRAIT);
+	builtin->setVariableByQName("EOFError","flash.errors",Class<EOFError>::getRef(),DECLARED_TRAIT);
+	builtin->setVariableByQName("IllegalOperationError","flash.errors",Class<IllegalOperationError>::getRef(),DECLARED_TRAIT);
+	builtin->setVariableByQName("InvalidSWFError","flash.errors",Class<InvalidSWFError>::getRef(),DECLARED_TRAIT);
+	builtin->setVariableByQName("MemoryError","flash.errors",Class<MemoryError>::getRef(),DECLARED_TRAIT);
+	builtin->setVariableByQName("ScriptTimeoutError","flash.errors",Class<ScriptTimeoutError>::getRef(),DECLARED_TRAIT);
+	builtin->setVariableByQName("StackOverflowError","flash.errors",Class<StackOverflowError>::getRef(),DECLARED_TRAIT);
 
 	builtin->setVariableByQName("isNaN","",Class<IFunction>::getFunction(isNaN),DECLARED_TRAIT);
 	builtin->setVariableByQName("isFinite","",Class<IFunction>::getFunction(isFinite),DECLARED_TRAIT);
@@ -1020,25 +1034,46 @@ void ABCVm::handleEvent(std::pair<_NR<EventDispatcher>, _R<Event> > e)
 					if(!ev->obj.isNull())
 						ev->obj->incRef();
 					ASObject* result = ev->f->call(ev->obj.getPtr(),ev->args,ev->numArgs);
-					// We should report the function result
-					if(ev->result != NULL)
-						*(ev->result) = result;
-					else if(result)
+					if(result)
 						result->decRef();
 				}
 				catch(ASObject* exception)
 				{
-					if(ev->exception)
-					{
-						// Report the exception
-						*(ev->exception) = exception;
-					}
-					else
-					{
-						//Exception unhandled, report up
-						ev->done.signal();
-						throw;
-					}
+					//Exception unhandled, report up
+					ev->done.signal();
+					throw;
+				}
+				catch(LightsparkException& e)
+				{
+					//An internal error happended, sync and rethrow
+					ev->done.signal();
+					throw;
+				}
+				break;
+			}
+			case EXTERNAL_CALL:
+			{
+				ExternalCallEvent* ev=static_cast<ExternalCallEvent*>(e.second.getPtr());
+
+				// Convert ExtVariant arguments to ASObjects
+				ASObject** objArgs = g_newa(ASObject*,ev->numArgs);
+				for(uint32_t i = 0; i < ev->numArgs; i++)
+				{
+					objArgs[i] = ev->args[i]->getASObject();
+				}
+
+				try
+				{
+					ASObject* result = ev->f->call(new Null,objArgs,ev->numArgs);
+					// We should report the function result
+					*(ev->result) = new ExtVariant(result);
+					result->decRef();
+				}
+				catch(ASObject* exception)
+				{
+					// Report the exception
+					*(ev->exception) = exception->toString();
+					*(ev->thrown) = true;
 				}
 				catch(LightsparkException& e)
 				{
@@ -1070,7 +1105,7 @@ void ABCVm::handleEvent(std::pair<_NR<EventDispatcher>, _R<Event> > e)
 				AdvanceFrameEvent* ev=static_cast<AdvanceFrameEvent*>(e.second.getPtr());
 				LOG(LOG_CALLS,"ADVANCE_FRAME");
 				m_sys->getStage()->advanceFrame();
-				ev->done.signal();
+				ev->done.signal(); // Won't this signal twice, wrt to the signal() below?
 				break;
 			}
 			case FLUSH_INVALIDATION_QUEUE:
@@ -1437,7 +1472,7 @@ void ABCVm::Run(ABCVm* th)
 		{
 			th->shuttingdown = true;
 			if(e->getClass())
-				LOG(LOG_ERROR,_("Unhandled ActionScript exception in VM ") << e->getClass()->class_name);
+				LOG(LOG_ERROR,_("Unhandled ActionScript exception in VM ") << e->toString());
 			else
 				LOG(LOG_ERROR,_("Unhandled ActionScript exception in VM (no type)"));
 			th->m_sys->setError(_("Unhandled ActionScript exception"));
@@ -1737,6 +1772,11 @@ void ABCContext::buildTrait(ASObject* obj, const traits_info* t, bool isBorrowed
 
 				//Methods save a copy of the scope stack of the class
 				f->acquireScope(prot->class_scope);
+				if(isBorrowed)
+				{
+					obj->incRef();
+					f->addToScope(scope_entry(_MR(obj),false));
+				}
 			}
 			else
 			{
@@ -1809,379 +1849,24 @@ void ABCContext::buildTrait(ASObject* obj, const traits_info* t, bool isBorrowed
 
 ASObject* method_info::getOptional(unsigned int i)
 {
-	assert_and_throw(i<options.size());
-	return context->getConstant(options[i].kind,options[i].val);
+	assert_and_throw(i<info.options.size());
+	return context->getConstant(info.options[i].kind,info.options[i].val);
 }
 
 const multiname* method_info::paramTypeName(unsigned int i) const
 {
-	assert_and_throw(i<param_type.size());
-	return context->getMultiname(param_type[i],NULL);
+	assert_and_throw(i<info.param_type.size());
+	return context->getMultiname(info.param_type[i],NULL);
 }
 
 const multiname* method_info::returnTypeName() const
 {
-	return context->getMultiname(return_type,NULL);
-}
-
-istream& lightspark::operator>>(istream& in, s32& v)
-{
-	int i=0;
-	v.val=0;
-	uint8_t t;
-	//bool signExtend=true;
-	do
-	{
-		in.read((char*)&t,1);
-		//No more than 5 bytes should be read
-		if(i==28)
-		{
-			//Only the first 4 bits should be used to reach 32 bits
-			if((t&0xf0))
-				LOG(LOG_ERROR,"Error in s32");
-			uint8_t t2=(t&0xf);
-			v.val|=(t2<<i);
-			//The number is filled, no sign extension
-			//signExtend=false;
-			break;
-		}
-		else
-		{
-			uint8_t t2=(t&0x7f);
-			v.val|=(t2<<i);
-			i+=7;
-		}
-	}
-	while(t&0x80);
-/*	//Sign extension usage not clear at all
-	if(signExtend && t&0x40)
-	{
-		//Sign extend
-		v.val|=(0xffffffff<<i);
-	}*/
-	return in;
-}
-
-istream& lightspark::operator>>(istream& in, s24& v)
-{
-	uint32_t ret=0;
-	in.read((char*)&ret,3);
-	v.val=LittleEndianToSignedHost24(ret);
-	return in;
-}
-
-istream& lightspark::operator>>(istream& in, u30& v)
-{
-	u32 vv;
-	in >> vv;
-	uint32_t val = vv;
-	if(val&0xc0000000)
-		assert_and_throw(false); //TODO: make this VerifierError
-	v.val = val;
-	return in;
-}
-
-istream& lightspark::operator>>(istream& in, u8& v)
-{
-	uint8_t t;
-	in.read((char*)&t,1);
-	v.val=t;
-	return in;
-}
-
-istream& lightspark::operator>>(istream& in, u16& v)
-{
-	uint16_t t;
-	in.read((char*)&t,2);
-	v.val=GINT16_FROM_LE(t);
-	return in;
-}
-
-istream& lightspark::operator>>(istream& in, d64& v)
-{
-	union double_reader
-	{
-		uint64_t dump;
-		double value;
-	};
-	double_reader dummy;
-	in.read((char*)&dummy.dump,8);
-	dummy.dump=GINT64_FROM_LE(dummy.dump);
-	v.val=dummy.value;
-	return in;
-}
-
-istream& lightspark::operator>>(istream& in, string_info& v)
-{
-	in >> v.size;
-	uint8_t t;
-	string tmp;
-	tmp.reserve(v.size);
-	for(unsigned int i=0;i<v.size;i++)
-	{
-		in.read((char*)&t,1);
-		tmp.push_back(t);
-	}
-	v.val=tmp;
-	return in;
-}
-
-istream& lightspark::operator>>(istream& in, namespace_info& v)
-{
-	in >> v.kind >> v.name;
-	if(v.kind!=0x05 && v.kind!=0x08 && v.kind!=0x16 && v.kind!=0x17 && v.kind!=0x18 && v.kind!=0x19 && v.kind!=0x1a)
-		throw UnsupportedException("Unexpected namespace kind");
-
-	return in;
-}
-
-istream& lightspark::operator>>(istream& in, method_body_info& v)
-{
-	in >> v.method >> v.max_stack >> v.local_count >> v.init_scope_depth >> v.max_scope_depth >> v.code_length;
-	v.code.resize(v.code_length);
-	for(unsigned int i=0;i<v.code_length;i++)
-		in.read(&v.code[i],1);
-
-	in >> v.exception_count;
-	v.exceptions.resize(v.exception_count);
-	for(unsigned int i=0;i<v.exception_count;i++)
-		in >> v.exceptions[i];
-
-	in >> v.trait_count;
-	v.traits.resize(v.trait_count);
-	for(unsigned int i=0;i<v.trait_count;i++)
-		in >> v.traits[i];
-	return in;
-}
-
-istream& lightspark::operator >>(istream& in, ns_set_info& v)
-{
-	in >> v.count;
-
-	v.ns.resize(v.count);
-	for(unsigned int i=0;i<v.count;i++)
-	{
-		in >> v.ns[i];
-		if(v.ns[i]==0)
-			LOG(LOG_ERROR,_("0 not allowed"));
-	}
-	return in;
-}
-
-istream& lightspark::operator>>(istream& in, multiname_info& v)
-{
-	in >> v.kind;
-
-	switch(v.kind)
-	{
-		case 0x07:
-		case 0x0d:
-			in >> v.ns >> v.name;
-			break;
-		case 0x0f:
-		case 0x10:
-			in >> v.name;
-			break;
-		case 0x11:
-		case 0x12:
-			break;
-		case 0x09:
-		case 0x0e:
-			in >> v.name >> v.ns_set;
-			break;
-		case 0x1b:
-		case 0x1c:
-			in >> v.ns_set;
-			break;
-		case 0x1d:
-		{
-			in >> v.type_definition;
-			u8 num_params;
-			in >> num_params;
-			v.param_types.resize(num_params);
-			for(unsigned int i=0;i<num_params;i++)
-			{
-				u30 t;
-				in >> t;
-				v.param_types[i]=t;
-			}
-			break;
-		}
-		default:
-			LOG(LOG_ERROR,_("Unexpected multiname kind ") << hex << v.kind);
-			throw UnsupportedException("Unexpected namespace kind");
-	}
-	return in;
+	return context->getMultiname(info.return_type,NULL);
 }
 
 istream& lightspark::operator>>(istream& in, method_info& v)
 {
-	in >> v.param_count;
-	in >> v.return_type;
-
-	v.param_type.resize(v.param_count);
-	for(unsigned int i=0;i<v.param_count;i++)
-		in >> v.param_type[i];
-	
-	in >> v.name >> v.flags;
-	if(v.flags&0x08)
-	{
-		in >> v.option_count;
-		v.options.resize(v.option_count);
-		for(unsigned int i=0;i<v.option_count;i++)
-		{
-			in >> v.options[i].val >> v.options[i].kind;
-			if(v.options[i].kind>0x1a)
-				LOG(LOG_ERROR,_("Unexpected options type"));
-		}
-	}
-	if(v.flags&0x80)
-	{
-		v.param_names.resize(v.param_count);
-		for(unsigned int i=0;i<v.param_count;i++)
-			in >> v.param_names[i];
-	}
-	return in;
-}
-
-istream& lightspark::operator>>(istream& in, script_info& v)
-{
-	in >> v.init >> v.trait_count;
-	v.traits.resize(v.trait_count);
-	for(unsigned int i=0;i<v.trait_count;i++)
-		in >> v.traits[i];
-	return in;
-}
-
-istream& lightspark::operator>>(istream& in, class_info& v)
-{
-	in >> v.cinit >> v.trait_count;
-	v.traits.resize(v.trait_count);
-	for(unsigned int i=0;i<v.trait_count;i++)
-	{
-		in >> v.traits[i];
-	}
-	return in;
-}
-
-istream& lightspark::operator>>(istream& in, metadata_info& v)
-{
-	in >> v.name;
-	in >> v.item_count;
-
-	v.items.resize(v.item_count);
-	for(unsigned int i=0;i<v.item_count;i++)
-	{
-		in >> v.items[i].key >> v.items[i].value;
-	}
-	return in;
-}
-
-istream& lightspark::operator>>(istream& in, traits_info& v)
-{
-	in >> v.name >> v.kind;
-	switch(v.kind&0xf)
-	{
-		case traits_info::Slot:
-		case traits_info::Const:
-			in >> v.slot_id >> v.type_name >> v.vindex;
-			if(v.vindex)
-				in >> v.vkind;
-			break;
-		case traits_info::Class:
-			in >> v.slot_id >> v.classi;
-			break;
-		case traits_info::Function:
-			in >> v.slot_id >> v.function;
-			break;
-		case traits_info::Getter:
-		case traits_info::Setter:
-		case traits_info::Method:
-			in >> v.disp_id >> v.method;
-			break;
-		default:
-			LOG(LOG_ERROR,_("Unexpected kind ") << v.kind);
-			break;
-	}
-
-	if(v.kind&traits_info::Metadata)
-	{
-		in >> v.metadata_count;
-		v.metadata.resize(v.metadata_count);
-		for(unsigned int i=0;i<v.metadata_count;i++)
-			in >> v.metadata[i];
-	}
-	return in;
-}
-
-istream& lightspark::operator >>(istream& in, exception_info& v)
-{
-	in >> v.from >> v.to >> v.target >> v.exc_type >> v.var_name;
-	return in;
-}
-
-istream& lightspark::operator>>(istream& in, instance_info& v)
-{
-	in >> v.name >> v.supername >> v.flags;
-	if(v.isProtectedNs())
-		in >> v.protectedNs;
-
-	in >> v.interface_count;
-	v.interfaces.resize(v.interface_count);
-	for(unsigned int i=0;i<v.interface_count;i++)
-	{
-		in >> v.interfaces[i];
-		if(v.interfaces[i]==0)
-			throw ParseException("Invalid interface specified");
-	}
-
-	in >> v.init;
-
-	in >> v.trait_count;
-	v.traits.resize(v.trait_count);
-	for(unsigned int i=0;i<v.trait_count;i++)
-		in >> v.traits[i];
-	return in;
-}
-
-istream& lightspark::operator>>(istream& in, cpool_info& v)
-{
-	in >> v.int_count;
-	v.integer.resize(v.int_count);
-	for(unsigned int i=1;i<v.int_count;i++)
-		in >> v.integer[i];
-
-	in >> v.uint_count;
-	v.uinteger.resize(v.uint_count);
-	for(unsigned int i=1;i<v.uint_count;i++)
-		in >> v.uinteger[i];
-
-	in >> v.double_count;
-	v.doubles.resize(v.double_count);
-	for(unsigned int i=1;i<v.double_count;i++)
-		in >> v.doubles[i];
-
-	in >> v.string_count;
-	v.strings.resize(v.string_count);
-	for(unsigned int i=1;i<v.string_count;i++)
-		in >> v.strings[i];
-
-	in >> v.namespace_count;
-	v.namespaces.resize(v.namespace_count);
-	for(unsigned int i=1;i<v.namespace_count;i++)
-		in >> v.namespaces[i];
-
-	in >> v.ns_set_count;
-	v.ns_sets.resize(v.ns_set_count);
-	for(unsigned int i=1;i<v.ns_set_count;i++)
-		in >> v.ns_sets[i];
-
-	in >> v.multiname_count;
-	v.multinames.resize(v.multiname_count);
-	for(unsigned int i=1;i<v.multiname_count;i++)
-		in >> v.multinames[i];
-
-	return in;
+	return in >> v.info;
 }
 
 ASFUNCTIONBODY(lightspark,undefinedFunction)

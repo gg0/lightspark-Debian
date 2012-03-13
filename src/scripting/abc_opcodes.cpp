@@ -24,6 +24,8 @@
 #include "compat.h"
 #include "abcutils.h"
 #include "scripting/toplevel/ASString.h"
+#include "toplevel/XML.h"
+#include "toplevel/XMLList.h"
 
 using namespace std;
 using namespace lightspark;
@@ -1497,7 +1499,27 @@ bool ABCVm::isTypelate(ASObject* type, ASObject* obj)
 
 	Class_base* objc=NULL;
 	Class_base* c=NULL;
-	assert_and_throw(type->getObjectType()==T_CLASS);
+	switch (type->getObjectType())
+	{
+		case T_NULL:
+		case T_INTEGER:
+		case T_UINTEGER:
+		case T_NUMBER:
+		case T_OBJECT:
+		case T_STRING:
+			obj->decRef();
+			type->decRef();
+			throw Class<TypeError>::getInstanceS("Error #1009");
+		case T_UNDEFINED:
+			obj->decRef();
+			type->decRef();
+			throw Class<TypeError>::getInstanceS("Error #1010");
+		case T_CLASS:
+			break;
+		default:
+			throw Class<TypeError>::getInstanceS("Error #1041");
+	}
+
 	c=static_cast<Class_base*>(type);
 	//Special case numeric types
 	if(obj->getObjectType()==T_INTEGER || obj->getObjectType()==T_UINTEGER || obj->getObjectType()==T_NUMBER)
@@ -1903,8 +1925,6 @@ void ABCVm::newClass(call_context* th, int n)
 	ret->setDeclaredMethodByQName("toString",AS3,Class<IFunction>::getFunction(Class_base::_toString),NORMAL_METHOD,false);
 
 	ret->class_scope=th->scope_stack;
-	ret->incRef();
-	ret->class_scope.emplace_back(scope_entry(_MR(ret),false));
 
 	LOG(LOG_CALLS,_("Building class traits"));
 	for(unsigned int i=0;i<th->context->classes[n].trait_count;i++)
@@ -1932,6 +1952,8 @@ void ABCVm::newClass(call_context* th, int n)
 #endif
 		SyntheticFunction* constructorFunc=Class<IFunction>::getSyntheticFunction(constructor);
 		constructorFunc->acquireScope(ret->class_scope);
+		ret->incRef();
+		constructorFunc->addToScope(scope_entry(_MR(ret),false));
 		constructorFunc->inClass = ret;
 		//add Constructor the the class methods
 		ret->constructor=constructorFunc;

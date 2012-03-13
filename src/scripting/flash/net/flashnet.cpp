@@ -43,8 +43,9 @@ REGISTER_CLASS_NAME(SharedObject);
 REGISTER_CLASS_NAME(ObjectEncoding);
 REGISTER_CLASS_NAME(NetConnection);
 REGISTER_CLASS_NAME(NetStream);
+REGISTER_CLASS_NAME(Responder);
 
-URLRequest::URLRequest():method(GET)
+URLRequest::URLRequest():method(GET),contentType("application/x-www-form-urlencoded")
 {
 }
 
@@ -58,6 +59,7 @@ void URLRequest::sinit(Class_base* c)
 	c->setDeclaredMethodByQName("method","",Class<IFunction>::getFunction(_getMethod),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("data","",Class<IFunction>::getFunction(_setData),SETTER_METHOD,true);
 	c->setDeclaredMethodByQName("data","",Class<IFunction>::getFunction(_getData),GETTER_METHOD,true);
+	REGISTER_GETTER_SETTER(c,contentType);
 }
 
 void URLRequest::buildTraits(ASObject* o)
@@ -74,7 +76,7 @@ URLInfo URLRequest::getRequestURL() const
 		return ret;
 
 	if(data->getClass()==Class<ByteArray>::getClass())
-		throw RunTimeException("ByteArray data not supported in URLRequest");
+		ret=ret.getParsedURL();
 	else
 	{
 		tiny_string newURL = ret.getParsedURL();
@@ -88,6 +90,20 @@ URLInfo URLRequest::getRequestURL() const
 	return ret;
 }
 
+/* Return contentType if it is a valid value for Content-Type header,
+ * otherwise raise ArgumentError.
+ */
+tiny_string URLRequest::validatedContentType() const
+{
+	if(contentType.find("\r")!=contentType.npos || 
+	   contentType.find("\n")!=contentType.npos)
+	{
+		throw Class<ArgumentError>::getInstanceS(tiny_string("Error #2096: The HTTP request header ") + contentType + tiny_string(" cannot be set via ActionScript."));
+	}
+
+	return contentType;
+}
+
 void URLRequest::getPostData(vector<uint8_t>& outData) const
 {
 	if(method!=POST)
@@ -97,7 +113,21 @@ void URLRequest::getPostData(vector<uint8_t>& outData) const
 		return;
 
 	if(data->getClass()==Class<ByteArray>::getClass())
-		throw RunTimeException("ByteArray not support in URLRequest");
+	{
+		ByteArray *ba=data->as<ByteArray>();
+		tiny_string tmp="Content-type: ";
+		outData.insert(outData.end(),tmp.raw_buf(),tmp.raw_buf()+tmp.numBytes());
+		tmp=validatedContentType();
+		outData.insert(outData.end(),tmp.raw_buf(),tmp.raw_buf()+tmp.numBytes());
+		tmp="\r\nContent-length: ";
+		outData.insert(outData.end(),tmp.raw_buf(),tmp.raw_buf()+tmp.numBytes());
+		char contentlenbuf[20];
+		snprintf(contentlenbuf,20,"%u\r\n\r\n",ba->getLength());
+		outData.insert(outData.end(),contentlenbuf,contentlenbuf+strlen(contentlenbuf));
+
+		const uint8_t *buf=ba->getBuffer(ba->getLength(), false);
+		outData.insert(outData.end(),buf,buf+ba->getLength());
+	}
 	else if(data->getClass()==Class<URLVariables>::getClass())
 	{
 		//Prepend the Content-Type header
@@ -193,6 +223,8 @@ ASFUNCTIONBODY(URLRequest,_setData)
 
 	return NULL;
 }
+
+ASFUNCTIONBODY_GETTER_SETTER(URLRequest,contentType);
 
 void URLRequestMethod::sinit(Class_base* c)
 {
@@ -328,7 +360,8 @@ void URLLoader::execute()
 		}
 		else
 		{
-			downloader=getSys()->downloadManager->downloadWithData(url, postData, NULL);
+			downloader=getSys()->downloadManager->downloadWithData(url, postData,
+					"Content-Type: application/x-www-form-urlencoded", NULL);
 			//Clean up the postData for the next load
 			postData.clear();
 		}
@@ -447,7 +480,6 @@ NetConnection::NetConnection():_connected(false)
 
 void NetConnection::sinit(Class_base* c)
 {
-	//assert(c->constructor==NULL);
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
 	c->setSuper(Class<EventDispatcher>::getRef());
 	c->setDeclaredMethodByQName("connect","",Class<IFunction>::getFunction(connect),NORMAL_METHOD,true);
@@ -459,10 +491,17 @@ void NetConnection::sinit(Class_base* c)
 	c->setDeclaredMethodByQName("objectEncoding","",Class<IFunction>::getFunction(_setObjectEncoding),SETTER_METHOD,true);
 	c->setDeclaredMethodByQName("protocol","",Class<IFunction>::getFunction(_getProtocol),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("uri","",Class<IFunction>::getFunction(_getURI),GETTER_METHOD,true);
+	REGISTER_GETTER_SETTER(c,client);
 }
 
 void NetConnection::buildTraits(ASObject* o)
 {
+}
+
+void NetConnection::finalize()
+{
+	EventDispatcher::finalize();
+	client.reset();
 }
 
 ASFUNCTIONBODY(NetConnection, _constructor)
@@ -505,15 +544,15 @@ ASFUNCTIONBODY(NetConnection,connect)
 		
 		if(!(th->uri.getProtocol() == "rtmp" ||
 		     th->uri.getProtocol() == "rtmpe" ||
-		     th->uri.getProtocol() == "rtmps"))
+		     th->uri.getProtocol() == "rtmps" ||
+		     th->uri.getProtocol() == "http"))
 		{
-			throw UnsupportedException("NetConnection::connect: only RTMP is supported");
+			LOG(LOG_ERROR, "Unsupported protocol " << th->uri.getProtocol() << " in NetConnection::connect");
+			throw UnsupportedException("NetConnection::connect: protocol not supported");
 		}
 
 		// We actually create the connection later in
-		// NetStream::play(). For now, we support only
-		// streaming, not remoting (NetConnection.call() is
-		// not implemented).
+		// NetStream::play() or NetConnection.call()
 	}
 
 	//When the URI is undefined the connect is successful (tested on Adobe player)
@@ -588,6 +627,8 @@ ASFUNCTIONBODY(NetConnection,_getURI)
 		return Class<ASString>::getInstanceS("null");
 	}
 }
+
+ASFUNCTIONBODY_GETTER_SETTER(NetConnection, client);
 
 NetStream::NetStream():frameRate(0),tickStarted(false),connection(),downloader(NULL),
 	videoDecoder(NULL),audioDecoder(NULL),audioStream(NULL),streamTime(0),paused(false),
@@ -727,6 +768,12 @@ ASFUNCTIONBODY(NetStream,play)
 	th->paused = false;
 //	th->audioPaused = false;
 	assert(!th->connection.isNull());
+
+	if(th->connection->uri.getProtocol()=="http")
+	{
+		//Remoting connection used, this should not happen
+		throw RunTimeException("Remoting NetConnection used in NetStream::play");
+	}
 	
 	if(th->connection->uri.isValid())
 	{
@@ -1316,7 +1363,7 @@ tiny_string URLVariables::toString_priv()
 			//Print using multiple properties
 			//Ex. ["foo","bar"] -> prop1=foo&prop1=bar
 			Array* arr=Class<Array>::cast(val.getPtr());
-			for(int32_t j=0;j<arr->size();j++)
+			for(uint32_t j=0;j<arr->size();j++)
 			{
 				//Escape the name
 				char* escapedName=g_uri_escape_string(name.raw_buf(),NULL, false);
@@ -1414,5 +1461,43 @@ ASFUNCTIONBODY(lightspark,sendToURL)
 	//TODO: make the download asynchronous instead of waiting for an unused response
 	downloader->waitForTermination();
 	getSys()->downloadManager->destroy(downloader);
+	return NULL;
+}
+
+void Responder::sinit(Class_base* c)
+{
+	c->setConstructor(Class<IFunction>::getFunction(_constructor));
+	c->setSuper(Class<ASObject>::getRef());
+	c->setDeclaredMethodByQName("onResult","",Class<IFunction>::getFunction(onResult),NORMAL_METHOD,true);
+}
+
+void Responder::finalize()
+{
+	ASObject::finalize();
+	result.reset();
+	status.reset();
+}
+
+ASFUNCTIONBODY(Responder, _constructor)
+{
+	Responder* th=Class<Responder>::cast(obj);
+	assert_and_throw(argslen==1 || argslen==2);
+	assert_and_throw(args[0]->getObjectType()==T_FUNCTION);
+	args[0]->incRef();
+	th->result = _MR(static_cast<IFunction*>(args[0]));
+	if(argslen==2 && args[1]->getObjectType()==T_FUNCTION)
+	{
+		args[1]->incRef();
+		th->status = _MR(static_cast<IFunction*>(args[1]));
+	}
+	return NULL;
+}
+
+ASFUNCTIONBODY(Responder, onResult)
+{
+	Responder* th=Class<Responder>::cast(obj);
+	assert_and_throw(argslen==1);
+	args[0]->incRef();
+	th->result->call(new Null, args, argslen);
 	return NULL;
 }

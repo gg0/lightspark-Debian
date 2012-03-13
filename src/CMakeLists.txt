@@ -56,14 +56,17 @@ SET(LIBSPARK_SOURCES
   scripting/abc_codesynt.cpp
   scripting/abc_interpreter.cpp
   scripting/abc_opcodes.cpp
+  scripting/abctypes.cpp
   scripting/flash/accessibility/flashaccessibility.cpp
   scripting/flash/display/flashdisplay.cpp
   scripting/flash/events/flashevents.cpp
   scripting/flash/external/ExternalInterface.cpp
+  scripting/flash/filters/flashfilters.cpp
   scripting/flash/geom/flashgeom.cpp
   scripting/flash/media/flashmedia.cpp
   scripting/flash/net/flashnet.cpp
   scripting/flash/net/URLStream.cpp
+  scripting/flash/errors/flasherrors.cpp
   scripting/flash/sensors/flashsensors.cpp
   scripting/flash/system/flashsystem.cpp
   scripting/flash/text/flashtext.cpp
@@ -76,6 +79,8 @@ SET(LIBSPARK_SOURCES
   scripting/toplevel/Error.cpp
   scripting/toplevel/Math.cpp
   scripting/toplevel/Vector.cpp
+  scripting/toplevel/XML.cpp
+  scripting/toplevel/XMLList.cpp
   scripting/class.cpp
   scripting/toplevel/toplevel.cpp
   platforms/engineutils.cpp)
@@ -116,7 +121,7 @@ ENDIF (CMAKE_COMPILER_IS_GNUCC)
 TARGET_LINK_LIBRARIES(spark ${CAIRO_LIBRARIES} ${ZLIB_LIBRARIES}
 	${Boost_LIBRARIES} ${LLVM_LIBS_CORE} ${LLVM_LIBS_JIT} ${LLVM_LDFLAGS}
 	${OPTIONAL_LIBRARIES} ${GTK_LIBRARIES} ${FREETYPE_LIBRARIES} ${JPEG_LIBRARIES}
-	${PCRE_LIBRARIES} ${GLIBMM_LIBRARIES}
+	${PCRE_LIBRARIES} ${GLIBMM_LIBRARIES} ${GMODULE_LIBRARIES}
 	${XMLPP_LIBRARIES} ${CMAKE_DL_LIBS} ${EXTRA_LIBS_LIBRARIES}
 	${X11_LIBRARIES})
 SET_TARGET_PROPERTIES(spark PROPERTIES VERSION "${MAJOR_VERSION}.${MINOR_VERSION}.${PATCH_VERSION}")

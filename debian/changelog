@@ -1,3 +1,10 @@
+lightspark (0.5.5-1) unstable; urgency=low
+
+  * New 0.5.5 upstream release
+  * Bugfix debian/watch to recognize https downloads.
+
+ -- Didier Raboud <odyx@debian.org>  Tue, 13 Mar 2012 13:59:16 +0100
+
 lightspark (0.5.4.1-1) unstable; urgency=low
 
   * New 0.5.4.1 upstream release

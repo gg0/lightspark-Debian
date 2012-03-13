@@ -52,6 +52,11 @@ public:
 
 	// Since these objects get used as keys in std::maps, they need to be comparable.
 	virtual bool operator<(const ExtIdentifier& other) const;
+	// Since this class is used as keys in property maps
+	// it must implement a proper copy operator that must
+	// deal with any subclass by acquiring the contents in
+	// the internal data structures
+	ExtIdentifier& operator=(const ExtIdentifier& other);
 
 	enum EI_TYPE { EI_STRING, EI_INT32 };
 	virtual EI_TYPE getType() const { return type; }
@@ -82,21 +87,20 @@ public:
 	ExtObject& operator=(const ExtObject& other);
 	void copy(std::map<ExtIdentifier, ExtVariant>& dest) const;
 
-	virtual bool hasProperty(const ExtIdentifier& id) const;
+	bool hasProperty(const ExtIdentifier& id) const;
 	// The returned value should be "delete"d by the caller after use
-	virtual ExtVariant* getProperty(const ExtIdentifier& id) const;
-	virtual void setProperty(const ExtIdentifier& id, const ExtVariant& value);
-	virtual bool removeProperty(const ExtIdentifier& id);
+	ExtVariant* getProperty(const ExtIdentifier& id) const;
+	void setProperty(const ExtIdentifier& id, const ExtVariant& value);
+	bool removeProperty(const ExtIdentifier& id);
 
-	virtual bool enumerate(ExtIdentifier*** ids, uint32_t* count) const;
-	virtual uint32_t getLength() const { return properties.size(); }
+	bool enumerate(ExtIdentifier*** ids, uint32_t* count) const;
+	uint32_t getLength() const { return properties.size(); }
 
 	enum EO_TYPE { EO_OBJECT, EO_ARRAY };
-	virtual EO_TYPE getType() const { return type; }
-	virtual void setType(EO_TYPE _type) { type = _type; }
+	EO_TYPE getType() const { return type; }
+	void setType(EO_TYPE _type) { type = _type; }
 protected:
 	EO_TYPE type;
-private:
 	std::map<ExtIdentifier, ExtVariant> properties;
 };
 
@@ -122,6 +126,12 @@ public:
 	ExtVariant(bool value);
 	ExtVariant(const ExtVariant& other);
 	ExtVariant(ASObject* other);
+
+	// Since this class is used as value in property maps
+	// it must implement a proper copy operator that must
+	// deal with any subclass by acquiring the contents in
+	// the internal data structures
+	ExtVariant& operator=(const ExtVariant& other);
 
 	virtual ~ExtVariant() {}
 
@@ -156,7 +166,7 @@ class ExtScriptObject;
 class DLL_PUBLIC ExtCallback
 {
 public:
-	ExtCallback() : success(false), exception(NULL) {}
+	ExtCallback() : success(false), exceptionThrown(false) {}
 	virtual ~ExtCallback() {}
 
 	// Don't forget to delete this copy after use
@@ -170,9 +180,11 @@ public:
 	virtual bool getResult(const ExtScriptObject& so, ExtVariant** result)=0;
 protected:
 	bool success;
-	ASObject* exception;
+	bool exceptionThrown;
+	tiny_string exception;
 };
 
+class ExternalCallEvent;
 /**
  * ExtCallback specialization for IFunctions
  */
@@ -193,8 +205,8 @@ public:
 	bool getResult(const ExtScriptObject& so, ExtVariant** _result);
 private:
 	IFunction* func;
-	_NR<FunctionEvent> funcEvent;
-	ASObject* result;
+	_NR<ExternalCallEvent> funcEvent;
+	ExtVariant* result;
 	bool funcWasCalled;
 };
 

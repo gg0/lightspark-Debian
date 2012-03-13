@@ -108,8 +108,8 @@ void RootMovieClip::setOrigin(const tiny_string& u, const tiny_string& filename)
 
 	if(!loaderInfo.isNull())
 	{
-		loaderInfo->url=origin.getParsedURL();
-		loaderInfo->loaderURL=origin.getParsedURL();
+		loaderInfo->setURL(origin.getParsedURL());
+		loaderInfo->setLoaderURL(origin.getParsedURL());
 	}
 }
 
@@ -169,7 +169,7 @@ SystemState::SystemState(ParseThread* parseThread, uint32_t fileSize):
 	parameters(NullRef),
 	invalidateQueueHead(NullRef),invalidateQueueTail(NullRef),showProfilingData(false),
 	currentVm(NULL),useInterpreter(true),useJit(false),exitOnError(false),downloadManager(NULL),
-	extScriptObject(NULL),scaleMode(SHOW_ALL)
+	extScriptObject(NULL),scaleMode(SHOW_ALL),mainApplicationDomain(NullRef)
 {
 	cookiesFileName = NULL;
 
@@ -190,6 +190,7 @@ SystemState::SystemState(ParseThread* parseThread, uint32_t fileSize):
 	loaderInfo->setBytesLoaded(fileSize);
 	loaderInfo->setBytesTotal(fileSize);
 	stage=Class<Stage>::getInstanceS();
+	mainApplicationDomain=_MR(Class<ApplicationDomain>::getInstanceS());
 	this->incRef();
 	stage->_addChildAt(_MR(this),0);
 	startTime=compat_msectiming();
@@ -377,6 +378,7 @@ void SystemState::finalize()
 	RootMovieClip::finalize();
 	invalidateQueueHead.reset();
 	invalidateQueueTail.reset();
+	mainApplicationDomain.reset();
 	parameters.reset();
 	frameListeners.clear();
 }
@@ -1193,6 +1195,14 @@ void ParseThread::parseSWF(UI8 ver)
 			{
 				case END_TAG:
 				{
+					// The whole frame has been parsed, now execute all queued SymbolClass tags,
+					// in the order in which they appeared in the file.
+					while(!symbolClassTags.empty())
+					{
+						symbolClassTags.front()->execute(root);
+						symbolClassTags.pop();
+					}
+
 					if(!empty)
 						root->commitFrame(false);
 					else
@@ -1214,9 +1224,27 @@ void ParseThread::parseSWF(UI8 ver)
 					empty=false;
 					break;
 				case SHOW_TAG:
+					// The whole frame has been parsed, now execute all queued SymbolClass tags,
+					// in the order in which they appeared in the file.
+					while(!symbolClassTags.empty())
+					{
+						symbolClassTags.front()->execute(root);
+						symbolClassTags.pop();
+					}
+
 					root->commitFrame(true);
 					empty=true;
 					break;
+				case SYMBOL_CLASS_TAG:
+				{
+					// Add symbol class tags to the queue, to be executed when the rest of the 
+					// frame has been parsed. This is to handle invalid SWF files that define ID's
+					// used in the SymbolClass tag only after the tag, which would otherwise result
+					// in "undefined dictionary ID" errors.
+					_R<ControlTag> stag = tag.cast<ControlTag>();
+					symbolClassTags.push(stag);
+					break;
+				}
 				case CONTROL_TAG:
 					/* The spec is not clear about that,
 					 * but it seems that all the CONTROL_TAGs

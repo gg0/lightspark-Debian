@@ -87,19 +87,19 @@ lightspark::Downloader* NPDownloadManager::download(const lightspark::URLInfo& u
  * \see DownloadManager::destroy()
  */
 lightspark::Downloader* NPDownloadManager::downloadWithData(const lightspark::URLInfo& url, const std::vector<uint8_t>& data, 
-		lightspark::ILoadable* owner)
+		const char* contentType, lightspark::ILoadable* owner)
 {
 	// Handle RTMP requests internally, not through NPAPI
 	if(url.getProtocol()=="rtmp" ||
 	   url.getProtocol()=="rtmpe" ||
 	   url.getProtocol()=="rtmps")
 	{
-		return StandaloneDownloadManager::downloadWithData(url, data, owner);
+		return StandaloneDownloadManager::downloadWithData(url, data, contentType, owner);
 	}
 
 	LOG(LOG_INFO, _("NET: PLUGIN: DownloadManager::downloadWithData '") << url.getParsedURL());
 	//Register this download
-	NPDownloader* downloader=new NPDownloader(url.getParsedURL(), data, instance, owner);
+	NPDownloader* downloader=new NPDownloader(url.getParsedURL(), data, contentType, instance, owner);
 	addDownloader(downloader);
 	return downloader;
 }
@@ -165,8 +165,9 @@ NPDownloader::NPDownloader(const lightspark::tiny_string& _url, bool _cached, NP
  * \param[in] _instance The netscape plugin instance
  * \param[in] owner The \c LoaderInfo object that keeps track of this download
  */
-NPDownloader::NPDownloader(const lightspark::tiny_string& _url, const std::vector<uint8_t>& _data, NPP _instance, lightspark::ILoadable* owner):
-	Downloader(_url, _data, owner),instance(_instance),state(INIT)
+NPDownloader::NPDownloader(const lightspark::tiny_string& _url, const std::vector<uint8_t>& _data,
+		const char* contentType, NPP _instance, lightspark::ILoadable* owner):
+	Downloader(_url, _data, contentType, owner),instance(_instance),state(INIT)
 {
 	NPN_PluginThreadAsyncCall(instance, dlStartCallback, this);
 }
@@ -185,7 +186,15 @@ void NPDownloader::dlStartCallback(void* t)
 	if(th->data.empty())
 		e=NPN_GetURLNotify(th->instance, th->url.raw_buf(), NULL, th);
 	else
-		e=NPN_PostURLNotify(th->instance, th->url.raw_buf(), NULL, th->data.size(), (const char*)&th->data[0], false, th);
+	{
+		vector<uint8_t> tmpData;
+		tmpData.insert(tmpData.end(), th->contentType, th->contentType+strlen(th->contentType));
+		char buf[40];
+		snprintf(buf, 40, "\nContent-Length: %lu\n\n", th->data.size());
+		tmpData.insert(tmpData.end(), buf, buf+strlen(buf));
+		tmpData.insert(tmpData.end(), th->data.begin(), th->data.end());
+		e=NPN_PostURLNotify(th->instance, th->url.raw_buf(), NULL, tmpData.size(), (const char*)&tmpData[0], false, th);
+	}
 	if(e!=NPERR_NO_ERROR)
 		th->setFailed(); //No need to crash, we can just mark the download failed
 }

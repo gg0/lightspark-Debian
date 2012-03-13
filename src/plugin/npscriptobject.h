@@ -95,25 +95,10 @@ public:
 	
 	~NPObjectObject() {}
 
-	NPObjectObject& operator=(const lightspark::ExtObject& other);
-
-	// Properties
-	bool hasProperty(const lightspark::ExtIdentifier& id) const;
-	// The returned value should be "delete"d by the caller after use
-	lightspark::ExtVariant* getProperty(const lightspark::ExtIdentifier& id) const;
-	void setProperty(const lightspark::ExtIdentifier& id, const lightspark::ExtVariant& value);
-	bool removeProperty(const lightspark::ExtIdentifier& id);
-
-	bool enumerate(lightspark::ExtIdentifier*** ids, uint32_t* count) const;
-	uint32_t getLength() const { return properties.size(); }
-
 	NPObject* getNPObject() const { return getNPObject(instance, *this); }
 	static NPObject* getNPObject(NPP instance, const lightspark::ExtObject& obj);
 private:
 	NPP instance;
-	std::map<NPIdentifierObject, NPVariantObject> properties;
-
-	static void copy(const lightspark::ExtObject& from, lightspark::ExtObject& to);
 };
 
 /**
@@ -184,6 +169,8 @@ public:
 	// Actual destruction should be initiated by the browser, as a last step of destruction.
 	void destroy();
 
+	void assertThread() { assert(Thread::self() == mainThread); }
+
 	// These methods are not part of the ExtScriptObject interface.
 	// ExtScriptObject does not provide a way to invoke the set methods.
 	bool invoke(NPIdentifier name, const NPVariant* args, uint32_t argc, NPVariant* result);
@@ -210,28 +197,37 @@ public:
 	NPVariantObject* getProperty(const lightspark::ExtIdentifier& id) const;
 	void setProperty(const lightspark::ExtIdentifier& id, const lightspark::ExtVariant& value)
 	{
-		properties[id] = NPVariantObject(instance, value);
+		properties[id] = value;
 	}
 	bool removeProperty(const lightspark::ExtIdentifier& id);
 
 	// Enumeration
 	bool enumerate(lightspark::ExtIdentifier*** ids, uint32_t* count) const;
 	
+
+	enum HOST_CALL_TYPE {EXTERNAL_CALL};
+	typedef struct {
+		NPScriptObject* so;
+		Semaphore* callStatus;
+		HOST_CALL_TYPE type;
+		void* arg1;
+		void* arg2;
+		void* arg3;
+		void* arg4;
+		void* returnValue;
+	} HOST_CALL_DATA;
+	// This method allows calling some method, while making sure
+	// no unintended blocking occurs.
+	void doHostCall(HOST_CALL_TYPE type, void* returnValue,
+		void* arg1, void* arg2=NULL, void* arg3=NULL, void* arg4=NULL);
+	static void hostCallHandler(void* d);
+
 	// Calling methods in the external container
 	bool callExternal(const lightspark::ExtIdentifier& id, const lightspark::ExtVariant** args, uint32_t argc, lightspark::ASObject** result);
 
-	typedef struct {
-		Thread* mainThread;
-		NPP instance;
-		const char* scriptString;
-		const lightspark::ExtVariant** args;
-		uint32_t argc;
-		lightspark::ASObject** result;
-		Semaphore* callStatus;
-		bool* success;
-	} EXT_CALL_DATA;
-	// This must be called from the plugin thread
-	static void callExternal(void* data);
+	// This is called from hostCallHandler() via doHostCall(EXTERNAL_CALL, ...)
+	static bool callExternalHandler(NPP instance, const char* scriptString,
+		const lightspark::ExtVariant** args, uint32_t argc, lightspark::ASObject** result);
 
 	// Throwing exceptions to the container
 	void setException(const std::string& message) const;
@@ -291,6 +287,7 @@ private:
 	Mutex mutex;
 	std::stack<Semaphore*> callStatusses;
 	Mutex externalCall;
+	Mutex hostCall;
 
 	// The root callback currently being invoked. If this is not NULL
 	// when invoke() gets called, we can assume the invoke()
@@ -299,7 +296,7 @@ private:
 	// The data for the external call that needs to be made.
 	// If a callback is woken up and this is not NULL,
 	// it was a forced wake-up and we should call an external method.
-	EXT_CALL_DATA* externalCallData;
+	HOST_CALL_DATA* hostCallData;
 
 	// True if this object is being shut down
 	bool shuttingDown;
@@ -309,8 +306,8 @@ private:
 	// This map stores this object's methods & properties
 	// If an entry is set with a ExtIdentifier or ExtVariant,
 	// they get converted to NPIdentifierObject or NPVariantObject by copy-constructors.
-	std::map<NPIdentifierObject, NPVariantObject> properties;
-	std::map<NPIdentifierObject, lightspark::ExtCallback*> methods;
+	std::map<ExtIdentifier, ExtVariant> properties;
+	std::map<ExtIdentifier, lightspark::ExtCallback*> methods;
 };
 
 /**
@@ -346,8 +343,8 @@ public:
 	static bool hasMethod(NPObject* obj, NPIdentifier id)
 	{
 		lightspark::SystemState* prevSys = getSys();
-		setTLSSys( ((NPScriptObjectGW*) obj)->m_sys );
-		bool success = ((NPScriptObjectGW*) obj)->so->hasMethod(NPIdentifierObject(id));
+		setTLSSys( static_cast<NPScriptObjectGW*>(obj)->m_sys );
+		bool success = static_cast<NPScriptObjectGW*>(obj)->so->hasMethod(NPIdentifierObject(id));
 		setTLSSys(prevSys);
 		return success;
 	}
@@ -355,8 +352,8 @@ public:
 			const NPVariant* args, uint32_t argc, NPVariant* result)
 	{
 		lightspark::SystemState* prevSys = getSys();
-		setTLSSys( ((NPScriptObjectGW*) obj)->m_sys );
-		bool success = ((NPScriptObjectGW*) obj)->so->invoke(id, args, argc, result);
+		setTLSSys( static_cast<NPScriptObjectGW*>(obj)->m_sys );
+		bool success = static_cast<NPScriptObjectGW*>(obj)->so->invoke(id, args, argc, result);
 		setTLSSys(prevSys);
 		return success;
 	}
@@ -364,8 +361,8 @@ public:
 			const NPVariant* args, uint32_t argc, NPVariant* result)
 	{
 		lightspark::SystemState* prevSys = getSys();
-		setTLSSys( ((NPScriptObjectGW*) obj)->m_sys );
-		bool success = ((NPScriptObjectGW*) obj)->so->invokeDefault(args, argc, result);
+		setTLSSys( static_cast<NPScriptObjectGW*>(obj)->m_sys );
+		bool success = static_cast<NPScriptObjectGW*>(obj)->so->invokeDefault(args, argc, result);
 		setTLSSys( prevSys );
 		return success;
 	}
@@ -373,8 +370,8 @@ public:
 	static bool hasProperty(NPObject* obj, NPIdentifier id)
 	{
 		lightspark::SystemState* prevSys = getSys();
-		setTLSSys( ((NPScriptObjectGW*) obj)->m_sys );
-		bool success = ((NPScriptObjectGW*) obj)->so->hasProperty(NPIdentifierObject(id));
+		setTLSSys( static_cast<NPScriptObjectGW*>(obj)->m_sys );
+		bool success = static_cast<NPScriptObjectGW*>(obj)->so->hasProperty(NPIdentifierObject(id));
 		setTLSSys( prevSys );
 		return success;
 	}
@@ -382,8 +379,9 @@ public:
 	static bool setProperty(NPObject* obj, NPIdentifier id, const NPVariant* value)
 	{
 		lightspark::SystemState* prevSys = getSys();
-		setTLSSys( ((NPScriptObjectGW*) obj)->m_sys );
-		((NPScriptObjectGW*) obj)->so->setProperty(NPIdentifierObject(id), NPVariantObject(((NPScriptObjectGW*) obj)->instance, *value));
+		setTLSSys( static_cast<NPScriptObjectGW*>(obj)->m_sys );
+		static_cast<NPScriptObjectGW*>(obj)->so->setProperty(
+			NPIdentifierObject(id), NPVariantObject(static_cast<NPScriptObjectGW*>(obj)->instance, *value));
 		bool success = true;
 		setTLSSys( prevSys );
 		return success;
@@ -391,8 +389,8 @@ public:
 	static bool removeProperty(NPObject* obj, NPIdentifier id)
 	{
 		lightspark::SystemState* prevSys = getSys();
-		setTLSSys( ((NPScriptObjectGW*) obj)->m_sys );
-		bool success = ((NPScriptObjectGW*) obj)->so->removeProperty(NPIdentifierObject(id));
+		setTLSSys( static_cast<NPScriptObjectGW*>(obj)->m_sys );
+		bool success = static_cast<NPScriptObjectGW*>(obj)->so->removeProperty(NPIdentifierObject(id));
 		setTLSSys( prevSys );
 		return success;
 	}

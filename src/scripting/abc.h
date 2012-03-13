@@ -45,127 +45,13 @@
 #include <map>
 #include <set>
 #include "swf.h"
+#include "abcutils.h"
+#include "abctypes.h"
 
 namespace lightspark
 {
 
 bool isVmThread();
-
-class u8
-{
-friend std::istream& operator>>(std::istream& in, u8& v);
-private:
-	uint32_t val;
-public:
-	operator uint32_t() const{return val;}
-};
-
-class u16
-{
-friend std::istream& operator>>(std::istream& in, u16& v);
-private:
-	uint32_t val;
-public:
-	operator uint32_t() const{return val;}
-};
-
-class s24
-{
-friend std::istream& operator>>(std::istream& in, s24& v);
-private:
-	int32_t val;
-public:
-	operator int32_t(){return val;}
-};
-
-class u30
-{
-friend std::istream& operator>>(std::istream& in, u30& v);
-private:
-	uint32_t val;
-public:
-	u30():val(0){}
-	u30(int v):val(v){}
-	operator uint32_t() const{return val;}
-};
-
-class s32
-{
-friend std::istream& operator>>(std::istream& in, s32& v);
-private:
-	int32_t val;
-public:
-	operator int32_t(){return val;}
-};
-
-class d64
-{
-friend std::istream& operator>>(std::istream& in, d64& v);
-private:
-	double val;
-public:
-	operator double(){return val;}
-};
-
-class string_info
-{
-friend std::istream& operator>>(std::istream& in, string_info& v);
-private:
-	u30 size;
-	tiny_string val;
-public:
-	operator const tiny_string&() const{return val;}
-};
-
-struct namespace_info
-{
-	u8 kind;
-	u30 name;
-};
-
-struct ns_set_info
-{
-	u30 count;
-	std::vector<u30> ns;
-};
-
-struct multiname_info
-{
-	u8 kind;
-	u30 name;
-	u30 ns;
-	u30 ns_set;
-	u30 type_definition;
-	std::vector<u30> param_types;
-	multiname* cached;
-	multiname_info():cached(NULL){}
-	~multiname_info(){delete cached;}
-	bool isAttributeName() const;
-};
-
-struct cpool_info
-{
-	u30 int_count;
-	std::vector<s32> integer;
-	u30 uint_count;
-	std::vector<u32> uinteger;
-	u30 double_count;
-	std::vector<d64> doubles;
-	u30 string_count;
-	std::vector<string_info> strings;
-	u30 namespace_count;
-	std::vector<namespace_info> namespaces;
-	u30 ns_set_count;
-	std::vector<ns_set_info> ns_sets;
-	u30 multiname_count;
-	std::vector<multiname_info> multinames;
-};
-
-struct option_detail
-{
-	u30 val;
-	u8 kind;
-};
 
 struct block_info
 {
@@ -203,22 +89,13 @@ inline stack_entry make_stack_entry(llvm::Value* v, STACK_TYPE t)
 	return std::make_pair(v, t);
 }
 
-class method_body_info;
-
 class method_info
 {
 friend std::istream& operator>>(std::istream& in, method_info& v);
 friend struct block_info;
 friend class SyntheticFunction;
 private:
-	enum { NEED_ARGUMENTS=0x01, NEED_ACTIVATION=0x02, NEED_REST=0x04, HAS_OPTIONAL=0x08, SET_DXNS=0x40, HAS_PARAM_NAMES=0x80 };
-	u30 param_count;
-	u30 return_type;
-	std::vector<u30> param_type;
-	std::vector<option_detail> options;
-	u8 flags;
-
-	std::vector<u30> param_names;
+	struct method_info_simple info;
 
 	//Helper functions to sync the static stack and locals to the memory 
 	void syncStacks(llvm::ExecutionEngine* ex, llvm::IRBuilder<>& builder, std::vector<stack_entry>& static_stack, 
@@ -247,18 +124,19 @@ public:
 	bool validProfName;
 #endif
 
-	u30 option_count;
 	SyntheticFunction::synt_function f;
-	u30 name;
 	ABCContext* context;
 	method_body_info* body;
 	SyntheticFunction::synt_function synt_method();
-	bool needsArgs() { return (flags & NEED_ARGUMENTS) != 0;}
-	bool needsRest() { return (flags & NEED_REST) != 0;}
-	bool hasOptional() { return (flags & HAS_OPTIONAL) != 0;}
-	bool hasDXNS() { return (flags & SET_DXNS) != 0;}
+	bool needsArgs() { return info.needsArgs(); }
+	bool needsActivation() { return info.needsActivation(); }
+	bool needsRest() { return info.needsRest(); }
+	bool hasOptional() { return info.hasOptional(); }
+	bool hasDXNS() { return info.hasDXNS(); }
+	bool hasParamNames() { return info.hasParamNames(); }
 	ASObject* getOptional(unsigned int i);
-	uint32_t numArgs() { return param_count; }
+	uint32_t numOptions() { return info.option_count; }
+	uint32_t numArgs() { return info.param_count; }
 	const multiname* paramTypeName(uint32_t i) const;
 	const multiname* returnTypeName() const;
 
@@ -270,99 +148,9 @@ public:
 		profTime(0),
 		validProfName(false),
 #endif
-		option_count(0),f(NULL),context(NULL),body(NULL),returnType(NULL)
+		f(NULL),context(NULL),body(NULL),returnType(NULL)
 	{
 	}
-};
-
-struct item_info
-{
-	u30 key;
-	u30 value;
-};
-
-struct metadata_info
-{
-	u30 name;
-	u30 item_count;
-	std::vector<item_info> items;
-};
-
-struct traits_info
-{
-	enum { Slot=0,Method=1,Getter=2,Setter=3,Class=4,Function=5,Const=6};
-	enum { Final=0x10, Override=0x20, Metadata=0x40};
-	u30 name;
-	u8 kind;
-
-	u30 slot_id;
-	u30 type_name;
-	u30 vindex;
-	u8 vkind;
-	u30 classi;
-	u30 function;
-	u30 disp_id;
-	u30 method;
-
-	u30 metadata_count;
-	std::vector<u30> metadata;
-};
-
-struct instance_info
-{
-	enum { ClassSealed=0x01,ClassFinal=0x02,ClassInterface=0x04,ClassProtectedNs=0x08};
-	bool isInterface() const { return flags&ClassInterface; }
-	bool isSealed() const { return flags&ClassSealed; }
-	bool isFinal() const { return flags&ClassFinal; }
-	bool isProtectedNs() const { return flags&ClassProtectedNs; }
-	u30 name;
-	u30 supername;
-	u8 flags;
-	u30 protectedNs;
-	u30 interface_count;
-	std::vector<u30> interfaces;
-	u30 init;
-	u30 trait_count;
-	std::vector<traits_info> traits;
-};
-
-struct class_info
-{
-	u30 cinit;
-	u30 trait_count;
-	std::vector<traits_info> traits;
-};
-
-struct script_info
-{
-	u30 init;
-	u30 trait_count;
-	std::vector<traits_info> traits;
-};
-
-struct exception_info
-{
-	u30 from;
-	u30 to;
-	u30 target;
-	u30 exc_type;
-	u30 var_name;
-};
-
-struct method_body_info
-{
-	u30 method;
-	u30 max_stack;
-	u30 local_count;
-	u30 init_scope_depth;
-	u30 max_scope_depth;
-	u30 code_length;
-	//This is a string to use it in a stringstream
-	std::string code;
-	u30 exception_count;
-	std::vector<exception_info> exceptions;
-	u30 trait_count;
-	std::vector<traits_info> traits;
 };
 
 struct opcode_handler
@@ -456,6 +244,26 @@ private:
 	//Interpreted AS instructions
 	//If you change a definition here, update the opcode_table_* entry in abc_codesynth
 	static bool hasNext2(call_context* th, int n, int m); 
+	template<class T>
+	static void loadIntN(call_context* th)
+	{
+		ASObject* arg1=th->runtime_stack_pop();
+		uint32_t addr=arg1->toUInt();
+		arg1->decRef();
+		_R<ApplicationDomain> appDomain = getSys()->mainApplicationDomain;
+		T ret=appDomain->readFromDomainMemory<T>(addr);
+		th->runtime_stack_push(abstract_ui(ret));
+	}
+	template<class T>
+	static void storeIntN(call_context* th)
+	{
+		ASObject* arg1=th->runtime_stack_pop();
+		ASObject* arg2=th->runtime_stack_pop();
+		uint32_t addr=arg1->toUInt();
+		uint32_t val=arg2->toUInt();
+		_R<ApplicationDomain> appDomain = getSys()->mainApplicationDomain;
+		appDomain->writeToDomainMemory<T>(addr, val);
+	}
 	static void callSuper(call_context* th, int n, int m, method_info** called_mi, bool keepReturn);
 	static void callProperty(call_context* th, int n, int m, method_info** called_mi, bool keepReturn);
 	static void callImpl(call_context* th, ASObject* f, ASObject* obj, ASObject** args, int m, method_info** called_mi, bool keepReturn);
@@ -705,7 +513,7 @@ private:
 	std::vector<STRING> Names;
 public:
 	SymbolClassTag(RECORDHEADER h, std::istream& in);
-	TAGTYPE getType() const{ return ABC_TAG; }
+	TAGTYPE getType() const{ return SYMBOL_CLASS_TAG; }
 	void execute(RootMovieClip* root);
 };
 
@@ -721,25 +529,7 @@ inline ABCVm* getVm()
 	return getSys()->currentVm;
 }
 
-std::istream& operator>>(std::istream& in, u8& v);
-std::istream& operator>>(std::istream& in, u16& v);
-std::istream& operator>>(std::istream& in, u30& v);
-std::istream& operator>>(std::istream& in, u32& v);
-std::istream& operator>>(std::istream& in, s32& v);
-std::istream& operator>>(std::istream& in, d64& v);
-std::istream& operator>>(std::istream& in, string_info& v);
-std::istream& operator>>(std::istream& in, namespace_info& v);
-std::istream& operator>>(std::istream& in, ns_set_info& v);
-std::istream& operator>>(std::istream& in, multiname_info& v);
-std::istream& operator>>(std::istream& in, cpool_info& v);
 std::istream& operator>>(std::istream& in, method_info& v);
-std::istream& operator>>(std::istream& in, exception_info& v);
-std::istream& operator>>(std::istream& in, method_body_info& v);
-std::istream& operator>>(std::istream& in, instance_info& v);
-std::istream& operator>>(std::istream& in, traits_info& v);
-std::istream& operator>>(std::istream& in, script_info& v);
-std::istream& operator>>(std::istream& in, metadata_info& v);
-std::istream& operator>>(std::istream& in, class_info& v);
 
 };
 

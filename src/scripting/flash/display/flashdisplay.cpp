@@ -34,10 +34,12 @@
 #include "compat.h"
 #include "flash/accessibility/flashaccessibility.h"
 #include "argconv.h"
+#include "toplevel/Vector.h"
 
 #include <fstream>
 #include <limits>
 #include <cmath>
+#include <cairo.h>
 
 using namespace std;
 using namespace lightspark;
@@ -256,6 +258,7 @@ ASFUNCTIONBODY(Loader,_constructor)
 		p->incRef();
 		th->contentLoaderInfo->setVariableByQName("parameters","",p.getPtr(),DECLARED_TRAIT);
 	}
+	th->contentLoaderInfo->setLoaderURL(getSys()->getOrigin().getParsedURL());
 	return NULL;
 }
 
@@ -289,6 +292,7 @@ ASFUNCTIONBODY(Loader,load)
 	if(r==NULL)
 		throw Class<ArgumentError>::getInstanceS("Wrong argument in Loader::load");
 	th->url=r->getRequestURL();
+	th->contentLoaderInfo->setURL(th->url.getParsedURL());
 	r->getPostData(th->postData);
 	th->source=URL;
 	//To be decreffed in jobFence
@@ -316,6 +320,8 @@ ASFUNCTIONBODY(Loader,loadBytes)
 		th->incRef();
 		getSys()->addJob(th);
 	}
+	else
+		LOG(LOG_INFO, "Empty ByteArray passed to Loader.loadBytes");
 	return NULL;
 }
 
@@ -404,14 +410,36 @@ void Loader::execute()
 		assert_and_throw(bytes->bytes);
 
 		//We only support swf files now
-		assert_and_throw(memcmp(bytes->bytes,"CWS",3)==0);
+		if(bytes->len > 3 && (memcmp(bytes->bytes,"CWS",3)==0 || memcmp(bytes->bytes,"FWS",3)==0))
+		{
+			bytes_buf bb(bytes->bytes,bytes->len);
+			istream s(&bb);
 
-		bytes_buf bb(bytes->bytes,bytes->len);
-		istream s(&bb);
+			ParseThread local_pt(s,this);
+			local_pt.execute();
+		}
+		// PNG files
+		else if(bytes->len > 8 && memcmp(bytes->bytes,"\x89PNG\r\n\x1a\n", 8) == 0)
+		{
+			LOG(LOG_NOT_IMPLEMENTED, "PNG files are not supported yet in Loader.loadBytes.");
+		}
+		// JPEG files
+		else if(bytes->len > 2 && memcmp(bytes->bytes,"\xff\xd8", 2) == 0)
+		{
+			LOG(LOG_NOT_IMPLEMENTED, "JPEG files are not supported yet in Loader.loadBytes.");
+		}
+		// GIF files
+		else if(bytes->len > 6 && (memcmp(bytes->bytes,"GIF89a", 6) == 0 || memcmp(bytes->bytes,"GIF87a", 6) == 0))
+		{
+			LOG(LOG_NOT_IMPLEMENTED, "GIF files are not supported yet in Loader.loadBytes.");
+		}
+		// Unknown filetype
+		else
+		{
+			LOG(LOG_ERROR, "Tried to load file of unknown type with Loader.loadBytes.");
+		}
 
-		ParseThread local_pt(s,this);
-		local_pt.execute();
-		bytes->decRef();
+		bytes.reset();
 		//Add a complete event for this object
 		getVm()->addEvent(contentLoaderInfo,_MR(Class<Event>::getInstanceS("complete")));
 	}
@@ -2959,6 +2987,7 @@ void Graphics::sinit(Class_base* c)
 	c->setDeclaredMethodByQName("drawRect","",Class<IFunction>::getFunction(drawRect),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("drawRoundRect","",Class<IFunction>::getFunction(drawRoundRect),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("drawCircle","",Class<IFunction>::getFunction(drawCircle),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("drawTriangles","",Class<IFunction>::getFunction(drawTriangles),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("moveTo","",Class<IFunction>::getFunction(moveTo),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("curveTo","",Class<IFunction>::getFunction(curveTo),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("cubicCurveTo","",Class<IFunction>::getFunction(cubicCurveTo),NORMAL_METHOD,true);
@@ -3225,6 +3254,42 @@ ASFUNCTIONBODY(Graphics,drawRect)
 	return NULL;
 }
 
+ASFUNCTIONBODY(Graphics,drawTriangles)
+{
+	Graphics* th=static_cast<Graphics*>(obj);
+	_NR<Vector> vertices;
+	_NR<Vector> indices;
+	_NR<Vector> uvtData;
+	tiny_string culling;
+	ARG_UNPACK (vertices) (indices, NullRef) (uvtData, NullRef) (culling, "none");
+
+	if (!indices.isNull())
+		LOG(LOG_NOT_IMPLEMENTED, "Graphics.drawTriangles doesn't support indices");
+	if (!uvtData.isNull())
+		LOG(LOG_NOT_IMPLEMENTED, "Graphics.drawTriangles doesn't support uvtData");
+	if (culling != "none")
+		LOG(LOG_NOT_IMPLEMENTED, "Graphics.drawTriangles doesn't support culling");
+
+	for (unsigned int i=0; i<vertices->size()/6; i++)
+	{
+		Vector2 a(vertices->at(6*i)->toNumber(),
+			  vertices->at(6*i+1)->toNumber());
+		Vector2 b(vertices->at(6*i+2)->toNumber(),
+			  vertices->at(6*i+3)->toNumber());
+		Vector2 c(vertices->at(6*i+4)->toNumber(),
+			  vertices->at(6*i+5)->toNumber());
+
+		th->owner->tokens.emplace_back(GeomToken(MOVE, a));
+		th->owner->tokens.emplace_back(GeomToken(STRAIGHT, b));
+		th->owner->tokens.emplace_back(GeomToken(STRAIGHT, c));
+		th->owner->tokens.emplace_back(GeomToken(STRAIGHT, a));
+	}
+	
+	th->owner->owner->requestInvalidation();
+
+	return NULL;
+}
+
 ASFUNCTIONBODY(Graphics,lineStyle)
 {
 	Graphics* th=static_cast<Graphics*>(obj);
@@ -3273,7 +3338,7 @@ ASFUNCTIONBODY(Graphics,beginGradientFill)
 	Array* ratios=Class<Array>::cast(args[3]);
 
 	int NumGradient = colors->size();
-	if (NumGradient != alphas->size() || NumGradient != ratios->size())
+	if (NumGradient != (int)alphas->size() || NumGradient != (int)ratios->size())
 		return NULL;
 
 	if (NumGradient < 1 || NumGradient > 15)
@@ -3440,13 +3505,43 @@ void IBitmapDrawable::linkTraits(Class_base* c)
 
 void BitmapData::sinit(Class_base* c)
 {
+	c->setConstructor(Class<IFunction>::getFunction(_constructor));
 	c->setSuper(Class<ASObject>::getRef());
 	c->addImplementedInterface(InterfaceClass<IBitmapDrawable>::getClass());
 	c->setDeclaredMethodByQName("draw","",Class<IFunction>::getFunction(draw),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("getPixel","",Class<IFunction>::getFunction(getPixel),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("getPixel32","",Class<IFunction>::getFunction(getPixel32),NORMAL_METHOD,true);
 	REGISTER_GETTER(c,width);
 	REGISTER_GETTER(c,height);
 
 	IBitmapDrawable::linkTraits(c);
+}
+
+ASFUNCTIONBODY(BitmapData,_constructor)
+{
+	int width;
+	int height;
+	bool transparent;
+	uint32_t fillColor;
+	BitmapData* th = obj->as<BitmapData>();
+	ARG_UNPACK(width, 0)(height, 0)(transparent, true)(fillColor, 0xFFFFFFFF);
+
+	ASObject::_constructor(obj,NULL,0);
+	if(width==0 || height==0)
+		return NULL;
+
+	uint32_t *pixels=new uint32_t[width*height];
+	uint32_t c=GUINT32_TO_BE(fillColor); // fromRGB expects big endian data
+	if(!transparent)
+	{
+		uint8_t *alpha=reinterpret_cast<uint8_t *>(&c);
+		*alpha=0xFF;
+	}
+	for(int i=0; i<width*height; i++)
+		pixels[i]=c;
+	th->fromRGB(reinterpret_cast<uint8_t *>(pixels), width, height, true);
+
+	return NULL;
 }
 
 ASFUNCTIONBODY_GETTER(BitmapData, width);
@@ -3486,6 +3581,37 @@ ASFUNCTIONBODY(BitmapData,draw)
 	return NULL;
 }
 
+uint32_t BitmapData::getPixelPriv(uint32_t x, uint32_t y)
+{
+	if ((int)x >= width || (int)y >= height)
+		return 0;
+
+	uint32_t *p=reinterpret_cast<uint32_t *>(&data[y*stride + 4*x]);
+
+	return *p;
+}
+
+ASFUNCTIONBODY(BitmapData,getPixel)
+{
+	BitmapData* th = obj->as<BitmapData>();
+	uint32_t x;
+	uint32_t y;
+	ARG_UNPACK(x)(y);
+
+	uint32_t pix=th->getPixelPriv(x, y);
+	return abstract_ui(pix & 0xffffff);
+}
+
+ASFUNCTIONBODY(BitmapData,getPixel32)
+{
+	BitmapData* th = obj->as<BitmapData>();
+	uint32_t x;
+	uint32_t y;
+	ARG_UNPACK(x)(y);
+
+	return abstract_ui(th->getPixelPriv(x, y));
+}
+
 Bitmap::Bitmap(std::istream *s, FILE_TYPE type) : TokenContainer(this)
 {
 	bitmapData = _MR(Class<BitmapData>::getInstanceS());
@@ -3519,6 +3645,12 @@ Bitmap::Bitmap(std::istream *s, FILE_TYPE type) : TokenContainer(this)
 	Bitmap::updatedData();
 }
 
+Bitmap::Bitmap(_R<BitmapData> data) : TokenContainer(this)
+{
+	bitmapData = data;
+	Bitmap::updatedData();
+}
+
 BitmapData::~BitmapData()
 {
 	if(data)
@@ -3530,10 +3662,15 @@ void Bitmap::sinit(Class_base* c)
 //	c->constructor=Class<IFunction>::getFunction(_constructor);
 	c->setConstructor(NULL);
 	c->setSuper(Class<DisplayObject>::getRef());
-	REGISTER_GETTER(c,bitmapData);
+	REGISTER_GETTER_SETTER(c,bitmapData);
 }
 
-ASFUNCTIONBODY_GETTER(Bitmap,bitmapData);
+void Bitmap::onBitmapData(_NR<BitmapData>)
+{
+	Bitmap::updatedData();
+}
+
+ASFUNCTIONBODY_GETTER_SETTER_CB(Bitmap,bitmapData,onBitmapData);
 
 void Bitmap::updatedData()
 {
@@ -3572,9 +3709,9 @@ bool BitmapData::fromRGB(uint8_t* rgb, uint32_t w, uint32_t h, bool hasAlpha)
 	width = w;
 	height = h;
 	if(hasAlpha)
-		data = CairoRenderer::convertBitmapWithAlphaToCairo(rgb, width, height, &dataSize);
+		data = CairoRenderer::convertBitmapWithAlphaToCairo(rgb, width, height, &dataSize, &stride);
 	else
-		data = CairoRenderer::convertBitmapToCairo(rgb, width, height, &dataSize);
+		data = CairoRenderer::convertBitmapToCairo(rgb, width, height, &dataSize, &stride);
 	delete[] rgb;
 	if(!data)
 	{

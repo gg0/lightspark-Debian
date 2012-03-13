@@ -56,9 +56,15 @@ ExtIdentifier::ExtIdentifier(int32_t value) :
 }
 ExtIdentifier::ExtIdentifier(const ExtIdentifier& other)
 {
+	*this=other;
+}
+
+ExtIdentifier& ExtIdentifier::operator=(const ExtIdentifier& other)
+{
 	type = other.getType();
 	strValue = other.getString();
 	intValue = other.getInt();
+	return *this;
 }
 
 // Convert integer string identifiers to integer identifiers
@@ -97,7 +103,7 @@ ExtObject::ExtObject(const ExtObject& other)
 // Copying
 ExtObject& ExtObject::operator=(const ExtObject& other)
 {
-	type = other.getType();
+	setType(other.getType());
 	other.copy(properties);
 	return *this;
 } 
@@ -175,12 +181,7 @@ ExtVariant::ExtVariant(bool value) :
 }
 ExtVariant::ExtVariant(const ExtVariant& other)
 {
-	type = other.getType();
-	strValue = other.getString();
-	intValue = other.getInt();
-	doubleValue = other.getDouble();
-	booleanValue = other.getBoolean();
-	objectValue = *other.getObject();
+	*this=other;
 }
 ExtVariant::ExtVariant(ASObject* other) :
 	strValue(""), intValue(0), doubleValue(0), booleanValue(false)
@@ -230,6 +231,39 @@ ExtVariant::ExtVariant(ASObject* other) :
 		type = EV_VOID;
 		break;
 	}
+}
+
+ExtVariant& ExtVariant::operator=(const ExtVariant& other)
+{
+	type = other.getType();
+
+	switch(type)
+	{
+	case EV_STRING:
+		strValue = other.getString();
+		break;
+	case EV_INT32:
+		intValue = other.getInt();
+		break;
+	case EV_DOUBLE:
+		doubleValue = other.getDouble();
+		break;
+	case EV_BOOLEAN:
+		booleanValue = other.getBoolean();
+		break;
+	case EV_OBJECT:
+		{
+			ExtObject* tmpObj=other.getObject();
+			objectValue = *tmpObj;
+			delete tmpObj;
+		}
+		break;
+	case EV_NULL:
+	case EV_VOID:
+		break;
+	}
+
+	return *this;
 }
 
 // Conversion to ASObject
@@ -326,12 +360,6 @@ ASObject* ExtVariant::getASObject() const
 void ExtASCallback::call(const ExtScriptObject& so, const ExtIdentifier& id,
 		const ExtVariant** args, uint32_t argc, bool synchronous)
 {
-	// Convert raw arguments to objects
-	ASObject** objArgs = g_newa(ASObject*,argc);
-	for(uint32_t i = 0; i < argc; i++)
-	{
-		objArgs[i] = args[i]->getASObject();
-	}
 	assert(funcEvent == NullRef);
 	// Explanation for argument "synchronous":
 	// Take a callback which (indirectly) calls another callback, while running in the VM thread.
@@ -345,7 +373,7 @@ void ExtASCallback::call(const ExtScriptObject& so, const ExtIdentifier& id,
 	if(!synchronous)
 	{
 		func->incRef();
-		funcEvent = _MR(new FunctionEvent(_MR(func), _MR(new Null), objArgs, argc, &result, &exception));
+		funcEvent = _MR(new ExternalCallEvent(_MR(func), args, argc, &result, &exceptionThrown, &exception));
 		// Add the callback function event to the VM event queue
 		funcWasCalled=getVm()->addEvent(NullRef,funcEvent);
 		if(!funcWasCalled)
@@ -356,13 +384,22 @@ void ExtASCallback::call(const ExtScriptObject& so, const ExtIdentifier& id,
 	{
 		try
 		{
+			// Convert ExtVariant arguments to ASObjects
+			ASObject** objArgs = g_newa(ASObject*,argc);
+			for(uint32_t i = 0; i < argc; i++)
+			{
+				objArgs[i] = args[i]->getASObject();
+			}
+
 			/* TODO: shouldn't we pass some global object instead of Null? */
-			result = func->call(new Null, objArgs, argc);
+			ASObject* asObjResult = func->call(new Null, objArgs, argc);
+			result = new ExtVariant(asObjResult);
+			asObjResult->decRef();
 		}
 		// Catch AS exceptions and pass them on
 		catch(ASObject* _exception)
 		{
-			exception = _exception;
+			exception = _exception->toString();
 		}
 		// Catch LS exceptions and report them
 		catch(LightsparkException& e)
@@ -372,7 +409,6 @@ void ExtASCallback::call(const ExtScriptObject& so, const ExtIdentifier& id,
 		}
 		funcWasCalled = true;
 	}
-
 }
 void ExtASCallback::wait()
 {
@@ -388,14 +424,13 @@ bool ExtASCallback::getResult(const ExtScriptObject& so, ExtVariant** _result)
 {
 	funcEvent = NullRef;
 	// Did the callback throw an AS exception?
-	if(exception != NULL)
+	if(exceptionThrown)
 	{
 		if(result != NULL)
-			result->decRef();
+			delete result;
 
 		// Pass on the exception to the container through the script object
-		so.setException(exception->toString().raw_buf());
-		exception->decRef();
+		so.setException(exception.raw_buf());
 		LOG(LOG_ERROR, "ASObject exception caught in external callback");
 		success = false;
 	}
@@ -408,17 +443,17 @@ bool ExtASCallback::getResult(const ExtScriptObject& so, ExtVariant** _result)
 	else if(result != NULL)
 	{
 		// Convert the result
-		*_result = new ExtVariant(result);
-		result->decRef();
+		*_result = result;
 		success = true;
 	}
-	// No exception but also not result, still a success
+	// No exception but also no result, still a success
 	else
 		success = true;
 
 	// Clean up pointers
 	result = NULL;
-	exception = NULL;
+	exceptionThrown = false;
+	exception = "";
 	return success;
 }
 /* -- ExtBuiltinCallback -- */
@@ -433,7 +468,9 @@ void ExtBuiltinCallback::call(const ExtScriptObject& so, const ExtIdentifier& id
 	// Catch AS exceptions and pass them on
 	catch(ASObject* _exception)
 	{
-		exception = _exception;
+		exceptionThrown = true;
+		exception = _exception->toString();
+		_exception->decRef();
 	}
 	// Catch LS exceptions and report them
 	catch(LightsparkException& e)
@@ -454,10 +491,9 @@ bool ExtBuiltinCallback::getResult(const ExtScriptObject& so, ExtVariant** _resu
 	// Set the result
 	*_result = result;
 	// Did the callback throw an AS exception?
-	if(exception != NULL)
+	if(exceptionThrown)
 	{
-		so.setException(exception->toString().raw_buf());
-		exception->decRef();
+		so.setException(exception.raw_buf());
 		LOG(LOG_ERROR, "ASObject exception caught in external callback");
 		return false;
 	}

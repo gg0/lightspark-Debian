@@ -25,6 +25,8 @@
 #include "parsing/amf3_generator.h"
 #include "scripting/toplevel/ASString.h"
 #include "scripting/toplevel/Date.h"
+#include "scripting/toplevel/XML.h"
+#include "scripting/toplevel/XMLList.h"
 
 using namespace lightspark;
 using namespace std;
@@ -114,7 +116,14 @@ _R<ASObject> ASObject::nextValue(uint32_t index)
 void ASObject::sinit(Class_base* c)
 {
 	c->setDeclaredMethodByQName("hasOwnProperty",AS3,Class<IFunction>::getFunction(hasOwnProperty),NORMAL_METHOD,true);
+
 	c->prototype->setVariableByQName("toString","",Class<IFunction>::getFunction(_toString),DYNAMIC_TRAIT);
+	c->prototype->setVariableByQName("toLocaleString","",Class<IFunction>::getFunction(_toString),DYNAMIC_TRAIT);
+	c->prototype->setVariableByQName("valueOf","",Class<IFunction>::getFunction(valueOf),DYNAMIC_TRAIT);
+	c->prototype->setVariableByQName("hasOwnProperty","",Class<IFunction>::getFunction(hasOwnProperty),DYNAMIC_TRAIT);
+	c->prototype->setVariableByQName("isPrototypeOf","",Class<IFunction>::getFunction(isPrototypeOf),DYNAMIC_TRAIT);
+	c->prototype->setVariableByQName("propertyIsEnumerable","",Class<IFunction>::getFunction(propertyIsEnumerable),DYNAMIC_TRAIT);
+	
 }
 
 void ASObject::buildTraits(ASObject* o)
@@ -399,9 +408,21 @@ bool ASObject::deleteVariableByMultiname(const multiname& name)
 {
 	assert_and_throw(ref_count>0);
 
-	//Only dynamic traits are deletable
-	variable* obj=Variables.findObjVar(name,NO_CREATE_TRAIT,DYNAMIC_TRAIT);
+	variable* obj=Variables.findObjVar(name,NO_CREATE_TRAIT,DYNAMIC_TRAIT|DECLARED_TRAIT);
+	
 	if(obj==NULL)
+	{
+		if (classdef && classdef->isSealed)
+			return false;
+
+		// fixed properties cannot be deleted
+		if (hasPropertyByMultiname(name,true))
+			return false;
+		//unknown variables must return true
+		return true;
+	}
+	//Only dynamic traits are deletable
+	if (obj->kind != DYNAMIC_TRAIT)
 		return false;
 
 	assert(obj->getter==NULL && obj->setter==NULL && obj->var!=NULL);
@@ -460,10 +481,15 @@ void ASObject::setVariableByMultiname(const multiname& name, ASObject* o, Class_
 		//Look in prototype chain
 		ASObject* proto = cls->prototype.getPtr();
 		while(proto)
-	        {
-			obj = proto->findSettable(name, false, NULL /*prototypes never have getters/setters*/);
-			if(obj)
+		{
+			variable* tmp = proto->findSettable(name, false, NULL /*prototypes never have getters/setters*/);
+			
+			if(tmp)
+			{
+				if (tmp->kind != DYNAMIC_TRAIT) // dynamic prototype properties can be overridden 
+					obj = tmp;
 				break;
+			}
 			proto = proto->getprop_prototype();
 		}
 	}
@@ -675,6 +701,12 @@ ASFUNCTIONBODY(ASObject,_toString)
 		ret+=obj->getClass()->class_name.name;
 		ret+="]";
 	}
+	else if (obj->is<Class_base>())
+	{
+		ret="[object ";
+		ret+=static_cast<Class_base*>(obj)->class_name.name;
+		ret+="]";
+	}
 	else
 		ret="[object Object]";
 
@@ -689,8 +721,69 @@ ASFUNCTIONBODY(ASObject,hasOwnProperty)
 	name.name_s=args[0]->toString();
 	name.ns.push_back(nsNameAndKind("",NAMESPACE));
 	name.isAttribute=false;
+	if(obj->getClass())
+	{
+		ASObject* proto = obj->getClass()->prototype.getPtr();
+		if  (proto != obj && proto->hasPropertyByMultiname(name, true))
+			return abstract_b(false);
+	}
 	bool ret=obj->hasPropertyByMultiname(name, true);
 	return abstract_b(ret);
+}
+
+ASFUNCTIONBODY(ASObject,valueOf)
+{
+	obj->incRef();
+	return obj;
+}
+
+ASFUNCTIONBODY(ASObject,isPrototypeOf)
+{
+	assert_and_throw(argslen==1);
+	bool ret =false;
+	Class_base* cls = args[0]->getClass();
+	
+	while (cls != NULL)
+	{
+		if (cls->prototype.getPtr() == obj)
+		{
+			ret = true;
+			break;
+		}
+		Class_base* clsparent = cls->prototype.getPtr()->getClass();
+		if (clsparent == cls)
+			break;
+		cls = clsparent;
+	}
+	return abstract_b(ret);
+}
+
+ASFUNCTIONBODY(ASObject,propertyIsEnumerable)
+{
+	assert_and_throw(argslen==1);
+	multiname name;
+	name.name_type=multiname::NAME_STRING;
+	name.name_s=args[0]->toString();
+	name.ns.push_back(nsNameAndKind("",NAMESPACE));
+	name.isAttribute=false;
+	unsigned int index = 0;
+	if (obj->is<Array>()) // propertyIsEnumerable(index) isn't mentioned in the ECMA specs but is tested for
+	{
+		Array* a = static_cast<Array*>(obj);
+		if (a->isValidMultiname(name,index))
+		{
+			return abstract_b(index < (unsigned int)a->size());
+		}
+	}
+	if(obj->getClass())
+	{
+		ASObject* proto = obj->getClass()->prototype.getPtr();
+		if  (proto->hasPropertyByMultiname(name, true))
+			return abstract_b(false);
+	}
+	if (obj->hasPropertyByMultiname(name,true))
+		return abstract_b(true);
+	return abstract_b(false);
 }
 
 ASFUNCTIONBODY(ASObject,_constructor)
@@ -1068,11 +1161,24 @@ void ASObject::serialize(ByteArray* out, std::map<tiny_string, uint32_t>& string
 
 	//0x0A -> object marker
 	out->writeByte(amf3::object_marker);
-	//0x0B -> a dynamic instance follows
-	out->writeByte(0x0B);
-	//The class name, empty if no alias is registered
-	out->writeStringVR(stringMap, "");
-	serializeDynamicProperties(out, stringMap, objMap);
+	//Check if the object has been already serialized
+	auto it=objMap.find(this);
+	if(it!=objMap.end())
+	{
+		//The least significant bit is 0 to signal a reference
+		out->writeU29(it->second << 1);
+	}
+	else
+	{
+		//Add the object to the map
+		objMap.insert(make_pair(this, objMap.size()));
+		//0x0B -> a dynamic instance follows
+		out->writeByte(0x0B);
+		//The class name, empty if no alias is registered
+		//TODO: support aliases
+		out->writeStringVR(stringMap, "");
+		serializeDynamicProperties(out, stringMap, objMap);
+	}
 }
 
 ASObject *ASObject::describeType() const

@@ -24,53 +24,130 @@
 #include "compat.h"
 #include "parsing/amf3_generator.h"
 #include "argconv.h"
+#include "flash/errors/flasherrors.h"
 #include <sstream>
+#include <zlib.h>
+#include <glib.h>
 
 using namespace std;
 using namespace lightspark;
 
 SET_NAMESPACE("flash.utils");
 
+REGISTER_CLASS_NAME(Endian);
+REGISTER_CLASS_NAME(IDataInput);
+REGISTER_CLASS_NAME(IDataOutput);
 REGISTER_CLASS_NAME(ByteArray);
 REGISTER_CLASS_NAME(Timer);
 REGISTER_CLASS_NAME(Dictionary);
 REGISTER_CLASS_NAME(Proxy);
 
-ByteArray::ByteArray(uint8_t* b, uint32_t l):bytes(b),len(l),position(0)
+#define BA_CHUNK_SIZE 4096
+
+const char* Endian::littleEndian = "littleEndian";
+const char* Endian::bigEndian = "bigEndian";
+
+void Endian::sinit(Class_base* c)
+{
+	c->setConstructor(NULL);
+	c->setVariableByQName("LITTLE_ENDIAN","",Class<ASString>::getInstanceS(littleEndian),DECLARED_TRAIT);
+	c->setVariableByQName("BIG_ENDIAN","",Class<ASString>::getInstanceS(bigEndian),DECLARED_TRAIT);
+}
+
+void IDataInput::linkTraits(Class_base* c)
+{
+	lookupAndLink(c,"bytesAvailable","flash.utils:IDataInput");
+	lookupAndLink(c,"endian","flash.utils:IDataInput");
+	lookupAndLink(c,"objectEncoding","flash.utils:IDataInput");
+	lookupAndLink(c,"readBoolean","flash.utils:IDataInput");
+	lookupAndLink(c,"readByte","flash.utils:IDataInput");
+	lookupAndLink(c,"readBytes","flash.utils:IDataInput");
+	lookupAndLink(c,"readDouble","flash.utils:IDataInput");
+	lookupAndLink(c,"readFloat","flash.utils:IDataInput");
+	lookupAndLink(c,"readInt","flash.utils:IDataInput");
+	lookupAndLink(c,"readMultiByte","flash.utils:IDataInput");
+	lookupAndLink(c,"readObject","flash.utils:IDataInput");
+	lookupAndLink(c,"readShort","flash.utils:IDataInput");
+	lookupAndLink(c,"readUnsignedByte","flash.utils:IDataInput");
+	lookupAndLink(c,"readUnsignedInt","flash.utils:IDataInput");
+	lookupAndLink(c,"readUnsignedShort","flash.utils:IDataInput");
+	lookupAndLink(c,"readUTF","flash.utils:IDataInput");
+	lookupAndLink(c,"readUTFBytes","flash.utils:IDataInput");
+}
+
+void IDataOutput::linkTraits(Class_base* c)
+{
+	lookupAndLink(c,"endian","flash.utils:IDataOutput");
+	lookupAndLink(c,"objectEncoding","flash.utils:IDataOutput");
+	lookupAndLink(c,"writeBoolean","flash.utils:IDataOutput");
+	lookupAndLink(c,"writeByte","flash.utils:IDataOutput");
+	lookupAndLink(c,"writeBytes","flash.utils:IDataOutput");
+	lookupAndLink(c,"writeDouble","flash.utils:IDataOutput");
+	lookupAndLink(c,"writeFloat","flash.utils:IDataOutput");
+	lookupAndLink(c,"writeInt","flash.utils:IDataOutput");
+	lookupAndLink(c,"writeMultiByte","flash.utils:IDataOutput");
+	lookupAndLink(c,"writeObject","flash.utils:IDataOutput");
+	lookupAndLink(c,"writeShort","flash.utils:IDataOutput");
+	lookupAndLink(c,"writeUnsignedInt","flash.utils:IDataOutput");
+	lookupAndLink(c,"writeUTF","flash.utils:IDataOutput");
+	lookupAndLink(c,"writeUTFBytes","flash.utils:IDataOutput");
+}
+
+ByteArray::ByteArray(uint8_t* b, uint32_t l):bytes(b),real_len(l),len(l),position(0),littleEndian(false),objectEncoding(ObjectEncoding::AMF3)
 {
 }
 
-ByteArray::ByteArray(const ByteArray& b):ASObject(b),len(b.len),position(b.position)
+ByteArray::ByteArray(const ByteArray& b):ASObject(b),real_len(b.len),len(b.len),position(b.position),littleEndian(b.littleEndian),objectEncoding(b.objectEncoding)
 {
 	assert_and_throw(position==0);
-	bytes=new uint8_t[len];
+	bytes = (uint8_t*) malloc(len);
+	assert_and_throw(bytes);
 	memcpy(bytes,b.bytes,len);
 }
 
 ByteArray::~ByteArray()
 {
-	delete[] bytes;
+	if(bytes)
+		free(bytes);
 }
 
 void ByteArray::sinit(Class_base* c)
 {
+	c->setConstructor(NULL);
+	c->setSuper(Class<ASObject>::getRef());
+
 	c->setDeclaredMethodByQName("length","",Class<IFunction>::getFunction(_getLength),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("length","",Class<IFunction>::getFunction(_setLength),SETTER_METHOD,true);
 	c->setDeclaredMethodByQName("bytesAvailable","",Class<IFunction>::getFunction(_getBytesAvailable),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("position","",Class<IFunction>::getFunction(_getPosition),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("position","",Class<IFunction>::getFunction(_setPosition),SETTER_METHOD,true);
+	c->setDeclaredMethodByQName("endian","",Class<IFunction>::getFunction(_getEndian),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("endian","",Class<IFunction>::getFunction(_setEndian),SETTER_METHOD,true);
+	c->setDeclaredMethodByQName("objectEncoding","",Class<IFunction>::getFunction(_getObjectEncoding),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("objectEncoding","",Class<IFunction>::getFunction(_setObjectEncoding),SETTER_METHOD,true);
 	c->setDeclaredMethodByQName("defaultObjectEncoding","",Class<IFunction>::getFunction(_getDefaultObjectEncoding),GETTER_METHOD,false);
 	c->setDeclaredMethodByQName("defaultObjectEncoding","",Class<IFunction>::getFunction(_setDefaultObjectEncoding),SETTER_METHOD,false);
 	getSys()->staticByteArrayDefaultObjectEncoding = ObjectEncoding::DEFAULT;
+	c->setDeclaredMethodByQName("clear","",Class<IFunction>::getFunction(clear),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("compress","",Class<IFunction>::getFunction(_compress),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("uncompress","",Class<IFunction>::getFunction(_uncompress),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("deflate","",Class<IFunction>::getFunction(_deflate),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("inflate","",Class<IFunction>::getFunction(_inflate),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("readBoolean","",Class<IFunction>::getFunction(readBoolean),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("readBytes","",Class<IFunction>::getFunction(readBytes),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("readByte","",Class<IFunction>::getFunction(readByte),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("readDouble","",Class<IFunction>::getFunction(readDouble),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("readFloat","",Class<IFunction>::getFunction(readFloat),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("readInt","",Class<IFunction>::getFunction(readInt),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("readUnsignedInt","",Class<IFunction>::getFunction(readInt),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("readMultiByte","",Class<IFunction>::getFunction(readMultiByte),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("readShort","",Class<IFunction>::getFunction(readShort),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("readUnsignedByte","",Class<IFunction>::getFunction(readUnsignedByte),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("readUnsignedInt","",Class<IFunction>::getFunction(readUnsignedInt),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("readUnsignedShort","",Class<IFunction>::getFunction(readUnsignedShort),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("readObject","",Class<IFunction>::getFunction(readObject),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("readUTF","",Class<IFunction>::getFunction(readUTF),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("readUTFBytes","",Class<IFunction>::getFunction(readUTFBytes),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("writeBoolean","",Class<IFunction>::getFunction(writeBoolean),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("writeUTF","",Class<IFunction>::getFunction(writeUTF),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("writeUTFBytes","",Class<IFunction>::getFunction(writeUTFBytes),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("writeBytes","",Class<IFunction>::getFunction(writeBytes),NORMAL_METHOD,true);
@@ -78,9 +155,16 @@ void ByteArray::sinit(Class_base* c)
 	c->setDeclaredMethodByQName("writeDouble","",Class<IFunction>::getFunction(writeDouble),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("writeFloat","",Class<IFunction>::getFunction(writeFloat),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("writeInt","",Class<IFunction>::getFunction(writeInt),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("writeMultiByte","",Class<IFunction>::getFunction(writeMultiByte),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("writeUnsignedInt","",Class<IFunction>::getFunction(writeUnsignedInt),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("writeObject","",Class<IFunction>::getFunction(writeObject),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("writeShort","",Class<IFunction>::getFunction(writeShort),NORMAL_METHOD,true);
 	c->prototype->setVariableByQName("toString","",Class<IFunction>::getFunction(ByteArray::_toString),DYNAMIC_TRAIT);
+
+	c->addImplementedInterface(InterfaceClass<IDataInput>::getClass());
+	IDataInput::linkTraits(c);
+	c->addImplementedInterface(InterfaceClass<IDataOutput>::getClass());
+	IDataOutput::linkTraits(c);
 }
 
 void ByteArray::buildTraits(ASObject* o)
@@ -89,38 +173,142 @@ void ByteArray::buildTraits(ASObject* o)
 
 uint8_t* ByteArray::getBuffer(unsigned int size, bool enableResize)
 {
+	// The first allocation is exactly the size we need,
+	// the subsequent reallocations happen in increments of BA_CHUNK_SIZE bytes
 	if(bytes==NULL)
 	{
 		len=size;
-		bytes=new uint8_t[len];
+		real_len=len;
+		bytes = (uint8_t*) malloc(len);
 	}
 	else if(enableResize==false)
 	{
 		assert_and_throw(size<=len);
 	}
-	else if(len<size) // && enableResize==true
+	else if(real_len<size) // && enableResize==true
 	{
-		//Resize the buffer
-		uint8_t* bytes2=new uint8_t[size];
-		memcpy(bytes2,bytes,len);
+		while(real_len < size)
+			real_len += BA_CHUNK_SIZE;
+		// Reallocate the buffer, in chunks of BA_CHUNK_SIZE bytes
+		uint8_t* bytes2 = (uint8_t*) realloc(bytes, real_len);
+		assert_and_throw(bytes2);
+		bytes = bytes2;
 		len=size;
-		delete[] bytes;
 		bytes=bytes2;
 	}
+	else if(len<size)
+	{
+		len=size;
+	}
 	return bytes;
+}
+
+uint16_t ByteArray::endianIn(uint16_t value)
+{
+	if(littleEndian)
+		return GUINT16_TO_LE(value);
+	else
+		return GUINT16_TO_BE(value);
+}
+
+uint32_t ByteArray::endianIn(uint32_t value)
+{
+	if(littleEndian)
+		return GUINT32_TO_LE(value);
+	else
+		return GUINT32_TO_BE(value);
+}
+
+uint64_t ByteArray::endianIn(uint64_t value)
+{
+	if(littleEndian)
+		return GUINT64_TO_LE(value);
+	else
+		return GUINT64_TO_BE(value);
+}
+
+uint16_t ByteArray::endianOut(uint16_t value)
+{
+	if(littleEndian)
+		return GUINT16_FROM_LE(value);
+	else
+		return GUINT16_FROM_BE(value);
+}
+
+uint32_t ByteArray::endianOut(uint32_t value)
+{
+	if(littleEndian)
+		return GUINT32_FROM_LE(value);
+	else
+		return GUINT32_FROM_BE(value);
+}
+
+uint64_t ByteArray::endianOut(uint64_t value)
+{
+	if(littleEndian)
+		return GUINT64_FROM_LE(value);
+	else
+		return GUINT64_FROM_BE(value);
+}
+
+uint32_t ByteArray::getPosition() const
+{
+	return position;
 }
 
 ASFUNCTIONBODY(ByteArray,_getPosition)
 {
 	ByteArray* th=static_cast<ByteArray*>(obj);
-	return abstract_i(th->position);
+	return abstract_i(th->getPosition());
+}
+
+void ByteArray::setPosition(uint32_t p)
+{
+	position=p;
 }
 
 ASFUNCTIONBODY(ByteArray,_setPosition)
 {
 	ByteArray* th=static_cast<ByteArray*>(obj);
-	int pos=args[0]->toInt();
-	th->position=pos;
+	uint32_t pos=args[0]->toUInt();
+	th->setPosition(pos);
+	return NULL;
+}
+
+ASFUNCTIONBODY(ByteArray,_getEndian)
+{
+	ByteArray* th=static_cast<ByteArray*>(obj);
+	if(th->littleEndian)
+		return Class<ASString>::getInstanceS(Endian::littleEndian);
+	else
+		return Class<ASString>::getInstanceS(Endian::bigEndian);
+}
+
+ASFUNCTIONBODY(ByteArray,_setEndian)
+{
+	ByteArray* th=static_cast<ByteArray*>(obj);
+	if(args[0]->toString() == Endian::littleEndian)
+		th->littleEndian = true;
+	else if(args[0]->toString() == Endian::bigEndian)
+		th->littleEndian = false;
+	return NULL;
+}
+
+ASFUNCTIONBODY(ByteArray,_getObjectEncoding)
+{
+	ByteArray* th=static_cast<ByteArray*>(obj);
+	return abstract_ui(th->objectEncoding);
+}
+
+ASFUNCTIONBODY(ByteArray,_setObjectEncoding)
+{
+	ByteArray* th=static_cast<ByteArray*>(obj);
+	uint32_t value;
+	ARG_UNPACK(value);
+	if(value!=ObjectEncoding::AMF0 && value!=ObjectEncoding::AMF3)
+		throw Class<ArgumentError>::getInstanceS("Error #2008: Parameter objectEncoding must be one of the accepted values.");
+
+	th->objectEncoding=value;
 	return NULL;
 }
 
@@ -149,23 +337,17 @@ ASFUNCTIONBODY(ByteArray,_setLength)
 	uint32_t newLen=args[0]->toInt();
 	if(newLen==th->len) //Nothing to do
 		return NULL;
-	uint8_t* newBytes=new uint8_t[newLen];
-	if(th->len<newLen)
+	uint32_t prevLen = th->len;
+	uint8_t* newBytes= (uint8_t*) realloc(th->bytes, newLen);
+	assert_and_throw(newBytes);
+	th->bytes = newBytes;
+	th->len = newLen;
+	th->real_len = newLen;
+	if(prevLen<newLen)
 	{
 		//Extend
-		memcpy(newBytes,th->bytes,th->len);
-		memset(newBytes+th->len,0,newLen-th->len);
+		memset(th->bytes+prevLen,0,newLen-prevLen);
 	}
-	else
-	{
-		//Truncate
-		memcpy(newBytes,th->bytes,newLen);
-	}
-	delete[] th->bytes;
-	th->bytes=newBytes;
-	th->len=newLen;
-	//TODO: check position
-	th->position=0;
 	return NULL;
 }
 
@@ -181,12 +363,25 @@ ASFUNCTIONBODY(ByteArray,_getBytesAvailable)
 	return abstract_i(th->len-th->position);
 }
 
+ASFUNCTIONBODY(ByteArray,readBoolean)
+{
+	ByteArray* th=static_cast<ByteArray*>(obj);
+
+	uint8_t ret;
+	if(!th->readByte(ret))
+	{
+		throw Class<EOFError>::getInstanceS("Error #2030: End of file was encountered.");
+	}
+
+	return abstract_b(ret!=0);
+}
+
 ASFUNCTIONBODY(ByteArray,readBytes)
 {
 	ByteArray* th=static_cast<ByteArray*>(obj);
 	//Validate parameters
 	assert_and_throw(argslen>=1 && argslen<=3);
-	assert_and_throw(args[0]->getClass()==Class<ByteArray>::getClass());
+	assert_and_throw(args[0]->getClass()->isSubClass(Class<ByteArray>::getClass()));
 
 	ByteArray* out=Class<ByteArray>::cast(args[0]);
 	uint32_t offset=0;
@@ -196,15 +391,18 @@ ASFUNCTIONBODY(ByteArray,readBytes)
 	if(argslen==3)
 		length=args[2]->toInt();
 	//TODO: Support offset (offset is in the destination!)
-	if(offset!=0 || length==0)
+	if(offset!=0)
+	{
 		throw UnsupportedException("offset in ByteArray::readBytes");
+	}
+
+	if(length == 0)
+		length = th->len;
 
 	//Error checks
 	if(length > th->len)
 	{
-		LOG(LOG_ERROR,"ByteArray::readBytes not enough data");
-		//TODO: throw AS exceptions
-		return NULL;
+		throw Class<EOFError>::getInstanceS("Error #2030: End of file was encountered.");
 	}
 	uint8_t* buf=out->getBuffer(length,true);
 	memcpy(buf,th->bytes+th->position,length);
@@ -213,31 +411,31 @@ ASFUNCTIONBODY(ByteArray,readBytes)
 	return NULL;
 }
 
+bool ByteArray::readUTF(tiny_string& ret)
+{
+	uint16_t stringLen;
+	if(!readShort(stringLen))
+		return false;
+	if(len < (position+stringLen))
+		return false;
+	//Very inefficient copy
+	//TODO: optmize
+	ret=string((char*)bytes+position, (size_t)stringLen);
+	position+=stringLen;
+	return true;
+}
+
 ASFUNCTIONBODY(ByteArray,readUTF)
 {
 	ByteArray* th=static_cast<ByteArray*>(obj);
 
-	if(th->len < th->position+2)
+	tiny_string res;
+	if (!th->readUTF(res))
 	{
-		LOG(LOG_ERROR,"ByteArray::readUTF not enough data");
-		//TODO: throw AS exceptions
-		return NULL;
+		throw Class<EOFError>::getInstanceS("Error #2030: End of file was encountered.");
 	}
 
-	uint16_t length;
-	memcpy(&length,th->bytes+th->position,2);
-	th->position+=2;
-
-	if(th->position+length > th->len)
-	{
-		LOG(LOG_ERROR,"ByteArray::readUTF not enough data");
-		//TODO: throw AS exceptions
-		return NULL;
-	}
-
-	uint8_t *bufStart=th->bytes+th->position;
-	th->position+=length;
-	return Class<ASString>::getInstanceS((char *)bufStart,length);
+	return Class<ASString>::getInstanceS(res);
 }
 
 ASFUNCTIONBODY(ByteArray,readUTFBytes)
@@ -248,14 +446,21 @@ ASFUNCTIONBODY(ByteArray,readUTFBytes)
 	ARG_UNPACK (length);
 	if(th->position+length > th->len)
 	{
-		LOG(LOG_ERROR,"ByteArray::readUTFBytes not enough data");
-		//TODO: throw AS exceptions
-		return NULL;
+		throw Class<EOFError>::getInstanceS("Error #2030: End of file was encountered.");
 	}
 
 	uint8_t *bufStart=th->bytes+th->position;
 	th->position+=length;
 	return Class<ASString>::getInstanceS((char *)bufStart,length);
+}
+
+void ByteArray::writeUTF(const tiny_string& str)
+{
+	getBuffer(position+str.numBytes()+2,true);
+	uint16_t numBytes=endianIn((uint16_t)str.numBytes());
+	memcpy(bytes+position,&numBytes,2);
+	memcpy(bytes+position+2,str.raw_buf(),str.numBytes());
+	position+=str.numBytes()+2;
 }
 
 ASFUNCTIONBODY(ByteArray,writeUTF)
@@ -265,11 +470,7 @@ ASFUNCTIONBODY(ByteArray,writeUTF)
 	assert_and_throw(argslen==1);
 	assert_and_throw(args[0]->getObjectType()==T_STRING);
 	ASString* str=Class<ASString>::cast(args[0]);
-	th->getBuffer(th->position+str->data.numBytes()+3,true);
-	uint16_t bytes=(uint16_t)str->data.numBytes();
-	memcpy(th->bytes+th->position,&bytes,2);
-	memcpy(th->bytes+th->position+2,str->data.raw_buf(),bytes+1);
-
+	th->writeUTF(str->data);
 	return NULL;
 }
 
@@ -280,10 +481,42 @@ ASFUNCTIONBODY(ByteArray,writeUTFBytes)
 	assert_and_throw(argslen==1);
 	assert_and_throw(args[0]->getObjectType()==T_STRING);
 	ASString* str=Class<ASString>::cast(args[0]);
-	th->getBuffer(th->position+str->data.numBytes()+1,true);
-	memcpy(th->bytes+th->position,str->data.raw_buf(),str->data.numBytes()+1);
+	th->getBuffer(th->position+str->data.numBytes(),true);
+	memcpy(th->bytes+th->position,str->data.raw_buf(),str->data.numBytes());
+	th->position+=str->data.numBytes();
 
 	return NULL;
+}
+
+ASFUNCTIONBODY(ByteArray,writeMultiByte)
+{
+	ByteArray* th=static_cast<ByteArray*>(obj);
+	tiny_string value;
+	tiny_string charset;
+	ARG_UNPACK(value)(charset);
+
+	// TODO: should convert from UTF-8 to charset
+	LOG(LOG_NOT_IMPLEMENTED, "ByteArray.writeMultiByte doesn't convert charset");
+
+	th->getBuffer(th->position+value.numBytes(),true);
+	memcpy(th->bytes+th->position,value.raw_buf(),value.numBytes());
+	th->position+=value.numBytes();
+
+	return NULL;
+}
+
+uint32_t ByteArray::writeObject(ASObject* obj)
+{
+	//Return the length of the serialized object
+
+	//TODO: support AMF0
+	assert_and_throw(objectEncoding==ObjectEncoding::AMF3);
+	//TODO: support custom serialization
+	map<tiny_string, uint32_t> stringMap;
+	map<const ASObject*, uint32_t> objMap;
+	uint32_t oldPosition=position;
+	obj->serialize(this, stringMap, objMap);
+	return position-oldPosition;
 }
 
 ASFUNCTIONBODY(ByteArray,writeObject)
@@ -291,12 +524,26 @@ ASFUNCTIONBODY(ByteArray,writeObject)
 	ByteArray* th=static_cast<ByteArray*>(obj);
 	//Validate parameters
 	assert_and_throw(argslen==1);
-	//TODO: support AMF0
-	//TODO: support custom serialization
-	map<tiny_string, uint32_t> stringMap;
-	map<const ASObject*, uint32_t> objMap;
-	args[0]->serialize(th, stringMap, objMap);
+	th->writeObject(args[0]);
 
+	return NULL;
+}
+
+void ByteArray::writeShort(uint16_t val)
+{
+	int16_t value2 = endianIn(val);
+	getBuffer(position+2,true);
+	memcpy(bytes+position,&value2,2);
+	position+=2;
+}
+
+ASFUNCTIONBODY(ByteArray,writeShort)
+{
+	ByteArray* th=static_cast<ByteArray*>(obj);
+	int32_t value;
+	ARG_UNPACK(value);
+
+	th->writeShort((static_cast<uint16_t>(value & 0xffff)));
 	return NULL;
 }
 
@@ -305,24 +552,25 @@ ASFUNCTIONBODY(ByteArray,writeBytes)
 	ByteArray* th=static_cast<ByteArray*>(obj);
 	//Validate parameters
 	assert_and_throw(argslen>=1 && argslen<=3);
-	assert_and_throw(args[0]->getClass()==Class<ByteArray>::getClass());
+	assert_and_throw(args[0]->getClass()->isSubClass(Class<ByteArray>::getClass()));
 	ByteArray* out=Class<ByteArray>::cast(args[0]);
 	uint32_t offset=0;
 	uint32_t length=0;
 	if(argslen>=2)
-		offset=args[1]->toInt();
+		offset=args[1]->toUInt();
 	if(argslen==3)
-		length=args[2]->toInt();
+		length=args[2]->toUInt();
+
+	// We need to clamp offset to the beginning of the bytes array
+	if(offset > out->getLength()-1)
+		offset = 0;
+	// We need to clamp length to the end of the bytes array
+	if(length > out->getLength()-offset)
+		length = 0;
 
 	//If the length is 0 the whole buffer must be copied
 	if(length == 0)
 		length=(out->getLength()-offset);
-	else if(length > (out->getLength()-offset))
-	{
-		LOG(LOG_ERROR,"ByteArray::writeBytes not enough data");
-		//TODO: throw AS exceptions
-		return NULL;
-	}
 	uint8_t* buf=out->getBuffer(offset+length,false);
 	th->getBuffer(th->position+length,true);
 	memcpy(th->bytes+th->position,buf+offset,length);
@@ -349,15 +597,30 @@ ASFUNCTIONBODY(ByteArray,writeByte)
 	return NULL;
 }
 
+ASFUNCTIONBODY(ByteArray,writeBoolean)
+{
+	ByteArray* th=static_cast<ByteArray*>(obj);
+	bool b;
+	ARG_UNPACK (b);
+
+	if (b)
+		th->writeByte(1);
+	else
+		th->writeByte(0);
+
+	return NULL;
+}
+
 ASFUNCTIONBODY(ByteArray,writeDouble)
 {
 	ByteArray* th=static_cast<ByteArray*>(obj);
 	assert_and_throw(argslen==1);
 
-	double value=args[0]->toNumber();
+	double value = args[0]->toNumber();
+	uint64_t value2=th->endianIn(*reinterpret_cast<uint64_t*>(&value));
 
 	th->getBuffer(th->position+8,true);
-	memcpy(th->bytes+th->position,&value,8);
+	memcpy(th->bytes+th->position,&value2,8);
 	th->position+=8;
 
 	return NULL;
@@ -368,10 +631,11 @@ ASFUNCTIONBODY(ByteArray,writeFloat)
 	ByteArray* th=static_cast<ByteArray*>(obj);
 	assert_and_throw(argslen==1);
 
-	float value=args[0]->toNumber();
+	float value = args[0]->toNumber();
+	uint32_t value2=th->endianIn(*reinterpret_cast<uint32_t*>(&value));
 
 	th->getBuffer(th->position+4,true);
-	memcpy(th->bytes+th->position,&value,4);
+	memcpy(th->bytes+th->position,&value2,4);
 	th->position+=4;
 
 	return NULL;
@@ -382,7 +646,7 @@ ASFUNCTIONBODY(ByteArray,writeInt)
 	ByteArray* th=static_cast<ByteArray*>(obj);
 	assert_and_throw(argslen==1);
 
-	int32_t value=args[0]->toInt();
+	uint32_t value=th->endianIn(static_cast<uint32_t>(args[0]->toInt()));
 
 	th->getBuffer(th->position+4,true);
 	memcpy(th->bytes+th->position,&value,4);
@@ -391,17 +655,20 @@ ASFUNCTIONBODY(ByteArray,writeInt)
 	return NULL;
 }
 
+void ByteArray::writeUnsignedInt(uint32_t val)
+{
+	getBuffer(position+4,true);
+	memcpy(bytes+position,&val,4);
+	position+=4;
+}
+
 ASFUNCTIONBODY(ByteArray,writeUnsignedInt)
 {
 	ByteArray* th=static_cast<ByteArray*>(obj);
 	assert_and_throw(argslen==1);
 
-	uint32_t value=args[0]->toUInt();
-
-	th->getBuffer(th->position+4,true);
-	memcpy(th->bytes+th->position,&value,4);
-	th->position+=4;
-
+	uint32_t value=th->endianIn(args[0]->toUInt());
+	th->writeUnsignedInt(value);
 	return NULL;
 }
 
@@ -414,7 +681,7 @@ bool ByteArray::readByte(uint8_t& b)
 	return true;
 }
 
-bool ByteArray::readU29(int32_t& ret)
+bool ByteArray::readU29(uint32_t& ret)
 {
 	ret=0;
 	for(uint32_t i=0;i<4;i++)
@@ -448,11 +715,9 @@ ASFUNCTIONBODY(ByteArray, readByte)
 	uint8_t ret;
 	if(!th->readByte(ret))
 	{
-		LOG(LOG_ERROR,"ByteArray::readByte not enough data");
-		//TODO: throw AS exceptions
-		return NULL;
+		throw Class<EOFError>::getInstanceS("Error #2030: End of file was encountered.");
 	}
-	return abstract_i(ret);
+	return abstract_i((int8_t)ret);
 }
 
 ASFUNCTIONBODY(ByteArray,readDouble)
@@ -462,16 +727,15 @@ ASFUNCTIONBODY(ByteArray,readDouble)
 
 	if(th->len < th->position+8)
 	{
-		LOG(LOG_ERROR,"ByteArray::readDouble not enough data");
-		//TODO: throw AS exceptions
-		return NULL;
+		throw Class<EOFError>::getInstanceS("Error #2030: End of file was encountered.");
 	}
 
-	double ret;
+	uint64_t ret;
 	memcpy(&ret,th->bytes+th->position,8);
 	th->position+=8;
+	ret = th->endianOut(ret);
 
-	return abstract_d(ret);
+	return abstract_d(*reinterpret_cast<double*>(&ret));
 }
 
 ASFUNCTIONBODY(ByteArray,readFloat)
@@ -481,16 +745,15 @@ ASFUNCTIONBODY(ByteArray,readFloat)
 
 	if(th->len < th->position+4)
 	{
-		LOG(LOG_ERROR,"ByteArray::readFloat not enough data");
-		//TODO: throw AS exceptions
-		return NULL;
+		throw Class<EOFError>::getInstanceS("Error #2030: End of file was encountered.");
 	}
 
-	float ret;
+	uint32_t ret;
 	memcpy(&ret,th->bytes+th->position,4);
 	th->position+=4;
+	ret = th->endianOut(ret);
 
-	return abstract_d(ret);
+	return abstract_d(*reinterpret_cast<float*>(&ret));
 }
 
 ASFUNCTIONBODY(ByteArray,readInt)
@@ -500,16 +763,65 @@ ASFUNCTIONBODY(ByteArray,readInt)
 
 	if(th->len < th->position+4)
 	{
-		LOG(LOG_ERROR,"ByteArray::readInt not enough data");
-		//TODO: throw AS exceptions
-		return NULL;
+		throw Class<EOFError>::getInstanceS("Error #2030: End of file was encountered.");
 	}
 
-	int32_t ret;
+	uint32_t ret;
 	memcpy(&ret,th->bytes+th->position,4);
 	th->position+=4;
 
-	return abstract_i(ret);
+	return abstract_i((int32_t)th->endianOut(ret));
+}
+
+bool ByteArray::readShort(uint16_t& ret)
+{
+	if (len < position+2)
+		return false;
+
+	uint16_t tmp;
+	memcpy(&tmp,bytes+position,2);
+	ret=endianOut(tmp);
+	position+=2;
+	return true;
+}
+
+ASFUNCTIONBODY(ByteArray,readShort)
+{
+	ByteArray* th=static_cast<ByteArray*>(obj);
+	assert_and_throw(argslen==0);
+
+	uint16_t ret;
+	if(!th->readShort(ret))
+	{
+		throw Class<EOFError>::getInstanceS("Error #2030: End of file was encountered.");
+	}
+
+	return abstract_i((int16_t)ret);
+}
+
+ASFUNCTIONBODY(ByteArray,readUnsignedByte)
+{
+	ByteArray* th=static_cast<ByteArray*>(obj);
+	assert_and_throw(argslen==0);
+
+	uint8_t ret;
+	if (!th->readByte(ret))
+	{
+		throw Class<EOFError>::getInstanceS("Error #2030: End of file was encountered.");
+	}
+	return abstract_ui(ret);
+}
+
+bool ByteArray::readUnsignedInt(uint32_t& ret)
+{
+	if(len < position+4)
+		return false;
+
+	uint32_t tmp;
+	memcpy(&tmp,bytes+position,4);
+	ret=endianOut(tmp);
+	position+=4;
+	return true;
 }
 
 ASFUNCTIONBODY(ByteArray,readUnsignedInt)
@@ -517,18 +829,42 @@ ASFUNCTIONBODY(ByteArray,readUnsignedInt)
 	ByteArray* th=static_cast<ByteArray*>(obj);
 	assert_and_throw(argslen==0);
 
-	if(th->len < th->position+4)
-	{
-		LOG(LOG_ERROR,"ByteArray::readUnsignedInt not enough data");
-		//TODO: throw AS exceptions
-		return NULL;
-	}
-
 	uint32_t ret;
-	memcpy(&ret,th->bytes+th->position,4);
-	th->position+=4;
+	if(!th->readUnsignedInt(ret))
+		throw Class<EOFError>::getInstanceS("Error #2030: End of file was encountered.");
 
 	return abstract_ui(ret);
+}
+
+ASFUNCTIONBODY(ByteArray,readUnsignedShort)
+{
+	ByteArray* th=static_cast<ByteArray*>(obj);
+	assert_and_throw(argslen==0);
+
+	uint16_t ret;
+	if(!th->readShort(ret))
+	{
+		throw Class<EOFError>::getInstanceS("Error #2030: End of file was encountered.");
+	}
+
+	return abstract_ui(ret);
+}
+
+ASFUNCTIONBODY(ByteArray,readMultiByte)
+{
+	ByteArray* th=static_cast<ByteArray*>(obj);
+	uint32_t strlen;
+	tiny_string charset;
+	ARG_UNPACK(strlen)(charset);
+
+	if(th->len < th->position+strlen)
+	{
+		throw Class<EOFError>::getInstanceS("Error #2030: End of file was encountered.");
+	}
+
+	// TODO: should convert from charset to UTF-8
+	LOG(LOG_NOT_IMPLEMENTED, "ByteArray.readMultiByte doesn't convert charset");
+	return Class<ASString>::getInstanceS((char*)th->bytes+th->position,strlen);
 }
 
 ASFUNCTIONBODY(ByteArray,readObject)
@@ -537,9 +873,9 @@ ASFUNCTIONBODY(ByteArray,readObject)
 	assert_and_throw(argslen==0);
 	if(th->bytes==NULL)
 	{
-		LOG(LOG_ERROR,"No data to read");
-		return NULL;
+		throw Class<EOFError>::getInstanceS("Error #2030: End of file was encountered.");
 	}
+	assert_and_throw(th->objectEncoding==ObjectEncoding::AMF3);
 	std::vector<ASObject*> ret;
 	Amf3Deserializer d(th);
 	try
@@ -592,8 +928,13 @@ _NR<ASObject> ByteArray::getVariableByMultiname(const multiname& name, GET_VARIA
 	if((opt & ASObject::SKIP_IMPL)!=0 || !Array::isValidMultiname(name,index))
 		return ASObject::getVariableByMultiname(name,opt);
 
-	assert_and_throw(index<len);
-	return _MNR(abstract_i(bytes[index]));
+	if(index<len)
+	{
+		uint8_t value = bytes[index];
+		return _MNR(abstract_ui(static_cast<uint32_t>(value)));
+	}
+	else
+		return _MNR(new Undefined);
 }
 
 int32_t ByteArray::getVariableByMultiname_i(const multiname& name)
@@ -603,8 +944,13 @@ int32_t ByteArray::getVariableByMultiname_i(const multiname& name)
 	if(!Array::isValidMultiname(name,index))
 		return ASObject::getVariableByMultiname_i(name);
 
-	assert_and_throw(index<len);
-	return bytes[index];
+	if(index<len)
+	{
+		uint8_t value = bytes[index];
+		return static_cast<uint32_t>(value);
+	}
+	else
+		return _MNR(new Undefined);
 }
 
 void ByteArray::setVariableByMultiname(const multiname& name, ASObject* o)
@@ -616,18 +962,15 @@ void ByteArray::setVariableByMultiname(const multiname& name, ASObject* o)
 
 	if(index>=len)
 	{
-		//Resize the array
-		uint8_t* buf=new uint8_t[index+1];
-		memcpy(buf,bytes,len);
-		delete[] bytes;
-		len=index+1;
-		bytes=buf;
+		uint32_t prevLen = len;
+		getBuffer(index+1, true);
+		// Fill the gap between the end of the current data and the index with zeros
+		memset(bytes+prevLen, 0, index-prevLen);
 	}
 
-	if(o->getObjectType()!=T_UNDEFINED)
-		bytes[index]=o->toInt();
-	else
-		bytes[index]=0;
+	// Fill the byte pointed to by index with the truncated uint value of the object.
+	uint8_t value = static_cast<uint8_t>(o->toUInt() & 0xff);
+	bytes[index] = value;
 
 	o->decRef();
 }
@@ -640,17 +983,15 @@ void ByteArray::setVariableByMultiname_i(const multiname& name, int32_t value)
 void ByteArray::acquireBuffer(uint8_t* buf, int bufLen)
 {
 	if(bytes)
-		delete[] bytes;
+		free(bytes);
 	bytes=buf;
+	real_len=bufLen;
 	len=bufLen;
 	position=0;
 }
 
-void ByteArray::writeU29(int32_t val)
+void ByteArray::writeU29(uint32_t val)
 {
-	if(val>=0x40000000 || val<=(int32_t)0xbfffffff)
-		throw AssertionException("Range exception in writeU29");
-
 	for(uint32_t i=0;i<4;i++)
 	{
 		uint8_t b;
@@ -674,16 +1015,148 @@ void ByteArray::writeStringVR(map<tiny_string, uint32_t>& stringMap, const tiny_
 {
 	const uint32_t len=s.numBytes();
 
-	if(len!=0)
-		assert_and_throw(stringMap.find(s)==stringMap.end());
+	//Check if the string is already in the map
+	auto it=stringMap.find(s);
+	if(it!=stringMap.end())
+	{
+		//The first bit must be 0, the next 29 bits
+		//store the index of the string in the map
+		writeU29(it->second << 1);
+	}
+	else
+	{
+		//The AMF3 spec says that the empty string is never sent by reference
+		//So add the string to the map only if it's not the empty string
+		if(len)
+			stringMap.insert(make_pair(s, stringMap.size()));
 
-	//The first bit must be 1, the next 29 bits
-	//store the number of bytes of the string
-	writeU29((len<<1) | 1);
+		//The first bit must be 1, the next 29 bits
+		//store the number of bytes of the string
+		writeU29((len<<1) | 1);
 
-	getBuffer(position+len,true);
-	memcpy(bytes+position,s.raw_buf(),len);
-	position+=len;
+		getBuffer(position+len,true);
+		memcpy(bytes+position,s.raw_buf(),len);
+		position+=len;
+	}
+}
+
+void ByteArray::compress_zlib()
+{
+	if(len==0)
+		return;
+
+	unsigned long buflen=compressBound(len);
+	uint8_t *compressed=(uint8_t*) malloc(buflen);
+	assert_and_throw(compressed);
+
+	if(compress(compressed, &buflen, bytes, len)!=Z_OK)
+	{
+		free(compressed);
+		throw RunTimeException("zlib compress failed");
+	}
+
+	acquireBuffer(compressed, buflen);
+	position=buflen;
+}
+
+void ByteArray::uncompress_zlib()
+{
+	z_stream strm;
+	int status;
+
+	if(len==0)
+		return;
+
+	strm.zalloc=Z_NULL;
+	strm.zfree=Z_NULL;
+	strm.opaque=Z_NULL;
+	strm.avail_in=len;
+	strm.next_in=bytes;
+	strm.total_out=0;
+	status=inflateInit(&strm);
+	if(status==Z_VERSION_ERROR)
+		throw Class<IOError>::getInstanceS("not valid compressed data");
+	else if(status!=Z_OK)
+		throw RunTimeException("zlib uncompress failed");
+
+	vector<uint8_t> buf(3*len);
+	do
+	{
+		strm.next_out=&buf[strm.total_out];
+		strm.avail_out=buf.size()-strm.total_out;
+		status=inflate(&strm, Z_NO_FLUSH);
+
+		if(status!=Z_OK && status!=Z_STREAM_END)
+		{
+			inflateEnd(&strm);
+			throw Class<IOError>::getInstanceS("not valid compressed data");
+		}
+
+		if(strm.avail_out==0)
+			buf.resize(buf.size()+len);
+	} while(status!=Z_STREAM_END);
+
+	inflateEnd(&strm);
+
+	len=strm.total_out;
+	real_len = len;
+	uint8_t* bytes2=(uint8_t*) realloc(bytes, len);
+	assert_and_throw(bytes2);
+	bytes = bytes2;
+	memcpy(bytes, &buf[0], len);
+	position=0;
+}
+
+ASFUNCTIONBODY(ByteArray,_compress)
+{
+	ByteArray* th=static_cast<ByteArray*>(obj);
+	tiny_string algorithm;
+	ARG_UNPACK(algorithm, "zlib");
+	if(algorithm=="zlib")
+		th->compress_zlib();
+	else
+		throw Class<ASError>::getInstanceS("Unsupported algorithm");
+
+	return NULL;
+}
+
+ASFUNCTIONBODY(ByteArray,_uncompress)
+{
+	ByteArray* th=static_cast<ByteArray*>(obj);
+	tiny_string algorithm;
+	ARG_UNPACK(algorithm, "zlib");
+	if(algorithm=="zlib")
+		th->uncompress_zlib();
+	else
+		throw Class<ASError>::getInstanceS("Unsupported algorithm");
+
+	return NULL;
+}
+
+ASFUNCTIONBODY(ByteArray,_deflate)
+{
+	ByteArray* th=static_cast<ByteArray*>(obj);
+	th->compress_zlib();
+	return NULL;
+}
+
+ASFUNCTIONBODY(ByteArray,_inflate)
+{
+	ByteArray* th=static_cast<ByteArray*>(obj);
+	th->uncompress_zlib();
+	return NULL;
+}
+
+ASFUNCTIONBODY(ByteArray,clear)
+{
+	ByteArray* th=static_cast<ByteArray*>(obj);
+	if(th->bytes)
+		free(th->bytes);
+	th->bytes = NULL;
+	th->len=0;
+	th->real_len=0;
+	th->position=0;
+	return NULL;
 }
 
 void Timer::tick()
@@ -696,7 +1169,7 @@ void Timer::tick()
 	if(repeatCount!=0)
 	{
 		currentCount++;
-		if(repeatCount<currentCount)
+		if(currentCount==repeatCount)
 		{
 			this->incRef();
 			getVm()->addEvent(_MR(this),_MR(Class<TimerEvent>::getInstanceS("timerComplete")));
@@ -839,7 +1312,13 @@ ASFUNCTIONBODY(lightspark,getQualifiedClassName)
 	//CHECK: what to do if ns is empty
 	ASObject* target=args[0];
 	Class_base* c;
-	if(target->getObjectType()!=T_CLASS)
+	SWFOBJECT_TYPE otype=target->getObjectType();
+	if(otype==T_NULL)
+		return Class<ASString>::getInstanceS("null");
+	else if(otype==T_UNDEFINED)
+		// Testing shows that this really returns "void"!
+		return Class<ASString>::getInstanceS("void");
+	else if(otype!=T_CLASS)
 	{
 		assert_and_throw(target->getClass());
 		c=target->getClass();
@@ -1205,10 +1684,73 @@ _NR<ASObject> Proxy::getVariableByMultiname(const multiname& name, GET_VARIABLE_
 
 bool Proxy::hasPropertyByMultiname(const multiname& name, bool considerDynamic)
 {
-	if(considerDynamic==false)
-		return ASObject::hasPropertyByMultiname(name, considerDynamic);
+	//If a variable named like this already exist, use that
+	if(ASObject::hasPropertyByMultiname(name, considerDynamic) || !implEnable)
+	{
+		return ASObject::deleteVariableByMultiname(name);
+	}
 
-	throw UnsupportedException("Proxy::hasProperty");
+	//Check if there is a custom deleter defined, skipping implementation to avoid recursive calls
+	multiname hasPropertyName;
+	hasPropertyName.name_type=multiname::NAME_STRING;
+	hasPropertyName.name_s="hasProperty";
+	hasPropertyName.ns.push_back(nsNameAndKind(flash_proxy,NAMESPACE));
+	_NR<ASObject> proxyHasProperty=getVariableByMultiname(hasPropertyName,ASObject::SKIP_IMPL);
+
+	if(proxyHasProperty.isNull())
+	{
+		return false;
+	}
+
+	assert_and_throw(proxyHasProperty->getObjectType()==T_FUNCTION);
+
+	IFunction* f=static_cast<IFunction*>(proxyHasProperty.getPtr());
+
+	//Well, I don't how to pass multiname to an as function. I'll just pass the name as a string
+	ASObject* arg=Class<ASString>::getInstanceS(name.name_s);
+	//We now suppress special handling
+	implEnable=false;
+	LOG(LOG_CALLS,_("Proxy::hasProperty"));
+	incRef();
+	_NR<ASObject> ret=_MNR(f->call(this,&arg,1));
+	implEnable=true;
+	Boolean* b = static_cast<Boolean*>(ret.getPtr());
+	return b->val;
+}
+bool Proxy::deleteVariableByMultiname(const multiname& name)
+{
+	//If a variable named like this already exist, use that
+	if(ASObject::hasPropertyByMultiname(name, true) || !implEnable)
+	{
+		return ASObject::deleteVariableByMultiname(name);
+	}
+
+	//Check if there is a custom deleter defined, skipping implementation to avoid recursive calls
+	multiname deletePropertyName;
+	deletePropertyName.name_type=multiname::NAME_STRING;
+	deletePropertyName.name_s="deleteProperty";
+	deletePropertyName.ns.push_back(nsNameAndKind(flash_proxy,NAMESPACE));
+	_NR<ASObject> proxyDeleter=getVariableByMultiname(deletePropertyName,ASObject::SKIP_IMPL);
+
+	if(proxyDeleter.isNull())
+	{
+		return ASObject::deleteVariableByMultiname(name);
+	}
+
+	assert_and_throw(proxyDeleter->getObjectType()==T_FUNCTION);
+
+	IFunction* f=static_cast<IFunction*>(proxyDeleter.getPtr());
+
+	//Well, I don't how to pass multiname to an as function. I'll just pass the name as a string
+	ASObject* arg=Class<ASString>::getInstanceS(name.name_s);
+	//We now suppress special handling
+	implEnable=false;
+	LOG(LOG_CALLS,_("Proxy::deleteProperty"));
+	incRef();
+	_NR<ASObject> ret=_MNR(f->call(this,&arg,1));
+	implEnable=true;
+	Boolean* b = static_cast<Boolean*>(ret.getPtr());
+	return b->val;
 }
 
 uint32_t Proxy::nextNameIndex(uint32_t cur_index)

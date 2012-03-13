@@ -39,6 +39,7 @@ REGISTER_CLASS_NAME(SyntaxError);
 REGISTER_CLASS_NAME(TypeError);
 REGISTER_CLASS_NAME(URIError);
 REGISTER_CLASS_NAME(VerifyError);
+REGISTER_CLASS_NAME(UninitializedError);
 
 ASFUNCTIONBODY(ASError,getStackTrace)
 {
@@ -72,9 +73,23 @@ ASFUNCTIONBODY(ASError,_constructor)
 	}
 	if(argslen == 2)
 	{
-		th->errorID = static_cast<Integer*>(args[0])->toInt();
+		th->errorID = static_cast<Integer*>(args[1])->toInt();
 	}
 	return NULL;
+}
+ASFUNCTIONBODY(ASError,generator)
+{
+	ASError* th=Class<ASError>::getInstanceS();
+	assert_and_throw(argslen <= 2);
+	if(argslen >= 1)
+	{
+		th->message = args[0]->toString();
+	}
+	if(argslen == 2)
+	{
+		th->setErrorID(static_cast<Integer*>(args[1])->toInt());
+	}
+	return th;
 }
 
 void ASError::sinit(Class_base* c)
@@ -315,4 +330,13 @@ ASFUNCTIONBODY(UninitializedError,_constructor)
 		th->message = args[0]->toString();
 	}
 	return NULL;
+}
+void UninitializedError::sinit(Class_base* c)
+{
+	c->setConstructor(Class<IFunction>::getFunction(_constructor));
+	c->setSuper(Class<ASError>::getRef());
+}
+
+void UninitializedError::buildTraits(ASObject* o)
+{
 }

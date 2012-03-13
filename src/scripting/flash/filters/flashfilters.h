@@ -17,42 +17,36 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
-#ifndef _STREAMS_H
-#define _STREAMS_H
+#ifndef _FLASH_FILTERS_H
+#define _FLASH_FILTERS_H
 
 #include "compat.h"
-#include <streambuf>
-#include <fstream>
-#include <inttypes.h>
-#include "zlib.h"
+#include "asobject.h"
 
-class zlib_filter: public std::streambuf
+namespace lightspark
 {
-private:
-	std::streambuf* backend;
-	int consumed;
-	z_stream strm;
-	char buffer[4096];
-	bool eof;
-protected:
-	char in_buf[4096];
-	virtual int_type underflow();
-	virtual pos_type seekoff(off_type, std::ios_base::seekdir, std::ios_base::openmode);
+
+class BitmapFilter: public ASObject
+{
 public:
-	zlib_filter(std::streambuf* b);
-	~zlib_filter();
+	static void sinit(Class_base* c);
+//	static void buildTraits(ASObject* o);
 };
 
-
-class bytes_buf:public std::streambuf
+class GlowFilter: public BitmapFilter
 {
-private:
-	const uint8_t* buf;
-	int offset;
-	int len;
 public:
-	bytes_buf(const uint8_t* b, int l);
-	virtual pos_type seekoff(off_type, std::ios_base::seekdir, std::ios_base::openmode);
+	static void sinit(Class_base* c);
+//	static void buildTraits(ASObject* o);
+};
+
+class DropShadowFilter: public BitmapFilter
+{
+public:
+	static void sinit(Class_base* c);
+//	static void buildTraits(ASObject* o);
+};
+
 };
 
 #endif

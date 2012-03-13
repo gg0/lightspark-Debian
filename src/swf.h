@@ -23,11 +23,13 @@
 #include "compat.h"
 #include <fstream>
 #include <list>
+#include <queue>
 #include <map>
 #include <string>
 #include "swftypes.h"
 #include "scripting/flash/display/flashdisplay.h"
 #include "scripting/flash/net/flashnet.h"
+#include "scripting/flash/system/flashsystem.h"
 #include "timer.h"
 
 #include "platforms/engineutils.h"
@@ -38,6 +40,7 @@ namespace lightspark
 class ABCVm;
 class AudioManager;
 class Config;
+class ControlTag;
 class DownloadManager;
 class DisplayListTag;
 class DictionaryTag;
@@ -329,6 +332,11 @@ public:
 	//Resize support
 	void resizeCompleted() const;
 
+	/*
+	 * The application domain for the main code
+	 */
+	_NR<ApplicationDomain> mainApplicationDomain;
+
 #ifdef PROFILING_SUPPORT
 	void setProfilingOutput(const tiny_string& t) DLL_PUBLIC;
 	const tiny_string& getProfilingOutput() const;
@@ -364,6 +372,7 @@ private:
 	Spinlock objectSpinlock;
 	tiny_string url;
 	FILE_TYPE fileType;
+	std::queue<_R<ControlTag>> symbolClassTags;
 	void threadAbort();
 	void jobFence() {};
 	void parseSWFHeader(RootMovieClip *root, UI8 ver);

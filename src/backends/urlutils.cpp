@@ -313,7 +313,7 @@ bool URLInfo::matchesDomain(const tiny_string& expression, const tiny_string& su
 tiny_string URLInfo::encode(const tiny_string& u, ENCODING type)
 {
 	tiny_string str;
-	char buf[4];
+	char buf[7];
 	
 	for(auto i=u.begin();i!=u.end();++i)
 	{
@@ -337,19 +337,19 @@ tiny_string URLInfo::encode(const tiny_string& u, ENCODING type)
 				str += '+';
 			//Additionally ENCODE_URICOMPONENT and ENCODE_URI don't encode:
 			//- _ . ! ~ * ' ( )
-			else if((type == ENCODE_URI || type == ENCODE_URICOMPONENT || type == ENCODE_ESCAPE) && 
+			else if((type == ENCODE_URI || type == ENCODE_URICOMPONENT) && 
 					(*i == '-' || *i == '_' || *i == '.' || *i == '!' ||
 						*i == '~' || *i == '*' || *i == '\'' ||	*i == '(' ||
 						*i == ')'))
 				str += *i;
 			//Additionally ENCODE_URI doesn't encode:
 			//; / ? : @ & = + $ , # 
-			else if((type == ENCODE_URI || type == ENCODE_ESCAPE) && 
+			else if((type == ENCODE_URI) && 
 						(*i == ';' || *i == '/' || *i == '?' || *i == ':' ||
 							*i == '@' || *i == '&' || *i == '=' || *i == '+' ||
 							*i == '$' || *i == ',' || *i == '#'))
 				str += *i;
-			//Additionally ENCODE_ESCAPE doesn't encode:
+			// ENCODE_ESCAPE doesn't encode:
 			//@ - _ . * + /
 			else if(type == ENCODE_ESCAPE && 
 						(*i == '@' || *i == '-' || *i == '_' || *i == '.' ||
@@ -358,7 +358,10 @@ tiny_string URLInfo::encode(const tiny_string& u, ENCODING type)
 
 			else
 			{
-				sprintf(buf,"%%%02X",(unsigned char)*i);
+				if(*i<256)
+					sprintf(buf,"%%%02X",*i);
+				else
+					sprintf(buf,"%%u%04X",*i);
 				str += buf;
 			}
 		}
@@ -419,9 +422,24 @@ std::string URLInfo::decode(const std::string& u, ENCODING type)
 			//All encoded characters that weren't excluded above are now decoded
 			else
 			{	
-				i++;
-				str += (unsigned char) strtoul(u.substr(i, 2).c_str(), NULL, 16);
-				i++;
+				if(u[i+1] == 'u' && i+6 <= u.length() && 
+				   isxdigit(u[i+2]) && isxdigit(u[i+3]) &&
+				   isxdigit(u[i+4]) && isxdigit(u[i+5]))
+				{
+					tiny_string s=tiny_string::fromChar((uint32_t)strtoul(u.substr(i+2, 4).c_str(), NULL, 16));
+					str.append(s.raw_buf());
+					i += 5;
+				}
+				else if(isxdigit(u[i+1]) && isxdigit(u[i+2]))
+				{
+					tiny_string s=tiny_string::fromChar((uint32_t)strtoul(u.substr(i+1, 2).c_str(), NULL, 16));
+					str.append(s.raw_buf());
+					i += 2;
+				}
+				else
+				{
+					str += u[i];
+				}
 			}
 		}
 	}

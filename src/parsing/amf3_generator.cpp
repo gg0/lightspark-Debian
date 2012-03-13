@@ -29,17 +29,29 @@ using namespace std;
 using namespace lightspark;
 using namespace lightspark::amf3;
 
-static tiny_string getString(Amf3Deserializer* th, const amf3::Utf8String& s)
+static tiny_string getString(Amf3Deserializer* th, const amf3::Utf8String& s,
+		vector<tiny_string>& stringMap)
 {
 	if(s.contents==amf3::Utf8String::REFERENCE)
-		return "TODO_support_references";
-	return s.value;
+	{
+		return stringMap[s.reference];
+	}
+	else
+	{
+		//Add string to the map, if it's not the empty one
+		if(s.value.size())
+			stringMap.emplace_back(s.value);
+		return s.value;
+	}
 }
 
-static ASObject* createArray(Amf3Deserializer* th, const amf3::ArrayType&);
-static ASObject* createObject(Amf3Deserializer* th, const amf3::ObjectType&);
+static ASObject* createArray(Amf3Deserializer* th, const amf3::ArrayType&,
+		vector<tiny_string>& stringMap, vector<ASObject*>& objMap);
+static ASObject* createObject(Amf3Deserializer* th, const amf3::ObjectType&,
+		vector<tiny_string>& stringMap, vector<ASObject*>& objMap);
 
-static ASObject* createValue(Amf3Deserializer* th, const amf3::ValueType& v)
+static ASObject* createValue(Amf3Deserializer* th, const amf3::ValueType& v,
+		vector<tiny_string>& stringMap, vector<ASObject*>& objMap)
 {
 	switch(v.contents)
 	{
@@ -54,52 +66,64 @@ static ASObject* createValue(Amf3Deserializer* th, const amf3::ValueType& v)
 		case amf3::ValueType::DOUBLE:
 			return abstract_d(v.doubleVal.val);
 		case amf3::ValueType::UTF8STRING:
-			return Class<ASString>::getInstanceS(getString(th, v.stringVal));
+			return Class<ASString>::getInstanceS(getString(th, v.stringVal, stringMap));
 		case amf3::ValueType::ARRAYTYPE:
-			return createArray(th, v.arrayVal);
+			return createArray(th, v.arrayVal, stringMap, objMap);
 		case amf3::ValueType::OBJECTTYPE:
-			return createObject(th, v.objVal);
+			return createObject(th, v.objVal, stringMap, objMap);
 		default:
 			throw UnsupportedException("Unsupported type in AMF3");
 	}
 }
 
-static ASObject* createObject(Amf3Deserializer* th, const amf3::ObjectType& t)
+static ASObject* createObject(Amf3Deserializer* th, const amf3::ObjectType& t,
+		vector<tiny_string>& stringMap, vector<ASObject*>& objMap)
 {
-	ASObject* ret=Class<ASObject>::getInstanceS();
 	if(t.contents==amf3::ObjectType::REFERENCE)
 	{
-		LOG(LOG_NOT_IMPLEMENTED,"References in AMF3 not supported");
+		assert_and_throw(t.reference < objMap.size());
+		ASObject* ret=objMap[t.reference];
+		ret->incRef();
 		return ret;
 	}
+	ASObject* ret=Class<ASObject>::getInstanceS();
+	//Add object to the map
+	objMap.push_back(ret);
+
 	const amf3::Object& o=t.value;
 	for(uint32_t i=0;i<o.m_associativeSection.size();i++)
 	{
-		const tiny_string& varName=getString(th, o.m_associativeSection[i].name);
-		ASObject* obj=createValue(th, o.m_associativeSection[i].value);
+		const tiny_string& varName=getString(th, o.m_associativeSection[i].name, stringMap);
+		ASObject* obj=createValue(th, o.m_associativeSection[i].value, stringMap, objMap);
 		ret->setVariableByQName(varName,"",obj,DYNAMIC_TRAIT);
 	}
 	return ret;
 }
 
-static ASObject* createArray(Amf3Deserializer* th, const amf3::ArrayType& t)
+static ASObject* createArray(Amf3Deserializer* th, const amf3::ArrayType& t,
+		vector<tiny_string>& stringMap, vector<ASObject*>& objMap)
 {
-	lightspark::Array* ret=Class<lightspark::Array>::getInstanceS();
 	if(t.contents==amf3::ArrayType::REFERENCE)
 	{
-		LOG(LOG_NOT_IMPLEMENTED,"References in AMF3 not supported");
+		assert_and_throw(t.reference < objMap.size());
+		ASObject* ret=objMap[t.reference];
+		ret->incRef();
 		return ret;
 	}
+	lightspark::Array* ret=Class<lightspark::Array>::getInstanceS();
+	//Add object to the map
+	objMap.push_back(ret);
+
 	const amf3::Array& a=t.value;
 	for(uint32_t i=0;i<a.m_associativeSection.size();i++)
 	{
-		const tiny_string& varName=getString(th, a.m_associativeSection[i].name);
-		ASObject* obj=createValue(th, a.m_associativeSection[i].value);
+		const tiny_string& varName=getString(th, a.m_associativeSection[i].name, stringMap);
+		ASObject* obj=createValue(th, a.m_associativeSection[i].value, stringMap, objMap);
 		ret->setVariableByQName(varName,"",obj, DYNAMIC_TRAIT);
 	}
 	for(uint32_t i=0;i<a.m_denseSection.size();i++)
 	{
-		ASObject* obj=createValue(th, a.m_denseSection[i]);
+		ASObject* obj=createValue(th, a.m_denseSection[i], stringMap, objMap);
 		ret->push(obj);
 	}
 	return ret;
@@ -110,15 +134,19 @@ bool Amf3Deserializer::generateObjects(std::vector<ASObject*>& objs)
 	amf3::ValueType ans=parseValue();
 
 	//Now create an object for the parsed value
-	objs.push_back(createValue(this, ans));
+	vector<tiny_string> stringMap;
+	vector<ASObject*> objMap;
+	objs.push_back(createValue(this, ans, stringMap, objMap));
 	return true;
 }
 
 amf3::Integer Amf3Deserializer::parseInteger() const
 {
 	amf3::Integer ret;
-	if(!input->readU29(ret.val))
+	uint32_t tmp;
+	if(!input->readU29(tmp))
 		throw ParseException("Not enough data to parse integer");
+	ret.val=tmp;
 	return ret;
 }
 
@@ -140,16 +168,20 @@ Double Amf3Deserializer::parseDouble() const
 Utf8String Amf3Deserializer::parseStringVR() const
 {
 	Utf8String ret;
-	int32_t strRef;
+	uint32_t strRef;
 	if(!input->readU29(strRef))
 		throw ParseException("Not enough data to parse string");
 
 	if((strRef&0x01)==0)
-		throw UnsupportedException("References not supported in parseStringVR");
+	{
+		//Just a reference
+		ret = (strRef >> 1);
+		return ret;
+	}
 
-	int32_t strLen=strRef>>1;
+	uint32_t strLen=strRef>>1;
 	string retStr;
-	for(int32_t i=0;i<strLen;i++)
+	for(uint32_t i=0;i<strLen;i++)
 	{
 		uint8_t c;
 		if(!input->readByte(c))
@@ -163,12 +195,16 @@ Utf8String Amf3Deserializer::parseStringVR() const
 ArrayType Amf3Deserializer::parseArray() const
 {
 	ArrayType ret;
-	int32_t arrayRef;
+	uint32_t arrayRef;
 	if(!input->readU29(arrayRef))
 		throw ParseException("Not enough data to parse AMF3 array");
 
 	if((arrayRef&0x01)==0)
-		throw UnsupportedException("References not supported in parseArray");
+	{
+		//Just a reference
+		ret = (arrayRef >> 1);
+		return ret;
+	}
 
 	amf3::Array arrayRet;
 
@@ -198,15 +234,18 @@ ArrayType Amf3Deserializer::parseArray() const
 ObjectType Amf3Deserializer::parseObject() const
 {
 	ObjectType ret;
-	//TODO: Use U29
-	uint8_t objRef;
-	if(!input->readByte(objRef))
+	uint32_t objRef;
+	if(!input->readU29(objRef))
 		throw ParseException("Not enough data to parse AMF3 object");
 
 	assert_and_throw((objRef&0x80)==0);
 
 	if((objRef&0x01)==0)
-		throw UnsupportedException("References not supported in parseObject");
+	{
+		//Just a reference
+		ret = (objRef >> 1);
+		return ret;
+	}
 
 	Object objRet;
 	if((objRef&0x02)==0)
@@ -245,6 +284,16 @@ ValueType Amf3Deserializer::parseValue() const
 
 	switch(marker)
 	{
+		case null_marker:
+		{
+			ret=NullType();
+			break;
+		}
+		case undefined_marker:
+		{
+			ret=UndefinedType();
+			break;
+		}
 		case false_marker:
 		{
 			ret=BoolType(false);

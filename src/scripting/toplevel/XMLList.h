@@ -48,6 +48,8 @@ public:
 	ASFUNCTION(_constructor);
 	ASFUNCTION(_getLength);
 	ASFUNCTION(appendChild);
+	ASFUNCTION(child);
+	ASFUNCTION(children);
 	ASFUNCTION(_hasSimpleContent);
 	ASFUNCTION(_hasComplexContent);
 	ASFUNCTION(_toString);

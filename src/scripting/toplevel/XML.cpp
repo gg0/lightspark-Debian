@@ -69,6 +69,7 @@ void XML::sinit(Class_base* c)
 	c->setDeclaredMethodByQName("valueOf",AS3,Class<IFunction>::getFunction(valueOf),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("toXMLString",AS3,Class<IFunction>::getFunction(toXMLString),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("nodeKind",AS3,Class<IFunction>::getFunction(nodeKind),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("child",AS3,Class<IFunction>::getFunction(child),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("children",AS3,Class<IFunction>::getFunction(children),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("attribute",AS3,Class<IFunction>::getFunction(attribute),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("attributes",AS3,Class<IFunction>::getFunction(attributes),NORMAL_METHOD,true);
@@ -82,26 +83,78 @@ void XML::sinit(Class_base* c)
 	c->setDeclaredMethodByQName("elements",AS3,Class<IFunction>::getFunction(elements),NORMAL_METHOD,true);
 }
 
+#ifdef XMLPP_2_35_1
+XML::RecoveryDocument::RecoveryDocument(_xmlDoc* d):xmlpp::Document(d)
+{
+}
+
+void XML::RecoveryDomParser::parse_memory_raw(const unsigned char* contents, size_type bytes_count)
+{
+	release_underlying(); //Free any existing document.
+
+	//The following is based on the implementation of xmlParseFile(), in xmlSAXParseFileWithData():
+	context_ = xmlCreateMemoryParserCtxt((const char*)contents, bytes_count);
+	if(!context_)
+		throw xmlpp::internal_error("Couldn't create parsing context");
+
+	xmlSAXHandlerV1* handler=(xmlSAXHandlerV1*)calloc(1,sizeof(xmlSAXHandlerV1));
+	initxmlDefaultSAXHandler(handler, 0);
+	context_->recovery=1;
+	free(context_->sax);
+	context_->sax=(xmlSAXHandler*)handler;
+	context_->keepBlanks = 0;
+	handler->ignorableWhitespace = xmlSAX2IgnorableWhitespace;
+
+	//The following is based on the implementation of xmlParseFile(), in xmlSAXParseFileWithData():
+	//and the implementation of xmlParseMemory(), in xmlSaxParseMemoryWithData().
+	initialize_context();
+
+	if(!context_)
+		throw xmlpp::internal_error("Context not initialized");
+
+	xmlParseDocument(context_);
+
+	check_for_exception();
+
+	if(!context_->wellFormed)
+		LOG(LOG_ERROR, "XML data not well formed!");
+
+	doc_ = new RecoveryDocument(context_->myDoc);
+	// This is to indicate to release_underlying that we took the
+	// ownership on the doc.
+	context_->myDoc = 0;
+
+	//Free the parse context, but keep the document alive so people can navigate the DOM tree:
+	//TODO: Why not keep the context alive too?
+	Parser::release_underlying();
+
+	check_for_exception();
+}
+
+#endif
+
 void XML::buildFromString(const string& str)
 {
-	if(str.empty())
+	string buf = parserQuirks(str);
+	try
 	{
-		xmlpp::Element *el=parser.get_document()->create_root_node("");
-		node=el->add_child_text();
-		// TODO: node's parent (root) should be inaccessible from AS code
+		parser.parse_memory_raw((const unsigned char*)buf.c_str(), buf.size());
 	}
-	else
+	catch(const exception& e)
 	{
-		string buf = parserQuirks(str);
-		try
-		{
-			parser.parse_memory_raw((const unsigned char*)buf.c_str(), buf.size());
-		}
-		catch(const exception& e)
-		{
-			throw RunTimeException("Error while parsing XML");
-		}
-		node=parser.get_document()->get_root_node();
+	}
+	xmlpp::Document* doc=parser.get_document();
+	if(doc)
+		node=doc->get_root_node();
+
+	if(node==NULL)
+	{
+		LOG(LOG_ERROR, "XML parsing failed, creating text node");
+		//If everything fails, create a fake document and add a single text string child
+		buf="<a></a>";
+		parser.parse_memory_raw((const unsigned char*)buf.c_str(), buf.size());
+		node=parser.get_document()->get_root_node()->add_child_text(str);
+		// TODO: node's parent (root) should be inaccessible from AS code
 	}
 }
 
@@ -198,11 +251,6 @@ ASFUNCTIONBODY(XML,_constructor)
 	{
 		th->buildFromString("");
 	}
-	else if(args[0]->getObjectType()==T_STRING)
-	{
-		ASString* str=Class<ASString>::cast(args[0]);
-		th->buildFromString(std::string(str->data));
-	}
 	else if(args[0]->getClass()->isSubClass(Class<ByteArray>::getClass()))
 	{
 		//Official documentation says that generic Objects are not supported.
@@ -211,6 +259,15 @@ ASFUNCTIONBODY(XML,_constructor)
 		uint32_t len=ba->getLength();
 		const uint8_t* str=ba->getBuffer(len, false);
 		th->buildFromString(std::string((const char*)str,len));
+	}
+	else if(args[0]->getObjectType()==T_STRING ||
+		args[0]->getObjectType()==T_NUMBER ||
+		args[0]->getObjectType()==T_INTEGER ||
+		args[0]->getObjectType()==T_BOOLEAN)
+	{
+		//By specs, XML constructor will only convert to string Numbers or Booleans
+		//ints are not explicitly mentioned, but they seem to work
+		th->buildFromString(args[0]->toString());
 	}
 	else
 		throw Class<TypeError>::getInstanceS("Unsupported type in XML conversion");
@@ -278,30 +335,29 @@ ASFUNCTIONBODY(XML,appendChild)
 {
 	XML* th=Class<XML>::cast(obj);
 	assert_and_throw(argslen==1);
-	XML* arg=NULL;
+	_NR<XML> arg;
 	if(args[0]->getClass()==Class<XML>::getClass())
-		arg=Class<XML>::cast(args[0]);
-	else if(args[0]->getClass()==Class<XMLList>::getClass())
-		arg=Class<XMLList>::cast(args[0])->convertToXML().getPtr();
-
-	if(arg==NULL)
-		throw RunTimeException("Invalid argument for XML::appendChild");
-	//Change the root of the appended XML node
-	_NR<XML> rootXML=NullRef;
-	if(th->root.isNull())
 	{
-		th->incRef();
-		rootXML=_MR(th);
+		args[0]->incRef();
+		arg=_MR(Class<XML>::cast(args[0]));
+	}
+	else if(args[0]->getClass()==Class<XMLList>::getClass())
+	{
+		XMLList* list=Class<XMLList>::cast(args[0]);
+		arg=list->convertToXML();
+		assert_and_throw(!arg.isNull());
 	}
 	else
-		rootXML=th->root;
+	{
+		//The appendChild specs says that any other type is converted to string
+		//NOTE: this is explicitly different from XML constructor, that will only convert to
+		//string Numbers and Booleans
+		arg=_MR(Class<XML>::getInstanceS(args[0]->toString()));
+	}
 
-	arg->root=rootXML;
-	xmlUnlinkNode(arg->node->cobj());
-	xmlNodePtr ret=xmlAddChild(th->node->cobj(),arg->node->cobj());
-	assert_and_throw(ret);
-	arg->incRef();
-	return arg;
+	th->node->import_node(arg->node, true);
+	th->incRef();
+	return th;
 }
 
 /* returns the named attribute in an XMLList */
@@ -431,29 +487,46 @@ ASFUNCTIONBODY(XML,toXMLString)
 	return ret;
 }
 
+void XML::childrenImpl(std::vector<_R<XML> >& ret, const tiny_string& name)
+{
+	assert(node);
+	const xmlpp::Node::NodeList& list=node->get_children();
+	xmlpp::Node::NodeList::const_iterator it=list.begin();
+
+	_NR<XML> rootXML=NullRef;
+	if(root.isNull())
+	{
+		this->incRef();
+		rootXML=_MR(this);
+	}
+	else
+		rootXML=root;
+
+	for(;it!=list.end();it++)
+	{
+		if(name!="*" && (*it)->get_name() != name.raw_buf())
+			continue;
+		ret.push_back(_MR(Class<XML>::getInstanceS(rootXML, *it)));
+	}
+}
+
+ASFUNCTIONBODY(XML,child)
+{
+	XML* th=Class<XML>::cast(obj);
+	assert_and_throw(argslen==1);
+	const tiny_string& arg0=args[0]->toString();
+	std::vector<_R<XML>> ret;
+	th->childrenImpl(ret, arg0);
+	XMLList* retObj=Class<XMLList>::getInstanceS(ret);
+	return retObj;
+}
+
 ASFUNCTIONBODY(XML,children)
 {
 	XML* th=Class<XML>::cast(obj);
 	assert_and_throw(argslen==0);
-	assert(th->node);
-	const xmlpp::Node::NodeList& list=th->node->get_children();
-	xmlpp::Node::NodeList::const_iterator it=list.begin();
 	std::vector<_R<XML>> ret;
-
-	_NR<XML> rootXML=NullRef;
-	if(th->root.isNull())
-	{
-		th->incRef();
-		rootXML=_MR(th);
-	}
-	else
-		rootXML=th->root;
-
-	for(;it!=list.end();it++)
-	{
-		rootXML->incRef();
-		ret.push_back(_MR(Class<XML>::getInstanceS(rootXML, *it)));
-	}
+	th->childrenImpl(ret, "*");
 	XMLList* retObj=Class<XMLList>::getInstanceS(ret);
 	return retObj;
 }
@@ -528,10 +601,7 @@ ASFUNCTIONBODY(XML,elements)
 	{
 		xmlElementType nodetype=(*it)->cobj()->type;
 		if(nodetype==XML_ELEMENT_NODE && (name.empty() || name == (*it)->get_name()))
-		{
-			rootXML->incRef();
 			ret.push_back(_MR(Class<XML>::getInstanceS(rootXML, *it)));
-		}
 	}
 	return Class<XMLList>::getInstanceS(ret);
 }
@@ -576,10 +646,7 @@ void XML::recursiveGetDescendantsByQName(_R<XML> root, xmlpp::Node* node, const 
 {
 	//Check if this node is being requested. The empty string means ALL
 	if(name.empty() || name == node->get_name())
-	{
-		root->incRef();
 		ret.push_back(_MR(Class<XML>::getInstanceS(root, node)));
-	}
 	//NOTE: Creating a temporary list is quite a large overhead, but there is no way in libxml++ to access the first child
 	const xmlpp::Node::NodeList& list=node->get_children();
 	xmlpp::Node::NodeList::const_iterator it=list.begin();
@@ -885,7 +952,8 @@ bool XML::isEqual(ASObject* r)
 }
 
 void XML::serialize(ByteArray* out, std::map<tiny_string, uint32_t>& stringMap,
-				std::map<const ASObject*, uint32_t>& objMap) const
+				std::map<const ASObject*, uint32_t>& objMap,
+				std::map<const Class_base*, uint32_t>& traitsMap)
 {
 	throw UnsupportedException("XML::serialize not implemented");
 }

@@ -640,36 +640,42 @@ ASObject* ABCVm::executeFunction(const SyntheticFunction* function, call_context
 			case 0x35:
 			{
 				//li8
+				LOG(LOG_CALLS, "li8");
 				loadIntN<uint8_t>(context);
 				break;
 			}
 			case 0x36:
 			{
 				//li16
+				LOG(LOG_CALLS, "li16");
 				loadIntN<uint16_t>(context);
 				break;
 			}
 			case 0x37:
 			{
 				//li32
+				LOG(LOG_CALLS, "li32");
 				loadIntN<uint32_t>(context);
 				break;
 			}
 			case 0x3a:
 			{
 				//si8
+				LOG(LOG_CALLS, "si8");
 				storeIntN<uint8_t>(context);
 				break;
 			}
 			case 0x3b:
 			{
 				//si16
+				LOG(LOG_CALLS, "si16");
 				storeIntN<uint16_t>(context);
 				break;
 			}
 			case 0x3c:
 			{
 				//si32
+				LOG(LOG_CALLS, "si32");
 				storeIntN<uint32_t>(context);
 				break;
 			}
@@ -855,7 +861,9 @@ ASObject* ABCVm::executeFunction(const SyntheticFunction* function, call_context
 				//findpropstrict
 				u30 t;
 				code >> t;
-				context->runtime_stack_push(findPropStrict(context,context->context->getMultiname(t,context)));
+				multiname* name=context->context->getMultiname(t,context);
+				context->runtime_stack_push(findPropStrict(context,name));
+				name->resetNameIfObject();
 				break;
 			}
 			case 0x5e:
@@ -863,7 +871,9 @@ ASObject* ABCVm::executeFunction(const SyntheticFunction* function, call_context
 				//findproperty
 				u30 t;
 				code >> t;
-				context->runtime_stack_push(findProperty(context,context->context->getMultiname(t,context)));
+				multiname* name=context->context->getMultiname(t,context);
+				context->runtime_stack_push(findProperty(context,name));
+				name->resetNameIfObject();
 				break;
 			}
 			case 0x60:
@@ -886,6 +896,7 @@ ASObject* ABCVm::executeFunction(const SyntheticFunction* function, call_context
 				ASObject* obj=context->runtime_stack_pop();
 
 				setProperty(value,obj,name);
+				name->resetNameIfObject();
 				break;
 			}
 			case 0x62:
@@ -936,6 +947,7 @@ ASObject* ABCVm::executeFunction(const SyntheticFunction* function, call_context
 				ASObject* obj=context->runtime_stack_pop();
 
 				ASObject* ret=getProperty(obj,name);
+				name->resetNameIfObject();
 
 				context->runtime_stack_push(ret);
 				break;
@@ -949,6 +961,7 @@ ASObject* ABCVm::executeFunction(const SyntheticFunction* function, call_context
 			        multiname* name=context->context->getMultiname(t,context);
 			        ASObject* obj=context->runtime_stack_pop();
 				initProperty(obj,value,name);
+				name->resetNameIfObject();
 				break;
 			}
 			case 0x6a:
@@ -959,6 +972,7 @@ ASObject* ABCVm::executeFunction(const SyntheticFunction* function, call_context
 				multiname* name = context->context->getMultiname(t,context);
 				ASObject* obj=context->runtime_stack_pop();
 				bool ret = deleteProperty(obj,name);
+				name->resetNameIfObject();
 				context->runtime_stack_push(abstract_b(ret));
 				break;
 			}
@@ -1017,7 +1031,7 @@ ASObject* ABCVm::executeFunction(const SyntheticFunction* function, call_context
 			{
 				//convert_u
 				ASObject* val=context->runtime_stack_pop();
-				context->runtime_stack_push(abstract_i(convert_u(val)));
+				context->runtime_stack_push(abstract_ui(convert_u(val)));
 				break;
 			}
 			case 0x75:
@@ -1066,11 +1080,11 @@ ASObject* ABCVm::executeFunction(const SyntheticFunction* function, call_context
 				//astype
 				u30 t;
 				code >> t;
-				multiname* name=context->context->getMultiname(t,context);
+				multiname* name=context->context->getMultiname(t,NULL);
 
 				ASObject* v1=context->runtime_stack_pop();
 
-				ASObject* ret=asType(v1, name);
+				ASObject* ret=asType(context->context, v1, name);
 				context->runtime_stack_push(ret);
 				break;
 			}
@@ -1333,11 +1347,11 @@ ASObject* ABCVm::executeFunction(const SyntheticFunction* function, call_context
 				//istype
 				u30 t;
 				code >> t;
-				multiname* name=context->context->getMultiname(t,context);
+				multiname* name=context->context->getMultiname(t,NULL);
 
 				ASObject* v1=context->runtime_stack_pop();
 
-				ASObject* ret=abstract_b(isType(v1, name));
+				ASObject* ret=abstract_b(isType(context->context, v1, name));
 				context->runtime_stack_push(ret);
 				break;
 			}

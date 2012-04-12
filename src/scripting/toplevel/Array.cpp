@@ -21,6 +21,8 @@
 #include "abc.h"
 #include "argconv.h"
 #include "parsing/amf3_generator.h"
+#include "Vector.h"
+#include "flash/utils/flashutils.h"
 
 using namespace std;
 using namespace lightspark;
@@ -60,7 +62,7 @@ void Array::sinit(Class_base* c)
 	c->setDeclaredMethodByQName("join",AS3,Class<IFunction>::getFunction(join),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("map",AS3,Class<IFunction>::getFunction(_map),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("pop",AS3,Class<IFunction>::getFunction(_pop),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("push",AS3,Class<IFunction>::getFunction(_push),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("push",AS3,Class<IFunction>::getFunction(_push_as3),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("reverse",AS3,Class<IFunction>::getFunction(_reverse),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("shift",AS3,Class<IFunction>::getFunction(shift),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("slice",AS3,Class<IFunction>::getFunction(slice),NORMAL_METHOD,true);
@@ -74,6 +76,10 @@ void Array::sinit(Class_base* c)
 
 	// workaround, pop was encountered not in the AS3 namespace before, need to investigate it further
 	c->setDeclaredMethodByQName("pop","",Class<IFunction>::getFunction(_pop),NORMAL_METHOD,true);
+	c->prototype->setVariableByQName("pop","",Class<IFunction>::getFunction(_pop),DYNAMIC_TRAIT);
+	c->prototype->setVariableByQName("push","",Class<IFunction>::getFunction(_push),DYNAMIC_TRAIT);
+	c->prototype->setVariableByQName("shift","",Class<IFunction>::getFunction(shift),DYNAMIC_TRAIT);
+	c->prototype->setVariableByQName("unshift","",Class<IFunction>::getFunction(unshift),DYNAMIC_TRAIT);
 }
 
 void Array::buildTraits(ASObject* o)
@@ -98,8 +104,8 @@ ASFUNCTIONBODY(Array,_constructor)
 		th->resize(argslen);
 		for(unsigned int i=0;i<argslen;i++)
 		{
-			th->set(i,args[i]);
 			args[i]->incRef();
+			th->set(i,_MR(args[i]));
 		}
 	}
 	return NULL;
@@ -122,8 +128,8 @@ ASFUNCTIONBODY(Array,generator)
 		th->resize(argslen);
 		for(unsigned int i=0;i<argslen;i++)
 		{
-			th->set(i,args[i]);
 			args[i]->incRef();
+			th->set(i,_MR(args[i]));
 		}
 	}
 	return th;
@@ -140,6 +146,8 @@ ASFUNCTIONBODY(Array,_concat)
 	for(;it != th->data.end();++it)
 	{
 		ret->data[it->first]=it->second;
+		if(ret->data[it->first].type==DATA_OBJECT && ret->data[it->first].data)
+			ret->data[it->first].data->incRef();
 	}
 	
 	if(argslen==1 && args[0]->getObjectType()==T_ARRAY)
@@ -148,7 +156,10 @@ ASFUNCTIONBODY(Array,_concat)
 		std::map<uint32_t, data_slot>::iterator ittmp=tmp->data.begin();
 		for(;ittmp != tmp->data.end();++ittmp)
 		{
-			ret->data[ret->size()+ittmp->first]=ittmp->second;
+			uint32_t newIndex=ret->size()+ittmp->first;
+			ret->data[newIndex]=ittmp->second;
+			if(ret->data[newIndex].type==DATA_OBJECT && ret->data[newIndex].data)
+				ret->data[newIndex].data->incRef();
 		}
 		ret->resize(th->size()+tmp->size());
 	}
@@ -156,15 +167,10 @@ ASFUNCTIONBODY(Array,_concat)
 	{
 		//Insert the arguments in the array
 		for(unsigned int i=0;i<argslen;i++)
-			ret->push(args[i]);
-	}
-
-	//All the elements in the new array should be increffed, as args will be deleted and
-	//this array could die too
-	for(unsigned int i=0;i<ret->size();i++)
-	{
-		if(ret->data.count(i) && ret->data[i].type==DATA_OBJECT && ret->data[i].data)
-			ret->data[i].data->incRef();
+		{
+			args[i]->incRef();
+			ret->push(_MR(args[i]));
+		}
 	}
 
 	return ret;
@@ -179,14 +185,13 @@ ASFUNCTIONBODY(Array,filter)
 	Array* ret=Class<Array>::getInstanceS();
 	ASObject *funcRet;
 
-	for(unsigned int i=0;i<th->size();i++)
+	std::map<uint32_t, data_slot>::iterator it=th->data.begin();
+	for(;it != th->data.end();++it)
 	{
-		if (!th->data.count(i))
-			continue;
-		assert_and_throw(th->data[i].type==DATA_OBJECT);
-		params[0] = th->data[i].data;
-		th->data[i].data->incRef();
-		params[1] = abstract_i(i);
+		assert_and_throw(it->second.type==DATA_OBJECT);
+		params[0] = it->second.data;
+		it->second.data->incRef();
+		params[1] = abstract_i(it->first);
 		params[2] = th;
 		th->incRef();
 
@@ -203,8 +208,8 @@ ASFUNCTIONBODY(Array,filter)
 		{
 			if(Boolean_concrete(funcRet))
 			{
-				th->data[i].data->incRef();
-				ret->push(th->data[i].data);
+				it->second.data->incRef();
+				ret->push(_MR(it->second.data));
 			}
 			funcRet->decRef();
 		}
@@ -220,14 +225,13 @@ ASFUNCTIONBODY(Array, some)
 	ASObject* params[3];
 	ASObject *funcRet;
 
-	for(unsigned int i=0; i < th->size(); i++)
+	std::map<uint32_t, data_slot>::iterator it=th->data.begin();
+	for(;it != th->data.end();++it)
 	{
-		if (!th->data.count(i))
-			continue;
-		assert_and_throw(th->data[i].type==DATA_OBJECT);
-		params[0] = th->data[i].data;
-		th->data[i].data->incRef();
-		params[1] = abstract_i(i);
+		assert_and_throw(it->second.type==DATA_OBJECT);
+		params[0] = it->second.data;
+		it->second.data->incRef();
+		params[1] = abstract_i(it->first);
 		params[2] = th;
 		th->incRef();
 
@@ -260,14 +264,13 @@ ASFUNCTIONBODY(Array, every)
 	ASObject* params[3];
 	ASObject *funcRet;
 
-	for(unsigned int i=0; i < th->size(); i++)
+	std::map<uint32_t, data_slot>::iterator it=th->data.begin();
+	for(;it != th->data.end();++it)
 	{
-		if (!th->data.count(i))
-			continue;
-		assert_and_throw(th->data[i].type==DATA_OBJECT);
-		params[0] = th->data[i].data;
-		th->data[i].data->incRef();
-		params[1] = abstract_i(i);
+		assert_and_throw(it->second.type==DATA_OBJECT);
+		params[0] = it->second.data;
+		it->second.data->incRef();
+		params[1] = abstract_i(it->first);
 		params[2] = th;
 		th->incRef();
 
@@ -317,14 +320,13 @@ ASFUNCTIONBODY(Array,forEach)
 	IFunction* f = static_cast<IFunction*>(args[0]);
 	ASObject* params[3];
 
-	for(unsigned int i=0; i < th->size(); i++)
+	std::map<uint32_t, data_slot>::iterator it=th->data.begin();
+	for(;it != th->data.end();++it)
 	{
-		if (!th->data.count(i))
-			continue;
-		assert_and_throw(th->data[i].type==DATA_OBJECT);
-		params[0] = th->data[i].data;
-		th->data[i].data->incRef();
-		params[1] = abstract_i(i);
+		assert_and_throw(it->second.type==DATA_OBJECT);
+		params[0] = it->second.data;
+		it->second.data->incRef();
+		params[1] = abstract_i(it->first);
 		params[2] = th;
 		th->incRef();
 
@@ -414,6 +416,26 @@ ASFUNCTIONBODY(Array,lastIndexOf)
 
 ASFUNCTIONBODY(Array,shift)
 {
+	if (!obj->is<Array>())
+	{
+		// this seems to be how Flash handles the generic shift calls
+		if (obj->is<Vector>())
+			return Vector::shift(obj,args,argslen);
+		if (obj->is<ByteArray>())
+			return ByteArray::shift(obj,args,argslen);
+		// for other objects we just decrease the length property
+		multiname lengthName;
+		lengthName.name_type=multiname::NAME_STRING;
+		lengthName.name_s="length";
+		lengthName.ns.push_back(nsNameAndKind("",NAMESPACE));
+		lengthName.ns.push_back(nsNameAndKind(AS3,NAMESPACE));
+		lengthName.isAttribute = true;
+		_NR<ASObject> o=obj->getVariableByMultiname(lengthName,SKIP_IMPL);
+		uint32_t res = o->toUInt();
+		if (res > 0)
+			obj->setVariableByMultiname(lengthName,abstract_ui(res-1));
+		return new Undefined;
+	}
 	Array* th=static_cast<Array*>(obj);
 	if(!th->size())
 		return new Undefined;
@@ -426,20 +448,17 @@ ASFUNCTIONBODY(Array,shift)
 			ret=th->data[0].data;
 		else
 			ret = abstract_i(th->data[0].data_i);
-		th->data.erase(0);
 	}
-	for(uint32_t i= 1;i< th->size();i++)
+	std::map<uint32_t,data_slot> tmp;
+	std::map<uint32_t,data_slot>::iterator it;
+	for ( it=th->data.begin(); it != th->data.end(); it++ )
 	{
-		if (th->data.count(i))
+		if(it->first)
 		{
-			th->data[i-1]=th->data[i];
-		}
-		else if (th->data.count(i-1))
-		{
-			th->data.erase(i-1);
+			tmp[it->first-1]=it->second;
 		}
 	}
-	th->data.erase(th->size()-1);// erase here to avoid decref
+	th->data = tmp;
 	th->resize(th->size()-1);
 	return ret;
 }
@@ -483,8 +502,9 @@ ASFUNCTIONBODY(Array,slice)
 	{
 		if (th->data.count(i))
 		{
-			th->data[i].data->incRef();
-			ret->data[j] =th->data[i];
+			if(th->data[i].type == DATA_OBJECT)
+				th->data[i].data->incRef();
+			ret->data[j]=th->data[i];
 		}
 		j++;
 	}
@@ -546,15 +566,15 @@ ASFUNCTIONBODY(Array,splice)
 	for(unsigned int i=2;i<argslen;i++)
 	{
 		args[i]->incRef();
-		th->push(args[i]);
+		th->push(_MR(args[i]));
 	}
 	// move remembered items to new position
 	for(int i=0;i<totalSize- (startIndex+deleteCount);i++)
 	{
 		if (tmp[i].type != DATA_OBJECT || tmp[i].data != NULL)
-			th->data[startIndex+i] = tmp[i];
+			th->data[startIndex+i+(argslen > 2 ? argslen-2 : 0)] = tmp[i];
 	}
-	th->resize((totalSize-deleteCount)+(argslen-2));
+	th->resize((totalSize-deleteCount)+(argslen > 2 ? argslen-2 : 0));
 	return ret;
 }
 
@@ -578,27 +598,26 @@ ASFUNCTIONBODY(Array,join)
 ASFUNCTIONBODY(Array,indexOf)
 {
 	Array* th=static_cast<Array*>(obj);
-	assert_and_throw(argslen==1 || argslen==2);
 	int ret=-1;
-	ASObject* arg0=args[0];
+	int32_t index=0;
+	ASObject* arg0 = args[0];
+	if (argslen > 1) 
+		index = args[1]->toInt();
 
-	int unsigned i = 0;
-	if(argslen == 2)
-	{
-		i = args[1]->toInt();
-	}
 
 	DATA_TYPE dtype;
-	for(;i<th->size();i++)
+	std::map<uint32_t,data_slot>::iterator it;
+	for ( it=th->data.begin() ; it != th->data.end(); it++ )
 	{
-		if (!th->data.count(i))
+		if (it->first < (uint32_t)index)
 			continue;
-		dtype = th->data[i].type;
+		data_slot sl = it->second;
+		dtype = sl.type;
 		assert_and_throw(dtype==DATA_OBJECT || dtype==DATA_INT);
-		if((dtype == DATA_OBJECT && ABCVm::strictEqualImpl(th->data[i].data,arg0)) ||
-			(dtype == DATA_INT && arg0->toInt() == th->data[i].data_i))
+		if((dtype == DATA_OBJECT && ABCVm::strictEqualImpl(sl.data,arg0)) ||
+			(dtype == DATA_INT && arg0->toInt() == sl.data_i))
 		{
-			ret=i;
+			ret=it->first;
 			break;
 		}
 	}
@@ -608,11 +627,32 @@ ASFUNCTIONBODY(Array,indexOf)
 
 ASFUNCTIONBODY(Array,_pop)
 {
+	if (!obj->is<Array>())
+	{
+		// this seems to be how Flash handles the generic pop calls
+		if (obj->is<Vector>())
+			return Vector::_pop(obj,args,argslen);
+		if (obj->is<ByteArray>())
+			return ByteArray::pop(obj,args,argslen);
+		// for other objects we just decrease the length property
+		multiname lengthName;
+		lengthName.name_type=multiname::NAME_STRING;
+		lengthName.name_s="length";
+		lengthName.ns.push_back(nsNameAndKind("",NAMESPACE));
+		lengthName.ns.push_back(nsNameAndKind(AS3,NAMESPACE));
+		lengthName.isAttribute = true;
+		_NR<ASObject> o=obj->getVariableByMultiname(lengthName,SKIP_IMPL);
+		uint32_t res = o->toUInt();
+		if (res > 0)
+			obj->setVariableByMultiname(lengthName,abstract_ui(res-1));
+		return new Undefined;
+	}
 	Array* th=static_cast<Array*>(obj);
 	uint32_t size =th->size();
 	if (size == 0)
 		return new Undefined;
 	ASObject* ret;
+	
 	if (th->data.count(size-1))
 	{
 		if(th->data[size-1].type==DATA_OBJECT)
@@ -763,36 +803,104 @@ ASFUNCTIONBODY(Array,sortOn)
 
 ASFUNCTIONBODY(Array,unshift)
 {
-	Array* th=static_cast<Array*>(obj);
-	th->resize(th->size()+argslen);
-	for(uint32_t i=th->size();i> 0;i--)
+	if (!obj->is<Array>())
 	{
-		if (th->data.count(i-1))
+		// this seems to be how Flash handles the generic unshift calls
+		if (obj->is<Vector>())
+			return Vector::unshift(obj,args,argslen);
+		if (obj->is<ByteArray>())
+			return ByteArray::unshift(obj,args,argslen);
+		// for other objects we just increase the length property
+		multiname lengthName;
+		lengthName.name_type=multiname::NAME_STRING;
+		lengthName.name_s="length";
+		lengthName.ns.push_back(nsNameAndKind("",NAMESPACE));
+		lengthName.ns.push_back(nsNameAndKind(AS3,NAMESPACE));
+		lengthName.isAttribute = true;
+		_NR<ASObject> o=obj->getVariableByMultiname(lengthName,SKIP_IMPL);
+		uint32_t res = o->toUInt();
+		obj->setVariableByMultiname(lengthName,abstract_ui(res+argslen));
+		return new Undefined;
+	}
+	Array* th=static_cast<Array*>(obj);
+	if (argslen > 0)
+	{
+		th->resize(th->size()+argslen);
+		std::map<uint32_t,data_slot> tmp;
+		std::map<uint32_t,data_slot>::reverse_iterator it;
+		for ( it=th->data.rbegin(); it != th->data.rend(); it++ )
 		{
-			th->data[(i-1)+argslen]=th->data[i-1];
-			th->data.erase(i-1);
+			tmp[it->first+argslen]=it->second;
 		}
 		
-	}
-
-	for(uint32_t i=0;i<argslen;i++)
-	{
-		th->data[i] = data_slot(args[i],DATA_OBJECT);
-		args[i]->incRef();
+		for(uint32_t i=0;i<argslen;i++)
+		{
+			tmp[i] = data_slot(args[i],DATA_OBJECT);
+			args[i]->incRef();
+		}
+		th->data = tmp;
 	}
 	return abstract_i(th->size());
 }
 
 ASFUNCTIONBODY(Array,_push)
 {
+	if (!obj->is<Array>())
+	{
+		// this seems to be how Flash handles the generic push calls
+		if (obj->is<Vector>())
+			return Vector::push(obj,args,argslen);
+		if (obj->is<ByteArray>())
+			return ByteArray::push(obj,args,argslen);
+		// for other objects we just increase the length property
+		multiname lengthName;
+		lengthName.name_type=multiname::NAME_STRING;
+		lengthName.name_s="length";
+		lengthName.ns.push_back(nsNameAndKind("",NAMESPACE));
+		lengthName.ns.push_back(nsNameAndKind(AS3,NAMESPACE));
+		lengthName.isAttribute = true;
+		_NR<ASObject> o=obj->getVariableByMultiname(lengthName,SKIP_IMPL);
+		uint32_t res = o->toUInt();
+		obj->setVariableByMultiname(lengthName,abstract_ui(res+argslen));
+		return new Undefined;
+	}
 	Array* th=static_cast<Array*>(obj);
 	for(unsigned int i=0;i<argslen;i++)
 	{
-		if (th->size() > UINT32_MAX)
-			throw Class<RangeError>::getInstanceS("");
-			
-		th->push(args[i]);
 		args[i]->incRef();
+		th->push(_MR(args[i]));
+	}
+	return abstract_i(th->size());
+}
+// AS3 handles push on uint.MAX_VALUE differently than ECMA, so we need to push methods
+ASFUNCTIONBODY(Array,_push_as3)
+{
+	if (!obj->is<Array>())
+	{
+		// this seems to be how Flash handles the generic push calls
+		if (obj->is<Vector>())
+			return Vector::push(obj,args,argslen);
+		if (obj->is<ByteArray>())
+			return ByteArray::push(obj,args,argslen);
+		// for other objects we just increase the length property
+		multiname lengthName;
+		lengthName.name_type=multiname::NAME_STRING;
+		lengthName.name_s="length";
+		lengthName.ns.push_back(nsNameAndKind("",NAMESPACE));
+		lengthName.ns.push_back(nsNameAndKind(AS3,NAMESPACE));
+		lengthName.isAttribute = true;
+		_NR<ASObject> o=obj->getVariableByMultiname(lengthName,SKIP_IMPL);
+		uint32_t res = o->toUInt();
+		obj->setVariableByMultiname(lengthName,abstract_ui(res+argslen));
+		return new Undefined;
+	}
+	Array* th=static_cast<Array*>(obj);
+	for(unsigned int i=0;i<argslen;i++)
+	{
+		if (th->size() >= UINT32_MAX)
+			break;
+		args[i]->incRef();
+		th->push(_MR(args[i]));
 	}
 	return abstract_i(th->size());
 }
@@ -804,30 +912,26 @@ ASFUNCTIONBODY(Array,_map)
 	IFunction* func=static_cast<IFunction*>(args[0]);
 	Array* arrayRet=Class<Array>::getInstanceS();
 
-	for(uint32_t i=0;i<th->size();i++)
+	std::map<uint32_t,data_slot>::iterator it;
+	for ( it=th->data.begin() ; it != th->data.end(); it++ )
 	{
 		ASObject* funcArgs[3];
-		if (!th->data.count(i))
-			funcArgs[0]=new Null;
-		else
+		const data_slot& slot=it->second;
+		if(slot.type==DATA_INT)
+			funcArgs[0]=abstract_i(slot.data_i);
+		else if(slot.type==DATA_OBJECT && slot.data)
 		{
-			const data_slot& slot=th->data[i];
-			if(slot.type==DATA_INT)
-				funcArgs[0]=abstract_i(slot.data_i);
-			else if(slot.type==DATA_OBJECT && slot.data)
-			{
-				funcArgs[0]=slot.data;
-				funcArgs[0]->incRef();
-			}
-			else
-				funcArgs[0]=new Undefined;
+			funcArgs[0]=slot.data;
+			funcArgs[0]->incRef();
 		}
-		funcArgs[1]=abstract_i(i);
+		else
+			funcArgs[0]=new Undefined;
+		funcArgs[1]=abstract_i(it->first);
 		funcArgs[2]=th;
 		funcArgs[2]->incRef();
 		ASObject* funcRet=func->call(new Null, funcArgs, 3);
 		assert_and_throw(funcRet);
-		arrayRet->push(funcRet);
+		arrayRet->push(_MR(funcRet));
 	}
 
 	return arrayRet;
@@ -842,7 +946,7 @@ ASFUNCTIONBODY(Array,_toString)
 int32_t Array::getVariableByMultiname_i(const multiname& name)
 {
 	assert_and_throw(implEnable);
-	unsigned int index=0;
+	uint32_t index=0;
 	if(!isValidMultiname(name,index))
 		return ASObject::getVariableByMultiname_i(name);
 
@@ -850,26 +954,27 @@ int32_t Array::getVariableByMultiname_i(const multiname& name)
 	{
 		if (!data.count(index))
 			return 0;
-		switch(data[index].type)
+		data_slot sl = data[index];
+		switch(sl.type)
 		{
 			case DATA_OBJECT:
 			{
-				assert(data[index].data!=NULL);
-				if(data[index].data->getObjectType()==T_INTEGER)
+				assert(sl.data!=NULL);
+				if(sl.data->getObjectType()==T_INTEGER)
 				{
-					Integer* i=static_cast<Integer*>(data[index].data);
+					Integer* i=static_cast<Integer*>(sl.data);
 					return i->toInt();
 				}
-				else if(data[index].data->getObjectType()==T_NUMBER)
+				else if(sl.data->getObjectType()==T_NUMBER)
 				{
-					Number* i=static_cast<Number*>(data[index].data);
+					Number* i=static_cast<Number*>(sl.data);
 					return i->toInt();
 				}
 				else
 					throw UnsupportedException("Array::getVariableByMultiname_i not completely implemented");
 			}
 			case DATA_INT:
-				return data[index].data_i;
+				return sl.data_i;
 		}
 	}
 
@@ -885,7 +990,7 @@ _NR<ASObject> Array::getVariableByMultiname(const multiname& name, GET_VARIABLE_
 	if(name.ns[0].name!="")
 		return ASObject::getVariableByMultiname(name,opt);
 
-	unsigned int index=0;
+	uint32_t index=0;
 	if(!isValidMultiname(name,index))
 		return ASObject::getVariableByMultiname(name,opt);
 	if(index<size())
@@ -893,20 +998,24 @@ _NR<ASObject> Array::getVariableByMultiname(const multiname& name, GET_VARIABLE_
 		ASObject* ret=NULL;
 		if (!data.count(index))
 			ret = new Undefined;
-		switch(data[index].type)
+		else
 		{
-			case DATA_OBJECT:
-				ret=data[index].data;
-				if(ret==NULL)
-				{
-					ret=new Undefined;
-					data[index].data=ret;
-				}
-				ret->incRef();
-				break;
-			case DATA_INT:
-				ret=abstract_i(data[index].data_i);
-				break;
+			data_slot sl = data[index];
+			switch(sl.type)
+			{
+				case DATA_OBJECT:
+					ret=sl.data;
+					if(ret==NULL)
+					{
+						ret=new Undefined;
+						sl.data=ret;
+					}
+					ret->incRef();
+					break;
+				case DATA_INT:
+					ret=abstract_i(sl.data_i);
+					break;
+			}
 		}
 		return _MNR(ret);
 	}
@@ -1070,15 +1179,16 @@ tiny_string Array::toString_priv() const
 	{
 		if (data.count(i))
 		{
-			if(data.at(i).type==DATA_OBJECT)
+			data_slot sl = data.at(i);
+			if(sl.type==DATA_OBJECT)
 			{
-				if(data.at(i).data)
-					ret+=data.at(i).data->toString().raw_buf();
+				if(sl.data)
+					ret+=sl.data->toString().raw_buf();
 			}
-			else if(data.at(i).type==DATA_INT)
+			else if(sl.type==DATA_INT)
 			{
 				char buf[20];
-				snprintf(buf,20,"%i",data.at(i).data_i);
+				snprintf(buf,20,"%i",sl.data_i);
 				ret+=buf;
 			}
 			else
@@ -1098,18 +1208,19 @@ _R<ASObject> Array::nextValue(uint32_t index)
 		index--;
 		if(!data.count(index))
 			return _MR(new Undefined);
-		if(data[index].type==DATA_OBJECT)
+		data_slot sl = data[index];
+		if(sl.type==DATA_OBJECT)
 		{
-			if(data[index].data==NULL)
+			if(sl.data==NULL)
 				return _MR(new Undefined);
 			else
 			{
-				data[index].data->incRef();
-				return _MR(data[index].data);
+				sl.data->incRef();
+				return _MR(sl.data);
 			}
 		}
-		else if(data[index].type==DATA_INT)
-			return _MR(abstract_i(data[index].data_i));
+		else if(sl.type==DATA_INT)
+			return _MR(abstract_i(sl.data_i));
 		else
 			throw UnsupportedException("Unexpected data type");
 	}
@@ -1158,26 +1269,30 @@ _R<ASObject> Array::nextName(uint32_t index)
 	}
 }
 
-ASObject* Array::at(unsigned int index) const
+_R<ASObject> Array::at(unsigned int index) const
 {
 	if(size()<=index)
 		outofbounds();
 
 	if (!data.count(index))
-		return new Undefined;
-	switch(data.at(index).type)
+		return _MR(new Undefined);
+	data_slot sl = data.at(index);
+	switch(sl.type)
 	{
 		case DATA_OBJECT:
 		{
-			if(data.at(index).data)
-				return data.at(index).data;
+			if(sl.data)
+			{
+				sl.data->incRef();
+				return _MR(sl.data);
+			}
 		}
 		case DATA_INT:
-			return abstract_i(data.at(index).data_i);
+			return _MR(abstract_i(sl.data_i));
 	}
 
 	//We should be here only if data is an object and is NULL
-	return new Undefined;
+	return _MR(new Undefined);
 }
 
 void Array::outofbounds() const
@@ -1185,11 +1300,31 @@ void Array::outofbounds() const
 	throw ParseException("Array access out of bounds");
 }
 
+void Array::resize(uint64_t n)
+{
+	std::map<uint32_t,data_slot>::reverse_iterator it;
+	std::map<uint32_t,data_slot>::iterator itstart = n ? data.end() : data.begin();
+	for ( it=data.rbegin() ; it != data.rend(); it++ )
+	{
+		if (it->first < n)
+		{
+			itstart = it.base();
+			break;
+		}
+		if (it->second.type==DATA_OBJECT && it->second.data)
+			it->second.data->decRef();
+	}
+	if (itstart != data.end())
+		data.erase(itstart,data.end());
+	currentsize = n;
+}
+
 void Array::serialize(ByteArray* out, std::map<tiny_string, uint32_t>& stringMap,
-				std::map<const ASObject*, uint32_t>& objMap) const
+				std::map<const ASObject*, uint32_t>& objMap,
+				std::map<const Class_base*, uint32_t>& traitsMap)
 {
 	assert_and_throw(objMap.find(this)==objMap.end());
-	out->writeByte(amf3::array_marker);
+	out->writeByte(array_marker);
 	//Check if the array has been already serialized
 	auto it=objMap.find(this);
 	if(it!=objMap.end())
@@ -1206,7 +1341,7 @@ void Array::serialize(ByteArray* out, std::map<tiny_string, uint32_t>& stringMap
 		assert_and_throw(denseCount<0x20000000);
 		uint32_t value = (denseCount << 1) | 1;
 		out->writeU29(value);
-		serializeDynamicProperties(out, stringMap, objMap);
+		serializeDynamicProperties(out, stringMap, objMap, traitsMap);
 		for(uint32_t i=0;i<denseCount;i++)
 		{
 			if (!data.count(i))
@@ -1216,19 +1351,25 @@ void Array::serialize(ByteArray* out, std::map<tiny_string, uint32_t>& stringMap
 				case DATA_INT:
 					throw UnsupportedException("int not supported in Array::serialize");
 				case DATA_OBJECT:
-					data.at(i).data->serialize(out, stringMap, objMap);
+					data.at(i).data->serialize(out, stringMap, objMap, traitsMap);
 			}
 		}
 	}
 }
 
+Array::~Array()
+{
+	Array::finalize();
+}
+
 void Array::finalize()
 {
 	ASObject::finalize();
-	for(unsigned int i=0;i<size();i++)
+	std::map<uint32_t,data_slot>::iterator it;
+	for ( it=data.begin() ; it != data.end(); it++ )
 	{
-		if(data.count(i) && data[i].type==DATA_OBJECT && data[i].data)
-			data[i].data->decRef();
+		if(it->second.type==DATA_OBJECT && it->second.data)
+			it->second.data->decRef();
 	}
 	data.clear();
 }

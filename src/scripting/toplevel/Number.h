@@ -17,45 +17,63 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
-#ifndef BOOLEAN_H_
-#define BOOLEAN_H_
-
+#ifndef NUMBER_H
+#define NUMBER_H
+#include "compat.h"
 #include "asobject.h"
 
 namespace lightspark
 {
 
-/* returns a fully inialized Boolean object with value b
- * like Class<Boolean>::getInstanceS(b) but without the constructor problems */
-Boolean* abstract_b(bool b);
-
-/* implements ecma3's ToBoolean() operation, see section 9.2, but returns the value instead of an Boolean object */
-bool Boolean_concrete(const ASObject* obj);
-
-class Boolean: public ASObject
+class Number : public ASObject
 {
-CLASSBUILDABLE(Boolean);
+friend ASObject* abstract_d(number_t i);
+friend class ABCContext;
+friend class ABCVm;
+CLASSBUILDABLE(Number);
 private:
-	Boolean() {type=T_BOOLEAN;}
-	static void buildTraits(ASObject* o){};
-	static void sinit(Class_base*);
+	Number():val(0) {type=T_NUMBER;}
+	Number(double v):val(v){type=T_NUMBER;}
+	static void purgeTrailingZeroes(char* buf);
 public:
-	bool val;
-	int32_t toInt()
-	{
-		return val ? 1 : 0;
-	}
-	bool isEqual(ASObject* r);
-	TRISTATE isLess(ASObject* r);
+	static const number_t NaN;
+	double val;
 	ASFUNCTION(_constructor);
 	ASFUNCTION(_toString);
-	ASFUNCTION(_valueOf);
+	ASFUNCTION(toFixed);
+	tiny_string toString();
+	static tiny_string toString(number_t val);
+	static bool isInteger(number_t val)
+	{
+		return floor(val) == val;
+	}
+	unsigned int toUInt()
+	{
+		return (unsigned int)(val);
+	}
+	int32_t toInt()
+	{
+		if(val<0)
+			return int(val);
+		else
+		{
+			uint32_t ret=val;
+			return ret;
+		}
+	}
+	TRISTATE isLess(ASObject* o);
+	bool isEqual(ASObject* o);
+	static void buildTraits(ASObject* o){};
+	static void sinit(Class_base* c);
 	ASFUNCTION(generator);
+	std::string toDebugString() { return toString()+"d"; }
 	//Serialization interface
 	void serialize(ByteArray* out, std::map<tiny_string, uint32_t>& stringMap,
 				std::map<const ASObject*, uint32_t>& objMap,
 				std::map<const Class_base*, uint32_t>& traitsMap);
 };
 
-}
-#endif /* BOOLEAN_H_ */
+
+};
+
+#endif // NUMBER_H

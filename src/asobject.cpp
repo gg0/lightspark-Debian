@@ -302,13 +302,9 @@ bool ASObject::isPrimitive() const
 
 variable* variables_map::findObjVar(const tiny_string& n, const nsNameAndKind& ns, TRAIT_KIND createKind, uint32_t traitKinds)
 {
-	const var_iterator ret_begin=Variables.lower_bound(n);
-	//This actually look for the first different name, if we accept also previous levels
-	//Otherwise we are just doing equal_range
-	const var_iterator ret_end=Variables.upper_bound(n);
-
-	var_iterator ret=ret_begin;
-	for(;ret!=ret_end;++ret)
+	pair<var_iterator, var_iterator> var_range=Variables.equal_range(n);
+	var_iterator ret=var_range.first;
+	for(;ret!=var_range.second;++ret)
 	{
 		if(!(ret->second.kind & traitKinds))
 			continue;
@@ -321,7 +317,7 @@ variable* variables_map::findObjVar(const tiny_string& n, const nsNameAndKind& n
 	if(createKind==NO_CREATE_TRAIT)
 		return NULL;
 
-	var_iterator inserted=Variables.insert(ret_begin,make_pair(n, variable(ns, createKind)) );
+	var_iterator inserted=Variables.insert(var_range.first,make_pair(n, variable(ns, createKind)) );
 	return &inserted->second;
 }
 
@@ -474,6 +470,11 @@ void ASObject::setVariableByMultiname(const multiname& name, ASObject* o, Class_
 		//looking for a settable even if a super class sets
 		//has_getter to true.
 		obj=cls->findSettable(name,true,&has_getter);
+		if(obj && cls->isFinal && !obj->setter)
+		{
+			tiny_string err=tiny_string("Error #1037: Cannot assign to a method ")+name.normalizedName()+tiny_string(" on ")+cls->getQualifiedClassName();
+			throw Class<ReferenceError>::getInstanceS(err);
+		}
 	}
 
 	if(!obj && cls)
@@ -486,6 +487,11 @@ void ASObject::setVariableByMultiname(const multiname& name, ASObject* o, Class_
 			
 			if(tmp)
 			{
+				if(cls->isFinal && !tmp->setter)
+				{
+					tiny_string err=tiny_string("Error #1037: Cannot assign to a method ")+name.normalizedName()+tiny_string(" on ")+cls->getQualifiedClassName();
+					throw Class<ReferenceError>::getInstanceS(err);
+				}
 				if (tmp->kind != DYNAMIC_TRAIT) // dynamic prototype properties can be overridden 
 					obj = tmp;
 				break;
@@ -493,7 +499,7 @@ void ASObject::setVariableByMultiname(const multiname& name, ASObject* o, Class_
 			proto = proto->getprop_prototype();
 		}
 	}
-
+	
 	if(!obj)
 	{
 		if(has_getter)
@@ -616,15 +622,10 @@ void variables_map::killObjVar(const multiname& mname)
 variable* variables_map::findObjVar(const multiname& mname, TRAIT_KIND createKind, uint32_t traitKinds)
 {
 	tiny_string name=mname.normalizedName();
-
-	const var_iterator ret_begin=Variables.lower_bound(name);
-	//This actually look for the first different name, if we accept also previous levels
-	//Otherwise we are just doing equal_range
-	const var_iterator ret_end=Variables.upper_bound(name);
-
+	pair<var_iterator, var_iterator> var_range=Variables.equal_range(name);
 	assert(!mname.ns.empty());
-	var_iterator ret=ret_begin;
-	for(;ret!=ret_end;++ret)
+	var_iterator ret=var_range.first;
+	for(;ret!=var_range.second;++ret)
 	{
 		if(!(ret->second.kind & traitKinds))
 			continue;
@@ -1127,58 +1128,153 @@ unsigned int ASObject::numVariables() const
 
 void ASObject::constructionComplete()
 {
-	//Nothing to be done now
+	Mutex::Lock lock(constructionMutex);
+	constructionSignal.broadcast();
+}
+
+bool ASObject::waitUntilConstructed(unsigned long maxwait_ms)
+{
+	Mutex::Lock lock(constructionMutex);
+
+	if(isConstructed())
+		return true;
+
+	// No need to loop over wait() because the construction state
+	// will change only once from false to true.
+	if(maxwait_ms==0)
+	{
+		constructionSignal.wait(constructionMutex);
+		return true;
+	}
+	else
+	{
+		CondTime wakeUp(maxwait_ms);
+		return wakeUp.wait(constructionMutex, constructionSignal);
+	}
 }
 
 void ASObject::serializeDynamicProperties(ByteArray* out, std::map<tiny_string, uint32_t>& stringMap,
-				std::map<const ASObject*, uint32_t>& objMap) const
+				std::map<const ASObject*, uint32_t>& objMap,
+				std::map<const Class_base*, uint32_t> traitsMap) const
 {
-	Variables.serialize(out, stringMap, objMap);
+	Variables.serialize(out, stringMap, objMap, traitsMap);
 }
 
 void variables_map::serialize(ByteArray* out, std::map<tiny_string, uint32_t>& stringMap,
-				std::map<const ASObject*, uint32_t>& objMap) const
+				std::map<const ASObject*, uint32_t>& objMap,
+				std::map<const Class_base*, uint32_t>& traitsMap) const
 {
 	//Pairs of name, value
 	auto it=Variables.begin();
 	for(;it!=Variables.end();it++)
 	{
+		if(it->second.kind!=DYNAMIC_TRAIT)
+			continue;
 		assert_and_throw(it->second.ns.size() == 1)
 		assert_and_throw(it->second.ns.begin()->name=="");
 		out->writeStringVR(stringMap,it->first);
-		it->second.var->serialize(out, stringMap, objMap);
+		it->second.var->serialize(out, stringMap, objMap, traitsMap);
 	}
 	//The empty string closes the object
 	out->writeStringVR(stringMap, "");
 }
 
 void ASObject::serialize(ByteArray* out, std::map<tiny_string, uint32_t>& stringMap,
-				std::map<const ASObject*, uint32_t>& objMap) const
+				std::map<const ASObject*, uint32_t>& objMap,
+				std::map<const Class_base*, uint32_t>& traitsMap)
 {
-	Class_base* type=getClass();
-	if(type!=Class<ASObject>::getClass())
-		throw UnsupportedException("ASObject::serialize not completely implemented");
-
 	//0x0A -> object marker
-	out->writeByte(amf3::object_marker);
-	//Check if the object has been already serialized
+	out->writeByte(object_marker);
+	//Check if the object has been already serialized to send it by reference
 	auto it=objMap.find(this);
 	if(it!=objMap.end())
 	{
 		//The least significant bit is 0 to signal a reference
 		out->writeU29(it->second << 1);
+		return;
 	}
+
+	Class_base* type=getClass();
+	assert_and_throw(type);
+
+	//Check if an alias is registered
+	auto aliasIt=getSys()->aliasMap.begin();
+	const auto aliasEnd=getSys()->aliasMap.end();
+	//Linear search for alias
+	tiny_string alias;
+	for(;aliasIt!=aliasEnd;++aliasIt)
+	{
+		if(aliasIt->second==type)
+		{
+			alias=aliasIt->first;
+			break;
+		}
+	}
+	bool serializeTraits = alias.empty()==false;
+
+	if(type->isSubClass(InterfaceClass<IExternalizable>::getClass()))
+	{
+		//Custom serialization necessary
+		if(!serializeTraits)
+			throw Class<TypeError>::getInstanceS("#2004: IExternalizable class must have an alias registered");
+		out->writeU29(0x7);
+		out->writeStringVR(stringMap, alias);
+
+		//Invoke writeExternal
+		multiname writeExternalName;
+		writeExternalName.name_type=multiname::NAME_STRING;
+		writeExternalName.name_s="writeExternal";
+		writeExternalName.ns.push_back(nsNameAndKind("",NAMESPACE));
+		writeExternalName.isAttribute = false;
+
+		_NR<ASObject> o=getVariableByMultiname(writeExternalName,SKIP_IMPL);
+		assert_and_throw(!o.isNull() && o->getObjectType()==T_FUNCTION);
+		IFunction* f=o->as<IFunction>();
+		this->incRef();
+		out->incRef();
+		ASObject* const tmpArg[1] = {out};
+		f->call(this, tmpArg, 1);
+		return;
+	}
+
+	//Add the object to the map
+	objMap.insert(make_pair(this, objMap.size()));
+
+	uint32_t traitsCount=0;
+	const variables_map::const_var_iterator beginIt = Variables.Variables.begin();
+	const variables_map::const_var_iterator endIt = Variables.Variables.end();
+	//Check if the class traits has been already serialized to send it by reference
+	auto it2=traitsMap.find(type);
+	if(it2!=traitsMap.end())
+		out->writeU29((it2->second << 2) | 1);
 	else
 	{
-		//Add the object to the map
-		objMap.insert(make_pair(this, objMap.size()));
-		//0x0B -> a dynamic instance follows
-		out->writeByte(0x0B);
-		//The class name, empty if no alias is registered
-		//TODO: support aliases
-		out->writeStringVR(stringMap, "");
-		serializeDynamicProperties(out, stringMap, objMap);
+		traitsMap.insert(make_pair(type, traitsMap.size()));
+		for(variables_map::const_var_iterator varIt=beginIt; varIt != endIt; ++varIt)
+		{
+			if(varIt->second.kind==DECLARED_TRAIT)
+				traitsCount++;
+		}
+		uint32_t dynamicFlag=(type->isSealed)?0:(1 << 3);
+		out->writeU29((traitsCount << 4) | dynamicFlag | 0x03);
+		out->writeStringVR(stringMap, alias);
+		for(variables_map::const_var_iterator varIt=beginIt; varIt != endIt; ++varIt)
+		{
+			if(varIt->second.kind==DECLARED_TRAIT)
+			{
+				assert_and_throw(varIt->second.ns.size() == 1)
+				assert_and_throw(varIt->second.ns.begin()->name=="");
+				out->writeStringVR(stringMap, varIt->first);
+			}
+		}
 	}
+	for(variables_map::const_var_iterator varIt=beginIt; varIt != endIt; ++varIt)
+	{
+		if(varIt->second.kind==DECLARED_TRAIT)
+			varIt->second.var->serialize(out, stringMap, objMap, traitsMap);
+	}
+	if(!type->isSealed)
+		serializeDynamicProperties(out, stringMap, objMap, traitsMap);
 }
 
 ASObject *ASObject::describeType() const
@@ -1257,4 +1353,3 @@ void ASObject::setprop_prototype(_NR<ASObject>& o)
 	else
 		ret->setVar(obj);
 }
-

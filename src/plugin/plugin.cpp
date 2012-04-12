@@ -33,8 +33,8 @@
 #define FAKE_MIME_TYPE  "application/x-lightspark"
 #define PLUGIN_NAME    "Shockwave Flash"
 #define FAKE_PLUGIN_NAME    "Lightspark player"
-#define MIME_TYPES_DESCRIPTION  MIME_TYPES_HANDLED":swf:"PLUGIN_NAME";"FAKE_MIME_TYPE":swfls:"FAKE_PLUGIN_NAME
-#define PLUGIN_DESCRIPTION "Shockwave Flash 11.1 r"SHORTVERSION
+#define MIME_TYPES_DESCRIPTION  MIME_TYPES_HANDLED ":swf:" PLUGIN_NAME ";" FAKE_MIME_TYPE ":swfls:" FAKE_PLUGIN_NAME
+#define PLUGIN_DESCRIPTION "Shockwave Flash 11.1 r" SHORTVERSION
 
 using namespace std;
 using namespace lightspark;
@@ -308,7 +308,7 @@ nsPluginInstance::nsPluginInstance(NPP aInstance, int16_t argc, char** argn, cha
 {
 	LOG(LOG_INFO, "Lightspark version " << VERSION << " Copyright 2009-2012 Alessandro Pignotti and others");
 	setTLSSys( NULL );
-	m_sys=new lightspark::SystemState(NULL,0);
+	m_sys=new lightspark::SystemState(0);
 	//Files running in the plugin have REMOTE sandbox
 	m_sys->securityManager->setSandboxType(lightspark::SecurityManager::REMOTE);
 	//Find flashvars argument
@@ -657,9 +657,11 @@ int32_t nsPluginInstance::Write(NPStream *stream, int32_t offset, int32_t len, v
 
 NPError nsPluginInstance::DestroyStream(NPStream *stream, NPError reason)
 {
-	setTLSSys(m_sys);
 	NPDownloader* dl=static_cast<NPDownloader*>(stream->pdata);
-	assert(dl);
+	if(!dl)
+		return NPERR_NO_ERROR;
+
+	setTLSSys(m_sys);
 	//Check if async destructin of this downloader has been requested
 	if(dl->state==NPDownloader::ASYNC_DESTROY)
 	{

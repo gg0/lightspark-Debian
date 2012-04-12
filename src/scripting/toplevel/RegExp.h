@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2011  Matthias Gehre (M.Gehre@gmx.de)
+    Copyright (C) 2009-2011  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -16,32 +16,41 @@
     You should have received a copy of the GNU Lesser General Public License
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
-#include <stdint.h>
-#include <istream>
 
-extern "C" {
-#include "jpeglib.h"
-#define PNG_SKIP_SETJMP_CHECK
-#include "png.h"
-}
+#ifndef REGEXP_H
+#define REGEXP_H
+#include "compat.h"
+#include "asobject.h"
+#include <pcre.h>
 
 namespace lightspark
 {
 
-class ImageDecoder
+class RegExp: public ASObject
 {
+CLASSBUILDABLE(RegExp);
+friend class ASString;
 private:
-	static uint8_t* decodeJPEGImpl(jpeg_source_mgr& src, uint32_t* width, uint32_t* height);
-	static uint8_t* decodePNGImpl(png_structp pngPtr, uint32_t* width, uint32_t* height);
+	RegExp();
+	RegExp(const tiny_string& _re);
 public:
-	/*
-	 * Returns a new[]'ed array of decompressed data and sets width, height and format
-	 * Return NULL on error
-	 */
-	static uint8_t* decodeJPEG(uint8_t* inData, int len, uint32_t* width, uint32_t* height);
-	static uint8_t* decodeJPEG(std::istream& str, uint32_t* width, uint32_t* height);
-	static uint8_t* decodePNG(uint8_t* inData, int len, uint32_t* width, uint32_t* height);
-	static uint8_t* decodePNG(std::istream& str, uint32_t* width, uint32_t* height);
+	pcre* compile();
+	static void sinit(Class_base* c);
+	static void buildTraits(ASObject* o);
+	ASObject *match(const tiny_string& str);
+	ASFUNCTION(_constructor);
+	ASFUNCTION(generator);
+	ASFUNCTION(exec);
+	ASFUNCTION(test);
+	ASFUNCTION(_toString);
+	ASPROPERTY_GETTER(bool, dotall);
+	ASPROPERTY_GETTER(bool, global);
+	ASPROPERTY_GETTER(bool, ignoreCase);
+	ASPROPERTY_GETTER(bool, extended);
+	ASPROPERTY_GETTER(bool, multiline);
+	ASPROPERTY_GETTER_SETTER(int, lastIndex);
+	ASPROPERTY_GETTER(tiny_string, source);
 };
 
 }
+#endif // REGEXP_H

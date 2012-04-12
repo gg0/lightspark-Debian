@@ -41,6 +41,12 @@ public:
 	static void sinit(Class_base* c);
 };
 
+class IExternalizable
+{
+public:
+	static void linkTraits(Class_base* c);
+};
+
 class IDataInput
 {
 public:
@@ -55,7 +61,7 @@ public:
 
 class ByteArray: public ASObject, public IDataInput, public IDataOutput
 {
-friend class Loader;
+friend class LoaderThread;
 friend class URLLoader;
 protected:
 	uint8_t* bytes;
@@ -85,6 +91,7 @@ public:
 	void writeU29(uint32_t val);
 	uint32_t getPosition() const;
 	void setPosition(uint32_t p);
+
 	ASFUNCTION(_getBytesAvailable);
 	ASFUNCTION(_getLength);
 	ASFUNCTION(_setLength);
@@ -129,6 +136,11 @@ public:
 	ASFUNCTION(writeUTFBytes);
 	ASFUNCTION(_toString);
 
+	// these are internal methods used if the generic Array-Methods are called on a ByteArray
+	ASFUNCTION(pop);
+	ASFUNCTION(push);
+	ASFUNCTION(shift);
+	ASFUNCTION(unshift);
 	/**
 		Get ownership over the passed buffer
 		@param buf Pointer to the buffer to acquire, ownership and delete authority is acquired
@@ -160,6 +172,7 @@ class Timer: public EventDispatcher, public ITickJob
 {
 private:
 	void tick();
+	void tickFence();
 protected:
 	uint32_t delay;
 	uint32_t repeatCount;
@@ -264,6 +277,7 @@ public:
 			const unsigned int _argslen, _R<ASObject> _obj, const uint32_t _interval);
 	~IntervalRunner();
 	void tick();
+	void tickFence();
 	INTERVALTYPE getType() { return type; }
 };
 

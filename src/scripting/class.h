@@ -18,6 +18,9 @@
 **************************************************************************/
 
 #include "scripting/toplevel/Array.h"
+#include "scripting/toplevel/Number.h"
+#include "scripting/toplevel/Integer.h"
+#include "scripting/toplevel/UInteger.h"
 #include "compat.h"
 #include "asobject.h"
 #include "swf.h"
@@ -259,14 +262,7 @@ class Class<ASObject>: public Class_base
 private:
 	Class<ASObject>(const QName& name):Class_base(name){}
 	//This function is instantiated always because of inheritance
-	ASObject* getInstance(bool construct, ASObject* const* args, const unsigned int argslen)
-	{
-		ASObject* ret=new ASObject;
-		ret->setClass(this);
-		if(construct)
-			handleConstruction(ret,args,argslen,true);
-		return ret;
-	}
+	ASObject* getInstance(bool construct, ASObject* const* args, const unsigned int argslen);
 public:
 	static ASObject* getInstanceS()
 	{
@@ -413,7 +409,7 @@ public:
 		ret->setClass(this);
 		ret->setTypes(types);
 		if(construct)
-			handleConstruction(ret,args,argslen,true);
+			this->handleConstruction(ret,args,argslen,true);
 		return ret;
 	}
 

@@ -81,7 +81,7 @@ int main(int argc, char* argv[])
 	Log::setLogLevel(log_level);
 	SystemState::staticInit();
 	//NOTE: see SystemState declaration
-	SystemState* sys=new SystemState(NULL,0);
+	SystemState* sys=new SystemState(0);
 	setTLSSys(sys);
 
 	//Set a bit of SystemState using parameters
@@ -112,7 +112,8 @@ int main(int argc, char* argv[])
 		ifstream f(fileNames[i]);
 		if(f.is_open())
 		{
-			ABCContext* context=new ABCContext(f);
+			sys->incRef();
+			ABCContext* context=new ABCContext(_MR(sys), f);
 			contexts.push_back(context);
 			f.close();
 			vm->addEvent(NullRef,_MR(new ABCContextInitEvent(context,false)));

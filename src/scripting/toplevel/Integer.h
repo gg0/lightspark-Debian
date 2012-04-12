@@ -17,40 +17,39 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
-#ifndef BOOLEAN_H_
-#define BOOLEAN_H_
-
+#ifndef INTEGER_H
+#define INTEGER_H
+#include "compat.h"
 #include "asobject.h"
 
 namespace lightspark
 {
 
-/* returns a fully inialized Boolean object with value b
- * like Class<Boolean>::getInstanceS(b) but without the constructor problems */
-Boolean* abstract_b(bool b);
-
-/* implements ecma3's ToBoolean() operation, see section 9.2, but returns the value instead of an Boolean object */
-bool Boolean_concrete(const ASObject* obj);
-
-class Boolean: public ASObject
+class Integer : public ASObject
 {
-CLASSBUILDABLE(Boolean);
+friend class Number;
+friend class Array;
+friend class ABCVm;
+friend class ABCContext;
+friend ASObject* abstract_i(int32_t i);
+CLASSBUILDABLE(Integer);
 private:
-	Boolean() {type=T_BOOLEAN;}
-	static void buildTraits(ASObject* o){};
-	static void sinit(Class_base*);
+	Integer(int32_t v=0):val(v){type=T_INTEGER;}
 public:
-	bool val;
+	int32_t val;
+	static void buildTraits(ASObject* o){};
+	static void sinit(Class_base* c);
+	ASFUNCTION(_toString);
+	tiny_string toString();
+	static tiny_string toString(int32_t val);
 	int32_t toInt()
 	{
-		return val ? 1 : 0;
+		return val;
 	}
-	bool isEqual(ASObject* r);
 	TRISTATE isLess(ASObject* r);
-	ASFUNCTION(_constructor);
-	ASFUNCTION(_toString);
-	ASFUNCTION(_valueOf);
+	bool isEqual(ASObject* o);
 	ASFUNCTION(generator);
+	std::string toDebugString() { return toString()+"i"; }
 	//Serialization interface
 	void serialize(ByteArray* out, std::map<tiny_string, uint32_t>& stringMap,
 				std::map<const ASObject*, uint32_t>& objMap,
@@ -58,4 +57,4 @@ public:
 };
 
 }
-#endif /* BOOLEAN_H_ */
+#endif // INTEGER_H

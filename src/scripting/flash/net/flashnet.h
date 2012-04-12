@@ -98,23 +98,33 @@ public:
 	static void sinit(Class_base*);
 };
 
-class URLLoader: public EventDispatcher, public IThreadJob
+class URLLoader;
+
+class URLLoaderThread : public DownloaderThreadBase
+{
+private:
+	_R<URLLoader> loader;
+	void execute();
+public:
+	URLLoaderThread(_R<URLRequest> _request, _R<URLLoader> _loader);
+};
+
+class URLLoader: public EventDispatcher, public IDownloaderThreadListener
 {
 private:
 	tiny_string dataFormat;
-	URLInfo url;
 	_NR<ASObject> data;
-	Spinlock downloaderLock;
-	Downloader* downloader;
-	std::vector<uint8_t> postData;
-	void execute();
-	void threadAbort();
-	void jobFence();
+	Spinlock spinlock;
+	URLLoaderThread *job;
 public:
 	URLLoader();
 	void finalize();
 	static void sinit(Class_base*);
 	static void buildTraits(ASObject* o);
+	void threadFinished(IThreadJob *job);
+	void setData(_NR<ASObject> data);
+	tiny_string getDataFormat();
+	void setDataFormat(const tiny_string& newFormat);
 	ASFUNCTION(_constructor);
 	ASFUNCTION(load);
 	ASFUNCTION(close);
@@ -135,7 +145,7 @@ public:
 	ASFUNCTION(onResult);
 };
 
-class NetConnection: public EventDispatcher
+class NetConnection: public EventDispatcher, public IThreadJob
 {
 friend class NetStream;
 private:
@@ -145,6 +155,17 @@ private:
 	ObjectEncoding::ENCODING objectEncoding;
 	tiny_string protocol;
 	URLInfo uri;
+	//Data for remoting support (NetConnection::call)
+	// The message data to be sent asynchronously
+	std::vector<uint8_t> messageData;
+	Spinlock downloaderLock;
+	Downloader* downloader;
+	_NR<Responder> responder;
+	uint32_t messageCount;
+	//IThreadJob interface
+	void execute();
+	void threadAbort();
+	void jobFence();
 public:
 	NetConnection();
 	void finalize();
@@ -152,6 +173,7 @@ public:
 	static void buildTraits(ASObject* o);
 	ASFUNCTION(_constructor);
 	ASFUNCTION(connect);
+	ASFUNCTION(call);
 	ASFUNCTION(_getConnected);
 	ASFUNCTION(_getDefaultObjectEncoding);
 	ASFUNCTION(_setDefaultObjectEncoding);
@@ -183,6 +205,7 @@ private:
 	void jobFence();
 	//ITickJob interface to frame advance
 	void tick();
+	void tickFence();
 	bool isReady() const;
 
 	//Indicates whether the NetStream is paused
@@ -285,6 +308,8 @@ public:
 };
 
 ASObject* sendToURL(ASObject* obj,ASObject* const* args, const unsigned int argslen);
+ASObject* registerClassAlias(ASObject* obj,ASObject* const* args, const unsigned int argslen);
+ASObject* getClassByAlias(ASObject* obj,ASObject* const* args, const unsigned int argslen);
 
 };
 

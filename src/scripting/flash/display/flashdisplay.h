@@ -66,6 +66,7 @@ private:
 	number_t tx,ty;
 	number_t rotation;
 	number_t sx,sy;
+	float alpha;
 	/**
 	  	The object we are masking, if any
 	*/
@@ -90,7 +91,7 @@ protected:
 	number_t computeHeight();
 	bool isSimple() const;
 	bool skipRender(bool maskEnabled) const;
-	float alpha;
+	float clippedAlpha() const;
 	bool visible;
 	/* cachedSurface may only be read/written from within the render thread */
 	CachedSurface cachedSurface;
@@ -140,7 +141,7 @@ public:
 		throw RunTimeException("DisplayObject::getScaleFactor");
 	}
 	void Render(RenderContext& ctxt, bool maskEnabled);
-	bool getBounds(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const;
+	bool getBounds(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax, const MATRIX& m) const;
 	_NR<InteractiveObject> hitTest(_NR<InteractiveObject> last, number_t x, number_t y, HIT_TYPE type);
 	//API to handle mask support in hit testing
 	virtual bool isOpaque(number_t x, number_t y) const
@@ -339,6 +340,7 @@ public:
 	static void FromShaperecordListToShapeVector(const std::vector<SHAPERECORD>& shapeRecords,
 					 std::vector<GeomToken>& tokens, const std::list<FILLSTYLE>& fillStyles,
 					 const Vector2& offset = Vector2(), int scaling = 1);
+	void getTextureSize(int *width, int *height) const;
 protected:
 	TokenContainer(DisplayObject* _o) : owner(_o), scaling(1.0f) {}
 	TokenContainer(DisplayObject* _o, const std::vector<GeomToken>& _tokens, float _scaling)
@@ -369,6 +371,11 @@ private:
 			assert(curX == 0 && curY == 0);
 		}
 	}
+	static void solveVertexMapping(double x1, double y1,
+				       double x2, double y2,
+				       double x3, double y3,
+				       double u1, double u2, double u3,
+				       double c[3]);
 public:
 	Graphics():owner(NULL)
 	{
@@ -447,8 +454,9 @@ private:
 	Spinlock spinlock;
 public:
 	ASPROPERTY_GETTER(_NR<ASObject>,parameters);
-	LoaderInfo():bytesLoaded(0),bytesTotal(0),sharedEvents(NullRef),loader(NullRef),loadStatus(STARTED) {}
-	LoaderInfo(_R<Loader> l):bytesLoaded(0),bytesTotal(0),sharedEvents(NullRef),loader(l),loadStatus(STARTED) {}
+	ASPROPERTY_GETTER(uint32_t,actionScriptVersion);
+	LoaderInfo():bytesLoaded(0),bytesTotal(0),sharedEvents(NullRef),loader(NullRef),loadStatus(STARTED),actionScriptVersion(3) {}
+	LoaderInfo(_R<Loader> l):bytesLoaded(0),bytesTotal(0),sharedEvents(NullRef),loader(l),loadStatus(STARTED),actionScriptVersion(3) {}
 	void finalize();
 	static void sinit(Class_base* c);
 	static void buildTraits(ASObject* o);
@@ -473,37 +481,49 @@ public:
 	void setBytesLoaded(uint32_t b);
 	void setURL(const tiny_string& _url) { url=_url; }
 	void setLoaderURL(const tiny_string& _url) { loaderURL=_url; }
+	void resetState();
 };
 
-class Loader: public IThreadJob, public DisplayObjectContainer
+class URLRequest;
+
+class LoaderThread : public DownloaderThreadBase
 {
 private:
 	enum SOURCE { URL, BYTES };
-	mutable Spinlock contentSpinlock;
-	_NR<DisplayObject> content;
-	bool loading;
-	bool loaded;
-	SOURCE source;
-	URLInfo url;
-	std::vector<uint8_t> postData;
 	_NR<ByteArray> bytes;
-	_NR<LoaderInfo> contentLoaderInfo;
-	Spinlock downloaderLock;
-	Downloader* downloader;
+	_R<Loader> loader;
+	_NR<LoaderInfo> loaderInfo;
+	SOURCE source;
 	void execute();
-	void threadAbort();
-	void jobFence();
 public:
-	Loader():content(NullRef),loading(false),loaded(false),bytes(NullRef),contentLoaderInfo(NullRef),downloader(NULL)
+	LoaderThread(_R<URLRequest> request, _R<Loader> loader);
+	LoaderThread(_R<ByteArray> bytes, _R<Loader> loader);
+};
+
+class Loader: public DisplayObjectContainer, public IDownloaderThreadListener
+{
+private:
+	mutable Spinlock spinlock;
+	_NR<DisplayObject> content;
+	IThreadJob *job;
+	bool loaded;
+	URLInfo url;
+	_NR<LoaderInfo> contentLoaderInfo;
+	void unload();
+public:
+	Loader():content(NullRef),job(NULL),loaded(false),contentLoaderInfo(NullRef)
 	{
 	}
 	~Loader();
 	void finalize();
+	void threadFinished(IThreadJob* job);
 	static void sinit(Class_base* c);
 	static void buildTraits(ASObject* o);
 	ASFUNCTION(_constructor);
+	ASFUNCTION(close);
 	ASFUNCTION(load);
 	ASFUNCTION(loadBytes);
+	ASFUNCTION(_unload);
 	ASFUNCTION(_getContentLoaderInfo);
 	ASFUNCTION(_getContent);
 	int getDepth() const
@@ -760,31 +780,41 @@ public:
 class BitmapData: public ASObject, public IBitmapDrawable
 {
 CLASSBUILDABLE(BitmapData);
-private:
+protected:
 	size_t stride;
 	size_t dataSize;
 	static void sinit(Class_base* c);
-	uint8_t* getData() { return data; }
-	int getWidth() { return width; }
-	int getHeight() { return height; }
 	uint32_t getPixelPriv(uint32_t x, uint32_t y);
+	void setPixelPriv(uint32_t x, uint32_t y, uint32_t color, bool setAlpha);
+	void copyFrom(BitmapData *source);
 public:
-	BitmapData() : stride(0), dataSize(0), data(NULL), width(0), height(0) {}
+	BitmapData() : stride(0), dataSize(0), width(0), height(0) {}
 	~BitmapData();
 	/* the bitmaps data in premultiplied, native-endian 32 bit
 	 * ARGB format. stride is the number of bytes per row, may be
 	 * larger than width. dataSize is the total allocated size of
 	 * data (=stride*height) */
-	uint8_t* data;
+	std::vector<uint8_t> data;
+	uint8_t* getData() { return &data[0]; }
 	ASPROPERTY_GETTER(int32_t, width);
 	ASPROPERTY_GETTER(int32_t, height);
+	ASPROPERTY_GETTER(bool, transparent);
 	ASFUNCTION(_constructor);
 	ASFUNCTION(draw);
 	ASFUNCTION(getPixel);
 	ASFUNCTION(getPixel32);
+	ASFUNCTION(setPixel);
+	ASFUNCTION(setPixel32);
+	ASFUNCTION(getRect);
+	ASFUNCTION(copyPixels);
+	ASFUNCTION(fillRect);
+	ASFUNCTION(generateFilterRect);
 	bool fromRGB(uint8_t* rgb, uint32_t width, uint32_t height, bool hasAlpha);
 	bool fromJPEG(uint8_t* data, int len);
 	bool fromJPEG(std::istream& s);
+	bool fromPNG(std::istream& s);
+	int getWidth() const { return width; }
+	int getHeight() const { return height; }
 };
 
 class Bitmap: public DisplayObject, public TokenContainer
@@ -802,6 +832,7 @@ public:
 	Bitmap(std::istream *s = NULL, FILE_TYPE type=FT_UNKNOWN);
 	Bitmap(_R<BitmapData> data);
 	static void sinit(Class_base* c);
+	ASFUNCTION(_constructor);
 	bool boundsRect(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const;
 	_NR<InteractiveObject> hitTestImpl(_NR<InteractiveObject> last, number_t x, number_t y, DisplayObject::HIT_TYPE type);
 	virtual IntSize getBitmapSize() const;

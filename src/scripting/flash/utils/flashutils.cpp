@@ -34,6 +34,7 @@ using namespace lightspark;
 
 SET_NAMESPACE("flash.utils");
 
+REGISTER_CLASS_NAME(IExternalizable);
 REGISTER_CLASS_NAME(Endian);
 REGISTER_CLASS_NAME(IDataInput);
 REGISTER_CLASS_NAME(IDataOutput);
@@ -52,6 +53,12 @@ void Endian::sinit(Class_base* c)
 	c->setConstructor(NULL);
 	c->setVariableByQName("LITTLE_ENDIAN","",Class<ASString>::getInstanceS(littleEndian),DECLARED_TRAIT);
 	c->setVariableByQName("BIG_ENDIAN","",Class<ASString>::getInstanceS(bigEndian),DECLARED_TRAIT);
+}
+
+void IExternalizable::linkTraits(Class_base* c)
+{
+	lookupAndLink(c,"readExternal","flash.utils:IExternalizable");
+	lookupAndLink(c,"writeExternal","flash.utils:IExternalizable");
 }
 
 void IDataInput::linkTraits(Class_base* c)
@@ -173,8 +180,14 @@ void ByteArray::buildTraits(ASObject* o)
 
 uint8_t* ByteArray::getBuffer(unsigned int size, bool enableResize)
 {
+	// the flash documentation doesn't tell how large ByteArrays are allowed to be
+	// so we simply don't allow bytearrays larger than 1GiB
+	// maybe we should set this smaller
+	if (size > 0x4000000) 
+		throw Class<ASError>::getInstanceS("Error #1000: out of memory.");
 	// The first allocation is exactly the size we need,
 	// the subsequent reallocations happen in increments of BA_CHUNK_SIZE bytes
+	uint32_t prevLen = len;
 	if(bytes==NULL)
 	{
 		len=size;
@@ -199,6 +212,11 @@ uint8_t* ByteArray::getBuffer(unsigned int size, bool enableResize)
 	else if(len<size)
 	{
 		len=size;
+	}
+	if(prevLen<size)
+	{
+		//Extend
+		memset(bytes+prevLen,0,size-prevLen);
 	}
 	return bytes;
 }
@@ -337,17 +355,20 @@ ASFUNCTIONBODY(ByteArray,_setLength)
 	uint32_t newLen=args[0]->toInt();
 	if(newLen==th->len) //Nothing to do
 		return NULL;
-	uint32_t prevLen = th->len;
-	uint8_t* newBytes= (uint8_t*) realloc(th->bytes, newLen);
-	assert_and_throw(newBytes);
-	th->bytes = newBytes;
-	th->len = newLen;
-	th->real_len = newLen;
-	if(prevLen<newLen)
+	if (newLen > 0)
 	{
-		//Extend
-		memset(th->bytes+prevLen,0,newLen-prevLen);
+		th->getBuffer(newLen,true);
 	}
+	else
+	{
+		if (th->bytes)
+			free(th->bytes);
+		th->bytes = NULL;
+		th->len = newLen;
+		th->real_len = newLen;
+	}
+	if (th->position > th->len)
+		th->position = (th->len > 0 ? th->len-1 : 0);
 	return NULL;
 }
 
@@ -390,11 +411,6 @@ ASFUNCTIONBODY(ByteArray,readBytes)
 		offset=args[1]->toInt();
 	if(argslen==3)
 		length=args[2]->toInt();
-	//TODO: Support offset (offset is in the destination!)
-	if(offset!=0)
-	{
-		throw UnsupportedException("offset in ByteArray::readBytes");
-	}
 
 	if(length == 0)
 		length = th->len;
@@ -404,8 +420,13 @@ ASFUNCTIONBODY(ByteArray,readBytes)
 	{
 		throw Class<EOFError>::getInstanceS("Error #2030: End of file was encountered.");
 	}
-	uint8_t* buf=out->getBuffer(length,true);
-	memcpy(buf,th->bytes+th->position,length);
+	if((uint64_t)length+offset > 0xFFFFFFFF)
+	{
+		throw Class<RangeError>::getInstanceS("length+offset");
+	}
+	
+	uint8_t* buf=out->getBuffer(length+offset,true);
+	memcpy(buf+offset,th->bytes+th->position,length);
 	th->position+=length;
 
 	return NULL;
@@ -514,8 +535,9 @@ uint32_t ByteArray::writeObject(ASObject* obj)
 	//TODO: support custom serialization
 	map<tiny_string, uint32_t> stringMap;
 	map<const ASObject*, uint32_t> objMap;
+	map<const Class_base*, uint32_t> traitsMap;
 	uint32_t oldPosition=position;
-	obj->serialize(this, stringMap, objMap);
+	obj->serialize(this, stringMap, objMap,traitsMap);
 	return position-oldPosition;
 }
 
@@ -617,7 +639,8 @@ ASFUNCTIONBODY(ByteArray,writeDouble)
 	assert_and_throw(argslen==1);
 
 	double value = args[0]->toNumber();
-	uint64_t value2=th->endianIn(*reinterpret_cast<uint64_t*>(&value));
+	uint64_t *intptr=reinterpret_cast<uint64_t*>(&value);
+	uint64_t value2=th->endianIn(*intptr);
 
 	th->getBuffer(th->position+8,true);
 	memcpy(th->bytes+th->position,&value2,8);
@@ -632,7 +655,8 @@ ASFUNCTIONBODY(ByteArray,writeFloat)
 	assert_and_throw(argslen==1);
 
 	float value = args[0]->toNumber();
-	uint32_t value2=th->endianIn(*reinterpret_cast<uint32_t*>(&value));
+	uint32_t *intptr=reinterpret_cast<uint32_t*>(&value);
+	uint32_t value2=th->endianIn(*intptr);
 
 	th->getBuffer(th->position+4,true);
 	memcpy(th->bytes+th->position,&value2,4);
@@ -683,6 +707,8 @@ bool ByteArray::readByte(uint8_t& b)
 
 bool ByteArray::readU29(uint32_t& ret)
 {
+	//Be careful! This is different from u32 parsing.
+	//Here the most significant bits appears before in the stream!
 	ret=0;
 	for(uint32_t i=0;i<4;i++)
 	{
@@ -690,15 +716,16 @@ bool ByteArray::readU29(uint32_t& ret)
 			return false;
 
 		uint8_t tmp=bytes[position++];
+		ret <<= i*7;
 		if(i<3)
 		{
-			ret|=((tmp&0x7f) << i*7);
+			ret |= tmp&0x7f;
 			if((tmp&0x80)==0)
 				break;
 		}
 		else
 		{
-			ret|=(tmp << 21);
+			ret |= tmp;
 			//Sign extend
 			if(tmp&0x80)
 				ret|=0xe0000000;
@@ -735,7 +762,8 @@ ASFUNCTIONBODY(ByteArray,readDouble)
 	th->position+=8;
 	ret = th->endianOut(ret);
 
-	return abstract_d(*reinterpret_cast<double*>(&ret));
+	double *doubleptr=reinterpret_cast<double*>(&ret);
+	return abstract_d(*doubleptr);
 }
 
 ASFUNCTIONBODY(ByteArray,readFloat)
@@ -753,7 +781,8 @@ ASFUNCTIONBODY(ByteArray,readFloat)
 	th->position+=4;
 	ret = th->endianOut(ret);
 
-	return abstract_d(*reinterpret_cast<float*>(&ret));
+	float *floatptr=reinterpret_cast<float*>(&ret);
+	return abstract_d(*floatptr);
 }
 
 ASFUNCTIONBODY(ByteArray,readInt)
@@ -876,11 +905,11 @@ ASFUNCTIONBODY(ByteArray,readObject)
 		throw Class<EOFError>::getInstanceS("Error #2030: End of file was encountered.");
 	}
 	assert_and_throw(th->objectEncoding==ObjectEncoding::AMF3);
-	std::vector<ASObject*> ret;
 	Amf3Deserializer d(th);
+	_NR<ASObject> ret(NullRef);
 	try
 	{
-		d.generateObjects(ret);
+		ret=d.readObject();
 	}
 	catch(LightsparkException& e)
 	{
@@ -888,18 +917,13 @@ ASFUNCTIONBODY(ByteArray,readObject)
 		//TODO: throw AS exception
 	}
 
-	if(ret.size()==0)
+	if(ret.isNull())
 	{
 		LOG(LOG_ERROR,"No objects in the AMF3 data. Returning Undefined");
 		return new Undefined;
 	}
-	if(ret.size()>1)
-	{
-		LOG(LOG_ERROR,"More than one object in the AMF3 data. Returning the first");
-		for(uint32_t i=1;i<ret.size();i++)
-			ret[i]->decRef();
-	}
-	return ret[0];
+	ret->incRef();
+	return ret.getPtr();
 }
 
 ASFUNCTIONBODY(ByteArray,_toString)
@@ -997,17 +1021,16 @@ void ByteArray::writeU29(uint32_t val)
 		uint8_t b;
 		if(i<3)
 		{
-			b=val&0x7f;
-			val>>=7;
-			if(val)
-				b|=0x80;
+			uint32_t tmp=(val >> ((3-i)*7));
+			if(tmp==0)
+				continue;
+
+			b=(tmp&0x7f)|0x80;
 		}
 		else
-			b=val&0xff;
+			b=val&0x7f;
 
 		writeByte(b);
-		if(val==0)
-			break;
 	}
 }
 
@@ -1110,26 +1133,20 @@ void ByteArray::uncompress_zlib()
 ASFUNCTIONBODY(ByteArray,_compress)
 {
 	ByteArray* th=static_cast<ByteArray*>(obj);
-	tiny_string algorithm;
-	ARG_UNPACK(algorithm, "zlib");
-	if(algorithm=="zlib")
-		th->compress_zlib();
-	else
-		throw Class<ASError>::getInstanceS("Unsupported algorithm");
-
+	// flash throws an error if compress is called with a compression algorithm,
+	// and always uses the zlib algorithm
+	// but tamarin tests do not catch it, so we simply ignore any parameters provided
+	th->compress_zlib();
 	return NULL;
 }
 
 ASFUNCTIONBODY(ByteArray,_uncompress)
 {
 	ByteArray* th=static_cast<ByteArray*>(obj);
-	tiny_string algorithm;
-	ARG_UNPACK(algorithm, "zlib");
-	if(algorithm=="zlib")
-		th->uncompress_zlib();
-	else
-		throw Class<ASError>::getInstanceS("Unsupported algorithm");
-
+	// flash throws an error if uncompress is called with a compression algorithm,
+	// and always uses the zlib algorithm
+	// but tamarin tests do not catch it, so we simply ignore any parameters provided
+	th->uncompress_zlib();
 	return NULL;
 }
 
@@ -1166,9 +1183,9 @@ void Timer::tick()
 	this->incRef();
 	getVm()->addEvent(_MR(this),_MR(Class<TimerEvent>::getInstanceS("timer")));
 
+	currentCount++;
 	if(repeatCount!=0)
 	{
-		currentCount++;
 		if(currentCount==repeatCount)
 		{
 			this->incRef();
@@ -1177,6 +1194,63 @@ void Timer::tick()
 			running=false;
 		}
 	}
+}
+
+void Timer::tickFence()
+{
+	this->decRef();
+}
+
+// this seems to be how AS3 handles generic pop calls in Array class
+ASFUNCTIONBODY(ByteArray,pop)
+{
+	ByteArray* th=static_cast<ByteArray*>(obj);
+	uint8_t res = 0;
+	if (th->readByte(res))
+	{
+		memmove(th->bytes,(th->bytes+1),th->getLength()-1);
+		th->len--;
+	}
+	return abstract_ui(res);
+	
+}
+
+// this seems to be how AS3 handles generic push calls in Array class
+ASFUNCTIONBODY(ByteArray,push)
+{
+	ByteArray* th=static_cast<ByteArray*>(obj);
+	th->getBuffer(th->len+argslen,true);
+	for (unsigned int i = 0; i < argslen; i++)
+	{
+		th->bytes[th->len+i] = (uint8_t)args[i]->toInt();
+	}
+	return abstract_ui(th->getLength());
+}
+
+// this seems to be how AS3 handles generic shift calls in Array class
+ASFUNCTIONBODY(ByteArray,shift)
+{
+	ByteArray* th=static_cast<ByteArray*>(obj);
+	uint8_t res = 0;
+	if (th->readByte(res))
+	{
+		memmove(th->bytes,(th->bytes+1),th->getLength()-1);
+		th->len--;
+	}
+	return abstract_ui(res);
+}
+
+// this seems to be how AS3 handles generic unshift calls in Array class
+ASFUNCTIONBODY(ByteArray,unshift)
+{
+	ByteArray* th=static_cast<ByteArray*>(obj);
+	th->getBuffer(th->len+argslen,true);
+	for (unsigned int i = 0; i < argslen; i++)
+	{
+		memmove((th->bytes+argslen),(th->bytes),th->len);
+		th->bytes[i] = (uint8_t)args[i]->toInt();
+	}
+	return abstract_ui(th->getLength());
 }
 
 void Timer::sinit(Class_base* c)
@@ -1265,6 +1339,7 @@ ASFUNCTIONBODY(Timer,start)
 		return NULL;
 	th->running=true;
 	th->stopMe=false;
+	//To be decReffed in tickFence
 	th->incRef();
 	if(th->repeatCount==1)
 		getSys()->addWait(th->delay,th);
@@ -1359,7 +1434,7 @@ ASFUNCTIONBODY(lightspark,getDefinitionByName)
 
 	LOG(LOG_CALLS,_("Looking for definition of ") << name);
 	ASObject* target;
-	ASObject* o=getGlobal()->getVariableAndTargetByMultiname(name,target);
+	ASObject* o=ABCVm::getCurrentApplicationDomain(getVm()->currentCallContext)->getVariableAndTargetByMultiname(name,target);
 
 	//TODO: should raise an exception, for now just return undefined	
 	if(o==NULL)
@@ -1419,10 +1494,8 @@ void Dictionary::setVariableByMultiname(const multiname& name, ASObject* o)
 	assert_and_throw(implEnable);
 	if(name.name_type==multiname::NAME_OBJECT)
 	{
+		name.name_o->incRef();
 		_R<ASObject> name_o(name.name_o);
-		//This is ugly, but at least we are sure that we own name_o
-		multiname* tmp=const_cast<multiname*>(&name);
-		tmp->name_o=NULL;
 
 		map<_R<ASObject>, _R<ASObject> >::iterator it=data.find(name_o);
 		if(it!=data.end())
@@ -1447,10 +1520,8 @@ bool Dictionary::deleteVariableByMultiname(const multiname& name)
 
 	if(name.name_type==multiname::NAME_OBJECT)
 	{
+		name.name_o->incRef();
 		_R<ASObject> name_o(name.name_o);
-		//This is ugly, but at least we are sure that we own name_o
-		multiname* tmp=const_cast<multiname*>(&name);
-		tmp->name_o=NULL;
 
 		map<_R<ASObject>, _R<ASObject> >::iterator it=data.find(name_o);
 		if(it != data.end())
@@ -1477,22 +1548,14 @@ _NR<ASObject> Dictionary::getVariableByMultiname(const multiname& name, GET_VARI
 	{
 		if(name.name_type==multiname::NAME_OBJECT)
 		{
+			name.name_o->incRef();
 			_R<ASObject> name_o(name.name_o);
 
 			map<_R<ASObject>, _R<ASObject> >::iterator it=data.find(name_o);
 			if(it != data.end())
-			{
-				//This is ugly, but at least we are sure that we own name_o
-				multiname* tmp=const_cast<multiname*>(&name);
-				tmp->name_o=NULL;
 				return it->second;
-			}
 			else
-			{
-				//Make sure name_o gets not destroyed, it's still owned by name
-				name_o->incRef();
 				return NullRef;
-			}
 		}
 		else
 		{
@@ -1515,6 +1578,7 @@ bool Dictionary::hasPropertyByMultiname(const multiname& name, bool considerDyna
 
 	if(name.name_type==multiname::NAME_OBJECT)
 	{
+		name.name_o->incRef();
 		_R<ASObject> name_o(name.name_o);
 
 		map<_R<ASObject>, _R<ASObject> >::iterator it=data.find(name_o);
@@ -1898,6 +1962,10 @@ void IntervalRunner::tick()
 		getSys()->intervalManager->clearInterval(id, TIMEOUT, false);
 		//No actions may be performed after this point
 	}
+}
+
+void IntervalRunner::tickFence()
+{
 }
 
 IntervalManager::IntervalManager() : currentID(1)

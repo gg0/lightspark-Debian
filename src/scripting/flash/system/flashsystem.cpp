@@ -38,11 +38,13 @@ REGISTER_CLASS_NAME(SecurityDomain);
 REGISTER_CLASS_NAME(Capabilities);
 REGISTER_CLASS_NAME(Security);
 
+
 #ifdef _WIN32
-const char* Capabilities::EMULATED_VERSION = "WIN 11,1,0,"SHORTVERSION;
+const char* Capabilities::EMULATED_VERSION = "WIN 11,1,0," SHORTVERSION;
 #else
-const char* Capabilities::EMULATED_VERSION = "LNX 11,1,0,"SHORTVERSION;
+const char* Capabilities::EMULATED_VERSION = "LNX 11,1,0," SHORTVERSION;
 #endif
+
 
 void Capabilities::sinit(Class_base* c)
 {
@@ -109,6 +111,7 @@ void ApplicationDomain::sinit(Class_base* c)
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
 	//Static
 	c->setDeclaredMethodByQName("currentDomain","",Class<IFunction>::getFunction(_getCurrentDomain),GETTER_METHOD,false);
+	c->setDeclaredMethodByQName("MIN_DOMAIN_MEMORY_LENGTH","",Class<IFunction>::getFunction(_getMinDomainMemoryLength),GETTER_METHOD,false);
 	//Instance
 	c->setDeclaredMethodByQName("hasDefinition","",Class<IFunction>::getFunction(hasDefinition),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("getDefinition","",Class<IFunction>::getFunction(getDefinition),NORMAL_METHOD,true);
@@ -125,6 +128,8 @@ void ApplicationDomain::finalize()
 {
 	ASObject::finalize();
 	domainMemory.reset();
+	for(auto i = globalScopes.begin(); i != globalScopes.end(); ++i)
+		(*i)->decRef();
 }
 
 ASFUNCTIONBODY(ApplicationDomain,_constructor)
@@ -132,16 +137,22 @@ ASFUNCTIONBODY(ApplicationDomain,_constructor)
 	return NULL;
 }
 
+ASFUNCTIONBODY(ApplicationDomain,_getMinDomainMemoryLength)
+{
+	return abstract_ui(1024);
+}
+
 ASFUNCTIONBODY(ApplicationDomain,_getCurrentDomain)
 {
-	ApplicationDomain* ret=getSys()->mainApplicationDomain.getPtr();
+	ApplicationDomain* ret=getSys()->applicationDomain.getPtr();
 	ret->incRef();
 	return ret;
 }
 
 ASFUNCTIONBODY(ApplicationDomain,hasDefinition)
 {
-	assert(args && argslen==1);
+	ApplicationDomain* th = obj->as<ApplicationDomain>();
+	assert(argslen==1);
 	const tiny_string& tmp=args[0]->toString();
 
 	multiname name;
@@ -152,7 +163,7 @@ ASFUNCTIONBODY(ApplicationDomain,hasDefinition)
 
 	LOG(LOG_CALLS,_("Looking for definition of ") << name);
 	ASObject* target;
-	ASObject* o=getGlobal()->getVariableAndTargetByMultiname(name,target);
+	ASObject* o=th->getVariableAndTargetByMultiname(name,target);
 	if(o==NULL)
 		return abstract_b(false);
 	else
@@ -167,7 +178,8 @@ ASFUNCTIONBODY(ApplicationDomain,hasDefinition)
 
 ASFUNCTIONBODY(ApplicationDomain,getDefinition)
 {
-	assert(args && argslen==1);
+	ApplicationDomain* th = obj->as<ApplicationDomain>();
+	assert(argslen==1);
 	const tiny_string& tmp=args[0]->toString();
 
 	multiname name;
@@ -178,7 +190,7 @@ ASFUNCTIONBODY(ApplicationDomain,getDefinition)
 
 	LOG(LOG_CALLS,_("Looking for definition of ") << name);
 	ASObject* target;
-	ASObject* o=getGlobal()->getVariableAndTargetByMultiname(name,target);
+	ASObject* o=th->getVariableAndTargetByMultiname(name,target);
 	assert_and_throw(o);
 
 	//TODO: specs says that also namespaces and function may be returned
@@ -187,6 +199,44 @@ ASFUNCTIONBODY(ApplicationDomain,getDefinition)
 	LOG(LOG_CALLS,_("Getting definition for ") << name);
 	o->incRef();
 	return o;
+}
+
+void ApplicationDomain::registerGlobalScope(Global* scope)
+{
+	globalScopes.push_back(scope);
+}
+
+ASObject* ApplicationDomain::getVariableByString(const std::string& str, ASObject*& target)
+{
+	size_t index=str.rfind('.');
+	multiname name;
+	name.name_type=multiname::NAME_STRING;
+	if(index==str.npos) //No dot
+	{
+		name.name_s=str;
+		name.ns.push_back(nsNameAndKind("",NAMESPACE)); //TODO: use ns kind
+	}
+	else
+	{
+		name.name_s=str.substr(index+1);
+		name.ns.push_back(nsNameAndKind(str.substr(0,index),NAMESPACE));
+	}
+	return getVariableAndTargetByMultiname(name, target);
+}
+
+ASObject* ApplicationDomain::getVariableAndTargetByMultiname(const multiname& name, ASObject*& target)
+{
+	for(uint32_t i=0;i<globalScopes.size();i++)
+	{
+		_NR<ASObject> o=globalScopes[i]->getVariableByMultiname(name);
+		if(!o.isNull())
+		{
+			target=globalScopes[i];
+			// No incRef, return a reference borrowed from globalScopes
+			return o.getPtr();
+		}
+	}
+	return NULL;
 }
 
 void SecurityDomain::sinit(Class_base* c)

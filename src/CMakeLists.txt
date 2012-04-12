@@ -77,7 +77,11 @@ SET(LIBSPARK_SOURCES
   scripting/toplevel/Boolean.cpp
   scripting/toplevel/Date.cpp
   scripting/toplevel/Error.cpp
+  scripting/toplevel/Integer.cpp
   scripting/toplevel/Math.cpp
+  scripting/toplevel/Number.cpp
+  scripting/toplevel/RegExp.cpp
+  scripting/toplevel/UInteger.cpp
   scripting/toplevel/Vector.cpp
   scripting/toplevel/XML.cpp
   scripting/toplevel/XMLList.cpp
@@ -120,7 +124,7 @@ ENDIF (CMAKE_COMPILER_IS_GNUCC)
 
 TARGET_LINK_LIBRARIES(spark ${CAIRO_LIBRARIES} ${ZLIB_LIBRARIES}
 	${Boost_LIBRARIES} ${LLVM_LIBS_CORE} ${LLVM_LIBS_JIT} ${LLVM_LDFLAGS}
-	${OPTIONAL_LIBRARIES} ${GTK_LIBRARIES} ${FREETYPE_LIBRARIES} ${JPEG_LIBRARIES}
+	${OPTIONAL_LIBRARIES} ${GTK_LIBRARIES} ${FREETYPE_LIBRARIES} ${JPEG_LIBRARIES} ${PNG_LIBRARIES}
 	${PCRE_LIBRARIES} ${GLIBMM_LIBRARIES} ${GMODULE_LIBRARIES}
 	${XMLPP_LIBRARIES} ${CMAKE_DL_LIBS} ${EXTRA_LIBS_LIBRARIES}
 	${X11_LIBRARIES})

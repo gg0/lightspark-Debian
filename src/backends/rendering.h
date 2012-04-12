@@ -23,6 +23,7 @@
 #include "lsopengl.h"
 #include "rendering_context.h"
 #include "timer.h"
+#include <glibmm/timeval.h>
 
 namespace lightspark
 {
@@ -95,6 +96,7 @@ private:
 	bool loadShaderPrograms();
 	bool tempBufferAcquired;
 	void tick();
+	void tickFence();
 	int frameCount;
 	int secsCount;
 	Mutex mutexUploadJobs;

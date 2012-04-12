@@ -31,10 +31,10 @@
 #include "backends/rendering.h"
 #include "backends/geometry.h"
 #include "backends/image.h"
-#include "compat.h"
 #include "flash/accessibility/flashaccessibility.h"
 #include "argconv.h"
 #include "toplevel/Vector.h"
+#include "backends/security.h"
 
 #include <fstream>
 #include <limits>
@@ -100,9 +100,11 @@ void LoaderInfo::sinit(Class_base* c)
 	c->setDeclaredMethodByQName("width","",Class<IFunction>::getFunction(_getWidth),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("height","",Class<IFunction>::getFunction(_getHeight),GETTER_METHOD,true);
 	REGISTER_GETTER(c,parameters);
+	REGISTER_GETTER(c,actionScriptVersion);
 }
 
 ASFUNCTIONBODY_GETTER(LoaderInfo,parameters);
+ASFUNCTIONBODY_GETTER(LoaderInfo,actionScriptVersion);
 
 void LoaderInfo::buildTraits(ASObject* o)
 {
@@ -113,6 +115,14 @@ void LoaderInfo::finalize()
 	EventDispatcher::finalize();
 	sharedEvents.reset();
 	loader.reset();
+}
+
+void LoaderInfo::resetState()
+{
+	SpinlockLocker l(spinlock);
+	bytesLoaded=0;
+	bytesTotal=0;
+	loadStatus=STARTED;
 }
 
 void LoaderInfo::setBytesLoaded(uint32_t b)
@@ -216,7 +226,8 @@ ASFUNCTIONBODY(LoaderInfo,_getBytesTotal)
 
 ASFUNCTIONBODY(LoaderInfo,_getApplicationDomain)
 {
-	return Class<ApplicationDomain>::getInstanceS();
+	getSys()->applicationDomain->incRef();
+	return getSys()->applicationDomain.getPtr();
 }
 
 ASFUNCTIONBODY(LoaderInfo,_getWidth)
@@ -245,6 +256,85 @@ ASFUNCTIONBODY(LoaderInfo,_getHeight)
 	return abstract_d(o->getNominalHeight());
 }
 
+LoaderThread::LoaderThread(_R<URLRequest> request, _R<Loader> ldr)
+  : DownloaderThreadBase(request, ldr.getPtr()), loader(ldr), loaderInfo(ldr->getContentLoaderInfo()), source(URL)
+{
+}
+
+LoaderThread::LoaderThread(_R<ByteArray> _bytes, _R<Loader> ldr)
+  : DownloaderThreadBase(NullRef, ldr.getPtr()), bytes(_bytes), loader(ldr), loaderInfo(ldr->getContentLoaderInfo()), source(BYTES)
+{
+}
+
+void LoaderThread::execute()
+{
+	assert(source==URL || source==BYTES);
+
+	streambuf *sbuf;
+	if(source==URL)
+	{
+		const char contenttype[]="Content-Type: application/x-www-form-urlencoded";
+		if(!createDownloader(false, contenttype, loaderInfo, loaderInfo.getPtr(), false))
+			return;
+
+		downloader->waitForData(); //Wait for some data, making sure our check for failure is working
+		if(downloader->hasFailed()) //Check to see if the download failed for some reason
+		{
+			LOG(LOG_ERROR, "Loader::execute(): Download of URL failed: " << url);
+			getVm()->addEvent(loaderInfo,_MR(Class<IOErrorEvent>::getInstanceS()));
+			getSys()->downloadManager->destroy(downloader);
+			return;
+		}
+		getVm()->addEvent(loaderInfo,_MR(Class<Event>::getInstanceS("open")));
+		sbuf=downloader;
+	}
+	else if(source==BYTES)
+	{
+		assert_and_throw(bytes->bytes);
+
+		loaderInfo->setBytesTotal(bytes->getLength());
+		loaderInfo->setBytesLoaded(bytes->getLength());
+
+		bytes_buf bb(bytes->bytes,bytes->getLength());
+		sbuf=&bb;
+	}
+
+	//TODO: support LoaderContext
+	istream s(sbuf);
+	ParseThread local_pt(s,getSys()->applicationDomain,loader.getPtr(),url.getParsedURL());
+	local_pt.execute();
+
+	{
+		//Acquire the lock to ensure consistency in threadAbort
+		SpinlockLocker l(downloaderLock);
+		if(downloader)
+			getSys()->downloadManager->destroy(downloader);
+		downloader=NULL;
+	}
+	bytes.reset();
+
+	_NR<DisplayObject> obj=local_pt.getParsedObject();
+	if(obj.isNull())
+	{
+		// The stream did not contain RootMovieClip or Bitmap
+		if(!threadAborting)
+			getVm()->addEvent(loaderInfo,_MR(Class<IOErrorEvent>::getInstanceS()));
+		return;
+	}
+
+	// Wait until the object is constructed before adding
+	// to the Loader. Check threadAborting once per
+	// second.
+	while(!obj->waitUntilConstructed(1000) && !threadAborting)
+		/* do nothing */;
+
+	if(threadAborting)
+		return;
+
+	loader->setContent(obj);
+	loaderInfo->sendInit();
+}
+
 ASFUNCTIONBODY(Loader,_constructor)
 {
 	Loader* th=static_cast<Loader*>(obj);
@@ -265,7 +355,7 @@ ASFUNCTIONBODY(Loader,_constructor)
 ASFUNCTIONBODY(Loader,_getContent)
 {
 	Loader* th=static_cast<Loader*>(obj);
-	SpinlockLocker l(th->contentSpinlock);
+	SpinlockLocker l(th->spinlock);
 	_NR<ASObject> ret=th->content;
 	if(ret.isNull())
 		ret=_MR(new Undefined);
@@ -281,48 +371,104 @@ ASFUNCTIONBODY(Loader,_getContentLoaderInfo)
 	return th->contentLoaderInfo.getPtr();
 }
 
+ASFUNCTIONBODY(Loader,close)
+{
+	Loader* th=static_cast<Loader*>(obj);
+ 	SpinlockLocker l(th->spinlock);
+	if(th->job)
+		th->job->threadAbort();
+
+	return NULL;
+}
+
 ASFUNCTIONBODY(Loader,load)
 {
 	Loader* th=static_cast<Loader*>(obj);
-	if(th->loading)
-		return NULL;
-	th->loading=true;
+
+	th->unload();
+
 	assert_and_throw(argslen > 0 && args[0] && argslen <= 2);
 	URLRequest* r=Class<URLRequest>::dyncast(args[0]);
 	if(r==NULL)
 		throw Class<ArgumentError>::getInstanceS("Wrong argument in Loader::load");
 	th->url=r->getRequestURL();
 	th->contentLoaderInfo->setURL(th->url.getParsedURL());
-	r->getPostData(th->postData);
-	th->source=URL;
-	//To be decreffed in jobFence
+	th->contentLoaderInfo->resetState();
+
+	if(!th->url.isValid())
+	{
+		//Notify an error during loading
+		th->incRef();
+		getSys()->currentVm->addEvent(_MR(th),_MR(Class<IOErrorEvent>::getInstanceS()));
+		return NULL;
+	}
+
+	SecurityManager::checkURLStaticAndThrow(th->url, ~(SecurityManager::LOCAL_WITH_FILE),
+		SecurityManager::LOCAL_WITH_FILE | SecurityManager::LOCAL_TRUSTED, true);
+
 	th->incRef();
-	getSys()->addJob(th);
+	r->incRef();
+	LoaderThread *thread=new LoaderThread(_MR(r), _MR(th));
+	getSys()->addJob(thread);
+	th->job=thread;
 	return NULL;
 }
 
 ASFUNCTIONBODY(Loader,loadBytes)
 {
 	Loader* th=static_cast<Loader*>(obj);
-	if(th->loading)
-		return NULL;
+
+	th->unload();
+
 	//Find the actual ByteArray object
 	assert_and_throw(argslen>=1);
 	assert_and_throw(args[0]->getClass() && 
 			args[0]->getClass()->isSubClass(Class<ByteArray>::getClass()));
-	args[0]->incRef();
-	th->bytes=_MR(static_cast<ByteArray*>(args[0]));
-	if(th->bytes->bytes)
+	ByteArray *ba=static_cast<ByteArray*>(args[0]);
+	if(ba->getLength()!=0)
 	{
-		th->loading=true;
-		th->source=BYTES;
-		//To be decreffed in jobFence
 		th->incRef();
-		getSys()->addJob(th);
+		ba->incRef();
+		LoaderThread *thread=new LoaderThread(_MR(ba), _MR(th));
+		getSys()->addJob(thread);
+		th->job=thread;
 	}
 	else
 		LOG(LOG_INFO, "Empty ByteArray passed to Loader.loadBytes");
 	return NULL;
+}
+
+ASFUNCTIONBODY(Loader,_unload)
+{
+	Loader* th=static_cast<Loader*>(obj);
+	th->unload();
+	return NULL;
+}
+
+void Loader::unload()
+{
+	_NR<DisplayObject> content_copy = NullRef;
+	{
+		SpinlockLocker l(spinlock);
+		if(job)
+			job->threadAbort();
+
+		content_copy=content;
+		content.reset();
+	}
+	
+	if(loaded)
+	{
+		getVm()->addEvent(contentLoaderInfo,_MR(Class<Event>::getInstanceS("unload")));
+		loaded=false;
+	}
+
+	// removeChild may execute AS code, release the lock before
+	// calling
+	if(content_copy)
+		_removeChild(content_copy);
+
+	contentLoaderInfo->resetState();
 }
 
 void Loader::finalize()
@@ -330,16 +476,10 @@ void Loader::finalize()
 	DisplayObjectContainer::finalize();
 	content.reset();
 	contentLoaderInfo.reset();
-	bytes.reset();
 }
 
 Loader::~Loader()
 {
-}
-
-void Loader::jobFence()
-{
-	decRef();
 }
 
 void Loader::sinit(Class_base* c)
@@ -348,113 +488,27 @@ void Loader::sinit(Class_base* c)
 	c->setSuper(Class<DisplayObjectContainer>::getRef());
 	c->setDeclaredMethodByQName("contentLoaderInfo","",Class<IFunction>::getFunction(_getContentLoaderInfo),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("content","",Class<IFunction>::getFunction(_getContent),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("close","",Class<IFunction>::getFunction(close),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("loadBytes","",Class<IFunction>::getFunction(loadBytes),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("load","",Class<IFunction>::getFunction(load),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("unload","",Class<IFunction>::getFunction(_unload),NORMAL_METHOD,true);
+}
+
+void Loader::threadFinished(IThreadJob* finishedJob)
+{
+	// If this is the current job, we are done. If these are not
+	// equal, finishedJob is a job that was cancelled when load()
+	// was called again, and we have to still wait for the correct
+	// job.
+	SpinlockLocker l(spinlock);
+	if(finishedJob==job)
+		job=NULL;
+
+	delete finishedJob;
 }
 
 void Loader::buildTraits(ASObject* o)
 {
-}
-
-void Loader::execute()
-{
-	assert(source==URL || source==BYTES);
-
-	if(source==URL)
-	{
-		//TODO: add security checks
-		LOG(LOG_CALLS,_("Loader async execution ") << url);
-		assert_and_throw(postData.empty());
-		downloader=getSys()->downloadManager->download(url, false, contentLoaderInfo.getPtr());
-		downloader->waitForData(); //Wait for some data, making sure our check for failure is working
-		if(downloader->hasFailed()) //Check to see if the download failed for some reason
-		{
-			LOG(LOG_ERROR, "Loader::execute(): Download of URL failed: " << url);
-			getVm()->addEvent(contentLoaderInfo,_MR(Class<IOErrorEvent>::getInstanceS()));
-			getSys()->downloadManager->destroy(downloader);
-			return;
-		}
-		getVm()->addEvent(contentLoaderInfo,_MR(Class<Event>::getInstanceS("open")));
-		istream s(downloader);
-		ParseThread local_pt(s,this,url.getParsedURL());
-		local_pt.execute();
-		{
-			//Acquire the lock to ensure consistency in threadAbort
-			SpinlockLocker l(downloaderLock);
-			getSys()->downloadManager->destroy(downloader);
-			downloader=NULL;
-		}
-
-		_NR<DisplayObject> obj=local_pt.getParsedObject();
-		if(obj.isNull())
-		{
-			// The stream did not contain RootMovieClip or Bitmap
-			getVm()->addEvent(contentLoaderInfo,_MR(Class<IOErrorEvent>::getInstanceS()));
-			return;
-		}
-
-		// Wait until the object is constructed before adding
-		// to the Loader
-		while (!obj->isConstructed() && !threadAborting)
-			/* TODO: use a Cond or Semaphore here */;
-
-		if(threadAborting)
-			return;
-
-		setContent(obj);
-		contentLoaderInfo->sendInit();
-	}
-	else if(source==BYTES)
-	{
-		//TODO: set bytesLoaded and bytesTotal
-		assert_and_throw(bytes->bytes);
-
-		//We only support swf files now
-		if(bytes->len > 3 && (memcmp(bytes->bytes,"CWS",3)==0 || memcmp(bytes->bytes,"FWS",3)==0))
-		{
-			bytes_buf bb(bytes->bytes,bytes->len);
-			istream s(&bb);
-
-			ParseThread local_pt(s,this);
-			local_pt.execute();
-		}
-		// PNG files
-		else if(bytes->len > 8 && memcmp(bytes->bytes,"\x89PNG\r\n\x1a\n", 8) == 0)
-		{
-			LOG(LOG_NOT_IMPLEMENTED, "PNG files are not supported yet in Loader.loadBytes.");
-		}
-		// JPEG files
-		else if(bytes->len > 2 && memcmp(bytes->bytes,"\xff\xd8", 2) == 0)
-		{
-			LOG(LOG_NOT_IMPLEMENTED, "JPEG files are not supported yet in Loader.loadBytes.");
-		}
-		// GIF files
-		else if(bytes->len > 6 && (memcmp(bytes->bytes,"GIF89a", 6) == 0 || memcmp(bytes->bytes,"GIF87a", 6) == 0))
-		{
-			LOG(LOG_NOT_IMPLEMENTED, "GIF files are not supported yet in Loader.loadBytes.");
-		}
-		// Unknown filetype
-		else
-		{
-			LOG(LOG_ERROR, "Tried to load file of unknown type with Loader.loadBytes.");
-		}
-
-		bytes.reset();
-		//Add a complete event for this object
-		getVm()->addEvent(contentLoaderInfo,_MR(Class<Event>::getInstanceS("complete")));
-	}
-	loaded=true;
-}
-
-void Loader::threadAbort()
-{
-	if(source==URL)
-	{
-		//We have to stop the downloader
-		SpinlockLocker l(downloaderLock);
-		if(downloader != NULL)
-			downloader->stop();
-	}
 }
 
 void Loader::setContent(_R<DisplayObject> o)
@@ -465,8 +519,9 @@ void Loader::setContent(_R<DisplayObject> o)
 	}
 
 	{
-		SpinlockLocker l(contentSpinlock);
+		SpinlockLocker l(spinlock);
 		content=o;
+		loaded=true;
 	}
 
 	// _addChild may cause AS code to run, release locks beforehand.
@@ -558,7 +613,7 @@ bool DisplayObjectContainer::boundsRect(number_t& xmin, number_t& xmax, number_t
 	for(;it!=dynamicDisplayList.end();++it)
 	{
 		number_t txmin,txmax,tymin,tymax;
-		if((*it)->getBounds(txmin,txmax,tymin,tymax))
+		if((*it)->getBounds(txmin,txmax,tymin,tymax,(*it)->getMatrix()))
 		{
 			if(ret==true)
 			{
@@ -606,7 +661,7 @@ bool Sprite::boundsRect(number_t& xmin, number_t& xmax, number_t& ymin, number_t
 	return ret;
 }
 
-bool DisplayObject::getBounds(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const
+bool DisplayObject::getBounds(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax, const MATRIX& m) const
 {
 	if(!isConstructed())
 		return false;
@@ -614,9 +669,18 @@ bool DisplayObject::getBounds(number_t& xmin, number_t& xmax, number_t& ymin, nu
 	bool ret=boundsRect(xmin,xmax,ymin,ymax);
 	if(ret)
 	{
-		//TODO: take rotation into account
-		getMatrix().multiply2D(xmin,ymin,xmin,ymin);
-		getMatrix().multiply2D(xmax,ymax,xmax,ymax);
+		number_t tmpX[4];
+		number_t tmpY[4];
+		m.multiply2D(xmin,ymin,tmpX[0],tmpY[0]);
+		m.multiply2D(xmax,ymin,tmpX[1],tmpY[1]);
+		m.multiply2D(xmax,ymax,tmpX[2],tmpY[2]);
+		m.multiply2D(xmin,ymax,tmpX[3],tmpY[3]);
+		auto retX=minmax_element(tmpX,tmpX+4);
+		auto retY=minmax_element(tmpY,tmpY+4);
+		xmin=*retX.first;
+		xmax=*retX.second;
+		ymin=*retY.first;
+		ymax=*retY.second;
 	}
 	return ret;
 }
@@ -843,7 +907,7 @@ ASFUNCTIONBODY(Scene,_getLabels)
 	ret->resize(th->labels.size());
 	for(size_t i=0; i<th->labels.size(); ++i)
 	{
-		ret->set(i, Class<FrameLabel>::getInstanceS(th->labels[i]));
+		ret->set(i, _MR(Class<FrameLabel>::getInstanceS(th->labels[i])));
 	}
 	return ret;
 }
@@ -1076,7 +1140,7 @@ ASFUNCTIONBODY(MovieClip,_getScenes)
 			numFrames = th->totalFrames_unreliable - th->scenes[i].startframe;
 		else
 			numFrames = th->scenes[i].startframe - th->scenes[i+1].startframe;
-		ret->set(i, Class<Scene>::getInstanceS(th->scenes[i],numFrames));
+		ret->set(i, _MR(Class<Scene>::getInstanceS(th->scenes[i],numFrames)));
 	}
 	return ret;
 }
@@ -1155,7 +1219,7 @@ ASFUNCTIONBODY(MovieClip,_getCurrentLabels)
 	ret->resize(sc.labels.size());
 	for(size_t i=0; i<sc.labels.size(); ++i)
 	{
-		ret->set(i, Class<FrameLabel>::getInstanceS(sc.labels[i]));
+		ret->set(i, _MR(Class<FrameLabel>::getInstanceS(sc.labels[i])));
 	}
 	return ret;
 }
@@ -1202,14 +1266,14 @@ void MovieClip::addFrameLabel(uint32_t frame, const tiny_string& label)
 	scenes.back().addFrameLabel(frame,label);
 }
 
-DisplayObject::DisplayObject():useMatrix(true),tx(0),ty(0),rotation(0),sx(1),sy(1),maskOf(),parent(),mask(),onStage(false),
-	loaderInfo(),alpha(1.0),visible(true),invalidateQueueNext()
+DisplayObject::DisplayObject():useMatrix(true),tx(0),ty(0),rotation(0),sx(1),sy(1),alpha(1.0),maskOf(),parent(),mask(),onStage(false),
+	loaderInfo(),visible(true),invalidateQueueNext()
 {
 	name = tiny_string("instance") + Integer::toString(ATOMIC_INCREMENT(instanceCount));
 }
 
-DisplayObject::DisplayObject(const DisplayObject& d):useMatrix(true),tx(d.tx),ty(d.ty),rotation(d.rotation),sx(d.sx),sy(d.sy),maskOf(),
-	parent(),mask(),onStage(false),loaderInfo(),alpha(d.alpha),visible(d.visible),name(d.name),invalidateQueueNext()
+DisplayObject::DisplayObject(const DisplayObject& d):useMatrix(true),tx(d.tx),ty(d.ty),rotation(d.rotation),sx(d.sx),sy(d.sy),alpha(d.alpha),maskOf(),
+	parent(),mask(),onStage(false),loaderInfo(),visible(d.visible),name(d.name),invalidateQueueNext()
 {
 	assert(!d.isConstructed());
 }
@@ -1285,10 +1349,11 @@ ASFUNCTIONBODY(DisplayObject,_getTransform)
 	DisplayObject* th=static_cast<DisplayObject*>(obj);
 
 	if(th->transform.isNull())
-		th->transform = _MNR(Class<Transform>::getInstanceS());
+		th->transform = _MR(Class<Transform>::getInstanceS());
 
 	LOG(LOG_NOT_IMPLEMENTED, "DisplayObject::transform is a stub and does not reflect the real display state");
 
+	th->transform->matrix=_MR(Class<lightspark::Matrix>::getInstanceS(th->getMatrix()));
 	th->transform->incRef();
 	return th->transform.getPtr();
 }
@@ -1350,12 +1415,19 @@ MATRIX DisplayObject::getConcatenatedMatrix() const
 		return parent->getConcatenatedMatrix().multiplyMatrix(getMatrix());
 }
 
+/* Return alpha value between 0 and 1. (The stored alpha value is not
+ * necessary bounded.) */
+float DisplayObject::clippedAlpha() const
+{
+	return dmin(dmax(alpha, 0.), 1.);
+}
+
 float DisplayObject::getConcatenatedAlpha() const
 {
 	if(parent.isNull())
-		return alpha;
+		return clippedAlpha();
 	else
-		return parent->getConcatenatedAlpha()*alpha;
+		return parent->getConcatenatedAlpha()*clippedAlpha();
 }
 
 MATRIX DisplayObject::getMatrix() const
@@ -1393,12 +1465,12 @@ void DisplayObject::valFromMatrix()
 bool DisplayObject::isSimple() const
 {
 	//TODO: Check filters
-	return alpha==1.0;
+	return clippedAlpha()==1.0;
 }
 
 bool DisplayObject::skipRender(bool maskEnabled) const
 {
-	return visible==false || alpha==0.0 || (!maskEnabled && !maskOf.isNull());
+	return visible==false || clippedAlpha()==0.0 || (!maskEnabled && !maskOf.isNull());
 }
 
 void DisplayObject::defaultRender(RenderContext& ctxt, bool maskEnabled) const
@@ -1527,9 +1599,8 @@ ASFUNCTIONBODY(DisplayObject,_setAlpha)
 	DisplayObject* th=static_cast<DisplayObject*>(obj);
 	number_t val;
 	ARG_UNPACK (val);
-	//Clip val
-	val=dmax(0,val);
-	val=dmin(val,1);
+	/* The stored value is not clipped, _getAlpha will return the
+	 * stored value even if it is outside the [0, 1] range. */
 	th->alpha=val;
 	if(th->onStage)
 		th->requestInvalidation();
@@ -1684,9 +1755,25 @@ ASFUNCTIONBODY(DisplayObject,_getBounds)
 	DisplayObject* th=static_cast<DisplayObject*>(obj);
 	assert_and_throw(argslen==1);
 
+	if(args[0]->is<Undefined>())
+		return Class<Rectangle>::getInstanceS();
+
+	assert_and_throw(args[0]->is<DisplayObject>());
+	DisplayObject* target=Class<DisplayObject>::cast(args[0]);
+	//Compute the transformation matrix
+	MATRIX m;
+	DisplayObject* cur=th;
+	while(cur!=NULL && cur!=target)
+	{
+		m = m.multiplyMatrix(cur->getMatrix());
+		cur=cur->parent.getPtr();
+	}
+	if(!cur)
+		return Class<Rectangle>::getInstanceS();
+
 	Rectangle* ret=Class<Rectangle>::getInstanceS();
 	number_t x1,x2,y1,y2;
-	bool r=th->getBounds(x1,x2,y1,y2);
+	bool r=th->getBounds(x1,x2,y1,y2, m);
 	if(r)
 	{
 		//Bounds are in the form [XY]{min,max}
@@ -1870,7 +1957,7 @@ ASFUNCTIONBODY(DisplayObject,_getVisible)
 number_t DisplayObject::computeHeight()
 {
 	number_t x1,x2,y1,y2;
-	bool ret=getBounds(x1,x2,y1,y2);
+	bool ret=getBounds(x1,x2,y1,y2,MATRIX());
 
 	return (ret)?(y2-y1):0;
 }
@@ -1878,7 +1965,7 @@ number_t DisplayObject::computeHeight()
 number_t DisplayObject::computeWidth()
 {
 	number_t x1,x2,y1,y2;
-	bool ret=getBounds(x1,x2,y1,y2);
+	bool ret=getBounds(x1,x2,y1,y2,MATRIX());
 
 	return (ret)?(x2-x1):0;
 }
@@ -2955,6 +3042,8 @@ bool TokenContainer::boundsRect(number_t& xmin, number_t& xmax, number_t& ymin, 
 			case CLEAR_FILL:
 			case CLEAR_STROKE:
 			case SET_FILL:
+			case FILL_KEEP_SOURCE:
+			case FILL_TRANSFORM_TEXTURE:
 				break;
 			case SET_STROKE:
 				strokeWidth = (double)(tokens[i].lineStyle.Width / 20.0);
@@ -2978,6 +3067,31 @@ bool TokenContainer::boundsRect(number_t& xmin, number_t& xmax, number_t& ymin, 
 	return hasContent;
 
 #undef VECTOR_BOUNDS
+}
+
+/* Find the size of the active texture (bitmap set by the latest SET_FILL). */
+void TokenContainer::getTextureSize(int *width, int *height) const
+{
+	*width=0;
+	*height=0;
+
+	unsigned int len=tokens.size();
+	for(unsigned int i=0;i<len;i++)
+	{
+		const FILLSTYLE& style=tokens[len-i-1].fillStyle;
+		const FILL_STYLE_TYPE& fstype=style.FillStyleType;
+		if(tokens[len-i-1].type==SET_FILL && 
+		   (fstype==REPEATING_BITMAP ||
+		    fstype==NON_SMOOTHED_REPEATING_BITMAP ||
+		    fstype==CLIPPED_BITMAP ||
+		    fstype==NON_SMOOTHED_CLIPPED_BITMAP) &&
+		   style.bitmap)
+		{
+			*width=style.bitmap->getWidth();
+			*height=style.bitmap->getHeight();
+			return;
+		}
+	}
 }
 
 void Graphics::sinit(Class_base* c)
@@ -3254,6 +3368,45 @@ ASFUNCTIONBODY(Graphics,drawRect)
 	return NULL;
 }
 
+/* Solve for c in the matrix equation
+ *
+ * [ 1 x1 y1 ] [ c[0] ]   [ u1 ]
+ * [ 1 x2 y2 ] [ c[1] ] = [ u2 ]
+ * [ 1 x3 y3 ] [ c[2] ]   [ u3 ]
+ *
+ * The result will be put in the output parameter c.
+ */
+void Graphics::solveVertexMapping(double x1, double y1,
+				  double x2, double y2,
+				  double x3, double y3,
+				  double u1, double u2, double u3,
+				  double c[3])
+{
+	double eps = 1e-15;
+	double det = fabs(x2*y3 + x1*y2 + y1*x3 - y2*x3 - x1*y3 - y1*x2);
+
+	if (det < eps)
+	{
+		// Degenerate matrix
+		c[0] = c[1] = c[2] = 0;
+		return;
+	}
+
+	// Symbolic solution of the equation by Gaussian elimination
+	if (fabs(x1-x2) < eps)
+	{
+		c[2] = (u2-u1)/(y2-y1);
+		c[1] = (u3 - u1 - (y3-y1)*c[2])/(x3-x1);
+		c[0] = u1 - x1*c[1] - y1*c[2];
+	}
+	else
+	{
+		c[2] = ((x2-x1)*(u3-u1) - (x3-x1)*(u2-u1))/((y3-y1)*(x2-x1) - (x3-x1)*(y2-y1));
+		c[1] = (u2 - u1 - (y2-y1)*c[2])/(x2-x1);
+		c[0] = u1 - x1*c[1] - y1*c[2];
+	}
+}
+
 ASFUNCTIONBODY(Graphics,drawTriangles)
 {
 	Graphics* th=static_cast<Graphics*>(obj);
@@ -3263,26 +3416,109 @@ ASFUNCTIONBODY(Graphics,drawTriangles)
 	tiny_string culling;
 	ARG_UNPACK (vertices) (indices, NullRef) (uvtData, NullRef) (culling, "none");
 
-	if (!indices.isNull())
-		LOG(LOG_NOT_IMPLEMENTED, "Graphics.drawTriangles doesn't support indices");
-	if (!uvtData.isNull())
-		LOG(LOG_NOT_IMPLEMENTED, "Graphics.drawTriangles doesn't support uvtData");
 	if (culling != "none")
 		LOG(LOG_NOT_IMPLEMENTED, "Graphics.drawTriangles doesn't support culling");
 
-	for (unsigned int i=0; i<vertices->size()/6; i++)
+	// Validate the parameters
+	if ((indices.isNull() && (vertices->size() % 6 != 0)) || 
+	    (!indices.isNull() && (indices->size() % 3 != 0)))
 	{
-		Vector2 a(vertices->at(6*i)->toNumber(),
-			  vertices->at(6*i+1)->toNumber());
-		Vector2 b(vertices->at(6*i+2)->toNumber(),
-			  vertices->at(6*i+3)->toNumber());
-		Vector2 c(vertices->at(6*i+4)->toNumber(),
-			  vertices->at(6*i+5)->toNumber());
+		throw Class<ArgumentError>::getInstanceS("Error #2004");
+	}
+
+	unsigned int numvertices=vertices->size()/2;
+	unsigned int numtriangles;
+	bool has_uvt=false;
+	int uvtElemSize=2;
+	int texturewidth=0;
+	int textureheight=0;
+
+	if (indices.isNull())
+		numtriangles=numvertices/3;
+	else
+		numtriangles=indices->size()/3;
+
+	if (!uvtData.isNull())
+	{
+		if (uvtData->size()==2*numvertices)
+		{
+			has_uvt=true;
+			uvtElemSize=2; /* (u, v) */
+		}
+		else if (uvtData->size()==3*numvertices)
+		{
+			has_uvt=true;
+			uvtElemSize=3; /* (u, v, t), t is ignored */
+			LOG(LOG_NOT_IMPLEMENTED, "Graphics.drawTriangles doesn't support t in uvtData parameter");
+		}
+		else
+		{
+			throw Class<ArgumentError>::getInstanceS("Error #2004");
+		}
+
+		th->owner->getTextureSize(&texturewidth, &textureheight);
+	}
+
+	// According to testing, drawTriangles first fills the current
+	// path and creates a new path, but keeps the source.
+	th->owner->tokens.emplace_back(FILL_KEEP_SOURCE);
+
+	if (has_uvt && (texturewidth==0 || textureheight==0))
+		return NULL;
+
+	// Construct the triangles
+	for (unsigned int i=0; i<numtriangles; i++)
+	{
+		double x[3], y[3], u[3]={0}, v[3]={0};
+		for (unsigned int j=0; j<3; j++)
+		{
+			unsigned int vertex;
+			if (indices.isNull())
+				vertex=3*i+j;
+			else
+				vertex=indices->at(3*i+j)->toInt();
+
+			x[j]=vertices->at(2*vertex)->toNumber();
+			y[j]=vertices->at(2*vertex+1)->toNumber();
+
+			if (has_uvt)
+			{
+				u[j]=uvtData->at(vertex*uvtElemSize)->toNumber()*texturewidth;
+				v[j]=uvtData->at(vertex*uvtElemSize+1)->toNumber()*textureheight;
+			}
+		}
+		
+		Vector2 a(x[0], y[0]);
+		Vector2 b(x[1], y[1]);
+		Vector2 c(x[2], y[2]);
 
 		th->owner->tokens.emplace_back(GeomToken(MOVE, a));
 		th->owner->tokens.emplace_back(GeomToken(STRAIGHT, b));
 		th->owner->tokens.emplace_back(GeomToken(STRAIGHT, c));
 		th->owner->tokens.emplace_back(GeomToken(STRAIGHT, a));
+
+		if (has_uvt)
+		{
+			double t[6];
+
+			// Use the known (x, y) and (u, v)
+			// correspondences to compute a transformation
+			// t from (x, y) space into (u, v) space
+			// (cairo needs the mapping in this
+			// direction).
+			//
+			// u = t[0] + t[1]*x + t[2]*y
+			// v = t[3] + t[4]*x + t[5]*y
+			//
+			// u and v parts can be solved separately.
+			th->solveVertexMapping(x[0], y[0], x[1], y[1], x[2], y[2],
+					       u[0], u[1], u[2], t);
+			th->solveVertexMapping(x[0], y[0], x[1], y[1], x[2], y[2],
+					       v[0], v[1], v[2], &t[3]);
+
+			MATRIX m(t[1], t[5], t[4], t[2], t[0], t[3]);
+			th->owner->tokens.emplace_back(GeomToken(FILL_TRANSFORM_TEXTURE, m));
+		}
 	}
 	
 	th->owner->owner->requestInvalidation();
@@ -3413,6 +3649,9 @@ ASFUNCTIONBODY(Graphics,beginBitmapFill)
 	bool repeat, smooth;
 	ARG_UNPACK (bitmap) (matrix, NullRef) (repeat, true) (smooth, false);
 
+	if(bitmap.isNull())
+		return NULL;
+
 	th->checkAndSetScaling();
 	FILLSTYLE style(-1);
 	if(repeat && smooth)
@@ -3511,6 +3750,12 @@ void BitmapData::sinit(Class_base* c)
 	c->setDeclaredMethodByQName("draw","",Class<IFunction>::getFunction(draw),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("getPixel","",Class<IFunction>::getFunction(getPixel),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("getPixel32","",Class<IFunction>::getFunction(getPixel32),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("setPixel","",Class<IFunction>::getFunction(setPixel),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("setPixel32","",Class<IFunction>::getFunction(setPixel32),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("rect","",Class<IFunction>::getFunction(getRect),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("copyPixels","",Class<IFunction>::getFunction(copyPixels),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("fillRect","",Class<IFunction>::getFunction(fillRect),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("generateFilterRect","",Class<IFunction>::getFunction(generateFilterRect),NORMAL_METHOD,true);
 	REGISTER_GETTER(c,width);
 	REGISTER_GETTER(c,height);
 
@@ -3519,8 +3764,8 @@ void BitmapData::sinit(Class_base* c)
 
 ASFUNCTIONBODY(BitmapData,_constructor)
 {
-	int width;
-	int height;
+	uint32_t width;
+	uint32_t height;
 	bool transparent;
 	uint32_t fillColor;
 	BitmapData* th = obj->as<BitmapData>();
@@ -3537,48 +3782,61 @@ ASFUNCTIONBODY(BitmapData,_constructor)
 		uint8_t *alpha=reinterpret_cast<uint8_t *>(&c);
 		*alpha=0xFF;
 	}
-	for(int i=0; i<width*height; i++)
+	for(uint32_t i=0; i<width*height; i++)
 		pixels[i]=c;
 	th->fromRGB(reinterpret_cast<uint8_t *>(pixels), width, height, true);
+	th->transparent=transparent;
 
 	return NULL;
 }
 
 ASFUNCTIONBODY_GETTER(BitmapData, width);
 ASFUNCTIONBODY_GETTER(BitmapData, height);
+ASFUNCTIONBODY_GETTER(BitmapData, transparent);
 
 ASFUNCTIONBODY(BitmapData,draw)
 {
 	BitmapData* th = obj->as<BitmapData>();
-	_NR<ASObject> drawableO;
+	_NR<ASObject> drawable;
 	_NR<Matrix> matrix;
 	_NR<ColorTransform> ctransform;
 	_NR<ASString> blendMode;
 	_NR<Rectangle> clipRect;
 	bool smoothing;
-	ARG_UNPACK (drawableO) (matrix, NullRef) (ctransform, NullRef) (blendMode, NullRef)
+	ARG_UNPACK (drawable) (matrix, NullRef) (ctransform, NullRef) (blendMode, NullRef)
 					(clipRect, NullRef) (smoothing, false);
 
-	if(!drawableO->getClass() || !drawableO->getClass()->isSubClass(InterfaceClass<IBitmapDrawable>::getClass()) )
+	if(!drawable->getClass() || !drawable->getClass()->isSubClass(InterfaceClass<IBitmapDrawable>::getClass()) )
 		throw Class<TypeError>::getInstanceS("Error #1034: Wrong type");
 
 	if(!matrix.isNull() || !ctransform.isNull() || !blendMode.isNull() || !clipRect.isNull() || smoothing)
 		LOG(LOG_NOT_IMPLEMENTED,"BitmapData.draw does not support many parameters");
 
-	if(drawableO->is<Loader>() && drawableO->as<Loader>()->getContent()->is<Bitmap>())
+	if(drawable->is<Loader>() && drawable->as<Loader>()->getContent()->is<Bitmap>())
 	{
-		Bitmap* bm = drawableO->as<Loader>()->getContent()->as<Bitmap>();
-		delete[] th->data;
-		th->dataSize = bm->bitmapData->dataSize;
-		th->data = new uint8_t[th->dataSize];
-		memcpy(th->data, bm->bitmapData->data, th->dataSize);
-		th->width = bm->bitmapData->width;
-		th->height = bm->bitmapData->height;
+		Bitmap* bm = drawable->as<Loader>()->getContent()->as<Bitmap>();
+		th->copyFrom(bm->bitmapData.getPtr());
 		return NULL;
 	}
+	else if(drawable->is<BitmapData>())
+	{
+		th->copyFrom(drawable->as<BitmapData>());
+		return NULL;
+	}
+	else
+		LOG(LOG_NOT_IMPLEMENTED,"BitmapData.draw does not support " << drawable->toDebugString());
 
-	LOG(LOG_NOT_IMPLEMENTED,"BitmapData.draw does not support " << drawableO->toDebugString());
 	return NULL;
+}
+
+void BitmapData::copyFrom(BitmapData *source)
+{
+	data.clear();
+	dataSize = source->dataSize;
+	data = source->data;
+	width = source->width;
+	height = source->height;
+	stride = source->stride;
 }
 
 uint32_t BitmapData::getPixelPriv(uint32_t x, uint32_t y)
@@ -3609,7 +3867,147 @@ ASFUNCTIONBODY(BitmapData,getPixel32)
 	uint32_t y;
 	ARG_UNPACK(x)(y);
 
-	return abstract_ui(th->getPixelPriv(x, y));
+	uint32_t pix=th->getPixelPriv(x, y);
+	return abstract_ui(pix);
+}
+
+void BitmapData::setPixelPriv(uint32_t x, uint32_t y, uint32_t color, bool setAlpha)
+{
+	if ((int)x >= width || (int)y >= height)
+		return;
+
+	uint32_t *p=reinterpret_cast<uint32_t *>(&data[y*stride + 4*x]);
+	if(setAlpha)
+		*p=color;
+	else
+		*p=(*p & 0xff000000) | (color & 0x00ffffff);
+}
+
+ASFUNCTIONBODY(BitmapData,setPixel)
+{
+	BitmapData* th = obj->as<BitmapData>();
+	uint32_t x;
+	uint32_t y;
+	uint32_t color;
+	ARG_UNPACK(x)(y)(color);
+	th->setPixelPriv(x, y, color, false);
+	return NULL;
+}
+
+ASFUNCTIONBODY(BitmapData,setPixel32)
+{
+	BitmapData* th = obj->as<BitmapData>();
+	uint32_t x;
+	uint32_t y;
+	uint32_t color;
+	ARG_UNPACK(x)(y)(color);
+	th->setPixelPriv(x, y, color, th->transparent);
+	return NULL;
+}
+
+ASFUNCTIONBODY(BitmapData,getRect)
+{
+	BitmapData* th = obj->as<BitmapData>();
+	Rectangle *rect=Class<Rectangle>::getInstanceS();
+	rect->width=th->width;
+	rect->height=th->height;
+	return rect;
+}
+
+ASFUNCTIONBODY(BitmapData,fillRect)
+{
+	BitmapData* th=obj->as<BitmapData>();
+	_NR<Rectangle> rect;
+	uint32_t color;
+	ARG_UNPACK(rect)(color);
+
+	//Clip rectangle
+	int32_t rectX=rect->x;
+	int32_t rectY=rect->y;
+	int32_t rectW=rect->width;
+	int32_t rectH=rect->height;
+	if(rectX<0)
+	{
+		rectW+=rectX;
+		rectX = 0;
+	}
+	if(rectY<0)
+	{
+		rectH+=rectY;
+		rectY = 0;
+	}
+	if(rectW > th->width)
+		rectW = th->width;
+	if(rectH > th->height)
+		rectH = th->height;
+
+	for(int32_t i=0;i<rectH;i++)
+	{
+		for(int32_t j=0;j<rectW;j++)
+		{
+			uint32_t offset=(i+rectY)*th->stride + (j+rectX)*4;
+			uint32_t* ptr=(uint32_t*)(th->getData()+offset);
+			*ptr=color;
+		}
+	}
+	return NULL;
+}
+
+ASFUNCTIONBODY(BitmapData,copyPixels)
+{
+	BitmapData* th=obj->as<BitmapData>();
+	_NR<BitmapData> source;
+	_NR<Rectangle> sourceRect;
+	_NR<Point> destPoint;
+	_NR<BitmapData> alphaBitmapData;
+	_NR<Point> alphaPoint;
+	bool mergeAlpha;
+	ARG_UNPACK(source)(sourceRect)(destPoint)(alphaBitmapData, NullRef)(alphaPoint, NullRef)(mergeAlpha,false);
+
+	if(!alphaBitmapData.isNull())
+		LOG(LOG_NOT_IMPLEMENTED, "BitmapData.copyPixels doesn't support alpha bitmap");
+
+	int srcLeft=imax((int)sourceRect->x, 0);
+	int srcTop=imax((int)sourceRect->y, 0);
+	int srcRight=imin((int)(sourceRect->x+sourceRect->width), source->width);
+	int srcBottom=imin((int)(sourceRect->y+sourceRect->height), source->height);
+
+	int destLeft=(int)destPoint->getX();
+	int destTop=(int)destPoint->getY();
+	if(destLeft<0)
+	{
+		srcLeft+=-destLeft;
+		destLeft=0;
+	}
+	if(destTop<0)
+	{
+		srcTop+=-destTop;
+		destTop=0;
+	}
+
+	int copyWidth=imin(srcRight-srcLeft, th->width-destLeft);
+	int copyHeight=imin(srcBottom-srcTop, th->height-destTop);
+
+	if(copyWidth<=0 || copyHeight<=0)
+		return NULL;
+
+	for(int i=0; i<copyHeight; i++)
+	{
+		memmove(th->getData() + (destTop+i)*th->stride + 4*destLeft, 
+			source->getData() + (srcTop+i)*source->stride + 4*srcLeft,
+			4*copyWidth);
+	}
+
+	return NULL;
+}
+ASFUNCTIONBODY(BitmapData,generateFilterRect)
+{
+	LOG(LOG_NOT_IMPLEMENTED,"BitmapData::generateFilterRect is just a stub");
+	BitmapData* th = obj->as<BitmapData>();
+	Rectangle *rect=Class<Rectangle>::getInstanceS();
+	rect->width=th->width;
+	rect->height=th->height;
+	return rect;
 }
 
 Bitmap::Bitmap(std::istream *s, FILE_TYPE type) : TokenContainer(this)
@@ -3635,8 +4033,10 @@ Bitmap::Bitmap(std::istream *s, FILE_TYPE type) : TokenContainer(this)
 			bitmapData->fromJPEG(*s);
 			break;
 		case FT_PNG:
+			bitmapData->fromPNG(*s);
+			break;
 		case FT_GIF:
-			LOG(LOG_NOT_IMPLEMENTED, _("PNGs and GIFs are not yet supported"));
+			LOG(LOG_NOT_IMPLEMENTED, _("GIFs are not yet supported"));
 			break;
 		default:
 			LOG(LOG_ERROR,_("Unsupported image type"));
@@ -3653,16 +4053,38 @@ Bitmap::Bitmap(_R<BitmapData> data) : TokenContainer(this)
 
 BitmapData::~BitmapData()
 {
-	if(data)
-		delete[] data;
+	data.clear();
 }
 
 void Bitmap::sinit(Class_base* c)
 {
-//	c->constructor=Class<IFunction>::getFunction(_constructor);
-	c->setConstructor(NULL);
+	c->setConstructor(Class<IFunction>::getFunction(_constructor));
 	c->setSuper(Class<DisplayObject>::getRef());
 	REGISTER_GETTER_SETTER(c,bitmapData);
+}
+
+ASFUNCTIONBODY(Bitmap,_constructor)
+{
+	tiny_string _pixelSnapping;
+	bool _smoothing;
+	_NR<BitmapData> _bitmapData;
+	Bitmap* th = obj->as<Bitmap>();
+	ARG_UNPACK(_bitmapData, NullRef)(_pixelSnapping, "auto")(_smoothing, false);
+
+	DisplayObject::_constructor(obj,NULL,0);
+
+	if(_pixelSnapping!="auto")
+		LOG(LOG_NOT_IMPLEMENTED, "Bitmap constructor doesn't support pixelSnapping");
+	if(_smoothing)
+		LOG(LOG_NOT_IMPLEMENTED, "Bitmap constructor doesn't support smoothing");
+
+	if(!_bitmapData.isNull())
+	{
+		th->bitmapData=_bitmapData;
+		th->updatedData();
+	}
+
+	return NULL;
 }
 
 void Bitmap::onBitmapData(_NR<BitmapData>)
@@ -3674,10 +4096,14 @@ ASFUNCTIONBODY_GETTER_SETTER_CB(Bitmap,bitmapData,onBitmapData);
 
 void Bitmap::updatedData()
 {
+	tokens.clear();
+
+	if(bitmapData.isNull())
+		return;
+
 	FILLSTYLE style(-1);
 	style.FillStyleType=CLIPPED_BITMAP;
 	style.bitmap=bitmapData.getPtr();
-	tokens.clear();
 	tokens.emplace_back(GeomToken(SET_FILL, style));
 	tokens.emplace_back(GeomToken(MOVE, Vector2(0, 0)));
 	tokens.emplace_back(GeomToken(STRAIGHT, Vector2(0, bitmapData->height)));
@@ -3698,7 +4124,10 @@ _NR<InteractiveObject> Bitmap::hitTestImpl(_NR<InteractiveObject> last, number_t
 
 IntSize Bitmap::getBitmapSize() const
 {
-	return IntSize(bitmapData->width, bitmapData->height);
+	if(bitmapData.isNull())
+		return IntSize(0, 0);
+	else
+		return IntSize(bitmapData->width, bitmapData->height);
 }
 
 bool BitmapData::fromRGB(uint8_t* rgb, uint32_t w, uint32_t h, bool hasAlpha)
@@ -3709,11 +4138,11 @@ bool BitmapData::fromRGB(uint8_t* rgb, uint32_t w, uint32_t h, bool hasAlpha)
 	width = w;
 	height = h;
 	if(hasAlpha)
-		data = CairoRenderer::convertBitmapWithAlphaToCairo(rgb, width, height, &dataSize, &stride);
+		CairoRenderer::convertBitmapWithAlphaToCairo(data, rgb, width, height, &dataSize, &stride);
 	else
-		data = CairoRenderer::convertBitmapToCairo(rgb, width, height, &dataSize, &stride);
+		CairoRenderer::convertBitmapToCairo(data, rgb, width, height, &dataSize, &stride);
 	delete[] rgb;
-	if(!data)
+	if(data.empty())
 	{
 		LOG(LOG_ERROR, "Error decoding image");
 		return false;
@@ -3724,7 +4153,7 @@ bool BitmapData::fromRGB(uint8_t* rgb, uint32_t w, uint32_t h, bool hasAlpha)
 
 bool BitmapData::fromJPEG(uint8_t *inData, int len)
 {
-	assert(!data);
+	assert(data.empty());
 	/* flash uses signed values for width and height */
 	uint32_t w,h;
 	uint8_t *rgb=ImageDecoder::decodeJPEG(inData, len, &w, &h);
@@ -3734,10 +4163,19 @@ bool BitmapData::fromJPEG(uint8_t *inData, int len)
 
 bool BitmapData::fromJPEG(std::istream &s)
 {
-	assert(!data);
+	assert(data.empty());
 	/* flash uses signed values for width and height */
 	uint32_t w,h;
 	uint8_t *rgb=ImageDecoder::decodeJPEG(s, &w, &h);
+	assert_and_throw((int32_t)w >= 0 && (int32_t)h >= 0);
+	return fromRGB(rgb, (int32_t)w, (int32_t)h, false);
+}
+bool BitmapData::fromPNG(std::istream &s)
+{
+	assert(data.empty());
+	/* flash uses signed values for width and height */
+	uint32_t w,h;
+	uint8_t *rgb=ImageDecoder::decodePNG(s, &w, &h);
 	assert_and_throw((int32_t)w >= 0 && (int32_t)h >= 0);
 	return fromRGB(rgb, (int32_t)w, (int32_t)h, false);
 }
@@ -4183,6 +4621,8 @@ void MovieClip::advanceFrame()
 
 void MovieClip::constructionComplete()
 {
+	ASObject::constructionComplete();
+
 	/* If this object was 'new'ed from AS code, the first
 	 * frame has not been initalized yet, so init the frame
 	 * now */

@@ -386,6 +386,14 @@ public:
 		ret->setClass(c);
 		return ret;
 	}
+	static Function* getFunction(Function::as_function v, int len)
+	{
+		Class<IFunction>* c=Class<IFunction>::getClass();
+		Function* ret=new Function(v);
+		ret->setClass(c);
+		ret->length = len;
+		return ret;
+	}
 	static SyntheticFunction* getSyntheticFunction(method_info* m)
 	{
 		Class<IFunction>* c=Class<IFunction>::getClass();
@@ -410,7 +418,8 @@ public:
 	ASObject *describeType() const;
 	//Serialization interface
 	void serialize(ByteArray* out, std::map<tiny_string, uint32_t>& stringMap,
-			std::map<const ASObject*, uint32_t>& objMap) const;
+				std::map<const ASObject*, uint32_t>& objMap,
+				std::map<const Class_base*, uint32_t>& traitsMap);
 };
 
 class Null: public ASObject
@@ -420,9 +429,13 @@ public:
 	bool isEqual(ASObject* r);
 	TRISTATE isLess(ASObject* r);
 	int32_t toInt();
+	_NR<ASObject> getVariableByMultiname(const multiname& name, GET_VARIABLE_OPTION opt);
+	int32_t getVariableByMultiname_i(const multiname& name);
+
 	//Serialization interface
 	void serialize(ByteArray* out, std::map<tiny_string, uint32_t>& stringMap,
-			std::map<const ASObject*, uint32_t>& objMap) const;
+				std::map<const ASObject*, uint32_t>& objMap,
+				std::map<const Class_base*, uint32_t>& traitsMap);
 };
 
 class ASQName: public ASObject
@@ -472,134 +485,6 @@ public:
 	bool isEqual(ASObject* o);
 };
 
-class Integer : public ASObject
-{
-friend class Number;
-friend class Array;
-friend class ABCVm;
-friend class ABCContext;
-friend ASObject* abstract_i(int32_t i);
-CLASSBUILDABLE(Integer);
-private:
-	Integer(int32_t v=0):val(v){type=T_INTEGER;}
-public:
-	int32_t val;
-	static void buildTraits(ASObject* o){};
-	static void sinit(Class_base* c);
-	ASFUNCTION(_toString);
-	tiny_string toString();
-	static tiny_string toString(int32_t val);
-	int32_t toInt()
-	{
-		return val;
-	}
-	TRISTATE isLess(ASObject* r);
-	bool isEqual(ASObject* o);
-	ASFUNCTION(generator);
-	std::string toDebugString() { return toString()+"i"; }
-	//Serialization interface
-	void serialize(ByteArray* out, std::map<tiny_string, uint32_t>& stringMap,
-			std::map<const ASObject*, uint32_t>& objMap) const;
-};
-
-class UInteger: public ASObject
-{
-friend ASObject* abstract_ui(uint32_t i);
-CLASSBUILDABLE(UInteger);
-private:
-public:
-	uint32_t val;
-	UInteger(uint32_t v=0):val(v){type=T_UINTEGER;}
-
-	static void sinit(Class_base* c);
-	tiny_string toString();
-	static tiny_string toString(uint32_t val);
-	int32_t toInt()
-	{
-		return val;
-	}
-	uint32_t toUInt()
-	{
-		return val;
-	}
-	TRISTATE isLess(ASObject* r);
-	bool isEqual(ASObject* o);
-	ASFUNCTION(generator);
-	ASFUNCTION(_toString);
-	std::string toDebugString() { return toString()+"ui"; }
-	//CHECK: should this have a special serialization?
-};
-
-class Number : public ASObject
-{
-friend ASObject* abstract_d(number_t i);
-friend class ABCContext;
-friend class ABCVm;
-CLASSBUILDABLE(Number);
-private:
-	Number():val(0) {type=T_NUMBER;}
-	Number(double v):val(v){type=T_NUMBER;}
-	static void purgeTrailingZeroes(char* buf);
-public:
-	static const number_t NaN;
-	double val;
-	ASFUNCTION(_constructor);
-	ASFUNCTION(_toString);
-	tiny_string toString();
-	static tiny_string toString(number_t val);
-	static bool isInteger(number_t val)
-	{
-		return floor(val) == val;
-	}
-	unsigned int toUInt()
-	{
-		return (unsigned int)(val);
-	}
-	int32_t toInt()
-	{
-		if(val<0)
-			return int(val);
-		else
-		{
-			uint32_t ret=val;
-			return ret;
-		}
-	}
-	TRISTATE isLess(ASObject* o);
-	bool isEqual(ASObject* o);
-	static void buildTraits(ASObject* o){};
-	static void sinit(Class_base* c);
-	ASFUNCTION(generator);
-	std::string toDebugString() { return toString()+"d"; }
-	//Serialization interface
-	void serialize(ByteArray* out, std::map<tiny_string, uint32_t>& stringMap,
-			std::map<const ASObject*, uint32_t>& objMap) const;
-};
-
-class RegExp: public ASObject
-{
-CLASSBUILDABLE(RegExp);
-friend class ASString;
-private:
-	RegExp();
-	RegExp(const tiny_string& _re);
-public:
-	static void sinit(Class_base* c);
-	static void buildTraits(ASObject* o);
-	ASObject *match(const tiny_string& str);
-	ASFUNCTION(_constructor);
-	ASFUNCTION(generator);
-	ASFUNCTION(exec);
-	ASFUNCTION(test);
-	ASFUNCTION(_toString);
-	ASPROPERTY_GETTER(bool, dotall);
-	ASPROPERTY_GETTER(bool, global);
-	ASPROPERTY_GETTER(bool, ignoreCase);
-	ASPROPERTY_GETTER(bool, extended);
-	ASPROPERTY_GETTER(bool, multiline);
-	ASPROPERTY_GETTER_SETTER(int, lastIndex);
-	ASPROPERTY_GETTER(tiny_string, source);
-};
 
 class Global : public ASObject
 {
@@ -612,16 +497,6 @@ private:
 	int scriptId;
 public:
 	_NR<ASObject> getVariableByMultiname(const multiname& name, GET_VARIABLE_OPTION opt=NONE);
-};
-
-class GlobalObject
-{
-public:
-	void registerGlobalScope(Global* scope);
-	std::vector<Global*> globalScopes;
-	ASObject* getVariableByString(const std::string& name, ASObject*& target);
-	ASObject* getVariableAndTargetByMultiname(const multiname& name, ASObject*& target);
-	~GlobalObject();
 };
 
 ASObject* eval(ASObject* obj,ASObject* const* args, const unsigned int argslen);
@@ -643,7 +518,7 @@ ASObject* _isXMLName(ASObject* obj,ASObject* const* args, const unsigned int arg
 
 inline void Manager::put(ASObject* o)
 {
-	if(available.size()>maxCache)
+	if(available.size()>=maxCache)
 		delete o;
 	else
 	{

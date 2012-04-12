@@ -134,7 +134,7 @@ const tiny_string tiny_string::operator+(const tiny_string& r) const
 
 tiny_string& tiny_string::replace(uint32_t pos1, uint32_t n1, const tiny_string& o )
 {
-	assert(pos1 < numChars());
+	assert(pos1 <= numChars());
 	uint32_t bytestart = g_utf8_offset_to_pointer(buf,pos1)-buf;
 	if(pos1 + n1 > numChars())
 		n1 = numChars()-pos1;
@@ -183,8 +183,7 @@ tiny_string multiname::qualifiedString() const
 {
 	assert_and_throw(ns.size()==1);
 	assert_and_throw(name_type==NAME_STRING);
-	//TODO: what if the ns is empty
-	if(false && ns[0].name=="")
+	if(ns[0].name.empty())
 		return name_s;
 	else
 	{
@@ -216,6 +215,7 @@ tiny_string multiname::normalizedName() const
 
 void multiname::setName(ASObject* n)
 {
+	assert(name_type!=NAME_OBJECT || name_o==NULL);
 	if(n->is<Integer>())
 	{
 		name_i=n->as<Integer>()->val;
@@ -248,6 +248,15 @@ void multiname::setName(ASObject* n)
 		n->incRef();
 		name_o=n;
 		name_type = NAME_OBJECT;
+	}
+}
+
+void multiname::resetNameIfObject()
+{
+	if(name_type==NAME_OBJECT && name_o)
+	{
+		name_o->decRef();
+		name_o=NULL;
 	}
 }
 

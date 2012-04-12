@@ -49,6 +49,7 @@ protected:
 	std::map<uint32_t,data_slot> data;
 	void outofbounds() const;
 	Array();
+	~Array();
 private:
 	enum SORTTYPE { CASEINSENSITIVE=1, DESCENDING=2, UNIQUESORT=4, RETURNINDEXEDARRAY=8, NUMERIC=16 };
 	class sortComparatorDefault
@@ -82,6 +83,7 @@ public:
 	ASFUNCTION(_constructor);
 	ASFUNCTION(generator);
 	ASFUNCTION(_push);
+	ASFUNCTION(_push_as3);
 	ASFUNCTION(_concat);
 	ASFUNCTION(_pop);
 	ASFUNCTION(join);
@@ -103,14 +105,15 @@ public:
 	ASFUNCTION(every);
 	ASFUNCTION(some);
 
-	ASObject* at(unsigned int index) const;
-	void set(unsigned int index, ASObject* o)
+	_R<ASObject> at(unsigned int index) const;
+	void set(unsigned int index, _R<ASObject> o)
 	{
 		if(index<currentsize)
 		{
 			if(!data.count(index))
 				data[index]=data_slot();
-			data[index].data=o;
+			o->incRef();
+			data[index].data=o.getPtr();
 			data[index].type=DATA_OBJECT;
 		}
 		else
@@ -120,24 +123,13 @@ public:
 	{
 		return currentsize;
 	}
-	void push(ASObject* o)
+	void push(_R<ASObject> o)
 	{
-		data[currentsize] = data_slot(o,DATA_OBJECT);
+		o->incRef();
+		data[currentsize] = data_slot(o.getPtr(),DATA_OBJECT);
 		currentsize++;
 	}
-	void resize(uint64_t n)
-	{
-		for (uint32_t i = n; i < currentsize; i++)
-		{
-			if(data.count(i))
-			{
-				if (data[i].type==DATA_OBJECT && data[i].data)
-					data[i].data->decRef();
-				data.erase(i);
-			}
-		}
-		currentsize = n;
-	}
+	void resize(uint64_t n);
 	_NR<ASObject> getVariableByMultiname(const multiname& name, GET_VARIABLE_OPTION opt);
 	int32_t getVariableByMultiname_i(const multiname& name);
 	void setVariableByMultiname(const multiname& name, ASObject* o);
@@ -150,7 +142,8 @@ public:
 	_R<ASObject> nextValue(uint32_t index);
 	//Serialization interface
 	void serialize(ByteArray* out, std::map<tiny_string, uint32_t>& stringMap,
-			std::map<const ASObject*, uint32_t>& objMap) const;
+				std::map<const ASObject*, uint32_t>& objMap,
+				std::map<const Class_base*, uint32_t>& traitsMap);
 };
 
 

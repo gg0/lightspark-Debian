@@ -23,6 +23,7 @@
 #include "compat.h"
 #include "argconv.h"
 #include "parsing/amf3_generator.h"
+#include "RegExp.h"
 
 using namespace std;
 using namespace lightspark;
@@ -75,6 +76,7 @@ ASFUNCTIONBODY(ASString,_getLength)
 
 void ASString::sinit(Class_base* c)
 {
+	c->isFinal = true;
 	c->setSuper(Class<ASObject>::getRef());
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
 	c->setDeclaredMethodByQName("split",AS3,Class<IFunction>::getFunction(split),NORMAL_METHOD,true);
@@ -113,6 +115,7 @@ void ASString::sinit(Class_base* c)
 	c->prototype->setVariableByQName("toLocaleUpperCase","",Class<IFunction>::getFunction(toUpperCase),DYNAMIC_TRAIT);
 	c->prototype->setVariableByQName("toLowerCase","",Class<IFunction>::getFunction(toLowerCase),DYNAMIC_TRAIT);
 	c->prototype->setVariableByQName("toUpperCase","",Class<IFunction>::getFunction(toUpperCase),DYNAMIC_TRAIT);
+	c->prototype->setVariableByQName("fromCharCode","",Class<IFunction>::getFunction(fromCharCode),DYNAMIC_TRAIT);
 	c->prototype->setVariableByQName("toString","",Class<IFunction>::getFunction(_toString),DYNAMIC_TRAIT);
 	c->prototype->setVariableByQName("valueOf","",Class<IFunction>::getFunction(_toString),DYNAMIC_TRAIT);
 }
@@ -128,7 +131,7 @@ ASFUNCTIONBODY(ASString,search)
 	if(argslen == 0 || args[0]->getObjectType() == T_UNDEFINED)
 		return abstract_i(-1);
 
-	int options=PCRE_UTF8;
+	int options=PCRE_UTF8|PCRE_NEWLINE_ANY|PCRE_JAVASCRIPT_COMPAT;
 	tiny_string restr;
 	if(args[0]->getClass() && args[0]->getClass()==Class<RegExp>::getClass())
 	{
@@ -153,7 +156,6 @@ ASFUNCTIONBODY(ASString,search)
 	pcre* pcreRE=pcre_compile(restr.raw_buf(), options, &error, &errorOffset,NULL);
 	if(error)
 		return abstract_i(ret);
-	//Verify that 30 for ovector is ok, it must be at least (captGroups+1)*3
 	int capturingGroups;
 	int infoOk=pcre_fullinfo(pcreRE, NULL, PCRE_INFO_CAPTURECOUNT, &capturingGroups);
 	if(infoOk!=0)
@@ -161,11 +163,13 @@ ASFUNCTIONBODY(ASString,search)
 		pcre_free(pcreRE);
 		return abstract_i(ret);
 	}
-	assert_and_throw(capturingGroups<10);
-	int ovector[30];
+	pcre_extra extra;
+	extra.match_limit_recursion=200;
+	extra.flags = PCRE_EXTRA_MATCH_LIMIT_RECURSION;
+	int ovector[(capturingGroups+1)*3];
 	int offset=0;
 	//Global is not used in search
-	int rc=pcre_exec(pcreRE, NULL, data.raw_buf(), data.numBytes(), offset, 0, ovector, 30);
+	int rc=pcre_exec(pcreRE, &extra, data.raw_buf(), data.numBytes(), offset, 0, ovector, (capturingGroups+1)*3);
 	if(rc<0)
 	{
 		//No matches or error
@@ -176,6 +180,7 @@ ASFUNCTIONBODY(ASString,search)
 	// pcre_exec returns byte position, so we have to convert it to character position 
 	tiny_string tmp = data.substr_bytes(0, ret);
 	ret = tmp.numChars();
+	pcre_free(pcreRE);
 	return abstract_i(ret);
 }
 
@@ -259,12 +264,14 @@ ASFUNCTIONBODY(ASString,split)
 {
 	tiny_string data = obj->toString();
 	Array* ret=Class<Array>::getInstanceS();
-	ASObject* delimiter=args[0];
-	if(argslen == 0 || delimiter->getObjectType()==T_UNDEFINED)
+	uint limit = 0x7fffffff;
+	if(argslen == 0 )
 	{
-		ret->push(Class<ASString>::getInstanceS(data));
+		ret->push(_MR(Class<ASString>::getInstanceS(data)));
 		return ret;
 	}
+	if (argslen > 1)
+		limit = args[1]->toUInt();
 
 	if(args[0]->getClass() && args[0]->getClass()==Class<RegExp>::getClass())
 	{
@@ -274,25 +281,13 @@ ASFUNCTIONBODY(ASString,split)
 		{
 			//the RegExp is empty, so split every character
 			for(auto i=data.begin();i!=data.end();++i)
-				ret->push( Class<ASString>::getInstanceS( tiny_string::fromChar(*i) ) );
+				ret->push(_MR(Class<ASString>::getInstanceS( tiny_string::fromChar(*i) ) ));
 			return ret;
 		}
 
-		const char* error;
-		int offset;
-		int options=PCRE_UTF8;
-		if(re->ignoreCase)
-			options|=PCRE_CASELESS;
-		if(re->extended)
-			options|=PCRE_EXTENDED;
-		if(re->multiline)
-			options|=PCRE_MULTILINE;
-		if(re->dotall)
-			options|=PCRE_DOTALL;
-		pcre* pcreRE=pcre_compile(re->source.raw_buf(), options, &error, &offset,NULL);
-		if(error)
+		pcre* pcreRE = re->compile();
+		if (!pcreRE)
 			return ret;
-		//Verify that 30 for ovector is ok, it must be at least (captGroups+1)*3
 		int capturingGroups;
 		int infoOk=pcre_fullinfo(pcreRE, NULL, PCRE_INFO_CAPTURECOUNT, &capturingGroups);
 		if(infoOk!=0)
@@ -300,15 +295,17 @@ ASFUNCTIONBODY(ASString,split)
 			pcre_free(pcreRE);
 			return ret;
 		}
-		assert_and_throw(capturingGroups<10);
-		int ovector[30];
-		offset=0;
+		pcre_extra extra;
+		extra.match_limit_recursion=200;
+		extra.flags = PCRE_EXTRA_MATCH_LIMIT_RECURSION;
+		int ovector[(capturingGroups+1)*3];
+		int offset=0;
 		unsigned int end;
 		uint32_t lastMatch = 0;
 		do
 		{
 			//offset is a byte offset that must point to the beginning of an utf8 character
-			int rc=pcre_exec(pcreRE, NULL, data.raw_buf(), data.numBytes(), offset, 0, ovector, 30);
+			int rc=pcre_exec(pcreRE, &extra, data.raw_buf(), data.numBytes(), offset, 0, ovector, (capturingGroups+1)*3);
 			end=ovector[0];
 			if(rc<0)
 				break;
@@ -319,7 +316,7 @@ ASFUNCTIONBODY(ASString,split)
 			}
 			//Extract string from last match until the beginning of the current match
 			ASString* s=Class<ASString>::getInstanceS(data.substr_bytes(lastMatch,end-lastMatch));
-			ret->push(s);
+			ret->push(_MR(s));
 			lastMatch=offset=ovector[1];
 
 			//Insert capturing groups
@@ -327,14 +324,14 @@ ASFUNCTIONBODY(ASString,split)
 			{
 				//use string interface through raw(), because we index on bytes, not on UTF-8 characters
 				ASString* s=Class<ASString>::getInstanceS(data.substr_bytes(ovector[i*2],ovector[i*2+1]-ovector[i*2]));
-				ret->push(s);
+				ret->push(_MR(s));
 			}
 		}
-		while(end<data.numBytes());
-		if(lastMatch != data.numBytes()+1)
+		while(end<data.numBytes() && ret->size() < limit);
+		if(ret->size() < limit && lastMatch != data.numBytes()+1)
 		{
 			ASString* s=Class<ASString>::getInstanceS(data.substr_bytes(lastMatch,data.numBytes()-lastMatch));
-			ret->push(s);
+			ret->push(_MR(s));
 		}
 		pcre_free(pcreRE);
 	}
@@ -344,8 +341,14 @@ ASFUNCTIONBODY(ASString,split)
 		if(del.empty())
 		{
 			//the string is empty, so split every character
+			uint j = 0;
 			for(auto i=data.begin();i!=data.end();++i)
-				ret->push( Class<ASString>::getInstanceS( tiny_string::fromChar(*i) ) );
+			{
+				if (j >= limit)
+					break;
+				j++;
+				ret->push(_MR(Class<ASString>::getInstanceS( tiny_string::fromChar(*i) ) ));
+			}
 			return ret;
 		}
 		unsigned int start=0;
@@ -357,10 +360,10 @@ ASFUNCTIONBODY(ASString,split)
 			if(match==-1)
 				match=data.numChars();
 			ASString* s=Class<ASString>::getInstanceS(data.substr(start,(match-start)));
-			ret->push(s);
+			ret->push(_MR(s));
 			start=match+del.numChars();
 		}
-		while(start<data.numChars());
+		while(start<data.numChars() && ret->size() < limit);
 	}
 
 	return ret;
@@ -518,9 +521,10 @@ TRISTATE ASString::isLess(ASObject* r)
 }
 
 void ASString::serialize(ByteArray* out, std::map<tiny_string, uint32_t>& stringMap,
-				std::map<const ASObject*, uint32_t>& objMap) const
+				std::map<const ASObject*, uint32_t>& objMap,
+				std::map<const Class_base*, uint32_t>& traitsMap)
 {
-	out->writeByte(amf3::string_marker);
+	out->writeByte(string_marker);
 	out->writeStringVR(stringMap, data);
 }
 
@@ -666,21 +670,10 @@ ASFUNCTIONBODY(ASString,replace)
 	{
 		RegExp* re=static_cast<RegExp*>(args[0]);
 
-		const char* error;
-		int errorOffset;
-		int options=PCRE_UTF8;
-		if(re->ignoreCase)
-			options|=PCRE_CASELESS;
-		if(re->extended)
-			options|=PCRE_EXTENDED;
-		if(re->multiline)
-			options|=PCRE_MULTILINE;
-		if(re->dotall)
-			options|=PCRE_DOTALL;
-		pcre* pcreRE=pcre_compile(re->source.raw_buf(), options, &error, &errorOffset,NULL);
-		if(error)
+		pcre* pcreRE = re->compile();
+		if (!pcreRE)
 			return ret;
-		//Verify that 30 for ovector is ok, it must be at least (captGroups+1)*3
+
 		int capturingGroups;
 		int infoOk=pcre_fullinfo(pcreRE, NULL, PCRE_INFO_CAPTURECOUNT, &capturingGroups);
 		if(infoOk!=0)
@@ -688,13 +681,15 @@ ASFUNCTIONBODY(ASString,replace)
 			pcre_free(pcreRE);
 			return ret;
 		}
-		assert_and_throw(capturingGroups<20);
-		int ovector[60];
+		pcre_extra extra;
+		extra.match_limit_recursion=200;
+		extra.flags = PCRE_EXTRA_MATCH_LIMIT_RECURSION;
+		int ovector[(capturingGroups+1)*3];
 		int offset=0;
 		int retDiff=0;
 		do
 		{
-			int rc=pcre_exec(pcreRE, NULL, ret->data.raw_buf(), ret->data.numBytes(), offset, 0, ovector, 60);
+			int rc=pcre_exec(pcreRE, &extra, ret->data.raw_buf(), ret->data.numBytes(), offset, 0, ovector, (capturingGroups+1)*3);
 			if(rc<0)
 			{
 				//No matches or error

@@ -232,14 +232,14 @@ ASFUNCTIONBODY(TextField, appendText)
 ASFUNCTIONBODY(TextField,_setTextFormat)
 {
 	TextField* th=Class<TextField>::cast(obj);
-	if(argslen == 0)
-		throw RunTimeException("TextField.setTextFormat: Not enough parameters");
-	if(argslen > 1)
-		LOG(LOG_NOT_IMPLEMENTED,"setTextFormat with more than one parameter");
+	_NR<TextFormat> tf;
+	int beginIndex;
+	int endIndex;
 
-	TextFormat* tf = Class<TextFormat>::cast(args[0]);
-	if(tf->getObjectType() == T_NULL)
-		return NULL;
+	ARG_UNPACK(tf)(beginIndex, -1)(endIndex, -1);
+
+	if(beginIndex!=-1 || endIndex!=-1)
+		LOG(LOG_NOT_IMPLEMENTED,"setTextFormat with beginIndex or endIndex");
 
 	if(tf->color)
 		th->textColor = tf->color->toUInt();
@@ -410,7 +410,7 @@ ASFUNCTIONBODY(StyleSheet,_getStyleNames)
 	Array* ret=Class<Array>::getInstanceS();
 	map<tiny_string, _R<ASObject>>::const_iterator it=th->styles.begin();
 	for(;it!=th->styles.end();++it)
-		ret->push(Class<ASString>::getInstanceS(it->first));
+		ret->push(_MR(Class<ASString>::getInstanceS(it->first)));
 	return ret;
 }
 

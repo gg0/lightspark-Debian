@@ -46,13 +46,19 @@ public:
 
 class ApplicationDomain: public ASObject
 {
+private:
+	std::vector<Global*> globalScopes;
 public:
 	ApplicationDomain(){}
 	void finalize();
 	static void sinit(Class_base* c);
 	static void buildTraits(ASObject* o);
+	void registerGlobalScope(Global* scope);
+	ASObject* getVariableByString(const std::string& name, ASObject*& target);
+	ASObject* getVariableAndTargetByMultiname(const multiname& name, ASObject*& target);
 	ASFUNCTION(_constructor);
 	ASFUNCTION(_getCurrentDomain);
+	ASFUNCTION(_getMinDomainMemoryLength);
 	ASFUNCTION(hasDefinition);
 	ASFUNCTION(getDefinition);
 	ASPROPERTY_GETTER_SETTER(_NR<ByteArray>, domainMemory);

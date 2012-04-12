@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2011  Matthias Gehre (M.Gehre@gmx.de)
+    Copyright (C) 2009-2011  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -16,32 +16,42 @@
     You should have received a copy of the GNU Lesser General Public License
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
-#include <stdint.h>
-#include <istream>
 
-extern "C" {
-#include "jpeglib.h"
-#define PNG_SKIP_SETJMP_CHECK
-#include "png.h"
-}
+#ifndef UINTEGER_H
+#define UINTEGER_H
+#include "compat.h"
+#include "asobject.h"
 
 namespace lightspark
 {
 
-class ImageDecoder
+class UInteger: public ASObject
 {
+friend ASObject* abstract_ui(uint32_t i);
+CLASSBUILDABLE(UInteger);
 private:
-	static uint8_t* decodeJPEGImpl(jpeg_source_mgr& src, uint32_t* width, uint32_t* height);
-	static uint8_t* decodePNGImpl(png_structp pngPtr, uint32_t* width, uint32_t* height);
 public:
-	/*
-	 * Returns a new[]'ed array of decompressed data and sets width, height and format
-	 * Return NULL on error
-	 */
-	static uint8_t* decodeJPEG(uint8_t* inData, int len, uint32_t* width, uint32_t* height);
-	static uint8_t* decodeJPEG(std::istream& str, uint32_t* width, uint32_t* height);
-	static uint8_t* decodePNG(uint8_t* inData, int len, uint32_t* width, uint32_t* height);
-	static uint8_t* decodePNG(std::istream& str, uint32_t* width, uint32_t* height);
+	uint32_t val;
+	UInteger(uint32_t v=0):val(v){type=T_UINTEGER;}
+
+	static void sinit(Class_base* c);
+	tiny_string toString();
+	static tiny_string toString(uint32_t val);
+	int32_t toInt()
+	{
+		return val;
+	}
+	uint32_t toUInt()
+	{
+		return val;
+	}
+	TRISTATE isLess(ASObject* r);
+	bool isEqual(ASObject* o);
+	ASFUNCTION(generator);
+	ASFUNCTION(_toString);
+	std::string toDebugString() { return toString()+"ui"; }
+	//CHECK: should this have a special serialization?
 };
 
 }
+#endif // UINTEGER_H

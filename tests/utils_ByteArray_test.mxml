@@ -9,6 +9,8 @@
 	<![CDATA[
 	import flash.utils.ByteArray;
 	import flash.utils.Endian;
+	import SerializableClass;
+	import CustomSerializableClass;
 	private function appComplete():void
 	{
 		var ba:ByteArray = new ByteArray();
@@ -128,6 +130,44 @@
 		Tests.assertEquals(3, ba8.readShort(), "writeUTF: written length");
 		ba8.position = 0;
 		Tests.assertEquals("abc", ba8.readUTF(), "readUTF after writeUTF");
+
+		var ba9:ByteArray = new ByteArray();
+		ba9.writeObject(128);
+		ba9.position = 0;
+		Tests.assertTrue(ba9[0]==0x04 && ba9[1]==0x81 && ba9[2]==0x00, "U29 serialization");
+		var tmp:Object = ba9.readObject();
+		Tests.assertEquals(tmp, 128, "U29 deserialization");
+
+		var sc:SerializableClass = new SerializableClass(1,2);
+		var ba10:ByteArray = new ByteArray();
+		ba10.writeObject(sc);
+		ba10.position=0;
+		var tmp2:Object = ba10.readObject();
+		Tests.assertTrue(tmp2.a==1 && tmp2.b==2 && getQualifiedClassName(tmp2)=="Object", "Class instance serialized without alias");
+		Tests.assertEquals(12, ba10.length, "Length of serialization without alias");
+
+		registerClassAlias("classalias", SerializableClass);
+		var ba11:ByteArray = new ByteArray();
+		ba11.writeObject(sc);
+		ba11.position=0;
+		var tmp3:Object = ba11.readObject();
+		Tests.assertTrue(tmp3.a==1 && tmp3.b==2 && getQualifiedClassName(tmp3)=="SerializableClass", "Class instance serialized with alias");
+		Tests.assertEquals(22, ba11.length, "Length of serialization with alias");
+
+		var sc2:SerializableClass = new SerializableClass(3,4);
+		var ba12:ByteArray = new ByteArray();
+		ba12.writeObject([sc, sc2]);
+		ba12.position=0;
+		var tmp4:Object = ba12.readObject();
+		Tests.assertEquals(32, ba12.length, "Length of multiple instances of serialized class (traits references test)");
+
+		registerClassAlias("customalias", CustomSerializableClass);
+		var csc:CustomSerializableClass = new CustomSerializableClass();
+		var ba13:ByteArray = new ByteArray();
+		ba13.writeObject(csc);
+		ba13.position=0;
+		var tmp5:Object = ba13.readObject();
+		Tests.assertEquals(true, tmp5.ok, "Custom serialization");
 
 		Tests.report(visual, this.name);
 	}

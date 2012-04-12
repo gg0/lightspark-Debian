@@ -100,8 +100,8 @@ public:
 	ASFUNCTION(_toString);
 	
 	number_t len() const;
-	number_t getX() { return x; };
-	number_t getY() { return y; };
+	number_t getX() const { return x; };
+	number_t getY() const { return y; };
 };
 
 class ColorTransform: public ASObject
@@ -141,6 +141,8 @@ public:
 class Matrix: public ASObject
 {
 public:
+	Matrix();
+	Matrix(const MATRIX& m);
 	number_t a, b, c, d, tx, ty;
 	static void sinit(Class_base* c);
 	static void buildTraits(ASObject* o);

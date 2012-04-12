@@ -80,7 +80,11 @@ void RenderThread::start(EngineData* data)
 	engineData=data;
 	/* this function must be called in the gtk main thread */
 	engineData->setSizeChangeHandler(sigc::mem_fun(this,&RenderThread::requestResize));
-	t = Thread::create(sigc::mem_fun(this, &RenderThread::worker), true);
+#ifdef HAVE_NEW_GLIBMM_THREAD_API
+	t = Thread::create(sigc::mem_fun(this,&RenderThread::worker));
+#else
+	t = Thread::create(sigc::mem_fun(this,&RenderThread::worker),true);
+#endif
 }
 
 void RenderThread::stop()
@@ -192,6 +196,11 @@ void RenderThread::handleUpload()
 	unsigned int nextBuffer = (currentPixelBuffer + 1)%2;
 	glBindBuffer(GL_PIXEL_UNPACK_BUFFER, pixelBuffers[nextBuffer]);
 	uint8_t* buf=(uint8_t*)glMapBuffer(GL_PIXEL_UNPACK_BUFFER,GL_WRITE_ONLY);
+	if(!buf)
+	{
+		handleGLErrors();
+		return;
+	}
 	uint8_t* alignedBuf=(uint8_t*)(uintptr_t((buf+15))&(~0xfL));
 
 	u->upload(alignedBuf, w, h);
@@ -1017,6 +1026,10 @@ void RenderThread::draw(bool force)
 void RenderThread::tick()
 {
 	draw(false);
+}
+
+void RenderThread::tickFence()
+{
 }
 
 void RenderThread::releaseTexture(const TextureChunk& chunk)

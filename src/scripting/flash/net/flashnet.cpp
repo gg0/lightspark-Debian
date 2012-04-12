@@ -233,7 +233,79 @@ void URLRequestMethod::sinit(Class_base* c)
 	c->setVariableByQName("POST","",Class<ASString>::getInstanceS("POST"),DECLARED_TRAIT);
 }
 
-URLLoader::URLLoader():dataFormat("text"),data(),downloader(NULL)
+URLLoaderThread::URLLoaderThread(_R<URLRequest> request, _R<URLLoader> ldr)
+  : DownloaderThreadBase(request, ldr.getPtr()), loader(ldr)
+{
+}
+
+void URLLoaderThread::execute()
+{
+	assert(!downloader);
+
+	//TODO: support httpStatus, progress events
+
+	const char contenttype[]="Content-Type: application/x-www-form-urlencoded";
+	if(!createDownloader(false, contenttype, loader))
+		return;
+
+	_NR<ASObject> data;
+	bool success=false;
+	if(!downloader->hasFailed())
+	{
+		getVm()->addEvent(loader,_MR(Class<Event>::getInstanceS("open")));
+		downloader->waitForTermination();
+		if(!downloader->hasFailed() && !threadAborting)
+		{
+			istream s(downloader);
+			uint8_t* buf=new uint8_t[downloader->getLength()];
+			//TODO: avoid this useless copy
+			s.read((char*)buf,downloader->getLength());
+			//TODO: test binary data format
+			tiny_string dataFormat=loader->getDataFormat();
+			if(dataFormat=="binary")
+			{
+				_R<ByteArray> byteArray=_MR(Class<ByteArray>::getInstanceS());
+				byteArray->acquireBuffer(buf,downloader->getLength());
+				data=byteArray;
+				//The buffers must not be deleted, it's now handled by the ByteArray instance
+			}
+			else if(dataFormat=="text")
+			{
+				data=_MR(Class<ASString>::getInstanceS((char*)buf,downloader->getLength()));
+				delete[] buf;
+			}
+			else if(dataFormat=="variables")
+			{
+				data=_MR(Class<URLVariables>::getInstanceS((char*)buf));
+				delete[] buf;
+			}
+
+			success=true;
+		}
+	}
+
+	// Don't send any events if the thread is aborting
+	if(success && !threadAborting)
+	{
+		//Send a complete event for this object
+		loader->setData(data);
+		getVm()->addEvent(loader,_MR(Class<Event>::getInstanceS("complete")));
+	}
+	else if(!success && !threadAborting)
+	{
+		//Notify an error during loading
+		getVm()->addEvent(loader,_MR(Class<IOErrorEvent>::getInstanceS()));
+	}
+
+	{
+		//Acquire the lock to ensure consistency in threadAbort
+		SpinlockLocker l(downloaderLock);
+		getSys()->downloadManager->destroy(downloader);
+		downloader = NULL;
+	}
+}
+
+URLLoader::URLLoader():dataFormat("text"),data(),job(NULL)
 {
 }
 
@@ -258,6 +330,25 @@ void URLLoader::buildTraits(ASObject* o)
 {
 }
 
+void URLLoader::threadFinished(IThreadJob *finishedJob)
+{
+	// If this is the current job, we are done. If these are not
+	// equal, finishedJob is a job that was cancelled when load()
+	// was called again, and we have to still wait for the correct
+	// job.
+	SpinlockLocker l(spinlock);
+	if(finishedJob==job)
+		job=NULL;
+
+	delete finishedJob;
+}
+
+void URLLoader::setData(_NR<ASObject> newData)
+{
+	SpinlockLocker l(spinlock);
+	data=newData;
+}
+
 ASFUNCTIONBODY(URLLoader,_constructor)
 {
 	EventDispatcher::_constructor(obj,NULL,0);
@@ -276,16 +367,14 @@ ASFUNCTIONBODY(URLLoader,load)
 	URLRequest* urlRequest=Class<URLRequest>::dyncast(arg);
 	assert_and_throw(urlRequest);
 
-	th->url=urlRequest->getRequestURL();
-
-	if(th->downloader)
 	{
-		/* the cbs player first constructs l = URLLoader(url) and then calls l.load(url) again */
-		LOG(LOG_NOT_IMPLEMENTED,"URLLoader::load called with download already running - ignored");
-		return NULL;
+		SpinlockLocker l(th->spinlock);
+		if(th->job)
+			th->job->threadAbort();
 	}
 
-	if(!th->url.isValid())
+	URLInfo url=urlRequest->getRequestURL();
+	if(!url.isValid())
 	{
 		//Notify an error during loading
 		th->incRef();
@@ -295,149 +384,52 @@ ASFUNCTIONBODY(URLLoader,load)
 
 	//TODO: support the right events (like SecurityErrorEvent)
 	//URLLoader ALWAYS checks for policy files, in contrast to NetStream.play().
-	SecurityManager::EVALUATIONRESULT evaluationResult = 
-		getSys()->securityManager->evaluateURLStatic(th->url, ~(SecurityManager::LOCAL_WITH_FILE),
-			SecurityManager::LOCAL_WITH_FILE | SecurityManager::LOCAL_TRUSTED, true);
-	//Network sandboxes can't access local files (this should be a SecurityErrorEvent)
-	if(evaluationResult == SecurityManager::NA_REMOTE_SANDBOX)
-		throw Class<SecurityError>::getInstanceS("SecurityError: URLLoader::load: "
-				"connect to network");
-	//Local-with-filesystem sandbox can't access network
-	else if(evaluationResult == SecurityManager::NA_LOCAL_SANDBOX)
-		throw Class<SecurityError>::getInstanceS("SecurityError: URLLoader::load: "
-				"connect to local file");
-	else if(evaluationResult == SecurityManager::NA_PORT)
-		throw Class<SecurityError>::getInstanceS("SecurityError: URLLoader::load: "
-				"connect to restricted port");
-	else if(evaluationResult == SecurityManager::NA_RESTRICT_LOCAL_DIRECTORY)
-		throw Class<SecurityError>::getInstanceS("SecurityError: URLLoader::load: "
-				"not allowed to navigate up for local files");
+	SecurityManager::checkURLStaticAndThrow(url, ~(SecurityManager::LOCAL_WITH_FILE),
+		SecurityManager::LOCAL_WITH_FILE | SecurityManager::LOCAL_TRUSTED, true);
 
 	//TODO: should we disallow accessing local files in a directory above 
 	//the current one like we do with NetStream.play?
 
-	urlRequest->getPostData(th->postData);
-
-	//To be decreffed in jobFence
 	th->incRef();
-	getSys()->addJob(th);
+	urlRequest->incRef();
+	URLLoaderThread *job=new URLLoaderThread(_MR(urlRequest), _MR(th));
+	getSys()->addJob(job);
+	th->job=job;
 	return NULL;
 }
 
 ASFUNCTIONBODY(URLLoader,close)
 {
-	obj->as<URLLoader>()->threadAbort();
+	URLLoader* th=static_cast<URLLoader*>(obj);
+	SpinlockLocker l(th->spinlock);
+	if(th->job)
+		th->job->threadAbort();
+
 	return NULL;
 }
 
-void URLLoader::jobFence()
+tiny_string URLLoader::getDataFormat()
 {
-	decRef();
+	SpinlockLocker l(spinlock);
+	return dataFormat;
 }
 
-void URLLoader::execute()
+void URLLoader::setDataFormat(const tiny_string& newFormat)
 {
-	//TODO: support httpStatus, progress, open events
-
-	//Check for URL policies and send SecurityErrorEvent if needed
-	SecurityManager::EVALUATIONRESULT evaluationResult = getSys()->securityManager->evaluatePoliciesURL(url, true);
-	if(evaluationResult == SecurityManager::NA_CROSSDOMAIN_POLICY)
-	{
-		this->incRef();
-		getVm()->addEvent(_MR(this),_MR(Class<SecurityErrorEvent>::getInstanceS("SecurityError: URLLoader::load: "
-					"connection to domain not allowed by securityManager")));
-		return;
-	}
-
-	{
-		SpinlockLocker l(downloaderLock);
-		//All the checks passed, create the downloader
-		if(postData.empty())
-		{
-			//This is a GET request
-			//Don't cache our downloaded files
-			downloader=getSys()->downloadManager->download(url, false, NULL);
-		}
-		else
-		{
-			downloader=getSys()->downloadManager->downloadWithData(url, postData,
-					"Content-Type: application/x-www-form-urlencoded", NULL);
-			//Clean up the postData for the next load
-			postData.clear();
-		}
-	}
-
-	if(!downloader->hasFailed())
-	{
-		downloader->waitForTermination();
-		//HACK: the downloader may have been cleared in the mean time
-		assert(downloader);
-		if(!downloader->hasFailed())
-		{
-			istream s(downloader);
-			uint8_t* buf=new uint8_t[downloader->getLength()];
-			//TODO: avoid this useless copy
-			s.read((char*)buf,downloader->getLength());
-			//TODO: test binary data format
-			if(dataFormat=="binary")
-			{
-				_R<ByteArray> byteArray=_MR(Class<ByteArray>::getInstanceS());
-				byteArray->acquireBuffer(buf,downloader->getLength());
-				data=byteArray;
-				//The buffers must not be deleted, it's now handled by the ByteArray instance
-			}
-			else if(dataFormat=="text")
-			{
-				data=_MR(Class<ASString>::getInstanceS((char*)buf,downloader->getLength()));
-				delete[] buf;
-			}
-			else if(dataFormat=="variables")
-			{
-				data=_MR(Class<URLVariables>::getInstanceS((char*)buf));
-				delete[] buf;
-			}
-			//Send a complete event for this object
-			this->incRef();
-			getVm()->addEvent(_MR(this),_MR(Class<Event>::getInstanceS("complete")));
-		}
-		else
-		{
-			//Notify an error during loading
-			this->incRef();
-			getVm()->addEvent(_MR(this),_MR(Class<IOErrorEvent>::getInstanceS()));
-		}
-	}
-	else
-	{
-		//Notify an error during loading
-		this->incRef();
-		getVm()->addEvent(_MR(this),_MR(Class<IOErrorEvent>::getInstanceS()));
-	}
-
-	{
-		//Acquire the lock to ensure consistency in threadAbort
-		SpinlockLocker l(downloaderLock);
-		getSys()->downloadManager->destroy(downloader);
-		downloader = NULL;
-	}
-}
-
-void URLLoader::threadAbort()
-{
-	SpinlockLocker l(downloaderLock);
-	if(downloader != NULL)
-		downloader->stop();
+	SpinlockLocker l(spinlock);
+	dataFormat=newFormat;
 }
 
 ASFUNCTIONBODY(URLLoader,_getDataFormat)
 {
 	URLLoader* th=static_cast<URLLoader*>(obj);
-	return Class<ASString>::getInstanceS(th->dataFormat);
+	return Class<ASString>::getInstanceS(th->getDataFormat());
 }
 
 ASFUNCTIONBODY(URLLoader,_getData)
 {
 	URLLoader* th=static_cast<URLLoader*>(obj);
+	SpinlockLocker l(th->spinlock);
 	if(th->data.isNull())
 		return new Undefined;
 	
@@ -449,7 +441,7 @@ ASFUNCTIONBODY(URLLoader,_setDataFormat)
 {
 	URLLoader* th=static_cast<URLLoader*>(obj);
 	assert_and_throw(args[0]);
-	th->dataFormat=args[0]->toString();
+	th->setDataFormat(args[0]->toString());
 	return NULL;
 }
 
@@ -474,7 +466,7 @@ void ObjectEncoding::sinit(Class_base* c)
 	c->setVariableByQName("DEFAULT","",abstract_i(DEFAULT),DECLARED_TRAIT);
 };
 
-NetConnection::NetConnection():_connected(false)
+NetConnection::NetConnection():_connected(false),downloader(NULL),messageCount(0)
 {
 }
 
@@ -483,6 +475,7 @@ void NetConnection::sinit(Class_base* c)
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
 	c->setSuper(Class<EventDispatcher>::getRef());
 	c->setDeclaredMethodByQName("connect","",Class<IFunction>::getFunction(connect),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("call","",Class<IFunction>::getFunction(call),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("connected","",Class<IFunction>::getFunction(_getConnected),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("defaultObjectEncoding","",Class<IFunction>::getFunction(_getDefaultObjectEncoding),GETTER_METHOD,false);
 	c->setDeclaredMethodByQName("defaultObjectEncoding","",Class<IFunction>::getFunction(_setDefaultObjectEncoding),SETTER_METHOD,false);
@@ -501,6 +494,7 @@ void NetConnection::buildTraits(ASObject* o)
 void NetConnection::finalize()
 {
 	EventDispatcher::finalize();
+	responder.reset();
 	client.reset();
 }
 
@@ -510,6 +504,114 @@ ASFUNCTIONBODY(NetConnection, _constructor)
 	th->objectEncoding = getSys()->staticNetConnectionDefaultObjectEncoding;
 	return NULL;
 }
+
+ASFUNCTIONBODY(NetConnection,call)
+{
+	NetConnection* th=Class<NetConnection>::cast(obj);
+	//Arguments are:
+	//1) A string for the command
+	//2) A Responder instance
+	//And other arguments to be passed to the server
+	assert_and_throw(argslen>=2 &&
+			args[0]->getObjectType()==T_STRING &&
+			args[1]->is<Responder>())
+	ASString* arg0=static_cast<ASString*>(args[0]);
+	args[1]->incRef();
+	th->responder=_MR(args[1]->as<Responder>());
+
+	th->messageCount++;
+
+	if(!th->uri.isValid())
+		return NULL;
+
+	//This function is supposed to be passed a array for the rest
+	//of the arguments. Since that is not supported for native methods
+	//just create it here
+	_R<Array> rest=_MR(Class<Array>::getInstanceS());
+	for(uint32_t i=2;i<argslen;i++)
+	{
+		args[i]->incRef();
+		rest->push(_MR(args[i]));
+	}
+
+	_R<ByteArray> message=_MR(Class<ByteArray>::getInstanceS());
+	//Version?
+	message->writeByte(0x00);
+	message->writeByte(0x03);
+	//Number of headers: 0
+	message->writeShort(0);
+	//Number of messages: 1
+	message->writeShort(1);
+	//Write the command
+	message->writeUTF(arg0->data);
+	//Write a "response URI". Use an increasing index
+	//NOTE: this assumes that the tiny_string is constant and not modified
+	char responseBuf[20];
+	snprintf(responseBuf,20,"/%u", th->messageCount);
+	message->writeUTF(tiny_string(responseBuf));
+	uint32_t messageLenPosition=message->getPosition();
+	message->writeUnsignedInt(0x0);
+	//HACK: Write the escape code for AMF3 data, it's the only supported mode
+	message->writeByte(0x11);
+	uint32_t messageLen=message->writeObject(rest.getPtr());
+	message->setPosition(messageLenPosition);
+	message->writeUnsignedInt(messageLen+1);
+
+	uint32_t len=message->getLength();
+	uint8_t* buf=message->getBuffer(len, false);
+	th->messageData.clear();
+	th->messageData.insert(th->messageData.end(), buf, buf+len);
+
+	//To be decreffed in jobFence
+	th->incRef();
+	getSys()->addJob(th);
+	return NULL;
+}
+
+void NetConnection::execute()
+{
+	LOG(LOG_CALLS,_("NetConnection async execution ") << uri);
+	assert(!messageData.empty());
+	downloader=getSys()->downloadManager->downloadWithData(uri, messageData,
+			"Content-Type: application/x-amf", NULL);
+	//Get the whole answer
+	downloader->waitForTermination();
+	if(downloader->hasFailed()) //Check to see if the download failed for some reason
+	{
+		LOG(LOG_ERROR, "NetConnection::execute(): Download of URL failed: " << uri);
+//		getVm()->addEvent(contentLoaderInfo,_MR(Class<IOErrorEvent>::getInstanceS()));
+		getSys()->downloadManager->destroy(downloader);
+		return;
+	}
+	istream s(downloader);
+	_R<ByteArray> message=_MR(Class<ByteArray>::getInstanceS());
+	uint8_t* buf=message->getBuffer(downloader->getLength(), true);
+	s.read((char*)buf,downloader->getLength());
+	//Download is done, destroy it
+	{
+		//Acquire the lock to ensure consistency in threadAbort
+		SpinlockLocker l(downloaderLock);
+		getSys()->downloadManager->destroy(downloader);
+		downloader = NULL;
+	}
+	_R<ParseRPCMessageEvent> event=_MR(new ParseRPCMessageEvent(message, client, responder));
+	getVm()->addEvent(NullRef,event);
+	responder.reset();
+}
+
+void NetConnection::threadAbort()
+{
+	//We have to stop the downloader
+	SpinlockLocker l(downloaderLock);
+	if(downloader != NULL)
+		downloader->stop();
+}
+
+void NetConnection::jobFence()
+{
+	decRef();
+}
+
 ASFUNCTIONBODY(NetConnection,connect)
 {
 	NetConnection* th=Class<NetConnection>::cast(obj);
@@ -524,10 +626,16 @@ ASFUNCTIONBODY(NetConnection,connect)
 	&& getSys()->securityManager->evaluateSandbox(SecurityManager::LOCAL_WITH_FILE))
 		throw Class<SecurityError>::getInstanceS("SecurityError: NetConnection::connect "
 				"from LOCAL_WITH_FILE sandbox");
+
+	bool isNull = false;
+	bool isRTMP = false;
+	//bool isRPC = false;
+
 	//Null argument means local file or web server, the spec only mentions NULL, but youtube uses UNDEFINED, so supporting that too.
 	if(args[0]->getObjectType()==T_NULL || args[0]->getObjectType()==T_UNDEFINED)
 	{
 		th->_connected = false;
+		isNull = true;
 	}
 	//String argument means Flash Remoting/Flash Media Server
 	else
@@ -542,10 +650,18 @@ ASFUNCTIONBODY(NetConnection,connect)
 			throw Class<SecurityError>::getInstanceS("SecurityError: connection to domain not allowed by securityManager");
 		}
 		
-		if(!(th->uri.getProtocol() == "rtmp" ||
+		if(th->uri.getProtocol() == "rtmp" ||
 		     th->uri.getProtocol() == "rtmpe" ||
-		     th->uri.getProtocol() == "rtmps" ||
-		     th->uri.getProtocol() == "http"))
+		     th->uri.getProtocol() == "rtmps")
+		{
+			isRTMP = true;
+		}
+		else if(th->uri.getProtocol() == "http" ||
+		     th->uri.getProtocol() == "https")
+		{
+			//isRPC = true;
+		}
+		else
 		{
 			LOG(LOG_ERROR, "Unsupported protocol " << th->uri.getProtocol() << " in NetConnection::connect");
 			throw UnsupportedException("NetConnection::connect: protocol not supported");
@@ -556,8 +672,11 @@ ASFUNCTIONBODY(NetConnection,connect)
 	}
 
 	//When the URI is undefined the connect is successful (tested on Adobe player)
-	th->incRef();
-	getVm()->addEvent(_MR(th), _MR(Class<NetStatusEvent>::getInstanceS("status", "NetConnection.Connect.Success")));
+	if(isNull || isRTMP)
+	{
+		th->incRef();
+		getVm()->addEvent(_MR(th), _MR(Class<NetStatusEvent>::getInstanceS("status", "NetConnection.Connect.Success")));
+	}
 	return NULL;
 }
 
@@ -935,6 +1054,10 @@ void NetStream::tick()
 	getSys()->getRenderThread()->addUploadJob(videoDecoder);
 }
 
+void NetStream::tickFence()
+{
+}
+
 bool NetStream::isReady() const
 {
 	if(videoDecoder==NULL || audioDecoder==NULL)
@@ -1286,14 +1409,13 @@ void URLVariables::decode(const tiny_string& s)
 				if(curValue->getObjectType()!=T_ARRAY)
 				{
 					arr=Class<Array>::getInstanceS();
-					curValue->incRef();
-					arr->push(curValue.getPtr());
+					arr->push(curValue);
 					setVariableByMultiname(propName,arr);
 				}
 				else
 					arr=Class<Array>::cast(curValue.getPtr());
 
-				arr->push(Class<ASString>::getInstanceS(value));
+				arr->push(_MR(Class<ASString>::getInstanceS(value)));
 			}
 			else
 				setVariableByMultiname(propName,Class<ASString>::getInstanceS(value));
@@ -1498,6 +1620,29 @@ ASFUNCTIONBODY(Responder, onResult)
 	Responder* th=Class<Responder>::cast(obj);
 	assert_and_throw(argslen==1);
 	args[0]->incRef();
-	th->result->call(new Null, args, argslen);
+	ASObject* ret=th->result->call(new Null, args, argslen);
+	ret->decRef();
 	return NULL;
+}
+
+ASFUNCTIONBODY(lightspark,registerClassAlias)
+{
+	assert_and_throw(argslen==2 && args[0]->getObjectType()==T_STRING && args[1]->getObjectType()==T_CLASS);
+	const tiny_string& arg0 = args[0]->toString();
+	args[1]->incRef();
+	_R<Class_base> c=_MR(static_cast<Class_base*>(args[1]));
+	getSys()->aliasMap.insert(make_pair(arg0, c));
+	return NULL;
+}
+
+ASFUNCTIONBODY(lightspark,getClassByAlias)
+{
+	assert_and_throw(argslen==1 && args[0]->getObjectType()==T_STRING);
+	const tiny_string& arg0 = args[0]->toString();
+	auto it=getSys()->aliasMap.find(arg0);
+	if(it==getSys()->aliasMap.end())
+		throw Class<ReferenceError>::getInstanceS("Alias not set");
+
+	it->second->incRef();
+	return it->second.getPtr();
 }

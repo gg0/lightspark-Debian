@@ -96,18 +96,22 @@ ASFUNCTIONBODY(ExternalInterface,call)
 	if(getSys()->extScriptObject == NULL)
 		throw Class<ASError>::getInstanceS("Container doesn't support callbacks");
 
-	assert_and_throw(argslen >= 1 && args[0]->getObjectType() == T_STRING);
+	assert_and_throw(argslen >= 1);
+	const tiny_string& arg0=args[0]->toString();
 
 	// TODO: Check security constraints & throw SecurityException
 
 	// Convert given arguments to ExtVariants
 	const ExtVariant** callArgs = g_newa(const ExtVariant*,argslen-1);
 	for(uint32_t i = 0; i < argslen-1; i++)
-		callArgs[i] = new ExtVariant(args[i+1]);
+	{
+		args[i+1]->incRef();
+		callArgs[i] = new ExtVariant(_MR(args[i+1]));
+	}
 
 	ASObject* asobjResult = NULL;
 	// Let the external script object call the external method
-	bool callSuccess = getSys()->extScriptObject->callExternal(args[0]->toString().raw_buf(), callArgs, argslen-1, &asobjResult);
+	bool callSuccess = getSys()->extScriptObject->callExternal(arg0.raw_buf(), callArgs, argslen-1, &asobjResult);
 
 	// Delete converted arguments
 	for(uint32_t i = 0; i < argslen-1; i++)
@@ -116,7 +120,7 @@ ASFUNCTIONBODY(ExternalInterface,call)
 	if(!callSuccess)
 	{
 		assert(asobjResult==NULL);
-		LOG(LOG_INFO, "External function failed, returning null: " << args[0]->toString().raw_buf());
+		LOG(LOG_INFO, "External function failed, returning null: " << arg0);
 		// If the call fails, return null
 		asobjResult = new Null;
 	}

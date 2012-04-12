@@ -450,7 +450,7 @@ cairo_pattern_t* CairoTokenRenderer::FILLSTYLEToCairo(const FILLSTYLE& style, do
 			if(style.bitmap==NULL)
 				throw RunTimeException("Invalid bitmap");
 
-			cairo_surface_t* surface = cairo_image_surface_create_for_data (style.bitmap->data,
+			cairo_surface_t* surface = cairo_image_surface_create_for_data (style.bitmap->getData(),
 										CAIRO_FORMAT_ARGB32, style.bitmap->width, style.bitmap->height,
 										cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, style.bitmap->width));
 
@@ -589,13 +589,15 @@ bool CairoTokenRenderer::cairoPathFromTokens(cairo_t* cr, const std::vector<Geom
 			}
 
 			case CLEAR_FILL:
+			case FILL_KEEP_SOURCE:
 				if(skipPaint)
 					break;
 
 				cairo_fill(cr);
 
-				// Clear source.
-				cairo_set_operator(cr, CAIRO_OPERATOR_DEST);
+				if(tokens[i].type==CLEAR_FILL)
+					// Clear source.
+					cairo_set_operator(cr, CAIRO_OPERATOR_DEST);
 				break;
 			case CLEAR_STROKE:
 				if(skipPaint)
@@ -606,6 +608,24 @@ bool CairoTokenRenderer::cairoPathFromTokens(cairo_t* cr, const std::vector<Geom
 				// Clear source.
 				cairo_set_operator(stroke_cr, CAIRO_OPERATOR_DEST);
 				break;
+			case FILL_TRANSFORM_TEXTURE:
+			{
+				if(skipPaint)
+					break;
+
+				cairo_matrix_t origmat;
+				cairo_pattern_t* pattern;
+				pattern=cairo_get_source(cr);
+				cairo_pattern_get_matrix(pattern, &origmat);
+
+				cairo_matrix_t mat = MATRIXToCairo(tokens[i].textureTransform);
+				cairo_pattern_set_matrix(pattern, &mat);
+
+				cairo_fill(cr);
+
+				cairo_pattern_set_matrix(pattern, &origmat);
+				break;
+			}
 			default:
 				assert(false);
 		}
@@ -656,7 +676,11 @@ void CairoTokenRenderer::executeDraw(cairo_t* cr)
 	cairoPathFromTokens(cr, tokens, scaleFactor, false);
 }
 
+#ifdef HAVE_NEW_GLIBMM_THREAD_API
+StaticMutex CairoRenderer::cairoMutex;
+#else
 StaticMutex CairoRenderer::cairoMutex = GLIBMM_STATIC_MUTEX_INIT;
+#endif
 
 /* This implements IThreadJob::execute */
 void CairoRenderer::execute()
@@ -754,11 +778,13 @@ bool CairoTokenRenderer::isOpaque(const std::vector<GeomToken>& tokens, float sc
 	return pixelBytes[0]!=0x00;
 }
 
-uint8_t* CairoRenderer::convertBitmapWithAlphaToCairo(uint8_t* inData, uint32_t width, uint32_t height, size_t* dataSize, size_t* stride)
+void CairoRenderer::convertBitmapWithAlphaToCairo(std::vector<uint8_t>& data, uint8_t* inData, uint32_t width,
+		uint32_t height, size_t* dataSize, size_t* stride)
 {
 	*stride = cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, width);
 	*dataSize = *stride * height;
-	uint8_t* outData = new uint8_t[*dataSize];
+	data.resize(*dataSize);
+	uint8_t* outData=&data[0];
 	uint32_t* inData32 = (uint32_t*)inData;
 
 	for(uint32_t i = 0; i < height; i++)
@@ -769,14 +795,15 @@ uint8_t* CairoRenderer::convertBitmapWithAlphaToCairo(uint8_t* inData, uint32_t 
 			*outDataPos = GINT32_FROM_BE( *(inData32+(i*width+j)) );
 		}
 	}
-	return outData;
 }
 
-uint8_t* CairoRenderer::convertBitmapToCairo(uint8_t* inData, uint32_t width, uint32_t height, size_t* dataSize, size_t* stride)
+void CairoRenderer::convertBitmapToCairo(std::vector<uint8_t>& data, uint8_t* inData, uint32_t width,
+		uint32_t height, size_t* dataSize, size_t* stride)
 {
 	*stride = cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, width);
 	*dataSize = *stride * height;
-	uint8_t* outData = new uint8_t[*dataSize];
+	data.resize(*dataSize);
+	uint8_t* outData = &data[0];
 	for(uint32_t i = 0; i < height; i++)
 	{
 		for(uint32_t j = 0; j < width; j++)
@@ -791,10 +818,13 @@ uint8_t* CairoRenderer::convertBitmapToCairo(uint8_t* inData, uint32_t width, ui
 			*outDataPos = GINT32_FROM_BE(pdata);
 		}
 	}
-	return outData;
 }
 
+#ifdef HAVE_NEW_GLIBMM_THREAD_API
+StaticMutex CairoPangoRenderer::pangoMutex;
+#else
 StaticMutex CairoPangoRenderer::pangoMutex = GLIBMM_STATIC_MUTEX_INIT;
+#endif
 
 void CairoPangoRenderer::pangoLayoutFromData(PangoLayout* layout, const TextData& tData)
 {
@@ -823,6 +853,8 @@ void CairoPangoRenderer::pangoLayoutFromData(PangoLayout* layout, const TextData
 			alignment = PANGO_ALIGN_CENTER;
 			break;
 		}
+		default:
+			assert(false);
 	}
 	pango_layout_set_alignment(layout,alignment);
 

@@ -23,6 +23,7 @@
 #include "compat.h"
 #include "swftypes.h"
 #include "smartrefs.h"
+#include "threading.h"
 #include <map>
 
 #define ASFUNCTION(name) \
@@ -188,7 +189,8 @@ public:
 	~variables_map();
 	void check() const;
 	void serialize(ByteArray* out, std::map<tiny_string, uint32_t>& stringMap,
-			std::map<const ASObject*, uint32_t>& objMap) const;
+				std::map<const ASObject*, uint32_t>& objMap,
+				std::map<const Class_base*, uint32_t>& traitsMap) const;
 	void dumpVariables();
 	void destroyContents();
 };
@@ -233,7 +235,8 @@ protected:
 	virtual ~ASObject();
 	SWFOBJECT_TYPE type;
 	void serializeDynamicProperties(ByteArray* out, std::map<tiny_string, uint32_t>& stringMap,
-				std::map<const ASObject*, uint32_t>& objMap) const;
+				std::map<const ASObject*, uint32_t>& objMap,
+				std::map<const Class_base*, uint32_t> traitsMap) const;
 private:
 	//maps variable name to namespace and var
 	variables_map Variables;
@@ -244,6 +247,8 @@ private:
 	Manager* manager;
 	Class_base* classdef;
 	ACQUIRE_RELEASE_FLAG(constructed);
+	Mutex constructionMutex;
+	Cond constructionSignal;
 public:
 #ifndef NDEBUG
 	//Stuff only used in debugging
@@ -254,6 +259,7 @@ public:
 	void setClass(Class_base* c);
 	Class_base* getClass() const { return classdef; }
 	bool isConstructed() const { return ACQUIRE_READ(constructed); }
+	bool waitUntilConstructed(unsigned long maxwait_ms=0);
 	ASFUNCTION(_constructor);
 	ASFUNCTION(_toString);
 	ASFUNCTION(hasOwnProperty);
@@ -304,11 +310,12 @@ public:
 			o->decRef();
 	}
 	/*
-	   The finalize function should be implemented in all derived class.
+	   The finalize function should be implemented in all derived class that stores pointers.
 	   It should decRef all referenced objects. It's guaranteed that the only operations
 	   that will happen on the object after finalization are decRef and delete.
 	   Each class must call BaseClass::finalize in their finalize function. 
-	   The finalize method must be callable multiple time with the same effects (no double frees)*/
+	   The finalize method must be callable multiple time with the same effects (no double frees).
+	   Each class must also call his own ::finalize in the destructor!*/
 	virtual void finalize();
 
 	enum GET_VARIABLE_OPTION {NONE=0x00, SKIP_IMPL=0x01, XML_STRICT=0x02};
@@ -412,10 +419,10 @@ public:
 	  Serialization interface
 
 	  The various maps are used to implement reference type of the AMF3 spec
-	  TODO:	Add traits map
 	*/
 	virtual void serialize(ByteArray* out, std::map<tiny_string, uint32_t>& stringMap,
-				std::map<const ASObject*, uint32_t>& objMap) const;
+				std::map<const ASObject*, uint32_t>& objMap,
+				std::map<const Class_base*, uint32_t>& traitsMap);
 
 	virtual ASObject *describeType() const;
 

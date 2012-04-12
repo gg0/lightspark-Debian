@@ -29,7 +29,6 @@
 #include "swftypes.h"
 #include "scripting/flash/display/flashdisplay.h"
 #include "scripting/flash/net/flashnet.h"
-#include "scripting/flash/system/flashsystem.h"
 #include "timer.h"
 
 #include "platforms/engineutils.h"
@@ -51,6 +50,7 @@ class PluginManager;
 class RenderThread;
 class SecurityManager;
 class Tag;
+class ApplicationDomain;
 
 //RootMovieClip is used as a ThreadJob for timed rendering purpose
 class RootMovieClip: public MovieClip
@@ -78,7 +78,8 @@ private:
 	void setOnStage(bool staged);
 	ACQUIRE_RELEASE_FLAG(finishedLoading);
 public:
-	RootMovieClip(LoaderInfo* li, bool isSys=false);
+	RootMovieClip(LoaderInfo* li, _NR<ApplicationDomain> appDomain, bool isSys=false);
+	void finalize();
 	bool hasFinishedLoading() { return ACQUIRE_READ(finishedLoading); }
 	uint32_t version;
 	uint32_t fileLength;
@@ -102,7 +103,11 @@ public:
 	void setVariableByQName(const tiny_string& name, const tiny_string& ns, ASObject* o);
 	void setVariableByMultiname(multiname& name, ASObject* o);
 	void setVariableByString(const std::string& s, ASObject* o);*/
-	static RootMovieClip* getInstance(LoaderInfo* li);
+	static RootMovieClip* getInstance(LoaderInfo* li, _R<ApplicationDomain> appDomain);
+	/*
+	 * The application domain for the main code
+	 */
+	_NR<ApplicationDomain> applicationDomain;
 	//DisplayObject interface
 	_NR<RootMovieClip> getRoot();
 };
@@ -228,8 +233,13 @@ public:
 	bool showProfilingData;
 	bool standalone;
 	
+	// Error types used to decide when to exit, extend as a bitmap
+	enum ERROR_TYPE { ERROR_NONE    = 0x0000,
+			  ERROR_PARSING = 0x0001,
+			  ERROR_OTHER   = 0x8000,
+			  ERROR_ANY     = 0xFFFF };
 	std::string errorCause;
-	void setError(const std::string& c);
+	void setError(const std::string& c, ERROR_TYPE type=ERROR_OTHER);
 	bool hasError() { return error; }
 	std::string& getErrorCause() { return errorCause; }
 	bool shouldTerminate() const;
@@ -237,6 +247,7 @@ public:
 	bool isOnError() const;
 	void setShutdownFlag() DLL_PUBLIC;
 	void tick();
+	void tickFence();
 	RenderThread* getRenderThread() const { return renderThread; }
 	InputThread* getInputThread() const { return inputThread; }
 	void setParamsAndEngine(EngineData* e, bool s) DLL_PUBLIC;
@@ -247,7 +258,7 @@ public:
 
 	//Be careful, SystemState constructor does some global initialization that must be done
 	//before any other thread gets started
-	SystemState(ParseThread* p, uint32_t fileSize) DLL_PUBLIC;
+	SystemState(uint32_t fileSize) DLL_PUBLIC;
 	void finalize();
 	/* Stop engines, threads and free classes and objects.
 	 * This call will decRef this object in the end,
@@ -275,7 +286,7 @@ public:
 	//Flags for command line options
 	bool useInterpreter;
 	bool useJit;
-	bool exitOnError;
+	ERROR_TYPE exitOnError;
 
 	//Parameters/FlashVars
 	void parseParametersFromFile(const char* f) DLL_PUBLIC;
@@ -333,10 +344,9 @@ public:
 	void resizeCompleted() const;
 
 	/*
-	 * The application domain for the main code
+	 * Support for class aliases in AMF3 serialization
 	 */
-	_NR<ApplicationDomain> mainApplicationDomain;
-
+	std::map<tiny_string, _R<Class_base> > aliasMap;
 #ifdef PROFILING_SUPPORT
 	void setProfilingOutput(const tiny_string& t) DLL_PUBLIC;
 	const tiny_string& getProfilingOutput() const;
@@ -352,17 +362,17 @@ public:
 	// Parse an object from stream. The type is detected
 	// automatically. After parsing the new object is available
 	// from getParsedObject().
-	ParseThread(std::istream& in, Loader *loader=NULL, tiny_string url="") DLL_PUBLIC;
+	ParseThread(std::istream& in, _NR<ApplicationDomain> appDomain, Loader *loader, tiny_string url) DLL_PUBLIC;
 	// Parse a clip from stream into root. The stream must be an
 	// SWF file.
 	ParseThread(std::istream& in, RootMovieClip *root) DLL_PUBLIC;
 	~ParseThread();
 	FILE_TYPE getFileType() const { return fileType; }
         _NR<DisplayObject> getParsedObject();
-	void setRootMovie(RootMovieClip *root);
-	RootMovieClip *getRootMovie();
+	RootMovieClip* getRootMovie() const;
 	static FILE_TYPE recognizeFile(uint8_t c1, uint8_t c2, uint8_t c3, uint8_t c4);
 	void execute();
+	_NR<ApplicationDomain> applicationDomain;
 private:
 	std::istream& f;
 	std::streambuf* zlibFilter;
@@ -378,6 +388,7 @@ private:
 	void parseSWFHeader(RootMovieClip *root, UI8 ver);
 	void parseSWF(UI8 ver);
 	void parseBitmap();
+	void setRootMovie(RootMovieClip *root);
 };
 
 /* Returns the thread-specific SystemState */

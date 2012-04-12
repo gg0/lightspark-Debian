@@ -40,6 +40,7 @@
 #include "toplevel/ASString.h"
 #include "toplevel/Date.h"
 #include "toplevel/Math.h"
+#include "toplevel/RegExp.h"
 #include "toplevel/Vector.h"
 #include "toplevel/XML.h"
 #include "toplevel/XMLList.h"
@@ -76,7 +77,9 @@ DoABCTag::DoABCTag(RECORDHEADER h, std::istream& in):ControlTag(h)
 	dest+=h.getLength();
 	LOG(LOG_CALLS,_("DoABCTag"));
 
-	context=new ABCContext(in);
+	RootMovieClip* root=getParseThread()->getRootMovie();
+	root->incRef();
+	context=new ABCContext(_MR(root), in);
 
 	int pos=in.tellg();
 	if(dest!=pos)
@@ -100,7 +103,9 @@ DoABCDefineTag::DoABCDefineTag(RECORDHEADER h, std::istream& in):ControlTag(h)
 	in >> Flags >> Name;
 	LOG(LOG_CALLS,_("DoABCDefineTag Name: ") << Name);
 
-	context=new ABCContext(in);
+	RootMovieClip* root=getParseThread()->getRootMovie();
+	root->incRef();
+	context=new ABCContext(_MR(root), in);
 
 	int pos=in.tellg();
 	if(dest!=pos)
@@ -293,7 +298,7 @@ void ABCVm::registerClasses()
 	builtin->setVariableByQName("clearInterval","flash.utils",Class<IFunction>::getFunction(clearInterval),DECLARED_TRAIT);
 	builtin->setVariableByQName("clearTimeout","flash.utils",Class<IFunction>::getFunction(clearTimeout),DECLARED_TRAIT);
 	builtin->setVariableByQName("describeType","flash.utils",Class<IFunction>::getFunction(describeType),DECLARED_TRAIT);
-	builtin->setVariableByQName("IExternalizable","flash.utils",Class<ASObject>::getStubClass(QName("IExternalizable","flash.utils")),DECLARED_TRAIT);
+	builtin->setVariableByQName("IExternalizable","flash.utils",InterfaceClass<IExternalizable>::getRef(),DECLARED_TRAIT);
 	builtin->setVariableByQName("IDataInput","flash.utils",InterfaceClass<IDataInput>::getRef(),DECLARED_TRAIT);
 	builtin->setVariableByQName("IDataOutput","flash.utils",InterfaceClass<IDataOutput>::getRef(),DECLARED_TRAIT);
 
@@ -340,6 +345,8 @@ void ABCVm::registerClasses()
 	builtin->setVariableByQName("ObjectEncoding","flash.net",Class<ObjectEncoding>::getRef(),DECLARED_TRAIT);
 	builtin->setVariableByQName("Socket","flash.net",Class<ASObject>::getStubClass(QName("Socket","flash.net")),DECLARED_TRAIT);
 	builtin->setVariableByQName("Responder","flash.net",Class<Responder>::getRef(),DECLARED_TRAIT);
+	builtin->setVariableByQName("registerClassAlias","flash.net",Class<IFunction>::getFunction(registerClassAlias),DECLARED_TRAIT);
+	builtin->setVariableByQName("getClassByAlias","flash.net",Class<IFunction>::getFunction(getClassByAlias),DECLARED_TRAIT);
 
 	builtin->setVariableByQName("fscommand","flash.system",Class<IFunction>::getFunction(fscommand),DECLARED_TRAIT);
 	builtin->setVariableByQName("Capabilities","flash.system",Class<Capabilities>::getRef(),DECLARED_TRAIT);
@@ -371,7 +378,7 @@ void ABCVm::registerClasses()
 	builtin->setVariableByQName("isFinite","",Class<IFunction>::getFunction(isFinite),DECLARED_TRAIT);
 	builtin->setVariableByQName("isXMLName","",Class<IFunction>::getFunction(_isXMLName),DECLARED_TRAIT);
 
-	global->registerGlobalScope(builtin);
+	getSys()->applicationDomain->registerGlobalScope(builtin);
 }
 
 /* This function determines how many stack values are needed for
@@ -706,7 +713,7 @@ multiname* ABCContext::getMultinameImpl(ASObject* n, ASObject* n2, unsigned int 
 	return ret;
 }
 
-ABCContext::ABCContext(istream& in)
+ABCContext::ABCContext(_R<RootMovieClip> r, istream& in):root(r)
 {
 	in >> minor >> major;
 	LOG(LOG_CALLS,_("ABCVm version ") << major << '.' << minor);
@@ -821,14 +828,16 @@ ABCVm::ABCVm(SystemState* s):m_sys(s),status(CREATED),shuttingdown(false),curren
 	int_manager=new Manager(15);
 	uint_manager=new Manager(15);
 	number_manager=new Manager(15);
-	global=new GlobalObject;
-	LOG(LOG_INFO,_("Global is ") << global);
 }
 
 void ABCVm::start()
 {
 	status=STARTED;
-	t = Glib::Thread::create(sigc::bind(&Run,this), true);
+#ifdef HAVE_NEW_GLIBMM_THREAD_API
+	t = Thread::create(sigc::bind(&Run,this));
+#else
+	t = Thread::create(sigc::bind(&Run,this),true);
+#endif
 }
 
 void ABCVm::shutdown()
@@ -863,7 +872,6 @@ ABCVm::~ABCVm()
 	delete int_manager;
 	delete uint_manager;
 	delete number_manager;
-	delete global;
 }
 
 int ABCVm::getEventQueueSize()
@@ -1066,8 +1074,7 @@ void ABCVm::handleEvent(std::pair<_NR<EventDispatcher>, _R<Event> > e)
 				{
 					ASObject* result = ev->f->call(new Null,objArgs,ev->numArgs);
 					// We should report the function result
-					*(ev->result) = new ExtVariant(result);
-					result->decRef();
+					*(ev->result) = new ExtVariant(_MR(result));
 				}
 				catch(ASObject* exception)
 				{
@@ -1114,6 +1121,23 @@ void ABCVm::handleEvent(std::pair<_NR<EventDispatcher>, _R<Event> > e)
 				m_sys->flushInvalidationQueue();
 				break;
 			}
+			case PARSE_RPC_MESSAGE:
+			{
+				ParseRPCMessageEvent* ev=static_cast<ParseRPCMessageEvent*>(e.second.getPtr());
+				try
+				{
+					parseRPCMessage(ev->message, ev->client, ev->responder);
+				}
+				catch(ASObject* exception)
+				{
+					LOG(LOG_ERROR, "Exception while parsing RPC message");
+				}
+				catch(LightsparkException& e)
+				{
+					LOG(LOG_ERROR, "Internal exception while parsing RPC message");
+				}
+				break;
+			}
 			default:
 				assert(false);
 		}
@@ -1151,11 +1175,11 @@ bool ABCVm::addEvent(_NR<EventDispatcher> obj ,_R<Event> ev)
 	return true;
 }
 
-Class_inherit* ABCVm::findClassInherit(const string& s)
+Class_inherit* ABCVm::findClassInherit(const string& s, RootMovieClip* root)
 {
 	LOG(LOG_CALLS,_("Setting class name to ") << s);
 	ASObject* target;
-	ASObject* derived_class=global->getVariableByString(s,target);
+	ASObject* derived_class=root->applicationDomain->getVariableByString(s,target);
 	if(derived_class==NULL)
 	{
 		LOG(LOG_ERROR,_("Class ") << s << _(" not found in global"));
@@ -1177,7 +1201,7 @@ Class_inherit* ABCVm::findClassInherit(const string& s)
 
 void ABCVm::buildClassAndInjectBase(const string& s, _R<RootMovieClip> base)
 {
-	Class_inherit* derived_class_tmp = findClassInherit(s);
+	Class_inherit* derived_class_tmp = findClassInherit(s, base.getPtr());
 	if(!derived_class_tmp)
 		return;
 
@@ -1188,7 +1212,7 @@ void ABCVm::buildClassAndInjectBase(const string& s, _R<RootMovieClip> base)
 
 void ABCVm::buildClassAndBindTag(const string& s, _R<DictionaryTag> t)
 {
-	Class_inherit* derived_class_tmp = findClassInherit(s);
+	Class_inherit* derived_class_tmp = findClassInherit(s, t->loadedFrom);
 	if(!derived_class_tmp)
 		return;
 
@@ -1249,11 +1273,12 @@ bool ABCContext::isinstance(ASObject* obj, multiname* name)
 {
 	LOG(LOG_CALLS, _("isinstance ") << *name);
 
-	if(name->qualifiedString() == "::any")
+	//TODO: Should check against multiname index being 0, not the name!
+	if(name->qualifiedString() == "any")
 		return true;
 	
 	ASObject* target;
-	ASObject* ret=getGlobal()->getVariableAndTargetByMultiname(*name, target);
+	ASObject* ret=root->applicationDomain->getVariableAndTargetByMultiname(*name, target);
 	if(!ret) //Could not retrieve type
 	{
 		LOG(LOG_ERROR,_("Cannot retrieve type"));
@@ -1333,7 +1358,7 @@ void ABCContext::exec(bool lazy)
 		global->initialized=true;
 #endif
 		//Register it as one of the global scopes
-		getGlobal()->registerGlobalScope(global);
+		root->applicationDomain->registerGlobalScope(global);
 	}
 	//The last script entry has to be run
 	LOG(LOG_CALLS, _("Last script (Entry Point)"));
@@ -1353,7 +1378,7 @@ void ABCContext::exec(bool lazy)
 		global->initialized=true;
 #endif
 	//Register it as one of the global scopes
-	getGlobal()->registerGlobalScope(global);
+	root->applicationDomain->registerGlobalScope(global);
 	//the script init of the last script is the main entry point
 	if(!lazy)
 		runScriptInit(i, global);
@@ -1457,6 +1482,8 @@ void ABCVm::Run(ABCVm* th)
 		{
 			//handle event without lock
 			th->handleEvent(e);
+			//Flush the invalidation queue
+			th->m_sys->flushInvalidationQueue();
 			profile->accountTime(chronometer.checkpoint());
 		}
 		catch(LightsparkException& e)
@@ -1501,6 +1528,101 @@ void ABCVm::signalEventWaiters()
 		if(e.second->is<WaitableEvent>())
 			e.second->as<WaitableEvent>()->done.signal();
 	}
+}
+
+void ABCVm::parseRPCMessage(_R<ByteArray> message, _NR<ASObject> client, _R<Responder> responder)
+{
+	uint16_t version;
+	if(!message->readShort(version))
+		return;
+	assert_and_throw(version==0x0);
+	uint16_t numHeaders;
+	if(!message->readShort(numHeaders))
+		return;
+	for(uint32_t i=0;i<numHeaders;i++)
+	{
+		//Read the header name
+		//header names are method that must be
+		//invoked on the client object
+		multiname headerName;
+		headerName.name_type=multiname::NAME_STRING;
+		headerName.ns.push_back(nsNameAndKind("",NAMESPACE));
+		if(!message->readUTF(headerName.name_s))
+			return;
+		//Read the must understand flag
+		uint8_t mustUnderstand;
+		if(!message->readByte(mustUnderstand))
+			return;
+		//Read the header length, not really useful
+		uint32_t headerLength;
+		if(!message->readUnsignedInt(headerLength))
+			return;
+
+		uint8_t marker;
+		if(!message->readByte(marker))
+			return;
+		assert_and_throw(marker==0x11);
+
+		_R<ASObject> obj=_MR(ByteArray::readObject(message.getPtr(), NULL, 0));
+
+		_NR<ASObject> callback;
+		if(!client.isNull())
+			callback = client->getVariableByMultiname(headerName);
+
+		//If mustUnderstand is set there must be a suitable callback on the client
+		if(mustUnderstand && (client.isNull() || callback.isNull() || callback->getObjectType()!=T_FUNCTION))
+		{
+			//TODO: use onStatus
+			throw UnsupportedException("Unsupported header with mustUnderstand");
+		}
+
+		if(!callback.isNull())
+		{
+			obj->incRef();
+			ASObject* const callbackArgs[1] {obj.getPtr()};
+			client->incRef();
+			callback->as<IFunction>()->call(client.getPtr(), callbackArgs, 1);
+		}
+	}
+	uint16_t numMessage;
+	if(!message->readShort(numMessage))
+		return;
+	assert_and_throw(numMessage==1);
+
+	tiny_string target;
+	if(!message->readUTF(target))
+		return;
+	tiny_string response;
+	if(!message->readUTF(response))
+		return;
+
+	//TODO: Really use the response to map request/responses and detect errors
+	uint32_t objLen;
+	if(!message->readUnsignedInt(objLen))
+		return;
+	uint8_t marker;
+	if(!message->readByte(marker))
+		return;
+	assert_and_throw(marker==0x11);
+	_R<ASObject> ret=_MR(ByteArray::readObject(message.getPtr(), NULL, 0));
+
+	multiname onResultName;
+	onResultName.name_type=multiname::NAME_STRING;
+	onResultName.name_s="onResult";
+	onResultName.ns.push_back(nsNameAndKind("",NAMESPACE));
+	_NR<ASObject> callback = responder->getVariableByMultiname(onResultName);
+	if(!callback.isNull() && callback->getObjectType() == T_FUNCTION)
+	{
+		ret->incRef();
+		ASObject* const callbackArgs[1] {ret.getPtr()};
+		responder->incRef();
+		callback->as<IFunction>()->call(responder.getPtr(), callbackArgs, 1);
+	}
+}
+
+_R<ApplicationDomain> ABCVm::getCurrentApplicationDomain(call_context* th)
+{
+	return th->context->root->applicationDomain;
 }
 
 const tiny_string& ABCContext::getString(unsigned int s) const

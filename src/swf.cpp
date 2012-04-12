@@ -70,8 +70,8 @@ ParseThread* lightspark::getParseThread()
 	return pt;
 }
 
-RootMovieClip::RootMovieClip(LoaderInfo* li, bool isSys):parsingIsFailed(false),frameRate(0),
-	toBind(false), finishedLoading(false)
+RootMovieClip::RootMovieClip(LoaderInfo* li, _NR<ApplicationDomain> appDomain, bool isSys):parsingIsFailed(false),frameRate(0),
+	toBind(false),finishedLoading(false),applicationDomain(appDomain)
 {
 	if(li)
 		li->incRef();
@@ -131,9 +131,9 @@ void RootMovieClip::setOnStage(bool staged)
 	MovieClip::setOnStage(staged);
 }
 
-RootMovieClip* RootMovieClip::getInstance(LoaderInfo* li)
+RootMovieClip* RootMovieClip::getInstance(LoaderInfo* li, _R<ApplicationDomain> appDomain)
 {
-	RootMovieClip* ret=new RootMovieClip(li);
+	RootMovieClip* ret=new RootMovieClip(li, appDomain);
 	ret->setClass(Class<MovieClip>::getClass());
 	return ret;
 }
@@ -162,23 +162,21 @@ void SystemState::staticDeinit()
 #endif
 }
 
-SystemState::SystemState(ParseThread* parseThread, uint32_t fileSize):
-	RootMovieClip(NULL,true),terminated(0),renderRate(0),error(false),shutdown(false),
+SystemState::SystemState(uint32_t fileSize):
+	RootMovieClip(NULL,NullRef,true),terminated(0),renderRate(0),error(false),shutdown(false),
 	renderThread(NULL),inputThread(NULL),engineData(NULL),mainThread(0),dumpedSWFPathAvailable(0),
 	vmVersion(VMNONE),childPid(0),
 	parameters(NullRef),
 	invalidateQueueHead(NullRef),invalidateQueueTail(NullRef),showProfilingData(false),
-	currentVm(NULL),useInterpreter(true),useJit(false),exitOnError(false),downloadManager(NULL),
-	extScriptObject(NULL),scaleMode(SHOW_ALL),mainApplicationDomain(NullRef)
+	currentVm(NULL),useInterpreter(true),useJit(false),exitOnError(ERROR_NONE),downloadManager(NULL),
+	extScriptObject(NULL),scaleMode(SHOW_ALL)
 {
 	cookiesFileName = NULL;
 
 	setTLSSys(this);
 
 	mainThread = Thread::self();
-	//Get starting time
-	if(parseThread) //ParseThread may be null in tightspark
-		parseThread->setRootMovie(this);
+	applicationDomain=_MR(Class<ApplicationDomain>::getInstanceS());
 	threadPool=new ThreadPool(this);
 	timerThread=new TimerThread(this);
 	pluginManager = new PluginManager;
@@ -190,9 +188,9 @@ SystemState::SystemState(ParseThread* parseThread, uint32_t fileSize):
 	loaderInfo->setBytesLoaded(fileSize);
 	loaderInfo->setBytesTotal(fileSize);
 	stage=Class<Stage>::getInstanceS();
-	mainApplicationDomain=_MR(Class<ApplicationDomain>::getInstanceS());
 	this->incRef();
 	stage->_addChildAt(_MR(this),0);
+	//Get starting time
 	startTime=compat_msectiming();
 	
 	setClass(Class<MovieClip>::getClass());
@@ -378,7 +376,6 @@ void SystemState::finalize()
 	RootMovieClip::finalize();
 	invalidateQueueHead.reset();
 	invalidateQueueTail.reset();
-	mainApplicationDomain.reset();
 	parameters.reset();
 	frameListeners.clear();
 }
@@ -502,10 +499,11 @@ bool SystemState::shouldTerminate() const
 	return shutdown || error;
 }
 
-void SystemState::setError(const string& c)
+void SystemState::setError(const string& c, ERROR_TYPE type)
 {
-	if(exitOnError)
+	if((exitOnError & type) != 0)
 		exit(1);
+
 	//We record only the first error for easier fix and reporting
 	if(!error)
 	{
@@ -880,16 +878,7 @@ void SystemState::addToInvalidateQueue(_R<DisplayObject> d)
 	if(!d->invalidateQueueNext.isNull() || d==invalidateQueueTail)
 		return;
 	if(!invalidateQueueHead)
-	{
 		invalidateQueueHead=invalidateQueueTail=d;
-		//This is the first object added to the invalidation queue
-		//TODO: support the case without the VM
-		if(currentVm)
-		{
-			//Let's ask the VM to invalidate the queue ater all events already queued are run
-			currentVm->addEvent(NullRef,_MR(new FlushInvalidationQueueEvent));
-		}
-	}
 	else
 	{
 		d->invalidateQueueNext=invalidateQueueHead;
@@ -1036,8 +1025,8 @@ void ThreadProfile::plot(uint32_t maxTime, cairo_t *cr)
 	}
 }
 
-ParseThread::ParseThread(istream& in, Loader *_loader, tiny_string srcurl)
-  : version(0),
+ParseThread::ParseThread(istream& in, _NR<ApplicationDomain> appDomain, Loader *_loader, tiny_string srcurl)
+  : version(0),applicationDomain(appDomain),
     f(in),zlibFilter(NULL),backend(NULL),loader(_loader),
     parsedObject(NullRef),url(srcurl),fileType(FT_UNKNOWN)
 {
@@ -1045,7 +1034,7 @@ ParseThread::ParseThread(istream& in, Loader *_loader, tiny_string srcurl)
 }
 
 ParseThread::ParseThread(std::istream& in, RootMovieClip *root)
-  : version(0),
+  : version(0),applicationDomain(NullRef), //The application domain is loaded from the root
     f(in),zlibFilter(NULL),backend(NULL),loader(NULL),
     parsedObject(NullRef),url(),fileType(FT_UNKNOWN)
 {
@@ -1139,7 +1128,7 @@ void ParseThread::execute()
 	catch(LightsparkException& e)
 	{
 		LOG(LOG_ERROR,_("Exception in ParseThread ") << e.cause);
-		getSys()->setError(e.cause);
+		getSys()->setError(e.cause, SystemState::ERROR_PARSING);
 	}
 	catch(std::exception& e)
 	{
@@ -1149,8 +1138,19 @@ void ParseThread::execute()
 
 void ParseThread::parseSWF(UI8 ver)
 {
-	RootMovieClip* root=getRootMovie();
-	assert_and_throw(root);
+	objectSpinlock.lock();
+	RootMovieClip* root=NULL;
+	if(parsedObject.isNull())
+	{
+		LoaderInfo *li=loader?loader->getContentLoaderInfo().getPtr():NULL;
+		root=RootMovieClip::getInstance(li, applicationDomain);
+		parsedObject=_MNR(root);
+		if(!url.empty())
+			root->setOrigin(url, "");
+	}
+	else
+		root=getRootMovie();
+	objectSpinlock.unlock();
 
 	try
 	{
@@ -1307,36 +1307,23 @@ void ParseThread::setRootMovie(RootMovieClip *root)
 	assert(root);
 	root->incRef();
 	parsedObject=_MNR(root);
+	applicationDomain=root->applicationDomain;
 }
 
-RootMovieClip *ParseThread::getRootMovie()
+RootMovieClip* ParseThread::getRootMovie() const
 {
-	objectSpinlock.lock();
-	RootMovieClip *root=dynamic_cast<RootMovieClip*>(parsedObject.getPtr());
-	objectSpinlock.unlock();
-	if(root)
-		return root;
-	else if(fileType==FT_SWF || fileType==FT_COMPRESSED_SWF)
-	{
-		LoaderInfo *li=loader?loader->getContentLoaderInfo().getPtr():NULL;
-		root=RootMovieClip::getInstance(li);
-		objectSpinlock.lock();
-		parsedObject=_MNR(root);
-		objectSpinlock.unlock();
-		if(!url.empty())
-			root->setOrigin(url, "");
-		return root;
-	}
-	else
-		return NULL;
+	return dynamic_cast<RootMovieClip*>(parsedObject.getPtr());
 }
 
 void ParseThread::threadAbort()
 {
-	//Tell the our RootMovieClip that the parsing is ending
-	RootMovieClip *root=getRootMovie();
-	if(root)
-		root->parsingFailed();
+	SpinlockLocker l(objectSpinlock);
+	if(parsedObject.isNull())
+		return;
+	RootMovieClip* root=getRootMovie();
+	if(root==NULL)
+		return;
+	root->parsingFailed();
 }
 
 bool RootMovieClip::boundsRect(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const
@@ -1562,6 +1549,10 @@ void SystemState::tick()
 		advFrame->done.wait();
 }
 
+void SystemState::tickFence()
+{
+}
+
 void SystemState::resizeCompleted() const
 {
 	if(currentVm && scaleMode==NO_SCALE)
@@ -1599,4 +1590,10 @@ void RootMovieClip::constructionComplete()
 	MovieClip::constructionComplete();
 	if(this==getSys())
 		loaderInfo->sendInit();
+}
+
+void RootMovieClip::finalize()
+{
+	MovieClip::finalize();
+	applicationDomain.reset();
 }

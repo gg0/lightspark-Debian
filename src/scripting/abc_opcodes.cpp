@@ -24,6 +24,7 @@
 #include "compat.h"
 #include "abcutils.h"
 #include "scripting/toplevel/ASString.h"
+#include "scripting/toplevel/RegExp.h"
 #include "toplevel/XML.h"
 #include "toplevel/XMLList.h"
 
@@ -295,6 +296,7 @@ void ABCVm::callProperty(call_context* th, int n, int m, method_info** called_mi
 
 	//We should skip the special implementation of get
 	_NR<ASObject> o=obj->getVariableByMultiname(*name, ASObject::SKIP_IMPL);
+	name->resetNameIfObject();
 
 	if(!o.isNull())
 	{
@@ -611,7 +613,9 @@ ASObject* ABCVm::constructFunction(call_context* th, IFunction* f, ASObject** ar
 	ret->setVariableByQName("constructor","",sf,DYNAMIC_TRAIT);
 
 	ret->incRef();
-	assert_and_throw(!sf->closure_this);
+	if (sf->closure_this)
+		throw Class<TypeError>::getInstanceS("Error #1064: Cannot call method as constructor");
+
 	sf->incRef();
 	ASObject* ret2=sf->call(ret,args,argslen);
 	sf->decRef();
@@ -688,7 +692,8 @@ void ABCVm::construct(call_context* th, int m)
 void ABCVm::constructGenericType(call_context* th, int m)
 {
 	LOG(LOG_CALLS, _("constructGenericType ") << m);
-	assert_and_throw(m==1);
+	if (m != 1)
+			throw Class<TypeError>::getInstanceS("Error #1128");
 	ASObject** args=g_newa(ASObject*, m);
 	for(int i=0;i<m;i++)
 		args[m-i-1]=th->runtime_stack_pop();
@@ -1250,6 +1255,7 @@ void ABCVm::setSuper(call_context* th, int n)
 	assert_and_throw(obj->getClass()->isSubClass(th->inClass));
 
 	obj->setVariableByMultiname(*name,value,th->inClass->super.getPtr());
+	name->resetNameIfObject();
 	obj->decRef();
 }
 
@@ -1266,6 +1272,7 @@ void ABCVm::getSuper(call_context* th, int n)
 	assert_and_throw(obj->getClass()->isSubClass(th->inClass));
 
 	_NR<ASObject> ret = obj->getVariableByMultiname(*name,ASObject::NONE,th->inClass->super.getPtr());
+	name->resetNameIfObject();
 	if(ret.isNull())
 	{
 		LOG(LOG_NOT_IMPLEMENTED,"getSuper: " << name->normalizedName() << " not found on " << obj->toDebugString());
@@ -1310,16 +1317,18 @@ void ABCVm::getLex(call_context* th, int n)
 	if(o==NULL)
 	{
 		ASObject* target;
-		o=getGlobal()->getVariableAndTargetByMultiname(*name, target);
+		o=getCurrentApplicationDomain(th)->getVariableAndTargetByMultiname(*name, target);
 		if(o==NULL)
 		{
 			LOG(LOG_NOT_IMPLEMENTED,"getLex: " << *name<< " not found, pushing Undefined");
 			th->runtime_stack_push(new Undefined);
+			name->resetNameIfObject();
 			return;
 		}
 		o->incRef();
 	}
 
+	name->resetNameIfObject();
 	th->runtime_stack_push(o);
 }
 
@@ -1339,6 +1348,7 @@ void ABCVm::constructSuper(call_context* th, int m)
 	LOG(LOG_CALLS,_("Super prototype name ") << th->inClass->super->class_name);
 
 	th->inClass->super->handleConstruction(obj,args, m, false);
+	obj->decRef();
 	LOG(LOG_CALLS,_("End super construct "));
 }
 
@@ -1364,7 +1374,7 @@ ASObject* ABCVm::findProperty(call_context* th, multiname* name)
 	{
 		//try to find a global object where this is defined
 		ASObject* target;
-		ASObject* o=getGlobal()->getVariableAndTargetByMultiname(*name, target);
+		ASObject* o=getCurrentApplicationDomain(th)->getVariableAndTargetByMultiname(*name, target);
 		if(o)
 			ret=target;
 		else //else push the current global object
@@ -1398,7 +1408,7 @@ ASObject* ABCVm::findPropStrict(call_context* th, multiname* name)
 	if(!found)
 	{
 		ASObject* target;
-		ASObject* o=getGlobal()->getVariableAndTargetByMultiname(*name, target);
+		ASObject* o=getCurrentApplicationDomain(th)->getVariableAndTargetByMultiname(*name, target);
 		if(o)
 			ret=target;
 		else
@@ -1471,6 +1481,7 @@ void ABCVm::callSuper(call_context* th, int n, int m, method_info** called_mi, b
 	assert_and_throw(obj->getClass());
 	assert_and_throw(obj->getClass()->isSubClass(th->inClass));
 	_NR<ASObject> f = obj->getVariableByMultiname(*name,ASObject::NONE,th->inClass->super.getPtr());
+	name->resetNameIfObject();
 	if(!f.isNull())
 	{
 		f->incRef();
@@ -1485,9 +1496,9 @@ void ABCVm::callSuper(call_context* th, int n, int m, method_info** called_mi, b
 	LOG(LOG_CALLS,_("End of callSuper ") << *name);
 }
 
-bool ABCVm::isType(ASObject* obj, multiname* name)
+bool ABCVm::isType(ABCContext* context, ASObject* obj, multiname* name)
 {
-	bool ret = ABCContext::isinstance(obj, name);
+	bool ret = context->isinstance(obj, name);
 	obj->decRef();
 	return ret;
 }
@@ -1572,9 +1583,9 @@ bool ABCVm::isTypelate(ASObject* type, ASObject* obj)
 	return real_ret;
 }
 
-ASObject* ABCVm::asType(ASObject* obj, multiname* name)
+ASObject* ABCVm::asType(ABCContext* context, ASObject* obj, multiname* name)
 {
-	bool ret = ABCContext::isinstance(obj, name);	
+	bool ret = context->isinstance(obj, name);
 	LOG(LOG_CALLS,_("asType"));
 	
 	if(ret)
@@ -1688,10 +1699,12 @@ bool ABCVm::in(ASObject* val2, ASObject* val1)
 {
 	LOG(LOG_CALLS, _("in") );
 	multiname name;
-	name.name_type=multiname::NAME_STRING;
-	name.name_s=val1->toString();
+	name.name_type=multiname::NAME_OBJECT;
+	//Acquire the reference
+	name.name_o=val1;
 	name.ns.push_back(nsNameAndKind("",NAMESPACE));
 	bool ret=val2->hasPropertyByMultiname(name, true);
+	name.name_o=NULL;
 	val1->decRef();
 	val2->decRef();
 	return ret;
@@ -1719,6 +1732,7 @@ void ABCVm::constructProp(call_context* th, int n, int m)
 	ASObject* obj=th->runtime_stack_pop();
 
 	_NR<ASObject> o=obj->getVariableByMultiname(*name);
+	name->resetNameIfObject();
 
 	if(o.isNull())
 	{
@@ -1740,7 +1754,7 @@ void ABCVm::constructProp(call_context* th, int n, int m)
 		ret = constructFunction(th, o->as<IFunction>(), args, m);
 	}
 	else
-		throw RunTimeException("Cannot construct such an object in constructProp");
+		throw Class<TypeError>::getInstanceS("Error #1007: Cannot construct such an object in constructProp");
 
 	th->runtime_stack_push(ret);
 	obj->decRef();
@@ -1977,7 +1991,7 @@ void ABCVm::newClass(call_context* th, int n)
 
 		//Make the class valid if needed
 		ASObject* target;
-		ASObject* obj=getGlobal()->getVariableAndTargetByMultiname(*name, target);
+		ASObject* obj=getCurrentApplicationDomain(th)->getVariableAndTargetByMultiname(*name, target);
 
 		//Named only interfaces seems to be allowed 
 		if(obj==NULL)
@@ -2063,7 +2077,6 @@ void ABCVm::callImpl(call_context* th, ASObject* f, ASObject* obj, ASObject** ar
 	if(f->is<Function>())
 	{
 		IFunction* func=f->as<Function>();
-		func->incRef();
 		ASObject* ret=func->call(obj,args,m);
 		//call getMethodInfo only after the call, so it's updated
 		if(called_mi)
@@ -2080,6 +2093,14 @@ void ABCVm::callImpl(call_context* th, ASObject* f, ASObject* obj, ASObject** ar
 		Class_base* c=f->as<Class_base>();
 		ASObject* ret=c->generator(args,m);
 		assert_and_throw(ret);
+		if(keepReturn)
+			th->runtime_stack_push(ret);
+		else
+			ret->decRef();
+	}
+	else if(f->is<RegExp>())
+	{
+		ASObject* ret=RegExp::exec(f,&obj,1);
 		if(keepReturn)
 			th->runtime_stack_push(ret);
 		else
@@ -2144,7 +2165,7 @@ ASObject* ABCVm::newCatch(call_context* th, int n)
 {
 	ASObject* catchScope = Class<ASObject>::getInstanceS();
 	assert_and_throw(n >= 0 && (unsigned int)n < th->mi->body->exception_count);
-	multiname* name = th->context->getMultiname(th->mi->body->exceptions[n].var_name, th);
+	multiname* name = th->context->getMultiname(th->mi->body->exceptions[n].var_name, NULL);
 	catchScope->setVariableByMultiname(*name, new Undefined);
 	catchScope->initSlot(1, *name);
 	return catchScope;
@@ -2156,7 +2177,7 @@ void ABCVm::newArray(call_context* th, int n)
 	Array* ret=Class<Array>::getInstanceS();
 	ret->resize(n);
 	for(int i=0;i<n;i++)
-		ret->set(n-i-1,th->runtime_stack_pop());
+		ret->set(n-i-1,_MR(th->runtime_stack_pop()));
 
 	th->runtime_stack_push(ret);
 }
@@ -2191,7 +2212,14 @@ bool ABCVm::instanceOf(ASObject* value, ASObject* type)
 
 	if(type->is<IFunction>())
 	{
-		LOG(LOG_NOT_IMPLEMENTED,"instanceOf opcodes probably does the wrong thing");
+		IFunction* t=static_cast<IFunction*>(type);
+		ASObject* proto = value->getClass()->prototype.getPtr();
+		while(proto)
+		{
+			if (proto == t->prototype.getPtr())
+				return true;
+			proto = proto->getprop_prototype();
+		}
 		return false;
 	}
 

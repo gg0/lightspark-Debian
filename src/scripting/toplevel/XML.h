@@ -22,6 +22,8 @@
 #include "asobject.h"
 #include <libxml/tree.h>
 #include <libxml++/parsers/domparser.h>
+#include <libxml++/exceptions/internal_error.h>
+#include <libxml/parserInternals.h>//For xmlCreateFileParserCtxt().
 
 namespace lightspark
 {
@@ -30,8 +32,24 @@ class XML: public ASObject
 {
 friend class XMLList;
 private:
+#ifdef XMLPP_2_35_1
+	//Create a utility derived class from xmlpp::DomParser since we want to use the recovery mode
+	class RecoveryDomParser:public xmlpp::DomParser
+	{
+	public:
+		void parse_memory_raw(const unsigned char* contents, size_type bytes_count);
+	};
+	//Also create a utility derived class from xmlpp::Document to access the protected constructor
+	class RecoveryDocument: public xmlpp::Document
+	{
+	public:
+		RecoveryDocument(_xmlDoc* d);
+	};
 	//The parser will destroy the document and all the childs on destruction
+	RecoveryDomParser parser;
+#else
 	xmlpp::DomParser parser;
+#endif
 	//Pointer to the root XML element, the one that owns the parser that created this node
 	_NR<XML> root;
 	//The node this object represent
@@ -52,6 +70,11 @@ private:
 	bool ignoreWhitespace;
 	uint32_t prettyIndent;
 	bool prettyPrinting;
+	/*
+	 * @param name The name of the wanted children, "*" for all children
+	 *
+	 */
+	void childrenImpl(std::vector<_R<XML> >& ret, const tiny_string& name);
 public:
 	XML();
 	XML(const std::string& str);
@@ -62,6 +85,7 @@ public:
 	ASFUNCTION(_toString);
 	ASFUNCTION(toXMLString);
 	ASFUNCTION(nodeKind);
+	ASFUNCTION(child);
 	ASFUNCTION(children);
 	ASFUNCTION(attributes);
 	ASFUNCTION(attribute);
@@ -91,7 +115,8 @@ public:
 	_R<ASObject> nextValue(uint32_t index);
 	//Serialization interface
 	void serialize(ByteArray* out, std::map<tiny_string, uint32_t>& stringMap,
-			std::map<const ASObject*, uint32_t>& objMap) const;
+				std::map<const ASObject*, uint32_t>& objMap,
+				std::map<const Class_base*, uint32_t>& traitsMap);
 };
 }
 #endif

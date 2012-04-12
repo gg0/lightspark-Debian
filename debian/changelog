@@ -1,3 +1,11 @@
+lightspark (0.5.6-1) unstable; urgency=low
+
+  * New 0.5.6 upstream release.
+    - Build-Depends: add libpng-dev.
+  * Bump Standards-Version to 3.9.3 without changes needed.
+
+ -- Didier Raboud <odyx@debian.org>  Thu, 12 Apr 2012 16:57:45 +0200
+
 lightspark (0.5.5-1) unstable; urgency=low
 
   * New 0.5.5 upstream release

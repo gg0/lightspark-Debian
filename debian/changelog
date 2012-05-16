@@ -1,3 +1,10 @@
+lightspark (0.5.7-1) unstable; urgency=low
+
+  * New 0.5.7 upstream release.
+  * Bump debhelper Build-Depends to 9.
+
+ -- Didier Raboud <odyx@debian.org>  Wed, 16 May 2012 13:20:28 +0200
+
 lightspark (0.5.6-1) unstable; urgency=low
 
   * New 0.5.6 upstream release.

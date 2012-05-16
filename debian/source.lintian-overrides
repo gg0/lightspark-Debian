@@ -1,2 +1,0 @@
-# Compat 9 is used on purpose, for auto- buildflags.
-package-needs-versioned-debhelper-build-depends 9

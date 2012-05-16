@@ -34,9 +34,10 @@ using namespace lightspark;
 SET_NAMESPACE("flash.system");
 
 REGISTER_CLASS_NAME(ApplicationDomain);
-REGISTER_CLASS_NAME(SecurityDomain);
 REGISTER_CLASS_NAME(Capabilities);
+REGISTER_CLASS_NAME(LoaderContext);
 REGISTER_CLASS_NAME(Security);
+REGISTER_CLASS_NAME(SecurityDomain);
 
 
 #ifdef _WIN32
@@ -106,6 +107,10 @@ ASFUNCTIONBODY(Capabilities,_getServerString)
 	return Class<ASString>::getInstanceS("");
 }
 
+ApplicationDomain::ApplicationDomain(Class_base* c, _NR<ApplicationDomain> p):ASObject(c),parentDomain(p)
+{
+}
+
 void ApplicationDomain::sinit(Class_base* c)
 {
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
@@ -116,9 +121,11 @@ void ApplicationDomain::sinit(Class_base* c)
 	c->setDeclaredMethodByQName("hasDefinition","",Class<IFunction>::getFunction(hasDefinition),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("getDefinition","",Class<IFunction>::getFunction(getDefinition),NORMAL_METHOD,true);
 	REGISTER_GETTER_SETTER(c,domainMemory);
+	REGISTER_GETTER(c,parentDomain);
 }
 
 ASFUNCTIONBODY_GETTER_SETTER(ApplicationDomain,domainMemory);
+ASFUNCTIONBODY_GETTER(ApplicationDomain,parentDomain);
 
 void ApplicationDomain::buildTraits(ASObject* o)
 {
@@ -134,6 +141,17 @@ void ApplicationDomain::finalize()
 
 ASFUNCTIONBODY(ApplicationDomain,_constructor)
 {
+	ApplicationDomain* th = Class<ApplicationDomain>::cast(obj);
+	_NR<ApplicationDomain> parentDomain;
+	ARG_UNPACK (parentDomain, NullRef);
+	if(!th->parentDomain.isNull())
+		// Don't override parentDomain if it was set in the
+		// C++ constructor
+		return NULL;
+	else if(parentDomain.isNull())
+		th->parentDomain =  getSys()->systemDomain;
+	else
+		th->parentDomain = parentDomain;
 	return NULL;
 }
 
@@ -144,9 +162,9 @@ ASFUNCTIONBODY(ApplicationDomain,_getMinDomainMemoryLength)
 
 ASFUNCTIONBODY(ApplicationDomain,_getCurrentDomain)
 {
-	ApplicationDomain* ret=getSys()->applicationDomain.getPtr();
+	_NR<ApplicationDomain> ret=ABCVm::getCurrentApplicationDomain(getVm()->currentCallContext);
 	ret->incRef();
-	return ret;
+	return ret.getPtr();
 }
 
 ASFUNCTIONBODY(ApplicationDomain,hasDefinition)
@@ -155,7 +173,7 @@ ASFUNCTIONBODY(ApplicationDomain,hasDefinition)
 	assert(argslen==1);
 	const tiny_string& tmp=args[0]->toString();
 
-	multiname name;
+	multiname name(NULL);
 	name.name_type=multiname::NAME_STRING;
 	name.ns.push_back(nsNameAndKind("",NAMESPACE)); //TODO: set type
 
@@ -182,7 +200,7 @@ ASFUNCTIONBODY(ApplicationDomain,getDefinition)
 	assert(argslen==1);
 	const tiny_string& tmp=args[0]->toString();
 
-	multiname name;
+	multiname name(NULL);
 	name.name_type=multiname::NAME_STRING;
 	name.ns.push_back(nsNameAndKind("",NAMESPACE)); //TODO: set type
 
@@ -209,7 +227,7 @@ void ApplicationDomain::registerGlobalScope(Global* scope)
 ASObject* ApplicationDomain::getVariableByString(const std::string& str, ASObject*& target)
 {
 	size_t index=str.rfind('.');
-	multiname name;
+	multiname name(NULL);
 	name.name_type=multiname::NAME_STRING;
 	if(index==str.npos) //No dot
 	{
@@ -226,6 +244,14 @@ ASObject* ApplicationDomain::getVariableByString(const std::string& str, ASObjec
 
 ASObject* ApplicationDomain::getVariableAndTargetByMultiname(const multiname& name, ASObject*& target)
 {
+	//Check in the parent first
+	if(!parentDomain.isNull())
+	{
+		ASObject* ret=parentDomain->getVariableAndTargetByMultiname(name, target);
+		if(ret)
+			return ret;
+	}
+
 	for(uint32_t i=0;i<globalScopes.size();i++)
 	{
 		_NR<ASObject> o=globalScopes[i]->getVariableByMultiname(name);
@@ -238,6 +264,32 @@ ASObject* ApplicationDomain::getVariableAndTargetByMultiname(const multiname& na
 	}
 	return NULL;
 }
+
+void LoaderContext::sinit(Class_base* c)
+{
+	c->setConstructor(Class<IFunction>::getFunction(_constructor));
+	REGISTER_GETTER_SETTER(c, applicationDomain);
+}
+
+void LoaderContext::finalize()
+{
+	ASObject::finalize();
+	applicationDomain.reset();
+}
+
+ASFUNCTIONBODY(LoaderContext,_constructor)
+{
+	LoaderContext* th=Class<LoaderContext>::cast(obj);
+	bool checkPolicy;
+	_NR<ApplicationDomain> appDomain;
+	_NR<SecurityDomain> secDomain;
+	ARG_UNPACK (checkPolicy, false) (appDomain, NullRef) (secDomain, NullRef);
+	//TODO: Support checkPolicyFile and securityDomain
+	th->applicationDomain=appDomain;
+	return NULL;
+}
+
+ASFUNCTIONBODY_GETTER_SETTER(LoaderContext, applicationDomain);
 
 void SecurityDomain::sinit(Class_base* c)
 {

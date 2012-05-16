@@ -121,7 +121,7 @@ ASObject* ABCVm::executeFunction(const SyntheticFunction* function, call_context
 				code >> t;
 				assert_and_throw(context->locals[t]);
 				context->locals[t]->decRef();
-				context->locals[t]=new Undefined;
+				context->locals[t]=getSys()->getUndefinedRef();
 				break;
 			}
 			case 0x09:
@@ -442,7 +442,7 @@ ASObject* ABCVm::executeFunction(const SyntheticFunction* function, call_context
 				LOG(LOG_CALLS,_("Switch default dest ") << defaultdest);
 				u30 count;
 				code >> count;
-				vector<s24> offsets(count+1);
+				s24* offsets=g_newa(s24, count+1);
 				for(unsigned int i=0;i<count+1;i++)
 				{
 					code >> offsets[i];

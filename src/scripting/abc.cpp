@@ -79,7 +79,7 @@ DoABCTag::DoABCTag(RECORDHEADER h, std::istream& in):ControlTag(h)
 
 	RootMovieClip* root=getParseThread()->getRootMovie();
 	root->incRef();
-	context=new ABCContext(_MR(root), in);
+	context=new ABCContext(_MR(root), in, getVm()->vmDataMemory);
 
 	int pos=in.tellg();
 	if(dest!=pos)
@@ -93,7 +93,7 @@ void DoABCTag::execute(RootMovieClip*)
 {
 	LOG(LOG_CALLS,_("ABC Exec"));
 	/* currentVM will free the context*/
-	getVm()->addEvent(NullRef,_MR(new ABCContextInitEvent(context,false)));
+	getVm()->addEvent(NullRef,_MR(new (getSys()->unaccountedMemory) ABCContextInitEvent(context,false)));
 }
 
 DoABCDefineTag::DoABCDefineTag(RECORDHEADER h, std::istream& in):ControlTag(h)
@@ -105,7 +105,7 @@ DoABCDefineTag::DoABCDefineTag(RECORDHEADER h, std::istream& in):ControlTag(h)
 
 	RootMovieClip* root=getParseThread()->getRootMovie();
 	root->incRef();
-	context=new ABCContext(_MR(root), in);
+	context=new ABCContext(_MR(root), in, getVm()->vmDataMemory);
 
 	int pos=in.tellg();
 	if(dest!=pos)
@@ -119,7 +119,7 @@ void DoABCDefineTag::execute(RootMovieClip*)
 {
 	LOG(LOG_CALLS,_("ABC Exec ") << Name);
 	/* currentVM will free the context*/
-	getVm()->addEvent(NullRef,_MR(new ABCContextInitEvent(context,((int32_t)Flags)&1)));
+	getVm()->addEvent(NullRef,_MR(new (getSys()->unaccountedMemory) ABCContextInitEvent(context,((int32_t)Flags)&1)));
 }
 
 SymbolClassTag::SymbolClassTag(RECORDHEADER h, istream& in):ControlTag(h)
@@ -148,13 +148,13 @@ void SymbolClassTag::execute(RootMovieClip* root)
 			//This will be done later
 			root->bindToName(className);
 			root->incRef();
-			getVm()->addEvent(NullRef, _MR(new BindClassEvent(_MR(root),className)));
+			getVm()->addEvent(NullRef, _MR(new (getSys()->unaccountedMemory) BindClassEvent(_MR(root),className)));
 
 		}
 		else
 		{
 			_R<DictionaryTag> t=root->dictionaryLookup(Tags[i]);
-			_R<BindClassEvent> e(new BindClassEvent(t,className));
+			_R<BindClassEvent> e(new (getSys()->unaccountedMemory) BindClassEvent(t,className));
 			getVm()->addEvent(NullRef,e);
 		}
 	}
@@ -179,7 +179,7 @@ void ABCVm::registerClasses()
 	builtin->setVariableByQName("String","",Class<ASString>::getRef(),DECLARED_TRAIT);
 	builtin->setVariableByQName("Array","",Class<Array>::getRef(),DECLARED_TRAIT);
 	builtin->setVariableByQName("Function","",Class<IFunction>::getRef(),DECLARED_TRAIT);
-	builtin->setVariableByQName("undefined","",new Undefined,DECLARED_TRAIT);
+	builtin->setVariableByQName("undefined","",getSys()->getUndefinedRef(),DECLARED_TRAIT);
 	builtin->setVariableByQName("Math","",Class<Math>::getRef(),DECLARED_TRAIT);
 	builtin->setVariableByQName("Namespace","",Class<Namespace>::getRef(),DECLARED_TRAIT);
 	builtin->setVariableByQName("AS3","",Class<Namespace>::getInstanceS(AS3),DECLARED_TRAIT);
@@ -353,7 +353,7 @@ void ABCVm::registerClasses()
 	builtin->setVariableByQName("Security","flash.system",Class<Security>::getRef(),DECLARED_TRAIT);
 	builtin->setVariableByQName("ApplicationDomain","flash.system",Class<ApplicationDomain>::getRef(),DECLARED_TRAIT);
 	builtin->setVariableByQName("SecurityDomain","flash.system",Class<SecurityDomain>::getRef(),DECLARED_TRAIT);
-	builtin->setVariableByQName("LoaderContext","flash.system",Class<ASObject>::getStubClass(QName("LoaderContext","flash.system")),DECLARED_TRAIT);
+	builtin->setVariableByQName("LoaderContext","flash.system",Class<LoaderContext>::getRef(),DECLARED_TRAIT);
 
 	builtin->setVariableByQName("SoundTransform","flash.media",Class<SoundTransform>::getRef(),DECLARED_TRAIT);
 	builtin->setVariableByQName("Video","flash.media",Class<Video>::getRef(),DECLARED_TRAIT);
@@ -378,7 +378,7 @@ void ABCVm::registerClasses()
 	builtin->setVariableByQName("isFinite","",Class<IFunction>::getFunction(isFinite),DECLARED_TRAIT);
 	builtin->setVariableByQName("isXMLName","",Class<IFunction>::getFunction(_isXMLName),DECLARED_TRAIT);
 
-	getSys()->applicationDomain->registerGlobalScope(builtin);
+	getSys()->systemDomain->registerGlobalScope(builtin);
 }
 
 /* This function determines how many stack values are needed for
@@ -421,7 +421,7 @@ multiname* ABCContext::s_getMultiname_d(call_context* th, number_t rtd, int n)
 	multiname_info* m=&th->context->constant_pool.multinames[n];
 	if(m->cached==NULL)
 	{
-		m->cached=new multiname;
+		m->cached=new (getVm()->vmDataMemory) multiname(getVm()->vmDataMemory);
 		ret=m->cached;
 		ret->isAttribute=m->isAttributeName();
 		switch(m->kind)
@@ -474,7 +474,7 @@ multiname* ABCContext::s_getMultiname_i(call_context* th, uint32_t rti, int n)
 	multiname_info* m=&th->context->constant_pool.multinames[n];
 	if(m->cached==NULL)
 	{
-		m->cached=new multiname;
+		m->cached=new (getVm()->vmDataMemory) multiname(getVm()->vmDataMemory);
 		ret=m->cached;
 		ret->isAttribute=m->isAttributeName();
 		switch(m->kind)
@@ -565,7 +565,7 @@ multiname* ABCContext::getMultinameImpl(ASObject* n, ASObject* n2, unsigned int 
 	/* If this multiname is not cached, resolve its static parts */
 	if(m->cached==NULL)
 	{
-		m->cached=new multiname;
+		m->cached=new (getVm()->vmDataMemory) multiname(getVm()->vmDataMemory);
 		ret=m->cached;
 		if(midx==0)
 		{
@@ -713,7 +713,13 @@ multiname* ABCContext::getMultinameImpl(ASObject* n, ASObject* n2, unsigned int 
 	return ret;
 }
 
-ABCContext::ABCContext(_R<RootMovieClip> r, istream& in):root(r)
+ABCContext::ABCContext(_R<RootMovieClip> r, istream& in, MemoryAccount* m):root(r),constant_pool(m),
+	methods(reporter_allocator<method_info>(m)),
+	metadata(reporter_allocator<metadata_info>(m)),
+	instances(reporter_allocator<instance_info>(m)),
+	classes(reporter_allocator<class_info>(m)),
+	scripts(reporter_allocator<script_info>(m)),
+	method_body(reporter_allocator<method_body_info>(m))
 {
 	in >> minor >> major;
 	LOG(LOG_CALLS,_("ABCVm version ") << major << '.' << minor);
@@ -819,8 +825,8 @@ void ABCContext::dumpProfilingData(ostream& f) const
 }
 #endif
 
-ABCVm::ABCVm(SystemState* s):m_sys(s),status(CREATED),shuttingdown(false),currentCallContext(NULL),
-	cur_recursion(0)
+ABCVm::ABCVm(SystemState* s, MemoryAccount* m):m_sys(s),status(CREATED),shuttingdown(false),
+	events_queue(reporter_allocator<eventType>(m)),currentCallContext(NULL),vmDataMemory(m),cur_recursion(0)
 {
 	limits.max_recursion = 256;
 	limits.script_timeout = 20;
@@ -828,6 +834,7 @@ ABCVm::ABCVm(SystemState* s):m_sys(s),status(CREATED),shuttingdown(false),curren
 	int_manager=new Manager(15);
 	uint_manager=new Manager(15);
 	number_manager=new Manager(15);
+	vmDataMemory=m_sys->allocateMemoryAccount("VM_Data");
 }
 
 void ABCVm::start()
@@ -1072,7 +1079,7 @@ void ABCVm::handleEvent(std::pair<_NR<EventDispatcher>, _R<Event> > e)
 
 				try
 				{
-					ASObject* result = ev->f->call(new Null,objArgs,ev->numArgs);
+					ASObject* result = ev->f->call(getSys()->getNullRef(),objArgs,ev->numArgs);
 					// We should report the function result
 					*(ev->result) = new ExtVariant(_MR(result));
 				}
@@ -1453,6 +1460,14 @@ void ABCVm::Run(ABCVm* th)
 	profile->setTag("VM");
 	//When aborting execution remaining events should be handled
 	bool firstMissingEvents=true;
+
+#ifdef MEMORY_USAGE_PROFILING
+	string memoryProfileFile="lightspark.massif.";
+	memoryProfileFile+=th->m_sys->getOrigin().getPathFile().raw_buf();
+	ofstream memoryProfile(memoryProfileFile, ios_base::out | ios_base::trunc);
+	int snapshotCount = 0;
+	memoryProfile << "desc: (none) \ncmd: lightspark\ntime_unit: i" << endl;
+#endif
 	while(true)
 	{
 		th->event_queue_mutex.lock();
@@ -1485,6 +1500,11 @@ void ABCVm::Run(ABCVm* th)
 			//Flush the invalidation queue
 			th->m_sys->flushInvalidationQueue();
 			profile->accountTime(chronometer.checkpoint());
+#ifdef MEMORY_USAGE_PROFILING
+			if((snapshotCount%100)==0)
+				th->m_sys->saveMemoryUsageInformation(memoryProfile, snapshotCount);
+			snapshotCount++;
+#endif
 		}
 		catch(LightsparkException& e)
 		{
@@ -1544,7 +1564,7 @@ void ABCVm::parseRPCMessage(_R<ByteArray> message, _NR<ASObject> client, _R<Resp
 		//Read the header name
 		//header names are method that must be
 		//invoked on the client object
-		multiname headerName;
+		multiname headerName(NULL);
 		headerName.name_type=multiname::NAME_STRING;
 		headerName.ns.push_back(nsNameAndKind("",NAMESPACE));
 		if(!message->readUTF(headerName.name_s))
@@ -1606,7 +1626,7 @@ void ABCVm::parseRPCMessage(_R<ByteArray> message, _NR<ASObject> client, _R<Resp
 	assert_and_throw(marker==0x11);
 	_R<ASObject> ret=_MR(ByteArray::readObject(message.getPtr(), NULL, 0));
 
-	multiname onResultName;
+	multiname onResultName(NULL);
 	onResultName.name_type=multiname::NAME_STRING;
 	onResultName.name_s="onResult";
 	onResultName.ns.push_back(nsNameAndKind("",NAMESPACE));
@@ -1746,7 +1766,7 @@ ASObject* ABCContext::getConstant(int kind, int index)
 	switch(kind)
 	{
 		case 0x00: //Undefined
-			return new Undefined;
+			return getSys()->getUndefinedRef();
 		case 0x01: //String
 			return Class<ASString>::getInstanceS(constant_pool.strings[index]);
 		case 0x03: //Int
@@ -1761,7 +1781,7 @@ ASObject* ABCContext::getConstant(int kind, int index)
 		case 0x0b: //True
 			return abstract_b(true);
 		case 0x0c: //Null
-			return new Null;
+			return getSys()->getNullRef();
 		default:
 		{
 			LOG(LOG_ERROR,_("Constant kind ") << hex << kind);
@@ -1805,14 +1825,8 @@ void ABCContext::buildTrait(ASObject* obj, const traits_info* t, bool isBorrowed
 			{
 				QName className(mname->name_s,mname->ns[0].name);
 
-				// Should the new definition overwrite the old one?
-				if(getSys()->classes.find(className)!=getSys()->classes.end())
-				{
-					LOG(LOG_TRACE, "Trying to re-define interface " << className.getQualifiedName());
-					break;
-				}
-
-				Class_inherit* ci=new Class_inherit(className);
+				MemoryAccount* memoryAccount = getSys()->allocateMemoryAccount(className.name);
+				Class_inherit* ci=new (getSys()->unaccountedMemory) Class_inherit(className, memoryAccount);
 				ci->setDeclaredMethodByQName("toString",AS3,Class<IFunction>::getFunction(Class_base::_toString),NORMAL_METHOD,false);
 				LOG(LOG_CALLS,_("Building class traits"));
 				for(unsigned int i=0;i<classes[t->classi].trait_count;i++)
@@ -1856,7 +1870,7 @@ void ABCContext::buildTrait(ASObject* obj, const traits_info* t, bool isBorrowed
 				ret = ci;
 			}
 			else
-				ret=new Undefined;
+				ret=getSys()->getUndefinedRef();
 
 			obj->setVariableByQName(mname->name_s,mname->ns[0],ret,DECLARED_TRAIT);
 
@@ -1926,7 +1940,7 @@ void ABCContext::buildTrait(ASObject* obj, const traits_info* t, bool isBorrowed
 			if(t->vindex)
 				ret=getConstant(t->vkind,t->vindex);
 			else
-				ret=new Undefined;
+				ret=getSys()->getUndefinedRef();
 
 			LOG(LOG_CALLS,_("Const ") << *mname <<_(" type ")<< *getMultiname(t->type_name,NULL));
 			obj->setVariableByQName(mname->name_s,mname->ns[0],ret,DECLARED_TRAIT);
@@ -1952,10 +1966,10 @@ void ABCContext::buildTrait(ASObject* obj, const traits_info* t, bool isBorrowed
 			{
 				LOG(LOG_CALLS,_("Slot ")<< t->slot_id<<  _(" vindex 0 ") << *mname <<_(" type ")<<*tname);
 				//The Undefined is coerced to the right type by the initializeVar..
-				ret = new Undefined;
+				ret = getSys()->getUndefinedRef();
 			}
 
-			obj->initializeVariableByMultiname(*mname, ret, tname);
+			obj->initializeVariableByMultiname(*mname, ret, tname, this);
 
 			if(t->slot_id)
 				obj->initSlot(t->slot_id, *mname);
@@ -1964,7 +1978,7 @@ void ABCContext::buildTrait(ASObject* obj, const traits_info* t, bool isBorrowed
 		}
 		default:
 			LOG(LOG_ERROR,_("Trait not supported ") << *mname << _(" ") << t->kind);
-			obj->setVariableByMultiname(*mname, new Undefined);
+			obj->setVariableByMultiname(*mname, getSys()->getUndefinedRef());
 	}
 }
 

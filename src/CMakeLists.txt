@@ -23,11 +23,13 @@ SET(LIBSPARK_SOURCES
   asobject.cpp
   compat.cpp
   logger.cpp
+  memory_support.cpp
   swf.cpp
   swftypes.cpp
   thread_pool.cpp
   threading.cpp
   timer.cpp
+  tiny_string.cpp
   backends/audio.cpp
   backends/builtindecoder.cpp
   backends/config.cpp
@@ -44,6 +46,7 @@ SET(LIBSPARK_SOURCES
   backends/rtmputils.cpp
   backends/security.cpp
   backends/urlutils.cpp
+  backends/xml_support.cpp
   parsing/amf3_generator.cpp
   parsing/config.cpp
   parsing/crossdomainpolicy.cpp
@@ -58,7 +61,11 @@ SET(LIBSPARK_SOURCES
   scripting/abc_opcodes.cpp
   scripting/abctypes.cpp
   scripting/flash/accessibility/flashaccessibility.cpp
+  scripting/flash/display/BitmapData.cpp
+  scripting/flash/display/DisplayObject.cpp
+  scripting/flash/display/IBitmapDrawable.cpp
   scripting/flash/display/flashdisplay.cpp
+  scripting/flash/display/TokenContainer.cpp
   scripting/flash/events/flashevents.cpp
   scripting/flash/external/ExternalInterface.cpp
   scripting/flash/filters/flashfilters.cpp
@@ -153,7 +160,6 @@ IF(COMPILE_LIGHTSPARK)
   PACK_EXECUTABLE(lightspark)
   INSTALL(FILES ${PROJECT_SOURCE_DIR}/src/lightspark.frag DESTINATION ${LSDATADIR})
   INSTALL(FILES ${PROJECT_SOURCE_DIR}/src/lightspark.vert DESTINATION ${LSDATADIR})
-  INSTALL(FILES ${PROJECT_SOURCE_DIR}/src/lightspark-blitter.vert DESTINATION ${LSDATADIR})
   INSTALL(TARGETS lightspark RUNTIME DESTINATION ${BINDIR})
   IF(UNIX)
     INSTALL(FILES ${PROJECT_SOURCE_DIR}/docs/man/lightspark.1 DESTINATION share/man/man1)

@@ -45,7 +45,7 @@ REGISTER_CLASS_NAME(NetConnection);
 REGISTER_CLASS_NAME(NetStream);
 REGISTER_CLASS_NAME(Responder);
 
-URLRequest::URLRequest():method(GET),contentType("application/x-www-form-urlencoded")
+URLRequest::URLRequest(Class_base* c):ASObject(c),method(GET),contentType("application/x-www-form-urlencoded")
 {
 }
 
@@ -207,7 +207,7 @@ ASFUNCTIONBODY(URLRequest,_getData)
 {
 	URLRequest* th=static_cast<URLRequest*>(obj);
 	if(th->data.isNull())
-		return new Undefined;
+		return getSys()->getUndefinedRef();
 
 	th->data->incRef();
 	return th->data.getPtr();
@@ -305,7 +305,7 @@ void URLLoaderThread::execute()
 	}
 }
 
-URLLoader::URLLoader():dataFormat("text"),data(),job(NULL)
+URLLoader::URLLoader(Class_base* c):EventDispatcher(c),dataFormat("text"),data(),job(NULL)
 {
 }
 
@@ -431,7 +431,7 @@ ASFUNCTIONBODY(URLLoader,_getData)
 	URLLoader* th=static_cast<URLLoader*>(obj);
 	SpinlockLocker l(th->spinlock);
 	if(th->data.isNull())
-		return new Undefined;
+		return getSys()->getUndefinedRef();
 	
 	th->data->incRef();
 	return th->data.getPtr();
@@ -453,10 +453,25 @@ void URLLoaderDataFormat::sinit(Class_base* c)
 	c->setVariableByQName("BINARY","",Class<ASString>::getInstanceS("binary"),DECLARED_TRAIT);
 }
 
+SharedObject::SharedObject(Class_base* c):EventDispatcher(c)
+{
+	data=_MR(new_asobject());
+}
+
 void SharedObject::sinit(Class_base* c)
 {
 	c->setSuper(Class<EventDispatcher>::getRef());
+	c->setDeclaredMethodByQName("getLocal","",Class<IFunction>::getFunction(getLocal),NORMAL_METHOD,false);
+	REGISTER_GETTER(c,data);
 };
+
+ASFUNCTIONBODY_GETTER(SharedObject,data);
+
+ASFUNCTIONBODY(SharedObject,getLocal)
+{
+	//TODO: Implement this
+	return Class<SharedObject>::getInstanceS();
+}
 
 void ObjectEncoding::sinit(Class_base* c)
 {
@@ -466,7 +481,7 @@ void ObjectEncoding::sinit(Class_base* c)
 	c->setVariableByQName("DEFAULT","",abstract_i(DEFAULT),DECLARED_TRAIT);
 };
 
-NetConnection::NetConnection():_connected(false),downloader(NULL),messageCount(0)
+NetConnection::NetConnection(Class_base* c):EventDispatcher(c),_connected(false),downloader(NULL),messageCount(0)
 {
 }
 
@@ -594,7 +609,7 @@ void NetConnection::execute()
 		getSys()->downloadManager->destroy(downloader);
 		downloader = NULL;
 	}
-	_R<ParseRPCMessageEvent> event=_MR(new ParseRPCMessageEvent(message, client, responder));
+	_R<ParseRPCMessageEvent> event=_MR(new (getSys()->unaccountedMemory) ParseRPCMessageEvent(message, client, responder));
 	getVm()->addEvent(NullRef,event);
 	responder.reset();
 }
@@ -650,15 +665,16 @@ ASFUNCTIONBODY(NetConnection,connect)
 			throw Class<SecurityError>::getInstanceS("SecurityError: connection to domain not allowed by securityManager");
 		}
 		
-		if(th->uri.getProtocol() == "rtmp" ||
-		     th->uri.getProtocol() == "rtmpe" ||
-		     th->uri.getProtocol() == "rtmps")
+		//By spec NetConnection::connect is true for RTMP and remoting and false otherwise
+		if(th->uri.isRTMP())
 		{
 			isRTMP = true;
+			th->_connected = true;
 		}
 		else if(th->uri.getProtocol() == "http" ||
 		     th->uri.getProtocol() == "https")
 		{
+			th->_connected = true;
 			//isRPC = true;
 		}
 		else
@@ -749,7 +765,7 @@ ASFUNCTIONBODY(NetConnection,_getURI)
 
 ASFUNCTIONBODY_GETTER_SETTER(NetConnection, client);
 
-NetStream::NetStream():frameRate(0),tickStarted(false),connection(),downloader(NULL),
+NetStream::NetStream(Class_base* c):EventDispatcher(c),frameRate(0),tickStarted(false),connection(),downloader(NULL),
 	videoDecoder(NULL),audioDecoder(NULL),audioStream(NULL),streamTime(0),paused(false),
 	closed(true),client(NullRef),checkPolicyFile(false),rawAccessAllowed(false),
 	oldVolume(-1.0)
@@ -804,7 +820,7 @@ ASFUNCTIONBODY(NetStream,_getClient)
 {
 	NetStream* th=Class<NetStream>::cast(obj);
 	if(th->client.isNull())
-		return new Undefined();
+		return getSys()->getUndefinedRef();
 
 	th->client->incRef();
 	return th->client.getPtr();
@@ -1110,6 +1126,7 @@ void NetStream::execute()
 	//We need to catch possible EOF and other error condition in the non reliable stream
 	try
 	{
+#ifdef ENABLE_LIBAVCODEC
 		Chronometer chronometer;
 		streamDecoder=new FFMpegStreamDecoder(s);
 		if(!streamDecoder->isValid())
@@ -1144,7 +1161,7 @@ void NetStream::execute()
 
 			if(!tickStarted && isReady())
 			{
-				multiname onMetaDataName;
+				multiname onMetaDataName(NULL);
 				onMetaDataName.name_type=multiname::NAME_STRING;
 				onMetaDataName.name_s="onMetaData";
 				onMetaDataName.ns.push_back(nsNameAndKind("",NAMESPACE));
@@ -1180,7 +1197,8 @@ void NetStream::execute()
 					metadata->incRef();
 					callbackArgs[0] = metadata;
 					callback->incRef();
-					_R<FunctionEvent> event(new FunctionEvent(_MR(static_cast<IFunction*>(callback.getPtr())),
+					_R<FunctionEvent> event(new (getSys()->unaccountedMemory) FunctionEvent(_MR(
+							static_cast<IFunction*>(callback.getPtr())),
 							_MR(client), callbackArgs, 1));
 					getVm()->addEvent(NullRef,event);
 				}
@@ -1200,7 +1218,7 @@ void NetStream::execute()
 			if(threadAborting)
 				throw JobTerminationException();
 		}
-
+#endif //ENABLE_LIBAVCODEC
 	}
 	catch(LightsparkException& e)
 	{
@@ -1397,7 +1415,7 @@ void URLVariables::decode(const tiny_string& s)
 			valueStart=NULL;
 			valueEnd=NULL;
 			//Check if the variable already exists
-			multiname propName;
+			multiname propName(NULL);
 			propName.name_type=multiname::NAME_STRING;
 			propName.name_s=name;
 			propName.ns.push_back(nsNameAndKind("",NAMESPACE));
@@ -1441,7 +1459,7 @@ void URLVariables::buildTraits(ASObject* o)
 {
 }
 
-URLVariables::URLVariables(const tiny_string& s)
+URLVariables::URLVariables(Class_base* c, const tiny_string& s):ASObject(c)
 {
 	decode(s);
 }
@@ -1620,7 +1638,7 @@ ASFUNCTIONBODY(Responder, onResult)
 	Responder* th=Class<Responder>::cast(obj);
 	assert_and_throw(argslen==1);
 	args[0]->incRef();
-	ASObject* ret=th->result->call(new Null, args, argslen);
+	ASObject* ret=th->result->call(getSys()->getNullRef(), args, argslen);
 	ret->decRef();
 	return NULL;
 }

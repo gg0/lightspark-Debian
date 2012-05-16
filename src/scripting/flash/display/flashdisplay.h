@@ -27,179 +27,21 @@
 #include "flash/events/flashevents.h"
 #include "thread_pool.h"
 #include "flash/utils/flashutils.h"
-#include "backends/geometry.h"
 #include "backends/graphics.h"
 #include "backends/netutils.h"
+#include "DisplayObject.h"
+#include "TokenContainer.h"
 
 namespace lightspark
 {
 
-class Stage;
 class RootMovieClip;
 class DisplayListTag;
-class LoaderInfo;
-class DisplayObjectContainer;
 class InteractiveObject;
 class Downloader;
-class AccessibilityProperties;
 class RenderContext;
-
-class IBitmapDrawable
-{
-public:
-	static void linkTraits(Class_base* c);
-};
-
-class Transform;
-
-class DisplayObject: public EventDispatcher, public IBitmapDrawable
-{
-friend class TokenContainer;
-friend std::ostream& operator<<(std::ostream& s, const DisplayObject& r);
-public:
-	enum HIT_TYPE { GENERIC_HIT, DOUBLE_CLICK };
-private:
-	ASPROPERTY_GETTER_SETTER(_NR<AccessibilityProperties>,accessibilityProperties);
-	static ATOMIC_INT32(instanceCount);
-	MATRIX Matrix;
-	ACQUIRE_RELEASE_FLAG(useMatrix);
-	number_t tx,ty;
-	number_t rotation;
-	number_t sx,sy;
-	float alpha;
-	/**
-	  	The object we are masking, if any
-	*/
-	_NR<DisplayObject> maskOf;
-	void becomeMaskOf(_NR<DisplayObject> m);
-	void setMask(_NR<DisplayObject> m);
-	_NR<DisplayObjectContainer> parent;
-	_NR<Transform> transform;
-protected:
-	~DisplayObject();
-	/**
-	  	The object that masks us, if any
-	*/
-	_NR<DisplayObject> mask;
-	mutable Spinlock spinlock;
-	void computeDeviceBoundsForRect(number_t xmin, number_t xmax, number_t ymin, number_t ymax,
-			int32_t& outXMin, int32_t& outYMin, uint32_t& outWidth, uint32_t& outHeight) const;
-	void valFromMatrix();
-	bool onStage;
-	_NR<LoaderInfo> loaderInfo;
-	number_t computeWidth();
-	number_t computeHeight();
-	bool isSimple() const;
-	bool skipRender(bool maskEnabled) const;
-	float clippedAlpha() const;
-	bool visible;
-	/* cachedSurface may only be read/written from within the render thread */
-	CachedSurface cachedSurface;
-
-	void defaultRender(RenderContext& ctxt, bool maskEnabled) const;
-	DisplayObject(const DisplayObject& d);
-	void renderPrologue(RenderContext& ctxt) const;
-	void renderEpilogue(RenderContext& ctxt) const;
-	void hitTestPrologue() const;
-	void hitTestEpilogue() const;
-	virtual bool boundsRect(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const
-	{
-		throw RunTimeException("DisplayObject::boundsRect: Derived class must implement this!");
-	}
-	virtual void renderImpl(RenderContext& ctxt, bool maskEnabled, number_t t1,number_t t2,number_t t3,number_t t4) const
-	{
-		throw RunTimeException("DisplayObject::renderImpl: Derived class must implement this!");
-	}
-	virtual _NR<InteractiveObject> hitTestImpl(_NR<InteractiveObject> last, number_t x, number_t y, HIT_TYPE type)
-	{
-		throw RunTimeException("DisplayObject::hitTestImpl: Derived class must implement this!");
-	}
-public:
-	tiny_string name;
-	UI16_SWF CharacterId;
-	CXFORMWITHALPHA ColorTransform;
-	UI16_SWF Ratio;
-	UI16_SWF ClipDepth;
-	CLIPACTIONS ClipActions;
-	_NR<DisplayObjectContainer> getParent() const { return parent; }
-	void setParent(_NR<DisplayObjectContainer> p);
-	/*
-	   Used to link DisplayObjects the invalidation queue
-	*/
-	_NR<DisplayObject> invalidateQueueNext;
-	DisplayObject();
-	void finalize();
-	MATRIX getMatrix() const;
-	virtual void invalidate();
-	virtual void requestInvalidation();
-	MATRIX getConcatenatedMatrix() const;
-	void localToGlobal(number_t xin, number_t yin, number_t& xout, number_t& yout) const;
-	void globalToLocal(number_t xin, number_t yin, number_t& xout, number_t& yout) const;
-	float getConcatenatedAlpha() const;
-	virtual float getScaleFactor() const
-	{
-		throw RunTimeException("DisplayObject::getScaleFactor");
-	}
-	void Render(RenderContext& ctxt, bool maskEnabled);
-	bool getBounds(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax, const MATRIX& m) const;
-	_NR<InteractiveObject> hitTest(_NR<InteractiveObject> last, number_t x, number_t y, HIT_TYPE type);
-	//API to handle mask support in hit testing
-	virtual bool isOpaque(number_t x, number_t y) const
-	{
-		throw RunTimeException("DisplayObject::isOpaque");
-	}
-	virtual void setOnStage(bool staged);
-	bool isOnStage() const { return onStage; }
-	virtual _NR<RootMovieClip> getRoot();
-	virtual _NR<Stage> getStage() const;
-	void setMatrix(const MATRIX& m);
-	virtual void advanceFrame() {}
-	virtual void initFrame();
-	Vector2f getLocalMousePos();
-	Vector2f getXY();
-	void setX(number_t x);
-	void setY(number_t y);
-	// Nominal width and heigt are the size before scaling and rotation
-	number_t getNominalWidth();
-	number_t getNominalHeight();
-	static void sinit(Class_base* c);
-	static void buildTraits(ASObject* o);
-	ASFUNCTION(_constructor);
-	ASFUNCTION(_getVisible);
-	ASFUNCTION(_setVisible);
-	ASFUNCTION(_getStage);
-	ASFUNCTION(_getX);
-	ASFUNCTION(_setX);
-	ASFUNCTION(_getY);
-	ASFUNCTION(_setY);
-	ASFUNCTION(_getMask);
-	ASFUNCTION(_setMask);
-	ASFUNCTION(_setAlpha);
-	ASFUNCTION(_getAlpha);
-	ASFUNCTION(_getScaleX);
-	ASFUNCTION(_setScaleX);
-	ASFUNCTION(_getScaleY);
-	ASFUNCTION(_setScaleY);
-	ASFUNCTION(_getLoaderInfo);
-	ASFUNCTION(_getBounds);
-	ASFUNCTION(_getWidth);
-	ASFUNCTION(_setWidth);
-	ASFUNCTION(_getHeight);
-	ASFUNCTION(_setHeight);
-	ASFUNCTION(_getRotation);
-	ASFUNCTION(_getName);
-	ASFUNCTION(_setName);
-	ASFUNCTION(_getParent);
-	ASFUNCTION(_getRoot);
-	ASFUNCTION(_getBlendMode);
-	ASFUNCTION(_getScale9Grid);
-	ASFUNCTION(_setRotation);
-	ASFUNCTION(_getMouseX);
-	ASFUNCTION(_getMouseY);
-	ASFUNCTION(_getTransform);
-	ASFUNCTION(localToGlobal);
-	ASFUNCTION(globalToLocal);
-};
+class ApplicationDomain;
+class Bitmap;
 
 class InteractiveObject: public DisplayObject
 {
@@ -214,7 +56,7 @@ protected:
 	}
 	~InteractiveObject();
 public:
-	InteractiveObject();
+	InteractiveObject(Class_base* c);
 	ASFUNCTION(_constructor);
 	ASFUNCTION(_setMouseEnabled);
 	ASFUNCTION(_getMouseEnabled);
@@ -231,7 +73,7 @@ private:
 	bool _contains(_R<DisplayObject> child);
 	bool mouseChildren;
 protected:
-	void requestInvalidation();
+	void requestInvalidation(InvalidateQueue* q);
 	//This is shared between RenderThread and VM
 	std::list < _R<DisplayObject> > dynamicDisplayList;
 	//The lock should only be taken when doing write operations
@@ -246,7 +88,7 @@ public:
 	void dumpDisplayList();
 	bool _removeChild(_R<DisplayObject> child);
 	int getChildIndex(_R<DisplayObject> child);
-	DisplayObjectContainer();
+	DisplayObjectContainer(Class_base* c);
 	void finalize();
 	bool hasLegacyChildAt(uint32_t depth);
 	void deleteLegacyChildAt(uint32_t depth);
@@ -301,7 +143,7 @@ private:
 	/* This is called by when an event is dispatched */
 	void defaultEventBehavior(_R<Event> e);
 public:
-	SimpleButton(DisplayObject *dS = NULL, DisplayObject *hTS = NULL,
+	SimpleButton(Class_base* c, DisplayObject *dS = NULL, DisplayObject *hTS = NULL,
 				 DisplayObject *oS = NULL, DisplayObject *uS = NULL);
 	void finalize();
 	static void sinit(Class_base* c);
@@ -319,40 +161,6 @@ public:
 	ASFUNCTION(_setEnabled);
 	ASFUNCTION(_getUseHandCursor);
 	ASFUNCTION(_setUseHandCursor);
-};
-
-class TokenContainer
-{
-	friend class Graphics;
-public:
-	DisplayObject* owner;
-	/* multiply shapes' coordinates by this
-	 * value to get pixel.
-	 * DefineShapeTags set a scaling of 1/20,
-	 * DefineTextTags set a scaling of 1/1024/20.
-	 * If any drawing function is called and
-	 * scaling is not 1.0f,
-	 * the tokens are cleared and scaling is set
-	 * to 1.0f.
-	 */
-	float scaling;
-	std::vector<GeomToken> tokens;
-	static void FromShaperecordListToShapeVector(const std::vector<SHAPERECORD>& shapeRecords,
-					 std::vector<GeomToken>& tokens, const std::list<FILLSTYLE>& fillStyles,
-					 const Vector2& offset = Vector2(), int scaling = 1);
-	void getTextureSize(int *width, int *height) const;
-protected:
-	TokenContainer(DisplayObject* _o) : owner(_o), scaling(1.0f) {}
-	TokenContainer(DisplayObject* _o, const std::vector<GeomToken>& _tokens, float _scaling)
-		: owner(_o), scaling(_scaling), tokens(_tokens) {}
-
-	void invalidate();
-	void requestInvalidation();
-	bool boundsRect(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const;
-	_NR<InteractiveObject> hitTestImpl(_NR<InteractiveObject> last, number_t x, number_t y, DisplayObject::HIT_TYPE type) const;
-	void renderImpl(RenderContext& ctxt, bool maskEnabled, number_t t1, number_t t2, number_t t3, number_t t4) const;
-	bool tokensEmpty() const { return tokens.empty(); }
-	bool isOpaqueImpl(number_t x, number_t y) const;
 };
 
 /* This objects paints to its owners tokens */
@@ -377,12 +185,12 @@ private:
 				       double u1, double u2, double u3,
 				       double c[3]);
 public:
-	Graphics():owner(NULL)
+	Graphics(Class_base* c):ASObject(c),owner(NULL)
 	{
 		throw RunTimeException("Cannot instantiate a Graphics object");
 	}
-	Graphics(TokenContainer* _o)
-		: curX(0),curY(0),owner(_o) {}
+	Graphics(Class_base* c, TokenContainer* _o)
+		: ASObject(c),curX(0),curY(0),owner(_o) {}
 	static void sinit(Class_base* c);
 	static void buildTraits(ASObject* o);
 	ASFUNCTION(_constructor);
@@ -414,17 +222,17 @@ protected:
 	_NR<InteractiveObject> hitTestImpl(_NR<InteractiveObject> last, number_t x, number_t y, DisplayObject::HIT_TYPE type)
 		{ return TokenContainer::hitTestImpl(last,x,y, type); }
 public:
-	Shape():TokenContainer(this), graphics() {}
-	Shape(const std::vector<GeomToken>& tokens, float scaling)
-		: TokenContainer(this, tokens, scaling), graphics() {}
+	Shape(Class_base* c);
+	Shape(Class_base* c, const tokensVector& tokens, float scaling);
 	void finalize();
 	static void sinit(Class_base* c);
 	static void buildTraits(ASObject* o);
 	ASFUNCTION(_constructor);
 	ASFUNCTION(_getGraphics);
 	bool isOpaque(number_t x, number_t y) const;
-	void requestInvalidation() { TokenContainer::requestInvalidation(); }
-	void invalidate() { TokenContainer::invalidate(); }
+	void requestInvalidation(InvalidateQueue* q) { TokenContainer::requestInvalidation(q); }
+	IDrawable* invalidate(DisplayObject* target, const MATRIX& initialMatrix)
+	{ return TokenContainer::invalidate(target, initialMatrix); }
 };
 
 class MorphShape: public DisplayObject
@@ -433,6 +241,7 @@ protected:
 	bool boundsRect(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const;
 	virtual _NR<InteractiveObject> hitTestImpl(_NR<InteractiveObject> last, number_t x, number_t y, HIT_TYPE type);
 public:
+	MorphShape(Class_base* c):DisplayObject(c){}
 	static void sinit(Class_base* c);
 	static void buildTraits(ASObject* o);
 	ASFUNCTION(_constructor);
@@ -455,8 +264,9 @@ private:
 public:
 	ASPROPERTY_GETTER(_NR<ASObject>,parameters);
 	ASPROPERTY_GETTER(uint32_t,actionScriptVersion);
-	LoaderInfo():bytesLoaded(0),bytesTotal(0),sharedEvents(NullRef),loader(NullRef),loadStatus(STARTED),actionScriptVersion(3) {}
-	LoaderInfo(_R<Loader> l):bytesLoaded(0),bytesTotal(0),sharedEvents(NullRef),loader(l),loadStatus(STARTED),actionScriptVersion(3) {}
+	ASPROPERTY_GETTER(bool, childAllowsParent);
+	LoaderInfo(Class_base* c);
+	LoaderInfo(Class_base* c, _R<Loader> l);
 	void finalize();
 	static void sinit(Class_base* c);
 	static void buildTraits(ASObject* o);
@@ -467,6 +277,7 @@ public:
 	ASFUNCTION(_getBytesLoaded);
 	ASFUNCTION(_getBytesTotal);
 	ASFUNCTION(_getApplicationDomain);
+	_NR<ApplicationDomain> applicationDomain;
 	ASFUNCTION(_getLoader);
 	ASFUNCTION(_getContent);
 	ASFUNCTION(_getSharedEvents);
@@ -511,9 +322,7 @@ private:
 	_NR<LoaderInfo> contentLoaderInfo;
 	void unload();
 public:
-	Loader():content(NullRef),job(NULL),loaded(false),contentLoaderInfo(NullRef)
-	{
-	}
+	Loader(Class_base* c);
 	~Loader();
 	void finalize();
 	void threadFinished(IThreadJob* job);
@@ -545,7 +354,7 @@ protected:
 	void renderImpl(RenderContext& ctxt, bool maskEnabled, number_t t1,number_t t2,number_t t3,number_t t4) const;
 	_NR<InteractiveObject> hitTestImpl(_NR<InteractiveObject> last, number_t x, number_t y, DisplayObject::HIT_TYPE type);
 public:
-	Sprite();
+	Sprite(Class_base* c);
 	void finalize();
 	static void sinit(Class_base* c);
 	static void buildTraits(ASObject* o);
@@ -557,8 +366,9 @@ public:
 	{
 		return 0;
 	}
-	void invalidate() { TokenContainer::invalidate(); }
-	void requestInvalidation();
+	IDrawable* invalidate(DisplayObject* target, const MATRIX& initialMatrix)
+	{ return TokenContainer::invalidate(target, initialMatrix); }
+	void requestInvalidation(InvalidateQueue* q);
 	bool isOpaque(number_t x, number_t y) const;
 };
 
@@ -573,8 +383,8 @@ struct FrameLabel_data
 class FrameLabel: public ASObject, public FrameLabel_data
 {
 public:
-	FrameLabel() {}
-	FrameLabel(const FrameLabel_data& data) : FrameLabel_data(data) {}
+	FrameLabel(Class_base* c);
+	FrameLabel(Class_base* c, const FrameLabel_data& data);
 	static void sinit(Class_base* c);
 	static void buildTraits(ASObject* o);
 	ASFUNCTION(_getFrame);
@@ -595,8 +405,8 @@ class Scene: public ASObject, public Scene_data
 {
 	uint32_t numFrames;
 public:
-	Scene() {}
-	Scene(const Scene_data& data, uint32_t _numFrames) : Scene_data(data), numFrames(_numFrames) {}
+	Scene(Class_base* c);
+	Scene(Class_base* c, const Scene_data& data, uint32_t _numFrames);
 	static void sinit(Class_base* c);
 	ASFUNCTION(_constructor);
 	ASFUNCTION(_getLabels);
@@ -644,7 +454,7 @@ private:
 	std::vector<Scene_data> scenes;
 public:
 	RunState state;
-	MovieClip();
+	MovieClip(Class_base* c);
 	MovieClip(const MovieClip& r);
 	void finalize();
 	ASObject* gotoAnd(ASObject* const* args, const unsigned int argslen, bool stop);
@@ -658,7 +468,6 @@ public:
 	virtual bool hasFinishedLoading() { return true; }
 	ASFUNCTION(_constructor);
 	ASFUNCTION(swapDepths);
-	ASFUNCTION(createEmptyMovieClip);
 	ASFUNCTION(addFrameScript);
 	ASFUNCTION(stop);
 	ASFUNCTION(gotoAndStop);
@@ -697,9 +506,10 @@ private:
 public:
 	_NR<InteractiveObject> hitTestImpl(_NR<InteractiveObject> last, number_t x, number_t y, DisplayObject::HIT_TYPE type);
 	void setOnStage(bool staged) { assert(false); /* we are the stage */}
-	Stage();
+	Stage(Class_base* c);
 	static void sinit(Class_base* c);
 	static void buildTraits(ASObject* o);
+	_NR<Stage> getStage();
 	ASFUNCTION(_constructor);
 	ASFUNCTION(_getStageWidth);
 	ASFUNCTION(_getStageHeight);
@@ -712,6 +522,7 @@ public:
 class StageScaleMode: public ASObject
 {
 public:
+	StageScaleMode(Class_base* c):ASObject(c){}
 	static void sinit(Class_base* c);
 	static void buildTraits(ASObject* o)
 	{
@@ -721,6 +532,7 @@ public:
 class StageAlign: public ASObject
 {
 public:
+	StageAlign(Class_base* c):ASObject(c){}
 	static void sinit(Class_base* c);
 	static void buildTraits(ASObject* o)
 	{
@@ -730,42 +542,49 @@ public:
 class StageQuality: public ASObject
 {
 public:
+	StageQuality(Class_base* c):ASObject(c){}
 	static void sinit(Class_base* c);
 };
 
 class StageDisplayState: public ASObject
 {
 public:
+	StageDisplayState(Class_base* c):ASObject(c){}
 	static void sinit(Class_base* c);
 };
 
 class LineScaleMode: public ASObject
 {
 public:
+	LineScaleMode(Class_base* c):ASObject(c){}
 	static void sinit(Class_base* c);
 };
 
 class BlendMode: public ASObject
 {
 public:
+	BlendMode(Class_base* c):ASObject(c){}
 	static void sinit(Class_base* c);
 };
 
 class GradientType: public ASObject
 {
 public:
+	GradientType(Class_base* c):ASObject(c){}
 	static void sinit(Class_base* c);
 };
 
 class InterpolationMethod: public ASObject
 {
 public:
+	InterpolationMethod(Class_base* c):ASObject(c){}
 	static void sinit(Class_base* c);
 };
 
 class SpreadMethod: public ASObject
 {
 public:
+	SpreadMethod(Class_base* c):ASObject(c){}
 	static void sinit(Class_base* c);
 };
 
@@ -775,46 +594,6 @@ public:
 	uint32_t width;
 	uint32_t height;
 	IntSize(uint32_t w, uint32_t h):width(h),height(h){}
-};
-
-class BitmapData: public ASObject, public IBitmapDrawable
-{
-CLASSBUILDABLE(BitmapData);
-protected:
-	size_t stride;
-	size_t dataSize;
-	static void sinit(Class_base* c);
-	uint32_t getPixelPriv(uint32_t x, uint32_t y);
-	void setPixelPriv(uint32_t x, uint32_t y, uint32_t color, bool setAlpha);
-	void copyFrom(BitmapData *source);
-public:
-	BitmapData() : stride(0), dataSize(0), width(0), height(0) {}
-	~BitmapData();
-	/* the bitmaps data in premultiplied, native-endian 32 bit
-	 * ARGB format. stride is the number of bytes per row, may be
-	 * larger than width. dataSize is the total allocated size of
-	 * data (=stride*height) */
-	std::vector<uint8_t> data;
-	uint8_t* getData() { return &data[0]; }
-	ASPROPERTY_GETTER(int32_t, width);
-	ASPROPERTY_GETTER(int32_t, height);
-	ASPROPERTY_GETTER(bool, transparent);
-	ASFUNCTION(_constructor);
-	ASFUNCTION(draw);
-	ASFUNCTION(getPixel);
-	ASFUNCTION(getPixel32);
-	ASFUNCTION(setPixel);
-	ASFUNCTION(setPixel32);
-	ASFUNCTION(getRect);
-	ASFUNCTION(copyPixels);
-	ASFUNCTION(fillRect);
-	ASFUNCTION(generateFilterRect);
-	bool fromRGB(uint8_t* rgb, uint32_t width, uint32_t height, bool hasAlpha);
-	bool fromJPEG(uint8_t* data, int len);
-	bool fromJPEG(std::istream& s);
-	bool fromPNG(std::istream& s);
-	int getWidth() const { return width; }
-	int getHeight() const { return height; }
 };
 
 class Bitmap: public DisplayObject, public TokenContainer
@@ -829,20 +608,24 @@ public:
 	ASPROPERTY_GETTER_SETTER(_NR<BitmapData>,bitmapData);
 	/* Call this after updating any member of 'data' */
 	void updatedData();
-	Bitmap(std::istream *s = NULL, FILE_TYPE type=FT_UNKNOWN);
-	Bitmap(_R<BitmapData> data);
+	Bitmap(Class_base* c, std::istream *s = NULL, FILE_TYPE type=FT_UNKNOWN);
+	Bitmap(Class_base* c, _R<BitmapData> data);
+	~Bitmap();
+	void finalize();
 	static void sinit(Class_base* c);
 	ASFUNCTION(_constructor);
 	bool boundsRect(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const;
 	_NR<InteractiveObject> hitTestImpl(_NR<InteractiveObject> last, number_t x, number_t y, DisplayObject::HIT_TYPE type);
 	virtual IntSize getBitmapSize() const;
-	void requestInvalidation() { TokenContainer::requestInvalidation(); }
-	void invalidate() { TokenContainer::invalidate(); }
+	void requestInvalidation(InvalidateQueue* q) { TokenContainer::requestInvalidation(q); }
+	IDrawable* invalidate(DisplayObject* target, const MATRIX& initialMatrix)
+	{ return TokenContainer::invalidate(target, initialMatrix); }
 };
 
 class AVM1Movie: public DisplayObject
 {
 public:
+	AVM1Movie(Class_base* c):DisplayObject(c){}
 	static void sinit(Class_base* c);
 	static void buildTraits(ASObject* o);
 	ASFUNCTION(_constructor);
@@ -851,6 +634,7 @@ public:
 class Shader : public ASObject
 {
 public:
+	Shader(Class_base* c):ASObject(c){}
 	static void sinit(Class_base* c);
 	ASFUNCTION(_constructor);
 };

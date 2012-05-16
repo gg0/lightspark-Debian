@@ -27,8 +27,7 @@
 #include "backends/config.h"
 #include "compat.h"
 #include "scripting/flash/text/flashtext.h"
-
-#include <iostream>
+#include "flash/display/BitmapData.h"
 
 using namespace lightspark;
 
@@ -105,7 +104,7 @@ void TextureBuffer::init(uint32_t w, uint32_t h, GLenum f)
 	
 	glBindTexture(GL_TEXTURE_2D,0);
 	
-	if(RenderThread::handleGLErrors())
+	if(GLRenderContext::handleGLErrors())
 	{
 		LOG(LOG_ERROR,_("OpenGL error in TextureBuffer::init"));
 		throw RunTimeException("OpenGL error in TextureBuffer::init");
@@ -122,7 +121,7 @@ void TextureBuffer::resize(uint32_t w, uint32_t h)
 			LOG(LOG_CALLS,_("Reallocating texture to size ") << w << 'x' << h);
 			setAllocSize(w,h);
 			glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, allocWidth, allocHeight, 0, GL_BGRA, GL_UNSIGNED_BYTE, 0);
-			if(RenderThread::handleGLErrors())
+			if(GLRenderContext::handleGLErrors())
 			{
 				LOG(LOG_ERROR,_("OpenGL error in TextureBuffer::resize"));
 				throw RunTimeException("OpenGL error in TextureBuffer::resize");
@@ -172,44 +171,6 @@ TextureBuffer::~TextureBuffer()
 {
 	shutdown();
 }
-
-
-MatrixApplier::MatrixApplier()
-{
-	//First of all try to preserve current matrix
-	getRenderThread()->lsglPushMatrix();
-
-	//TODO: implement smart stack flush
-	//Save all the current stack, compute using SSE the final matrix and push that one
-	//Maybe mulps, shuffle and parallel add
-	//On unapply the stack will be reset as before
-}
-
-MatrixApplier::MatrixApplier(const MATRIX& m)
-{
-	//First of all try to preserve current matrix
-	getRenderThread()->lsglPushMatrix();
-
-	float matrix[16];
-	m.get4DMatrix(matrix);
-	getRenderThread()->lsglMultMatrixf(matrix);
-	getRenderThread()->setMatrixUniform(LSGL_MODELVIEW);
-}
-
-void MatrixApplier::concat(const MATRIX& m)
-{
-	float matrix[16];
-	m.get4DMatrix(matrix);
-	getRenderThread()->lsglMultMatrixf(matrix);
-	getRenderThread()->setMatrixUniform(LSGL_MODELVIEW);
-}
-
-void MatrixApplier::unapply()
-{
-	getRenderThread()->lsglPopMatrix();
-	getRenderThread()->setMatrixUniform(LSGL_MODELVIEW);
-}
-
 
 TextureChunk::TextureChunk(uint32_t w, uint32_t h)
 {
@@ -291,75 +252,9 @@ bool TextureChunk::resizeIfLargeEnough(uint32_t w, uint32_t h)
 	return false;
 }
 
-CairoRenderer::CairoRenderer(ASObject* _o, CachedSurface& _t, const MATRIX& _m,
-		int32_t _x, int32_t _y, int32_t _w, int32_t _h, float _s, float _a)
-	: owner(_o),surface(_t),matrix(_m),xOffset(_x),yOffset(_y),alpha(_a),width(_w),height(_h),
-	surfaceBytes(NULL),scaleFactor(_s),uploadNeeded(true)
+CairoRenderer::CairoRenderer(const MATRIX& _m, int32_t _x, int32_t _y, int32_t _w, int32_t _h, float _s, float _a)
+	: IDrawable(_w, _h, _x, _y, _a), matrix(_m), scaleFactor(_s)
 {
-	owner->incRef();
-}
-
-CairoRenderer::~CairoRenderer()
-{
-	delete[] surfaceBytes;
-	owner->decRef();
-}
-
-void CairoRenderer::sizeNeeded(uint32_t& w, uint32_t& h) const
-{
-	w=width;
-	h=height;
-}
-
-void CairoRenderer::upload(uint8_t* data, uint32_t w, uint32_t h) const
-{
-	if(surfaceBytes)
-		memcpy(data,surfaceBytes,w*h*4);
-}
-
-const TextureChunk& CairoRenderer::getTexture()
-{
-	/* This is called in the render thread,
-	 * so we need no locking for surface */
-	//Verify that the texture is large enough
-	if(!surface.tex.resizeIfLargeEnough(width, height))
-		surface.tex=getSys()->getRenderThread()->allocateTexture(width, height,false);
-	surface.xOffset=xOffset;
-	surface.yOffset=yOffset;
-	surface.alpha=alpha;
-	return surface.tex;
-}
-
-void CairoRenderer::uploadFence()
-{
-	delete this;
-}
-
-cairo_matrix_t CairoRenderer::MATRIXToCairo(const MATRIX& matrix)
-{
-	cairo_matrix_t ret;
-
-	cairo_matrix_init(&ret,
-	                  matrix.ScaleX, matrix.RotateSkew0,
-	                  matrix.RotateSkew1, matrix.ScaleY,
-	                  matrix.TranslateX, matrix.TranslateY);
-
-	return ret;
-}
-
-void CairoRenderer::threadAbort()
-{
-	//Nothing special to be done
-}
-
-void CairoRenderer::jobFence()
-{
-	//If the data must be uploaded (there were no errors) the Job add itself to the upload queue.
-	//Otherwise it destroys itself
-	if(uploadNeeded)
-		getSys()->getRenderThread()->addUploadJob(this);
-	else
-		delete this;
 }
 
 void CairoTokenRenderer::quadraticBezier(cairo_t* cr, double control_x, double control_y, double end_x, double end_y)
@@ -447,7 +342,7 @@ cairo_pattern_t* CairoTokenRenderer::FILLSTYLEToCairo(const FILLSTYLE& style, do
 		case REPEATING_BITMAP:
 		case CLIPPED_BITMAP:
 		{
-			if(style.bitmap==NULL)
+			if(style.bitmap.isNull())
 				throw RunTimeException("Invalid bitmap");
 
 			cairo_surface_t* surface = cairo_image_surface_create_for_data (style.bitmap->getData(),
@@ -457,7 +352,8 @@ cairo_pattern_t* CairoTokenRenderer::FILLSTYLEToCairo(const FILLSTYLE& style, do
 			pattern = cairo_pattern_create_for_surface(surface);
 			cairo_surface_destroy(surface);
 
-			cairo_matrix_t mat = MATRIXToCairo(style.Matrix);
+			cairo_matrix_t mat;
+			style.Matrix.getCairoMatrix(&mat);
 			cairo_status_t st = cairo_matrix_invert(&mat);
 			assert(st == CAIRO_STATUS_SUCCESS);
 			mat.x0 /= scaleCorrection;
@@ -618,7 +514,8 @@ bool CairoTokenRenderer::cairoPathFromTokens(cairo_t* cr, const std::vector<Geom
 				pattern=cairo_get_source(cr);
 				cairo_pattern_get_matrix(pattern, &origmat);
 
-				cairo_matrix_t mat = MATRIXToCairo(tokens[i].textureTransform);
+				cairo_matrix_t mat;
+				tokens[i].textureTransform.getCairoMatrix(&mat);
 				cairo_pattern_set_matrix(pattern, &mat);
 
 				cairo_fill(cr);
@@ -659,13 +556,12 @@ void CairoRenderer::cairoClean(cairo_t* cr)
 	cairo_paint(cr);
 }
 
-cairo_surface_t* CairoRenderer::allocateSurface()
+cairo_surface_t* CairoRenderer::allocateSurface(uint8_t*& buf)
 {
 	int32_t cairoWidthStride=cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, width);
 	assert(cairoWidthStride==width*4);
-	assert(surfaceBytes==NULL);
-	surfaceBytes=new uint8_t[cairoWidthStride*height];
-	return cairo_image_surface_create_for_data(surfaceBytes, CAIRO_FORMAT_ARGB32, width, height, cairoWidthStride);
+	buf=new uint8_t[cairoWidthStride*height];
+	return cairo_image_surface_create_for_data(buf, CAIRO_FORMAT_ARGB32, width, height, cairoWidthStride);
 }
 
 void CairoTokenRenderer::executeDraw(cairo_t* cr)
@@ -682,15 +578,11 @@ StaticMutex CairoRenderer::cairoMutex;
 StaticMutex CairoRenderer::cairoMutex = GLIBMM_STATIC_MUTEX_INIT;
 #endif
 
-/* This implements IThreadJob::execute */
-void CairoRenderer::execute()
+uint8_t* CairoRenderer::getPixelBuffer()
 {
 	Mutex::Lock l(cairoMutex);
 	if(width==0 || height==0 || !Config::getConfig()->isRenderingEnabled())
-	{
-		uploadNeeded = false;
-		return;
-	}
+		return NULL;
 
 	int32_t windowWidth=getSys()->getRenderThread()->windowWidth;
 	int32_t windowHeight=getSys()->getRenderThread()->windowHeight;
@@ -698,22 +590,29 @@ void CairoRenderer::execute()
 	if(xOffset >= windowWidth || yOffset >= windowHeight
 		|| xOffset + width <= 0 || yOffset + height <= 0)
 	{
-		uploadNeeded = false;
-		return;
+		width=0;
+		height=0;
+		return NULL;
 	}
 
-	//TODO:clip on the right and bottom also
 	if(xOffset<0)
+	{
 		width+=xOffset;
+		xOffset=0;
+	}
 	if(yOffset<0)
+	{
 		height+=yOffset;
+		yOffset=0;
+	}
 
 	//Clip the size to the screen borders
-	if((xOffset>=0) && (width+xOffset) > windowWidth)
+	if((xOffset>0) && (width+xOffset) > windowWidth)
 		width=windowWidth-xOffset;
 	if((yOffset>0) && (height+yOffset) > windowHeight)
 		height=windowHeight-yOffset;
-	cairo_surface_t* cairoSurface=allocateSurface();
+	uint8_t* ret=NULL;
+	cairo_surface_t* cairoSurface=allocateSurface(ret);
 
 	cairo_t* cr=cairo_create(cairoSurface);
 	cairo_surface_destroy(cairoSurface); /* cr has an reference to it */
@@ -726,12 +625,14 @@ void CairoRenderer::execute()
 		matrix.TranslateX-=xOffset;
 	if(yOffset >= 0)
 		matrix.TranslateY-=yOffset;
-	const cairo_matrix_t& mat=MATRIXToCairo(matrix);
+	cairo_matrix_t mat;
+	matrix.getCairoMatrix(&mat);
 	cairo_transform(cr, &mat);
 
 	executeDraw(cr);
 
 	cairo_destroy(cr);
+	return ret;
 }
 
 bool CairoTokenRenderer::hitTest(const std::vector<GeomToken>& tokens, float scaleFactor, number_t x, number_t y)
@@ -778,12 +679,12 @@ bool CairoTokenRenderer::isOpaque(const std::vector<GeomToken>& tokens, float sc
 	return pixelBytes[0]!=0x00;
 }
 
-void CairoRenderer::convertBitmapWithAlphaToCairo(std::vector<uint8_t>& data, uint8_t* inData, uint32_t width,
+void CairoRenderer::convertBitmapWithAlphaToCairo(std::vector<uint8_t, reporter_allocator<uint8_t>>& data, uint8_t* inData, uint32_t width,
 		uint32_t height, size_t* dataSize, size_t* stride)
 {
 	*stride = cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, width);
 	*dataSize = *stride * height;
-	data.resize(*dataSize);
+	data.resize(*dataSize, 0);
 	uint8_t* outData=&data[0];
 	uint32_t* inData32 = (uint32_t*)inData;
 
@@ -797,12 +698,12 @@ void CairoRenderer::convertBitmapWithAlphaToCairo(std::vector<uint8_t>& data, ui
 	}
 }
 
-void CairoRenderer::convertBitmapToCairo(std::vector<uint8_t>& data, uint8_t* inData, uint32_t width,
+void CairoRenderer::convertBitmapToCairo(std::vector<uint8_t, reporter_allocator<uint8_t>>& data, uint8_t* inData, uint32_t width,
 		uint32_t height, size_t* dataSize, size_t* stride)
 {
 	*stride = cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, width);
 	*dataSize = *stride * height;
-	data.resize(*dataSize);
+	data.resize(*dataSize, 0);
 	uint8_t* outData = &data[0];
 	for(uint32_t i = 0; i < height; i++)
 	{
@@ -933,4 +834,74 @@ bool CairoPangoRenderer::getBounds(const TextData& _textData, uint32_t& w, uint3
 	}
 
 	return (h!=0) && (w!=0);
+}
+
+AsyncDrawJob::AsyncDrawJob(IDrawable* d, _R<DisplayObject> o):drawable(d),owner(o),surfaceBytes(NULL),uploadNeeded(false)
+{
+}
+
+AsyncDrawJob::~AsyncDrawJob()
+{
+	delete drawable;
+	delete[] surfaceBytes;
+}
+
+void AsyncDrawJob::execute()
+{
+	surfaceBytes=drawable->getPixelBuffer();
+	if(surfaceBytes)
+		uploadNeeded=true;
+}
+
+void AsyncDrawJob::threadAbort()
+{
+	//Nothing special to be done
+}
+
+void AsyncDrawJob::jobFence()
+{
+	//If the data must be uploaded (there were no errors) the Job add itself to the upload queue.
+	//Otherwise it destroys itself
+	if(uploadNeeded)
+		getSys()->getRenderThread()->addUploadJob(this);
+	else
+		delete this;
+}
+
+void AsyncDrawJob::upload(uint8_t* data, uint32_t w, uint32_t h) const
+{
+	assert(surfaceBytes);
+	memcpy(data, surfaceBytes, w*h*4);
+}
+
+void AsyncDrawJob::sizeNeeded(uint32_t& w, uint32_t& h) const
+{
+	w=drawable->getWidth();
+	h=drawable->getHeight();
+}
+
+const TextureChunk& AsyncDrawJob::getTexture()
+{
+	/* This is called in the render thread,
+	 * so we need no locking for surface */
+	CachedSurface& surface=owner->cachedSurface;
+	uint32_t width=drawable->getWidth();
+	uint32_t height=drawable->getHeight();
+	//Verify that the texture is large enough
+	if(!surface.tex.resizeIfLargeEnough(width, height))
+		surface.tex=getSys()->getRenderThread()->allocateTexture(width, height,false);
+	surface.xOffset=drawable->getXOffset();
+	surface.yOffset=drawable->getYOffset();
+	surface.alpha=drawable->getAlpha();
+	return surface.tex;
+}
+
+void AsyncDrawJob::uploadFence()
+{
+	delete this;
+}
+
+void SoftwareInvalidateQueue::addToInvalidateQueue(_R<DisplayObject> d)
+{
+	queue.emplace_back(d);
 }

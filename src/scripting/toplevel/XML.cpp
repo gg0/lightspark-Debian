@@ -33,24 +33,25 @@ using namespace lightspark;
 SET_NAMESPACE("");
 REGISTER_CLASS_NAME(XML);
 
-XML::XML():node(NULL),constructed(false),ignoreComments(true)
+XML::XML(Class_base* c):ASObject(c),node(NULL),constructed(false),ignoreComments(true)
 {
 }
 
-XML::XML(const string& str):node(NULL),constructed(true)
+XML::XML(Class_base* c,const string& str):ASObject(c),node(NULL),constructed(true)
 {
-	buildFromString(str);
+	node=buildFromString(str);
 }
 
-XML::XML(_R<XML> _r, xmlpp::Node* _n):root(_r),node(_n),constructed(true)
+XML::XML(Class_base* c,_R<XML> _r, xmlpp::Node* _n):ASObject(c),root(_r),node(_n),constructed(true)
 {
 	assert(node);
 }
 
-XML::XML(xmlpp::Node* _n):constructed(true)
+XML::XML(Class_base* c,xmlpp::Node* _n):ASObject(c),constructed(true)
 {
 	assert(_n);
-	node=parser.get_document()->create_root_node_by_import(_n);
+	node=buildCopy(_n);
+	assert(node);
 }
 
 void XML::finalize()
@@ -73,6 +74,7 @@ void XML::sinit(Class_base* c)
 	c->setDeclaredMethodByQName("children",AS3,Class<IFunction>::getFunction(children),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("attribute",AS3,Class<IFunction>::getFunction(attribute),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("attributes",AS3,Class<IFunction>::getFunction(attributes),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("length",AS3,Class<IFunction>::getFunction(length),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("localName",AS3,Class<IFunction>::getFunction(localName),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("name",AS3,Class<IFunction>::getFunction(name),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("descendants",AS3,Class<IFunction>::getFunction(descendants),NORMAL_METHOD,true);
@@ -83,148 +85,30 @@ void XML::sinit(Class_base* c)
 	c->setDeclaredMethodByQName("elements",AS3,Class<IFunction>::getFunction(elements),NORMAL_METHOD,true);
 }
 
-#ifdef XMLPP_2_35_1
-XML::RecoveryDocument::RecoveryDocument(_xmlDoc* d):xmlpp::Document(d)
-{
-}
-
-void XML::RecoveryDomParser::parse_memory_raw(const unsigned char* contents, size_type bytes_count)
-{
-	release_underlying(); //Free any existing document.
-
-	//The following is based on the implementation of xmlParseFile(), in xmlSAXParseFileWithData():
-	context_ = xmlCreateMemoryParserCtxt((const char*)contents, bytes_count);
-	if(!context_)
-		throw xmlpp::internal_error("Couldn't create parsing context");
-
-	xmlSAXHandlerV1* handler=(xmlSAXHandlerV1*)calloc(1,sizeof(xmlSAXHandlerV1));
-	initxmlDefaultSAXHandler(handler, 0);
-	context_->recovery=1;
-	free(context_->sax);
-	context_->sax=(xmlSAXHandler*)handler;
-	context_->keepBlanks = 0;
-	handler->ignorableWhitespace = xmlSAX2IgnorableWhitespace;
-
-	//The following is based on the implementation of xmlParseFile(), in xmlSAXParseFileWithData():
-	//and the implementation of xmlParseMemory(), in xmlSaxParseMemoryWithData().
-	initialize_context();
-
-	if(!context_)
-		throw xmlpp::internal_error("Context not initialized");
-
-	xmlParseDocument(context_);
-
-	check_for_exception();
-
-	if(!context_->wellFormed)
-		LOG(LOG_ERROR, "XML data not well formed!");
-
-	doc_ = new RecoveryDocument(context_->myDoc);
-	// This is to indicate to release_underlying that we took the
-	// ownership on the doc.
-	context_->myDoc = 0;
-
-	//Free the parse context, but keep the document alive so people can navigate the DOM tree:
-	//TODO: Why not keep the context alive too?
-	Parser::release_underlying();
-
-	check_for_exception();
-}
-
-#endif
-
-void XML::buildFromString(const string& str)
-{
-	string buf = parserQuirks(str);
-	try
-	{
-		parser.parse_memory_raw((const unsigned char*)buf.c_str(), buf.size());
-	}
-	catch(const exception& e)
-	{
-	}
-	xmlpp::Document* doc=parser.get_document();
-	if(doc)
-		node=doc->get_root_node();
-
-	if(node==NULL)
-	{
-		LOG(LOG_ERROR, "XML parsing failed, creating text node");
-		//If everything fails, create a fake document and add a single text string child
-		buf="<a></a>";
-		parser.parse_memory_raw((const unsigned char*)buf.c_str(), buf.size());
-		node=parser.get_document()->get_root_node()->add_child_text(str);
-		// TODO: node's parent (root) should be inaccessible from AS code
-	}
-}
-
-// Adobe player's XML parser accepts many strings which are not valid
-// XML according to the specs. This function attempts to massage
-// invalid-but-accepted-by-Adobe strings into valid XML so that
-// libxml++ parser doesn't throw an error.
-string XML::parserQuirks(const string& str)
-{
-	string buf = quirkCData(str);
-	buf = quirkXMLDeclarationInMiddle(buf);
-	return buf;
-}
-
-string XML::quirkCData(const string& str) {
-	//if this is a CDATA node replace CDATA tags to make it look like a text-node
-	//for compatibility with the Adobe player
-	if (str.compare(0, 9, "<![CDATA[") == 0) {
-		return "<a>"+str.substr(9, str.size()-12)+"</a>";
-	}
-	else
-		return str;
-}
-
-string XML::quirkXMLDeclarationInMiddle(const string& str) {
-	string buf(str);
-
-	// Adobe player ignores XML declarations in the middle of a
-	// string.
-	while (true)
-	{
-		size_t start = buf.find("<?xml ", 1);
-		if (start == buf.npos)
-			break;
-		
-		size_t end = buf.find("?>", start+5);
-		if (end == buf.npos)
-			break;
-		end += 2;
-		
-		buf.erase(start, end-start);
-	}
-
-	return buf;
-}
-
 ASFUNCTIONBODY(XML,generator)
 {
 	assert(obj==NULL);
 	assert_and_throw(argslen<=1);
-	if (argslen == 0)
+	if (argslen == 0 ||
+	    args[0]->is<Null>() ||
+	    args[0]->is<Undefined>())
 	{
 		return Class<XML>::getInstanceS("");
 	}
-	if(args[0]->getObjectType()==T_STRING)
+	else if(args[0]->is<ASString>() ||
+		args[0]->is<Number>() ||
+		args[0]->is<Integer>() ||
+		args[0]->is<UInteger>() ||
+		args[0]->is<Boolean>())
 	{
-		ASString* str=Class<ASString>::cast(args[0]);
-		return Class<XML>::getInstanceS(std::string(str->data));
+		return Class<XML>::getInstanceS(args[0]->toString());
 	}
-	else if(args[0]->getObjectType()==T_NULL ||
-		args[0]->getObjectType()==T_UNDEFINED)
-	{
-		return Class<XML>::getInstanceS("");
-	}
-	else if(args[0]->getClass()==Class<XML>::getClass())
+	else if(args[0]->is<XML>())
 	{
 		args[0]->incRef();
 		return args[0];
 	}
-	else if(args[0]->getClass()==Class<XMLList>::getClass())
+	else if(args[0]->is<XMLList>())
 	{
 		_R<XML> ret=args[0]->as<XMLList>()->reduceToXML();
 		ret->incRef();
@@ -246,10 +130,10 @@ ASFUNCTIONBODY(XML,_constructor)
 		return NULL;
 
 	if(argslen==0 ||
-	   args[0]->getObjectType()==T_NULL || 
-	   args[0]->getObjectType()==T_UNDEFINED)
+	   args[0]->is<Null>() || 
+	   args[0]->is<Undefined>())
 	{
-		th->buildFromString("");
+		th->node=th->buildFromString("");
 	}
 	else if(args[0]->getClass()->isSubClass(Class<ByteArray>::getClass()))
 	{
@@ -258,16 +142,27 @@ ASFUNCTIONBODY(XML,_constructor)
 		ByteArray* ba=Class<ByteArray>::cast(args[0]);
 		uint32_t len=ba->getLength();
 		const uint8_t* str=ba->getBuffer(len, false);
-		th->buildFromString(std::string((const char*)str,len));
+		th->node=th->buildFromString(std::string((const char*)str,len));
 	}
-	else if(args[0]->getObjectType()==T_STRING ||
-		args[0]->getObjectType()==T_NUMBER ||
-		args[0]->getObjectType()==T_INTEGER ||
-		args[0]->getObjectType()==T_BOOLEAN)
+	else if(args[0]->is<ASString>() ||
+		args[0]->is<Number>() ||
+		args[0]->is<Integer>() ||
+		args[0]->is<UInteger>() ||
+		args[0]->is<Boolean>())
 	{
 		//By specs, XML constructor will only convert to string Numbers or Booleans
 		//ints are not explicitly mentioned, but they seem to work
-		th->buildFromString(args[0]->toString());
+		th->node=th->buildFromString(args[0]->toString());
+	}
+	else if(args[0]->is<XML>())
+	{
+		th->node=th->buildCopy(args[0]->as<XML>()->node);
+	}
+	else if(args[0]->is<XMLList>())
+	{
+		XMLList *list=args[0]->as<XMLList>();
+		_R<XML> reduced=list->reduceToXML();
+		th->node=th->buildCopy(reduced->node);
 	}
 	else
 		throw Class<TypeError>::getInstanceS("Unsupported type in XML conversion");
@@ -288,12 +183,21 @@ ASFUNCTIONBODY(XML,nodeKind)
 			return Class<ASString>::getInstanceS("element");
 		case XML_TEXT_NODE:
 			return Class<ASString>::getInstanceS("text");
+		case XML_COMMENT_NODE:
+			return Class<ASString>::getInstanceS("comment");
+		case XML_PI_NODE:
+			return Class<ASString>::getInstanceS("processing-instruction");
 		default:
 		{
 			LOG(LOG_ERROR,"Unsupported XML type " << libXml2Node->type);
 			throw UnsupportedException("Unsupported XML node type");
 		}
 	}
+}
+
+ASFUNCTIONBODY(XML,length)
+{
+	return abstract_i(1);
 }
 
 ASFUNCTIONBODY(XML,localName)
@@ -303,7 +207,7 @@ ASFUNCTIONBODY(XML,localName)
 	assert(th->node);
 	xmlElementType nodetype=th->node->cobj()->type;
 	if(nodetype==XML_TEXT_NODE || nodetype==XML_COMMENT_NODE)
-		return new Null;
+		return getSys()->getNullRef();
 	else
 		return Class<ASString>::getInstanceS(th->node->get_name());
 }
@@ -316,9 +220,13 @@ ASFUNCTIONBODY(XML,name)
 	xmlElementType nodetype=th->node->cobj()->type;
 	//TODO: add namespace
 	if(nodetype==XML_TEXT_NODE || nodetype==XML_COMMENT_NODE)
-		return new Null;
+		return getSys()->getNullRef();
 	else
-		return Class<ASString>::getInstanceS(th->node->get_name());
+	{
+		ASQName* ret = Class<ASQName>::getInstanceS();
+		ret->setByNode(th->node);
+		return ret;
+	}
 }
 
 ASFUNCTIONBODY(XML,descendants)
@@ -326,7 +234,7 @@ ASFUNCTIONBODY(XML,descendants)
 	XML* th=Class<XML>::cast(obj);
 	assert_and_throw(argslen==1);
 	assert_and_throw(args[0]->getObjectType()!=T_QNAME);
-	vector<_R<XML>> ret;
+	XMLVector ret;
 	th->getDescendantsByQName(args[0]->toString(),"",ret);
 	return Class<XMLList>::getInstanceS(ret);
 }
@@ -388,7 +296,7 @@ ASFUNCTIONBODY(XML,attribute)
 	else
 		rootXML=th->root;
 
-	std::vector<_R<XML>> ret;
+	XMLVector ret;
 	ret.push_back(_MR(Class<XML>::getInstanceS(rootXML, attribute)));
 	return Class<XMLList>::getInstanceS(ret);
 }
@@ -408,7 +316,7 @@ XMLList* XML::getAllAttributes()
 		return Class<XMLList>::getInstanceS();
 	const xmlpp::Element::AttributeList& list=elem->get_attributes();
 	xmlpp::Element::AttributeList::const_iterator it=list.begin();
-	std::vector<_R<XML>> ret;
+	XMLVector ret;
 	_NR<XML> rootXML=NullRef;
 	if(root.isNull())
 	{
@@ -467,7 +375,15 @@ void XML::toXMLString_priv(xmlBufferPtr buf)
 		cNode->nsDef=&localNamespaces.front();
 	}
 
-	int retVal=xmlNodeDump(buf, xmlDoc, cNode, 0, 0);
+	int retVal;
+	if(cNode->type==XML_ATTRIBUTE_NODE)
+	{
+		retVal=xmlNodeBufGetContent(buf, cNode);
+	}
+	else
+	{
+		retVal=xmlNodeDump(buf, xmlDoc, cNode, 0, 0);
+	}
 	//Restore the previously defined namespaces
 	cNode->nsDef=oldNsDef;
 	if(retVal==-1)
@@ -487,7 +403,7 @@ ASFUNCTIONBODY(XML,toXMLString)
 	return ret;
 }
 
-void XML::childrenImpl(std::vector<_R<XML> >& ret, const tiny_string& name)
+void XML::childrenImpl(XMLVector& ret, const tiny_string& name)
 {
 	assert(node);
 	const xmlpp::Node::NodeList& list=node->get_children();
@@ -510,13 +426,55 @@ void XML::childrenImpl(std::vector<_R<XML> >& ret, const tiny_string& name)
 	}
 }
 
+void XML::childrenImpl(XMLVector& ret, uint32_t index)
+{
+	assert(node);
+	_NR<XML> rootXML=NullRef;
+	if(root.isNull())
+	{
+		this->incRef();
+		rootXML=_MR(this);
+	}
+	else
+		rootXML=root;
+
+	uint32_t i=0;
+	const xmlpp::Node::NodeList& list=node->get_children();
+	xmlpp::Node::NodeList::const_iterator it=list.begin();
+	while(it!=list.end())
+	{
+		xmlpp::TextNode* nodeText = dynamic_cast<xmlpp::TextNode*>(*it);
+		if(!(nodeText && nodeText->is_white_space()))
+		{
+			if(i==index)
+			{
+				ret.push_back(_MR(Class<XML>::getInstanceS(rootXML, *it)));
+				break;
+			}
+
+			i++;
+		}
+
+		it++;
+	}
+}
+
 ASFUNCTIONBODY(XML,child)
 {
 	XML* th=Class<XML>::cast(obj);
 	assert_and_throw(argslen==1);
 	const tiny_string& arg0=args[0]->toString();
-	std::vector<_R<XML>> ret;
-	th->childrenImpl(ret, arg0);
+	XMLVector ret;
+	uint32_t index=0;
+	multiname mname(NULL);
+	mname.name_s=arg0;
+	mname.name_type=multiname::NAME_STRING;
+	mname.ns.push_back(nsNameAndKind("",NAMESPACE));
+	mname.isAttribute=false;
+	if(Array::isValidMultiname(mname, index))
+		th->childrenImpl(ret, index);
+	else
+		th->childrenImpl(ret, arg0);
 	XMLList* retObj=Class<XMLList>::getInstanceS(ret);
 	return retObj;
 }
@@ -525,7 +483,7 @@ ASFUNCTIONBODY(XML,children)
 {
 	XML* th=Class<XML>::cast(obj);
 	assert_and_throw(argslen==0);
-	std::vector<_R<XML>> ret;
+	XMLVector ret;
 	th->childrenImpl(ret, "*");
 	XMLList* retObj=Class<XMLList>::getInstanceS(ret);
 	return retObj;
@@ -549,7 +507,7 @@ ASFUNCTIONBODY(XML,valueOf)
 	return obj;
 }
 
-void XML::getText(vector<_R<XML>> &ret)
+void XML::getText(XMLVector& ret)
 {
 	xmlpp::Node::NodeList nl = node->get_children();
 	xmlpp::Node::NodeList::iterator i;
@@ -572,14 +530,14 @@ ASFUNCTIONBODY(XML,text)
 {
 	XML *th = obj->as<XML>();
 	ARG_UNPACK;
-	vector<_R<XML>> ret;
+	XMLVector ret;
 	th->getText(ret);
 	return Class<XMLList>::getInstanceS(ret);
 }
 
 ASFUNCTIONBODY(XML,elements)
 {
-	vector<_R<XML>> ret;
+	XMLVector ret;
 	XML *th = obj->as<XML>();
 	tiny_string name;
 	ARG_UNPACK (name, "");
@@ -642,7 +600,7 @@ xmlElementType XML::getNodeKind() const
 }
 
 void XML::recursiveGetDescendantsByQName(_R<XML> root, xmlpp::Node* node, const tiny_string& name, const tiny_string& ns,
-		std::vector<_R<XML>>& ret)
+		XMLVector& ret)
 {
 	//Check if this node is being requested. The empty string means ALL
 	if(name.empty() || name == node->get_name())
@@ -654,7 +612,7 @@ void XML::recursiveGetDescendantsByQName(_R<XML> root, xmlpp::Node* node, const 
 		recursiveGetDescendantsByQName(root, *it, name, ns, ret);
 }
 
-void XML::getDescendantsByQName(const tiny_string& name, const tiny_string& ns, std::vector<_R<XML> >& ret)
+void XML::getDescendantsByQName(const tiny_string& name, const tiny_string& ns, XMLVector& ret)
 {
 	assert(node);
 	assert_and_throw(ns=="");
@@ -682,7 +640,12 @@ _NR<ASObject> XML::getVariableByMultiname(const multiname& name, GET_VARIABLE_OP
 	}
 
 	bool isAttr=name.isAttribute;
+	unsigned int index=0;
+	//Normalize the name to the string form
 	const tiny_string normalizedName=name.normalizedName();
+	//TODO: support namespaces
+	assert_and_throw(name.ns.size()>0 && name.ns[0].name=="");
+
 	const char *buf=normalizedName.raw_buf();
 	if(!normalizedName.empty() && normalizedName.charAt(0)=='@')
 	{
@@ -692,13 +655,9 @@ _NR<ASObject> XML::getVariableByMultiname(const multiname& name, GET_VARIABLE_OP
 	if(isAttr)
 	{
 		//Lookup attribute
-		//TODO: support namespaces
-		assert_and_throw(name.ns.size()>0 && name.ns[0].name=="");
-
 		if(normalizedName.empty())
 			return _MR(getAllAttributes());
 
-		//Normalize the name to the string form
 		assert(node);
 		//To have attributes we must be an Element
 		xmlpp::Element* element=dynamic_cast<xmlpp::Element*>(node);
@@ -717,21 +676,30 @@ _NR<ASObject> XML::getVariableByMultiname(const multiname& name, GET_VARIABLE_OP
 		else
 			rootXML=root;
 
-		std::vector<_R<XML> > retnode;
+		XMLVector retnode;
 		retnode.push_back(_MR(Class<XML>::getInstanceS(rootXML, attr)));
 		return _MNR(Class<XMLList>::getInstanceS(retnode));
+	}
+	else if(Array::isValidMultiname(name,index))
+	{
+		// If the multiname is a valid array property, the XML
+		// object is treated as a single-item XMLList.
+		if(index==0)
+		{
+			incRef();
+			return _MNR(this);
+		}
+		else
+			return NullRef;
 	}
 	else
 	{
 		//Lookup children
-		//TODO: support namespaces
-		assert_and_throw(name.ns.size()>0 && name.ns[0].name=="");
-		//Normalize the name to the string form
 		assert(node);
 		const xmlpp::Node::NodeList& children=node->get_children(buf);
 		xmlpp::Node::NodeList::const_iterator it=children.begin();
 
-		std::vector<_R<XML>> ret;
+		XMLVector ret;
 
 		_NR<XML> rootXML=NullRef;
 		if(root.isNull())
@@ -749,6 +717,34 @@ _NR<ASObject> XML::getVariableByMultiname(const multiname& name, GET_VARIABLE_OP
 			return NullRef;
 
 		return _MNR(Class<XMLList>::getInstanceS(ret));
+	}
+}
+
+void XML::setVariableByMultiname(const multiname& name, ASObject* o)
+{
+	bool isAttr=name.isAttribute;
+	//Normalize the name to the string form
+	const tiny_string normalizedName=name.normalizedName();
+	//TODO: support namespaces
+	assert_and_throw(name.ns.size()>0 && name.ns[0].name=="");
+
+	const char *buf=normalizedName.raw_buf();
+	if(!normalizedName.empty() && normalizedName.charAt(0)=='@')
+	{
+		isAttr=true;
+		buf+=1;
+	}
+	if(isAttr)
+	{
+		//To have attributes we must be an Element
+		xmlpp::Element* element=dynamic_cast<xmlpp::Element*>(node);
+		assert_and_throw(element);
+		element->set_attribute(name.name_s, o->toString());
+	}
+	else
+	{
+		xmlpp::Element* child=node->add_child(name.name_s);
+		child->add_child_text(o->toString());
 	}
 }
 

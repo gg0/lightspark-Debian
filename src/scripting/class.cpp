@@ -29,29 +29,41 @@ ASObject* lightspark::new_asobject()
 	return Class<ASObject>::getInstanceS();
 }
 
+Class_inherit::Class_inherit(const QName& name, MemoryAccount* m):Class_base(name, m),tag(NULL),bindedToRoot(false)
+{
+	this->incRef(); //create on reference for the classes map
+#ifndef NDEBUG
+	bool ret=
+#endif
+	getSys()->customClasses.insert(this).second;
+	assert(ret);
+}
+
 void Class_inherit::finalize()
 {
 	Class_base::finalize();
 	class_scope.clear();
 }
 
-ASObject* Class_inherit::getInstance(bool construct, ASObject* const* args, const unsigned int argslen)
+ASObject* Class_inherit::getInstance(bool construct, ASObject* const* args, const unsigned int argslen, Class_base* realClass)
 {
+	//We override the classdef
+	if(realClass==NULL)
+		realClass=this;
+
 	ASObject* ret=NULL;
 	assert_and_throw(!bindedToRoot);
 	if(tag)
 	{
-		ret=tag->instance();
+		ret=tag->instance(realClass);
 		assert_and_throw(ret);
 	}
 	else
 	{
 		assert_and_throw(super);
 		//Our super should not construct, we are going to do it ourselves
-		ret=super->getInstance(false,NULL,0);
+		ret=super->getInstance(false,NULL,0,realClass);
 	}
-	//We override the classdef
-	ret->setClass(this);
 	if(construct)
 		handleConstruction(ret,args,argslen,true);
 	return ret;
@@ -67,7 +79,7 @@ void Class_inherit::buildInstanceTraits(ASObject* o) const
 }
 
 template<>
-Global* Class<Global>::getInstance(bool construct, ASObject* const* args, const unsigned int argslen)
+Global* Class<Global>::getInstance(bool construct, ASObject* const* args, const unsigned int argslen, Class_base* realClass)
 {
 	throw Class<TypeError>::getInstanceS("Error #1007: Cannot construct global object");
 }
@@ -108,7 +120,7 @@ void lightspark::lookupAndLink(Class_base* c, const tiny_string& name, const tin
 	}
 }
 
-ASObject* Class<ASObject>::getInstance(bool construct, ASObject* const* args, const unsigned int argslen)
+ASObject* Class<ASObject>::getInstance(bool construct, ASObject* const* args, const unsigned int argslen, Class_base* realClass)
 {
 	if (construct && args && argslen == 1 && this == Class<ASObject>::getClass())
 	{
@@ -133,8 +145,9 @@ ASObject* Class<ASObject>::getInstance(bool construct, ASObject* const* args, co
 			break;
 		}
 	}
-	ASObject* ret=new ASObject;
-	ret->setClass(this);
+	if(realClass==NULL)
+		realClass=this;
+	ASObject* ret=new (realClass->memoryAccount) ASObject(realClass);
 	if(construct)
 		handleConstruction(ret,args,argslen,true);
 	return ret;

@@ -80,6 +80,10 @@ void Vector::sinit(Class_base* c)
 	c->prototype->setVariableByQName("unshift",AS3,Class<IFunction>::getFunction(unshift),DYNAMIC_TRAIT);
 }
 
+Vector::Vector(Class_base* c):ASObject(c),vec_type(NULL),vec(reporter_allocator<ASObject*>(c->memoryAccount))
+{
+}
+
 Vector::~Vector()
 {
 	finalize();
@@ -140,7 +144,7 @@ ASObject* Vector::generator(TemplatedClass<Vector>* o_class, ASObject* const* ar
 	}
 	else
 	{
-		throw ArgumentError("global Vector() function takes Array or Vector");
+		throw Class<ArgumentError>::getInstanceS("global Vector() function takes Array or Vector");
 	}
 }
 
@@ -166,7 +170,7 @@ ASFUNCTIONBODY(Vector,_concat)
 	Vector* ret= (Vector*)obj->getClass()->getInstance(true,NULL,0);
 	// copy values into new Vector
 	ret->vec.resize(th->size(), NULL);
-	std::vector<ASObject*>::iterator it=th->vec.begin();
+	auto it=th->vec.begin();
 	uint32_t index = 0;
 	for(;it != th->vec.end();++it)
 	{
@@ -184,7 +188,7 @@ ASFUNCTIONBODY(Vector,_concat)
 		{
 			Vector* arg=static_cast<Vector*>(args[i]);
 			ret->vec.resize(index+arg->size(), NULL);
-			std::vector<ASObject*>::iterator it=arg->vec.begin();
+			auto it=arg->vec.begin();
 			for(;it != arg->vec.end();++it)
 			{
 				if (*it)
@@ -232,7 +236,7 @@ ASFUNCTIONBODY(Vector,filter)
 
 		if(argslen==1)
 		{
-			funcRet=f->call(new Null, params, 3);
+			funcRet=f->call(getSys()->getNullRef(), params, 3);
 		}
 		else
 		{
@@ -275,7 +279,7 @@ ASFUNCTIONBODY(Vector, some)
 
 		if(argslen==1)
 		{
-			funcRet=f->call(new Null, params, 3);
+			funcRet=f->call(getSys()->getNullRef(), params, 3);
 		}
 		else
 		{
@@ -313,14 +317,14 @@ ASFUNCTIONBODY(Vector, every)
 			th->vec[i]->incRef();
 		}
 		else
-			params[0] = new Null;
+			params[0] = getSys()->getNullRef();
 		params[1] = abstract_i(i);
 		params[2] = th;
 		th->incRef();
 
 		if(argslen==1)
 		{
-			funcRet=f->call(new Null, params, 3);
+			funcRet=f->call(getSys()->getNullRef(), params, 3);
 		}
 		else
 		{
@@ -363,10 +367,10 @@ ASFUNCTIONBODY(Vector,_pop)
 		throw Class<RangeError>::getInstanceS("Error #1126");
 	uint32_t size =th->size();
 	if (size == 0)
-        return th->vec_type->coerce(new Null);
+        return th->vec_type->coerce(getSys()->getNullRef());
 	ASObject* ret = th->vec[size-1];
 	if (!ret)
-		ret = th->vec_type->coerce(new Null);
+		ret = th->vec_type->coerce(getSys()->getNullRef());
 	th->vec.pop_back();
 	return ret;
 }
@@ -430,7 +434,7 @@ ASFUNCTIONBODY(Vector,forEach)
 		ASObject *funcret;
 		if( argslen == 1 )
 		{
-			funcret=f->call(new Null, params, 3);
+			funcret=f->call(getSys()->getNullRef(), params, 3);
 		}
 		else
 		{
@@ -448,7 +452,7 @@ ASFUNCTIONBODY(Vector, _reverse)
 {
 	Vector* th = static_cast<Vector*>(obj);
 
-	std::vector<ASObject*> tmp = std::vector<ASObject*>(th->vec);
+	std::vector<ASObject*> tmp = std::vector<ASObject*>(th->vec.begin(),th->vec.end());
 	uint32_t size = th->size();
 	th->vec.clear();
 	th->vec.resize(size, NULL);
@@ -517,12 +521,12 @@ ASFUNCTIONBODY(Vector,shift)
 	if (th->fixed)
 		throw Class<RangeError>::getInstanceS("Error #1126");
 	if(!th->size())
-		return th->vec_type->coerce(new Null);
+		return th->vec_type->coerce(getSys()->getNullRef());
 	ASObject* ret;
 	if(th->vec[0])
 		ret=th->vec[0];
 	else
-		ret=th->vec_type->coerce(new Null);
+		ret=th->vec_type->coerce(getSys()->getNullRef());
 	for(uint32_t i= 1;i< th->size();i++)
 	{
 		if (th->vec[i])
@@ -704,17 +708,17 @@ bool Vector::sortComparatorWrapper::operator()(ASObject* d1, ASObject* d2)
 		objs[0]->incRef();
 	}
 	else
-		objs[0] = vec_type->coerce(new Null);
+		objs[0] = vec_type->coerce(getSys()->getNullRef());
 	if (d2)
 	{
 		objs[1] = d2;
 		objs[1]->incRef();
 	}
 	else
-		objs[1] = vec_type->coerce(new Null);
+		objs[1] = vec_type->coerce(getSys()->getNullRef());
 
 	assert(comparator);
-	_NR<ASObject> ret=_MNR(comparator->call(new Null, objs, 2));
+	_NR<ASObject> ret=_MNR(comparator->call(getSys()->getNullRef(), objs, 2));
 	assert_and_throw(ret);
 	return (ret->toNumber()<0); //Less
 }
@@ -751,8 +755,8 @@ ASFUNCTIONBODY(Vector,unshift)
 
 	for(uint32_t i=0;i<argslen;i++)
 	{
-		th->vec[i] = th->vec_type->coerce(args[i]);
 		args[i]->incRef();
+		th->vec[i] = th->vec_type->coerce(args[i]);
 	}
 	return abstract_i(th->size());
 }
@@ -768,7 +772,7 @@ ASFUNCTIONBODY(Vector,_map)
 	{
 		ASObject* funcArgs[3];
 		if (!th->vec[i])
-			funcArgs[0]=new Null;
+			funcArgs[0]=getSys()->getNullRef();
 		else
 		{
 			if(th->vec[i])
@@ -777,12 +781,12 @@ ASFUNCTIONBODY(Vector,_map)
 				funcArgs[0]->incRef();
 			}
 			else
-				funcArgs[0]=new Undefined;
+				funcArgs[0]=getSys()->getUndefinedRef();
 		}
 		funcArgs[1]=abstract_i(i);
 		funcArgs[2]=th;
 		funcArgs[2]->incRef();
-		ASObject* funcRet=func->call(new Null, funcArgs, 3);
+		ASObject* funcRet=func->call(getSys()->getNullRef(), funcArgs, 3);
 		assert_and_throw(funcRet);
 		ret->vec.push_back(funcRet);
 	}
@@ -800,7 +804,7 @@ ASFUNCTIONBODY(Vector,_toString)
 			ret += th->vec[i]->toString();
 		else
 			// use the type's default value
-			ret += th->vec_type->coerce( new Null )->toString();
+			ret += th->vec_type->coerce( getSys()->getNullRef() )->toString();
 
 		if(i!=th->vec.size()-1)
 			ret += ',';
@@ -847,7 +851,7 @@ _NR<ASObject> Vector::getVariableByMultiname(const multiname& name, GET_VARIABLE
 			return _MNR(vec[index]);
 		}
 		else
-			return _MNR(vec_type->coerce( new Null ));
+			return _MNR(vec_type->coerce( getSys()->getNullRef() ));
 	}
 	else
 	{
@@ -895,7 +899,7 @@ tiny_string Vector::toString(bool debugMsg)
 		if (vec[i]) 
 			t += vec[i]->toString();
 		else
-			t += vec_type->coerce( new Null )->toString();
+			t += vec_type->coerce( getSys()->getNullRef() )->toString();
 	}
 	return t;
 }
@@ -925,7 +929,7 @@ _R<ASObject> Vector::nextValue(uint32_t index)
 			vec[index-1]->incRef();
 			return _MR(vec[index-1]);
 		}
-		return _MR(vec_type->coerce( new Null ));
+		return _MR(vec_type->coerce( getSys()->getNullRef() ));
 	}
 	else
 		throw RunTimeException("Vector::nextValue out of bounds");
@@ -939,38 +943,11 @@ bool Vector::isValidMultiname(const multiname& name, uint32_t& index)
 	if(name.ns[0].name!="")
 		return false;
 
-	index=0;
-	switch(name.name_type)
-	{
-		//We try to convert this to an index, otherwise bail out
-		case multiname::NAME_STRING:
-        {
-			if(name.name_s.empty())
-                return false;
-            ASString* s = Class<ASString>::getInstanceS(name.name_s);
-            number_t n = s->toNumber();
-            delete s;
-            if(!Number::isInteger(n) || n<0)
-                return false;
-            index = n;
-            break;
-        }
-		//This is already an int, so its good enough
-		case multiname::NAME_INT:
-			if(name.name_i < 0)
-				throw Class<RangeError>::getInstanceS("Error #1125");
-			index=name.name_i;
-			break;
-		case multiname::NAME_NUMBER:
-			if(!Number::isInteger(name.name_d) || name.name_d < 0)
-				throw Class<RangeError>::getInstanceS("Error #1125");
-			index = name.name_d;
-			break;
-		case multiname::NAME_OBJECT:
-			//TODO: should be use toPrimitive here?
-			return false;
-		default:
-			throw UnsupportedException("Vector::isValidMultiname not completely implemented");
-	}
-	return true;
+	bool validIndex=name.toUInt(index);
+	// Don't throw for non-numeric NAME_STRING or NAME_OBJECT
+	// because they can still be valid built-in property names.
+	if(!validIndex && (name.name_type==multiname::NAME_INT || name.name_type==multiname::NAME_NUMBER))
+		throw Class<RangeError>::getInstanceS("Error #1125");
+
+	return validIndex;
 }

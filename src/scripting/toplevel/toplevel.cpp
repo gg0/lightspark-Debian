@@ -59,7 +59,12 @@ REGISTER_CLASS_NAME(Namespace);
 Any* const Type::anyType = new Any();
 Void* const Type::voidType = new Void();
 
-Undefined::Undefined()
+Null::Null():ASObject((Class_base*)(NULL))
+{
+	type=T_NULL;
+}
+
+Undefined::Undefined():ASObject((Class_base*)(NULL))
 {
 	type=T_UNDEFINED;
 }
@@ -102,7 +107,7 @@ int Undefined::toInt()
 
 ASObject *Undefined::describeType() const
 {
-	return new Undefined;
+	return getSys()->getUndefinedRef();
 }
 
 void Undefined::serialize(ByteArray* out, std::map<tiny_string, uint32_t>& stringMap,
@@ -112,7 +117,13 @@ void Undefined::serialize(ByteArray* out, std::map<tiny_string, uint32_t>& strin
 	out->writeByte(undefined_marker);
 }
 
-IFunction::IFunction():inClass(NULL),length(0)
+void Undefined::setVariableByMultiname(const multiname& name, ASObject* o)
+{
+	LOG(LOG_NOT_IMPLEMENTED, "Ignoring set on Undefined " << name);
+	o->decRef();
+}
+
+IFunction::IFunction(Class_base* c):ASObject(c),inClass(NULL),length(0)
 {
 	type=T_FUNCTION;
 	prototype = _MR(new_asobject());
@@ -225,10 +236,15 @@ ASObject *IFunction::describeType() const
 	return Class<XML>::getInstanceS(root);
 }
 
-SyntheticFunction::SyntheticFunction(method_info* m):hit_count(0),mi(m),val(NULL)
+SyntheticFunction::SyntheticFunction(Class_base* c,method_info* m):IFunction(c),hit_count(0),mi(m),val(NULL)
 {
 	if(mi)
 		length = mi->numArgs();
+}
+
+SyntheticFunction::~SyntheticFunction()
+{
+	finalize();
 }
 
 void SyntheticFunction::finalize()
@@ -263,13 +279,13 @@ ASObject* SyntheticFunction::call(ASObject* obj, ASObject* const* args, uint32_t
 		mi->paramTypes.reserve(mi->numArgs());
 		for(size_t i=0;i < mi->numArgs();++i)
 		{
-			const Type* t = Type::getTypeFromMultiname(mi->paramTypeName(i));
+			const Type* t = Type::getTypeFromMultiname(mi->paramTypeName(i), mi->context);
 			mi->paramTypes.push_back(t);
 			if(t != Type::anyType)
 				mi->hasExplicitTypes = true;
 		}
 
-		const Type* t = Type::getTypeFromMultiname(mi->returnTypeName());
+		const Type* t = Type::getTypeFromMultiname(mi->returnTypeName(), mi->context);
 		mi->returnType = t;
 	}
 
@@ -365,7 +381,7 @@ ASObject* SyntheticFunction::call(ASObject* obj, ASObject* const* args, uint32_t
 			cc.locals[i+1]=mi->paramTypes[i]->coerce(mi->getOptional(iOptional));
 		else {
 			assert(mi->paramTypes[i] == Type::anyType);
-			cc.locals[i+1]=new Undefined();
+			cc.locals[i+1]=getSys()->getUndefinedRef();
 		}
 	}
 
@@ -452,7 +468,7 @@ ASObject* SyntheticFunction::call(ASObject* obj, ASObject* const* args, uint32_t
 	obj->decRef();
 
 	if(ret==NULL)
-		ret=new Undefined;
+		ret=getSys()->getUndefinedRef();
 
 	return mi->returnType->coerce(ret);
 }
@@ -497,7 +513,7 @@ ASObject* Function::call(ASObject* obj, ASObject* const* args, uint32_t num_args
 		args[i]->decRef();
 	obj->decRef();
 	if(ret==NULL)
-		ret=new Undefined;
+		ret=getSys()->getUndefinedRef();
 	return ret;
 }
 
@@ -593,6 +609,11 @@ void Null::serialize(ByteArray* out, std::map<tiny_string, uint32_t>& stringMap,
 	out->writeByte(null_marker);
 }
 
+void Null::setVariableByMultiname(const multiname& name, ASObject* o)
+{
+	o->decRef();
+	throw Class<TypeError>::getInstanceS("Cannot set on null");
+}
 
 ASObject* Void::coerce(ASObject* o) const
 {
@@ -615,8 +636,8 @@ bool Type::isTypeResolvable(const multiname* mn)
 		return true;
 
 	//Check if the class has already been defined
-	auto i = getSys()->classes.find(QName(mn->name_s, mn->ns[0].name));
-	return i != getSys()->classes.end();
+	auto i = getSys()->builtinClasses.find(QName(mn->name_s, mn->ns[0].name));
+	return i != getSys()->builtinClasses.end();
 }
 
 /*
@@ -624,7 +645,7 @@ bool Type::isTypeResolvable(const multiname* mn)
  * by running ABCContext::exec() for all ABCContexts.
  * Therefore, all classes are at least declared.
  */
-const Type* Type::getTypeFromMultiname(const multiname* mn)
+const Type* Type::getTypeFromMultiname(const multiname* mn, const ABCContext* context)
 {
 	if(mn == 0) //multiname idx zero indicates any type
 		return Type::anyType;
@@ -639,21 +660,20 @@ const Type* Type::getTypeFromMultiname(const multiname* mn)
 
 	ASObject* typeObject;
 	/*
-	 * During the newClass opcode, the class is added to sys->classes.
+	 * During the newClass opcode, the class is added to context->classesBeingDefined.
 	 * The class variable in the global scope is only set a bit later.
 	 * When the class has to be resolved in between (for example, the
 	 * class has traits of the class's type), then we'll find it in
-	 * sys->classes, but getGlobal()->getVariableAndTargetByMultiname()
+	 * classesBeingDefined, but context->root->getVariableAndTargetByMultiname()
 	 * would still return "Undefined".
 	 */
-	auto i = getSys()->classes.find(QName(mn->name_s, mn->ns[0].name));
-	if(i != getSys()->classes.end())
+	auto i = context->classesBeingDefined.find(mn);
+	if(i != context->classesBeingDefined.end())
 		typeObject = i->second;
 	else
 	{
 		ASObject* target;
-		typeObject=ABCVm::getCurrentApplicationDomain(getVm()->currentCallContext)->
-			getVariableAndTargetByMultiname(*mn,target);
+		typeObject=context->root->applicationDomain->getVariableAndTargetByMultiname(*mn,target);
 	}
 
 	if(!typeObject)
@@ -667,8 +687,9 @@ const Type* Type::getTypeFromMultiname(const multiname* mn)
 	return typeObject->as<Type>();
 }
 
-Class_base::Class_base(const QName& name):use_protected(false),protected_ns("",PACKAGE_NAMESPACE),constructor(NULL),
-	isFinal(false),isSealed(false),context(NULL),class_name(name),class_index(-1)
+Class_base::Class_base(const QName& name, MemoryAccount* m):ASObject(m),use_protected(false),protected_ns("",PACKAGE_NAMESPACE),constructor(NULL),
+	referencedObjects(std::less<ASObject*>(), reporter_allocator<ASObject*>(m)),
+	isFinal(false),isSealed(false),context(NULL),class_name(name),class_index(-1),memoryAccount(m)
 {
 	type=T_CLASS;
 }
@@ -882,6 +903,8 @@ void Class_base::finalize()
 	finalizeObjects();
 
 	ASObject::finalize();
+	super.reset();
+	prototype.reset();
 	if(constructor)
 	{
 		constructor->decRef();
@@ -889,7 +912,7 @@ void Class_base::finalize()
 	}
 }
 
-Template_base::Template_base(QName name) : template_name(name)
+Template_base::Template_base(QName name) : ASObject((Class_base*)(NULL)),template_name(name)
 {
 	type = T_TEMPLATE;
 }
@@ -898,12 +921,12 @@ Class_object* Class_object::getClass()
 {
 	//We check if we are registered in the class map
 	//if not we register ourselves (see also Class<T>::getClass)
-	std::map<QName, Class_base*>::iterator it=getSys()->classes.find(QName("Class",""));
+	std::map<QName, Class_base*>::iterator it=getSys()->builtinClasses.find(QName("Class",""));
 	Class_object* ret=NULL;
-	if(it==getSys()->classes.end()) //This class is not yet in the map, create it
+	if(it==getSys()->builtinClasses.end()) //This class is not yet in the map, create it
 	{
-		ret=new Class_object();
-		getSys()->classes.insert(std::make_pair(QName("Class",""),ret));
+		ret=new (getSys()->unaccountedMemory) Class_object();
+		getSys()->builtinClasses.insert(std::make_pair(QName("Class",""),ret));
 	}
 	else
 		ret=static_cast<Class_object*>(it->second);
@@ -1166,12 +1189,23 @@ void Class_base::describeTraits(xmlpp::Element* root,
 	}
 }
 
+ASQName::ASQName(Class_base* c):ASObject(c)
+{
+	type=T_QNAME; uri_is_null=false;
+}
+void ASQName::setByNode(xmlpp::Node* node)
+{
+	uri_is_null=false;
+	local_name = node->get_name();
+	uri=node->get_namespace_uri();
+}
+
 void ASQName::sinit(Class_base* c)
 {
 	c->setSuper(Class<ASObject>::getRef());
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
 	c->setDeclaredMethodByQName("uri","",Class<IFunction>::getFunction(_getURI),GETTER_METHOD,true);
-	c->setDeclaredMethodByQName("local_name","",Class<IFunction>::getFunction(_getLocalName),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("localName","",Class<IFunction>::getFunction(_getLocalName),GETTER_METHOD,true);
 	c->prototype->setVariableByQName("toString",AS3,Class<IFunction>::getFunction(_toString),DYNAMIC_TRAIT);
 }
 
@@ -1243,17 +1277,103 @@ ASFUNCTIONBODY(ASQName,_constructor)
 	}
 	else
 	{
-		th->uri=namespaceval->toString();
+		if(namespaceval->getObjectType()==T_QNAME && 
+		   !(static_cast<ASQName*>(namespaceval)->uri_is_null))
+		{
+			ASQName* q=static_cast<ASQName*>(namespaceval);
+			th->uri=q->uri;
+		}
+		else
+			th->uri=namespaceval->toString();
 	}
 
 	return NULL;
+}
+ASFUNCTIONBODY(ASQName,generator)
+{
+	ASQName* th=Class<ASQName>::getInstanceS();
+	assert_and_throw(argslen<3);
+
+	ASObject *nameval;
+	ASObject *namespaceval;
+
+	if(argslen==0)
+	{
+		th->local_name="";
+		th->uri_is_null=false;
+		th->uri="";
+		// Should set th->uri to the default namespace
+		LOG(LOG_NOT_IMPLEMENTED, "QName constructor not completely implemented");
+		return th;
+	}
+	if(argslen==1)
+	{
+		nameval=args[0];
+		namespaceval=NULL;
+	}
+	else if(argslen==2)
+	{
+		namespaceval=args[0];
+		nameval=args[1];
+	}
+
+	// Set local_name
+	if(nameval->getObjectType()==T_QNAME)
+	{
+		ASQName *q=static_cast<ASQName*>(nameval);
+		th->local_name=q->local_name;
+		if(!namespaceval)
+		{
+			th->uri_is_null=q->uri_is_null;
+			th->uri=q->uri;
+			return th;
+		}
+	}
+	else if(nameval->getObjectType()==T_UNDEFINED)
+		th->local_name="";
+	else
+		th->local_name=nameval->toString();
+
+	// Set uri
+	th->uri_is_null=false;
+	if(!namespaceval || namespaceval->getObjectType()==T_UNDEFINED)
+	{
+		if(th->local_name=="*")
+		{
+			th->uri_is_null=true;
+			th->uri="";
+		}
+		else
+		{
+			// Should set th->uri to the default namespace
+			LOG(LOG_NOT_IMPLEMENTED, "QName constructor not completely implemented");
+			th->uri="";
+		}
+	}
+	else if(namespaceval->getObjectType()==T_NULL)
+	{
+		th->uri_is_null=true;
+		th->uri="";
+	}
+	else
+	{
+		if(namespaceval->getObjectType()==T_QNAME && 
+		   !(static_cast<ASQName*>(namespaceval)->uri_is_null))
+		{
+			ASQName* q=static_cast<ASQName*>(namespaceval);
+			th->uri=q->uri;
+		}
+		else
+			th->uri=namespaceval->toString();
+	}
+	return th;
 }
 
 ASFUNCTIONBODY(ASQName,_getURI)
 {
 	ASQName* th=static_cast<ASQName*>(obj);
 	if(th->uri_is_null)
-		return new Null;
+		return getSys()->getNullRef();
 	else
 		return Class<ASString>::getInstanceS(th->uri);
 }
@@ -1280,7 +1400,7 @@ bool ASQName::isEqual(ASObject* o)
 		return uri_is_null==q->uri_is_null && uri==q->uri && local_name==q->local_name;
 	}
 
-	return false;
+	return ASObject::isEqual(o);
 }
 
 tiny_string ASQName::toString()
@@ -1292,6 +1412,18 @@ tiny_string ASQName::toString()
 		s = uri + "::";
 
 	return s + local_name;
+}
+
+Namespace::Namespace(Class_base* c):ASObject(c)
+{
+	type=T_NAMESPACE;
+	prefix_is_undefined=false;
+}
+
+Namespace::Namespace(Class_base* c, const tiny_string& _uri):ASObject(c),uri(_uri)
+{
+	type=T_NAMESPACE;
+	prefix_is_undefined=false;
 }
 
 void Namespace::sinit(Class_base* c)
@@ -1344,6 +1476,7 @@ ASFUNCTIONBODY(Namespace,_constructor)
 			Namespace* n=static_cast<Namespace*>(urival);
 			th->uri=n->uri;
 			th->prefix=n->prefix;
+			th->prefix_is_undefined=n->prefix_is_undefined;
 		}
 		else if(urival->getObjectType()==T_QNAME && 
 		   !(static_cast<ASQName*>(urival)->uri_is_null))
@@ -1396,6 +1529,93 @@ ASFUNCTIONBODY(Namespace,_constructor)
 
 	return NULL;
 }
+ASFUNCTIONBODY(Namespace,generator)
+{
+	Namespace* th=Class<Namespace>::getInstanceS();
+	ASObject *urival;
+	ASObject *prefixval;
+	assert_and_throw(argslen<3);
+
+	if (argslen == 0)
+	{
+		th->prefix_is_undefined=false;
+		th->prefix = "";
+		th->uri = "";
+		return th;
+	}
+	else if (argslen == 1)
+	{
+		urival = args[0];
+		prefixval = NULL;
+	}
+	else
+	{
+		prefixval = args[0];
+		urival = args[1];
+	}
+	th->prefix_is_undefined=false;
+	th->prefix = "";
+	th->uri = "";
+
+	if(!prefixval)
+	{
+		if(urival->getObjectType()==T_NAMESPACE)
+		{
+			Namespace* n=static_cast<Namespace*>(urival);
+			th->uri=n->uri;
+			th->prefix=n->prefix;
+			th->prefix_is_undefined=n->prefix_is_undefined;
+		}
+		else if(urival->getObjectType()==T_QNAME && 
+		   !(static_cast<ASQName*>(urival)->uri_is_null))
+		{
+			ASQName* q=static_cast<ASQName*>(urival);
+			th->uri=q->uri;
+		}
+		else
+		{
+			th->uri=urival->toString();
+			if(th->uri!="")
+			{
+				th->prefix_is_undefined=true;
+				th->prefix="";
+			}
+		}
+	}
+	else // has both urival and prefixval
+	{
+		if(urival->getObjectType()==T_QNAME &&
+		   !(static_cast<ASQName*>(urival)->uri_is_null))
+		{
+			ASQName* q=static_cast<ASQName*>(urival);
+			th->uri=q->uri;
+		}
+		else
+		{
+			th->uri=urival->toString();
+		}
+
+		if(th->uri=="")
+		{
+			if(prefixval->getObjectType()==T_UNDEFINED ||
+			   prefixval->toString()=="")
+				th->prefix="";
+			else
+				throw Class<TypeError>::getInstanceS("Namespace prefix for empty uri not allowed");
+		}
+		else if(prefixval->getObjectType()==T_UNDEFINED ||
+			!isXMLName(prefixval))
+		{
+			th->prefix_is_undefined=true;
+			th->prefix="";
+		}
+		else
+		{
+			th->prefix=prefixval->toString();
+		}
+	}
+	return th;
+}
 
 ASFUNCTIONBODY(Namespace,_setURI)
 {
@@ -1430,7 +1650,7 @@ ASFUNCTIONBODY(Namespace,_getPrefix)
 {
 	Namespace* th=static_cast<Namespace*>(obj);
 	if(th->prefix_is_undefined)
-		return new Undefined;
+		return getSys()->getUndefinedRef();
 	else
 		return Class<ASString>::getInstanceS(th->prefix);
 }
@@ -1464,29 +1684,30 @@ bool Namespace::isEqual(ASObject* o)
 		return uri==n->uri;
 	}
 
-	return false;
+	return ASObject::isEqual(o);
 }
 
 
 ASObject* ASNop(ASObject* obj, ASObject* const* args, const unsigned int argslen)
 {
-	return new Undefined;
+	return getSys()->getUndefinedRef();
 }
 
-ASObject* Class<IFunction>::getInstance(bool construct, ASObject* const* args, const unsigned int argslen)
+ASObject* Class<IFunction>::getInstance(bool construct, ASObject* const* args, const unsigned int argslen, Class_base* realClass)
 {
-	if(argslen)
-		LOG(LOG_NOT_IMPLEMENTED,"new Function() with argslen > 0");
+	if (argslen > 0)
+		throw Class<EvalError>::getInstanceS("Error #1066: Function('function body') is not supported");
 	return Class<IFunction>::getFunction(ASNop);
 }
 
 Class<IFunction>* Class<IFunction>::getClass()
 {
-	std::map<QName, Class_base*>::iterator it=getSys()->classes.find(QName(ClassName<IFunction>::name,ClassName<IFunction>::ns));
+	std::map<QName, Class_base*>::iterator it=getSys()->builtinClasses.find(QName(ClassName<IFunction>::name,ClassName<IFunction>::ns));
 	Class<IFunction>* ret=NULL;
-	if(it==getSys()->classes.end()) //This class is not yet in the map, create it
+	if(it==getSys()->builtinClasses.end()) //This class is not yet in the map, create it
 	{
-		ret=new Class<IFunction>;
+		MemoryAccount* memoryAccount = getSys()->allocateMemoryAccount(ClassName<IFunction>::name);
+		ret=new (getSys()->unaccountedMemory) Class<IFunction>(memoryAccount);
 		ret->prototype = _MNR(new_asobject());
 		//This function is called from Class<ASObject>::getRef(),
 		//so the Class<ASObject> we obtain will not have any
@@ -1496,7 +1717,7 @@ Class<IFunction>* Class<IFunction>::getClass()
 
 		ret->prototype->setprop_prototype(ret->super->prototype);
 
-		getSys()->classes.insert(std::make_pair(QName(ClassName<IFunction>::name,ClassName<IFunction>::ns),ret));
+		getSys()->builtinClasses.insert(std::make_pair(QName(ClassName<IFunction>::name,ClassName<IFunction>::ns),ret));
 
 		//we cannot use sinit, as we need to setup 'this_class' before calling
 		//addPrototypeGetter and setDeclaredMethodByQName.
@@ -1516,6 +1737,11 @@ Class<IFunction>* Class<IFunction>::getClass()
 		ret=static_cast<Class<IFunction>*>(it->second);
 
 	return ret;
+}
+
+
+Global::Global(Class_base* cb, ABCContext* c, int s):ASObject(cb),context(c),scriptId(s)
+{
 }
 
 void Global::sinit(Class_base* c)

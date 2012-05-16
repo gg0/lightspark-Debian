@@ -47,6 +47,11 @@ const GLfloat RenderContext::lsIdentityMatrix[16] = {
 								0, 0, 0, 1
 								};
 
+RenderContext::RenderContext(CONTEXT_TYPE t):contextType(t)
+{
+	lsglLoadIdentity();
+}
+
 void RenderContext::lsglLoadMatrixf(const GLfloat *m)
 {
 	memcpy(lsMVPMatrix, m, LSGL_MATRIX_SIZE);
@@ -55,21 +60,6 @@ void RenderContext::lsglLoadMatrixf(const GLfloat *m)
 void RenderContext::lsglLoadIdentity()
 {
 	lsglLoadMatrixf(lsIdentityMatrix);
-}
-
-void RenderContext::lsglPushMatrix()
-{
-	GLfloat *top = new GLfloat[16];
-	memcpy(top, lsMVPMatrix, LSGL_MATRIX_SIZE);
-	lsglMatrixStack.push(top);
-}
-
-void RenderContext::lsglPopMatrix()
-{
-	assert(lsglMatrixStack.size() > 0);
-	memcpy(lsMVPMatrix, lsglMatrixStack.top(), LSGL_MATRIX_SIZE);
-	delete[] lsglMatrixStack.top();
-	lsglMatrixStack.pop();
 }
 
 void RenderContext::lsglMultMatrixf(const GLfloat *m)
@@ -112,7 +102,7 @@ void RenderContext::lsglTranslatef(GLfloat translateX, GLfloat translateY, GLflo
 	lsglMultMatrixf(trans);
 }
 
-void RenderContext::lsglOrtho(GLfloat l, GLfloat r, GLfloat b, GLfloat t, GLfloat n, GLfloat f)
+void GLRenderContext::lsglOrtho(GLfloat l, GLfloat r, GLfloat b, GLfloat t, GLfloat n, GLfloat f)
 {
 	GLfloat ortho[16];
 	memset(ortho, 0, sizeof(ortho));
@@ -127,8 +117,30 @@ void RenderContext::lsglOrtho(GLfloat l, GLfloat r, GLfloat b, GLfloat t, GLfloa
 	lsglMultMatrixf(ortho);
 }
 
-void RenderContext::renderTextured(const TextureChunk& chunk, int32_t x, int32_t y, uint32_t w, uint32_t h)
+const CachedSurface& GLRenderContext::getCachedSurface(const DisplayObject* d) const
 {
+	return d->cachedSurface;
+}
+
+void GLRenderContext::renderTextured(const TextureChunk& chunk, int32_t x, int32_t y, uint32_t w, uint32_t h,
+			float alpha, COLOR_MODE colorMode, MASK_MODE maskMode)
+{
+	if(maskMode==ENABLE_MASK)
+	{
+		glPushMatrix();
+		renderMaskToTmpBuffer();
+		glPopMatrix();
+	}
+
+	//Set color mode
+	glUniform1f(yuvUniform, (colorMode==YUV_MODE)?1:0);
+	//Set mask mode
+	glUniform1f(maskUniform, (maskMode==ENABLE_MASK)?1.0f:0.0f);
+	//Set alpha
+	glUniform1f(alphaUniform, alpha);
+	//Set matrix
+	setMatrixUniform(LSGL_MODELVIEW);
+
 	glBindTexture(GL_TEXTURE_2D, largeTextures[chunk.texId].id);
 	const uint32_t blocksPerSide=largeTextureSize/CHUNKSIZE;
 	uint32_t startX, startY, endX, endY;
@@ -137,8 +149,9 @@ void RenderContext::renderTextured(const TextureChunk& chunk, int32_t x, int32_t
 	uint32_t curChunk=0;
 	//The 4 corners of each texture are specified as the vertices of 2 triangles,
 	//so there are 6 vertices per quad, two of them duplicated (the diagonal)
-	GLfloat *vertex_coords = new GLfloat[chunk.getNumberOfChunks()*12];
-	GLfloat *texture_coords = new GLfloat[chunk.getNumberOfChunks()*12];
+	//Allocate the data on the stack to reduce heap fragmentation
+	GLfloat *vertex_coords = g_newa(GLfloat,chunk.getNumberOfChunks()*12);
+	GLfloat *texture_coords = g_newa(GLfloat,chunk.getNumberOfChunks()*12);
 	for(uint32_t i=0, k=0;i<chunk.height;i+=CHUNKSIZE)
 	{
 		startY=h*i/chunk.height;
@@ -212,12 +225,10 @@ void RenderContext::renderTextured(const TextureChunk& chunk, int32_t x, int32_t
 	glDrawArrays(GL_TRIANGLES, 0, curChunk*6);
 	glDisableVertexAttribArray(VERTEX_ATTRIB);
 	glDisableVertexAttribArray(TEXCOORD_ATTRIB);
-	delete[] vertex_coords;
-	delete[] texture_coords;
 	handleGLErrors();
 }
 
-bool RenderContext::handleGLErrors()
+bool GLRenderContext::handleGLErrors()
 {
 	int errorCount = 0;
 	GLenum err;
@@ -240,14 +251,14 @@ bool RenderContext::handleGLErrors()
 	return errorCount;
 }
 
-void RenderContext::setMatrixUniform(LSGL_MATRIX m) const
+void GLRenderContext::setMatrixUniform(LSGL_MATRIX m) const
 {
 	GLint uni = (m == LSGL_MODELVIEW) ? modelviewMatrixUniform:projectionMatrixUniform;
 
 	glUniformMatrix4fv(uni, 1, GL_FALSE, lsMVPMatrix);
 }
 
-void RenderContext::renderMaskToTmpBuffer()
+void GLRenderContext::renderMaskToTmpBuffer()
 {
 	assert(!maskStack.empty());
 	//Clear the tmp buffer
@@ -257,12 +268,103 @@ void RenderContext::renderMaskToTmpBuffer()
 	glClear(GL_COLOR_BUFFER_BIT);
 	for(uint32_t i=0;i<maskStack.size();i++)
 	{
-		float matrix[16];
-		maskStack[i].m.get4DMatrix(matrix);
-		lsglLoadMatrixf(matrix);
-		setMatrixUniform(LSGL_MODELVIEW);
-		maskStack[i].d->Render(*this, true);
+		maskStack[i]->Render(*this, true);
 	}
 	glBindFramebuffer(GL_FRAMEBUFFER, 0);
 	glDrawBuffer(GL_BACK);
+}
+
+CairoRenderContext::CairoRenderContext(uint8_t* buf, uint32_t width, uint32_t height):RenderContext(CAIRO)
+{
+	cairo_surface_t* cairoSurface=getCairoSurfaceForData(buf, width, height);
+	cr=cairo_create(cairoSurface);
+	cairo_surface_destroy(cairoSurface); /* cr has an reference to it */
+}
+
+CairoRenderContext::~CairoRenderContext()
+{
+	for(auto it=customSurfaces.begin();it!=customSurfaces.end();it++)
+	{
+		//Delete and reset here the buffer memory stored in chunks
+		delete[] it->second.tex.chunks;
+		it->second.tex.chunks=NULL;
+	}
+	cairo_destroy(cr);
+}
+
+cairo_surface_t* CairoRenderContext::getCairoSurfaceForData(uint8_t* buf, uint32_t width, uint32_t height)
+{
+	uint32_t cairoWidthStride=cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, width);
+	assert(cairoWidthStride==width*4);
+	return cairo_image_surface_create_for_data(buf, CAIRO_FORMAT_ARGB32, width, height, cairoWidthStride);
+}
+
+void CairoRenderContext::simpleBlit(int32_t destX, int32_t destY, uint8_t* sourceBuf, uint32_t sourceTotalWidth, uint32_t sourceTotalHeight,
+		int32_t sourceX, int32_t sourceY, uint32_t sourceWidth, uint32_t sourceHeight)
+{
+	cairo_surface_t* sourceSurface = getCairoSurfaceForData(sourceBuf, sourceTotalWidth, sourceTotalHeight);
+	cairo_pattern_t* sourcePattern = cairo_pattern_create_for_surface(sourceSurface);
+	cairo_surface_destroy(sourceSurface);
+	cairo_pattern_set_filter(sourcePattern, CAIRO_FILTER_NEAREST);
+	cairo_pattern_set_extend(sourcePattern, CAIRO_EXTEND_NONE);
+	cairo_matrix_t matrix;
+	cairo_matrix_init_translate(&matrix, sourceX-destX, sourceY-destY);
+	cairo_pattern_set_matrix(sourcePattern, &matrix);
+	cairo_set_source(cr, sourcePattern);
+	cairo_pattern_destroy(sourcePattern);
+	cairo_rectangle(cr, destX, destY, sourceWidth, sourceHeight);
+	cairo_fill(cr);
+}
+
+void CairoRenderContext::transformedBlit(const MATRIX& m, uint8_t* sourceBuf, uint32_t sourceTotalWidth, uint32_t sourceTotalHeight,
+		FILTER_MODE filterMode)
+{
+	cairo_surface_t* sourceSurface = getCairoSurfaceForData(sourceBuf, sourceTotalWidth, sourceTotalHeight);
+	cairo_pattern_t* sourcePattern = cairo_pattern_create_for_surface(sourceSurface);
+	cairo_surface_destroy(sourceSurface);
+	cairo_pattern_set_filter(sourcePattern, (filterMode==FILTER_SMOOTH)?CAIRO_FILTER_BILINEAR:CAIRO_FILTER_NEAREST);
+	cairo_pattern_set_extend(sourcePattern, CAIRO_EXTEND_NONE);
+	cairo_matrix_t matrix;
+	m.getCairoMatrix(&matrix);
+	cairo_set_matrix(cr, &matrix);
+	cairo_set_source(cr, sourcePattern);
+	cairo_pattern_destroy(sourcePattern);
+	cairo_rectangle(cr, 0, 0, sourceTotalWidth, sourceTotalHeight);
+	cairo_fill(cr);
+}
+
+void CairoRenderContext::renderTextured(const TextureChunk& chunk, int32_t x, int32_t y, uint32_t w, uint32_t h,
+			float alpha, COLOR_MODE colorMode, MASK_MODE maskMode)
+{
+	//TODO: support alpha, colorMode, and maskMode
+	uint8_t* buf=(uint8_t*)chunk.chunks;
+	cairo_surface_t* chunkSurface = getCairoSurfaceForData(buf, chunk.width, chunk.height);
+	cairo_pattern_t* chunkPattern = cairo_pattern_create_for_surface(chunkSurface);
+	cairo_surface_destroy(chunkSurface);
+	cairo_pattern_set_filter(chunkPattern, CAIRO_FILTER_BILINEAR);
+	cairo_pattern_set_extend(chunkPattern, CAIRO_EXTEND_NONE);
+	cairo_matrix_t matrix;
+	//TODO: Support scaling
+	cairo_matrix_init_translate(&matrix, -x, -y);
+	cairo_pattern_set_matrix(chunkPattern, &matrix);
+	cairo_set_source(cr, chunkPattern);
+	cairo_pattern_destroy(chunkPattern);
+	cairo_rectangle(cr, x, y, w, h);
+	cairo_fill(cr);
+}
+
+const CachedSurface& CairoRenderContext::getCachedSurface(const DisplayObject* d) const
+{
+	auto ret=customSurfaces.find(d);
+	assert(ret!=customSurfaces.end());
+	return ret->second;
+}
+
+CachedSurface& CairoRenderContext::allocateCustomSurface(const DisplayObject* d, uint8_t* texBuf)
+{
+	auto ret=customSurfaces.insert(make_pair(d, CachedSurface()));
+	assert(ret.second);
+	CachedSurface& surface=ret.first->second;
+	surface.tex.chunks=(uint32_t*)texBuf;
+	return surface;
 }

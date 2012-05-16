@@ -43,12 +43,12 @@ struct data_slot
 class Array: public ASObject
 {
 friend class ABCVm;
-CLASSBUILDABLE(Array);
 protected:
 	uint64_t currentsize;
-	std::map<uint32_t,data_slot> data;
+	typedef std::map<uint32_t,data_slot,std::less<uint32_t>,
+		reporter_allocator<std::pair<const uint32_t, data_slot>>> arrayType;
+	arrayType data;
 	void outofbounds() const;
-	Array();
 	~Array();
 private:
 	enum SORTTYPE { CASEINSENSITIVE=1, DESCENDING=2, UNIQUESORT=4, RETURNINDEXEDARRAY=8, NUMERIC=16 };
@@ -72,6 +72,7 @@ private:
 	tiny_string toString_priv() const;
 	int capIndex(int i) const;
 public:
+	Array(Class_base* c);
 	void finalize();
 	//These utility methods are also used by ByteArray
 	static bool isValidMultiname(const multiname& name, uint32_t& index);

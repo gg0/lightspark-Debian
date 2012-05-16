@@ -19,6 +19,7 @@
 
 #ifndef NUMBER_H
 #define NUMBER_H
+#include <math.h>
 #include "compat.h"
 #include "asobject.h"
 
@@ -30,12 +31,10 @@ class Number : public ASObject
 friend ASObject* abstract_d(number_t i);
 friend class ABCContext;
 friend class ABCVm;
-CLASSBUILDABLE(Number);
 private:
-	Number():val(0) {type=T_NUMBER;}
-	Number(double v):val(v){type=T_NUMBER;}
 	static void purgeTrailingZeroes(char* buf);
 public:
+	Number(Class_base* c, double v=0):ASObject(c),val(v){type=T_NUMBER;}
 	static const number_t NaN;
 	double val;
 	ASFUNCTION(_constructor);

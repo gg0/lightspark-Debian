@@ -110,7 +110,7 @@ ASFUNCTIONBODY(TextField,_setWordWrap)
 	assert_and_throw(argslen==1);
 	th->wordWrap=Boolean_concrete(args[0]);
 	if(th->onStage)
-		th->requestInvalidation();
+		th->requestInvalidation(getSys());
 	return NULL;
 }
 
@@ -147,7 +147,7 @@ ASFUNCTIONBODY(TextField,_setAutoSize)
 	else
 		throw Class<ArgumentError>::getInstanceS("Wrong argument in TextField.autoSize");
 	if(th->onStage)
-		th->requestInvalidation();//TODO:check if there was any change
+		th->requestInvalidation(getSys());//TODO:check if there was any change
 	return NULL;
 }
 
@@ -166,7 +166,7 @@ ASFUNCTIONBODY(TextField,_setWidth)
 	{
 		th->width=args[0]->toInt();
 		if(th->onStage)
-			th->requestInvalidation();
+			th->requestInvalidation(getSys());
 		else
 			th->updateSizes();
 	}
@@ -187,7 +187,7 @@ ASFUNCTIONBODY(TextField,_setHeight)
 	{
 		th->height=args[0]->toInt();
 		if(th->onStage)
-			th->requestInvalidation();
+			th->requestInvalidation(getSys());
 		else
 			th->updateSizes();
 	}
@@ -264,21 +264,20 @@ void TextField::updateSizes()
 void TextField::updateText(const tiny_string& new_text)
 {
 	text = new_text;
-	requestInvalidation();
 	if(onStage)
-		requestInvalidation();
+		requestInvalidation(getSys());
 	else
 		updateSizes();
 }
 
-void TextField::requestInvalidation()
+void TextField::requestInvalidation(InvalidateQueue* q)
 {
 	incRef();
 	updateSizes();
-	getSys()->addToInvalidateQueue(_MR(this));
+	q->addToInvalidateQueue(_MR(this));
 }
 
-void TextField::invalidate()
+IDrawable* TextField::invalidate(DisplayObject* target, const MATRIX& initialMatrix)
 {
 	int32_t x,y;
 	uint32_t width,height;
@@ -286,35 +285,34 @@ void TextField::invalidate()
 	if(boundsRect(bxmin,bxmax,bymin,bymax)==false)
 	{
 		//No contents, nothing to do
-		return;
+		return NULL;
 	}
 
-	computeDeviceBoundsForRect(bxmin,bxmax,bymin,bymax,x,y,width,height);
+	MATRIX totalMatrix(initialMatrix);
+	DisplayObject* cur=this;
+	while(cur!=target)
+	{
+		totalMatrix=cur->getMatrix().multiplyMatrix(totalMatrix);
+		cur=cur->getParent().getPtr();
+	}
+	computeBoundsForTransformedRect(bxmin,bxmax,bymin,bymax,x,y,width,height,totalMatrix);
 	if(width==0 || height==0)
-		return;
-	MATRIX mat = getConcatenatedMatrix();
-	if(mat.ScaleX != 1 || mat.ScaleY != 1)
+		return NULL;
+	if(totalMatrix.ScaleX != 1 || totalMatrix.ScaleY != 1)
 		LOG(LOG_NOT_IMPLEMENTED, "TextField when scaled is not correctly implemented");
 	/**  TODO: The scaling is done differently for textfields : height changes are applied directly
 		on the font size. In some cases, it can change the width (if autosize is on and wordwrap off).
 		Width changes do not change the font size, and do nothing when autosize is on and wordwrap off.
 		Currently, the TextField is stretched in case of scaling.
 	*/
-	CairoPangoRenderer* r=new CairoPangoRenderer(this, cachedSurface, *this,
-				getConcatenatedMatrix(), x, y, width, height, 1.0f,
+	return new CairoPangoRenderer(*this,
+				totalMatrix, x, y, width, height, 1.0f,
 				getConcatenatedAlpha());
-	getSys()->addJob(r);
 }
 
 void TextField::renderImpl(RenderContext& ctxt, bool maskEnabled, number_t t1, number_t t2, number_t t3, number_t t4) const
 {
-	//if(!isSimple())
-	//	rt->acquireTempBuffer(t1,t2,t3,t4);
-
 	defaultRender(ctxt, maskEnabled);
-
-	//if(!isSimple())
-	//	rt->blitTempBuffer(t1,t2,t3,t4);
 }
 
 void TextFieldAutoSize ::sinit(Class_base* c)
@@ -399,7 +397,7 @@ ASFUNCTIONBODY(StyleSheet,getStyle)
 		return it->second.getPtr();
 	}
 	else
-		return new Null;
+		return getSys()->getNullRef();
 	return NULL;
 }
 

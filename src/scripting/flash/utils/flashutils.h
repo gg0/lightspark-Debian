@@ -37,7 +37,7 @@ class Endian : public ASObject
 public:
 	static const char* bigEndian;
 	static const char* littleEndian;
-	Endian(){};
+	Endian(Class_base* c):ASObject(c){};
 	static void sinit(Class_base* c);
 };
 
@@ -74,7 +74,7 @@ protected:
 	void compress_zlib();
 	void uncompress_zlib();
 public:
-	ByteArray(uint8_t* b = NULL, uint32_t l = 0);
+	ByteArray(Class_base* c, uint8_t* b = NULL, uint32_t l = 0);
 	~ByteArray();
 	//Helper interface for serialization
 	bool readByte(uint8_t& b);
@@ -179,7 +179,7 @@ protected:
 	uint32_t currentCount;
 	bool running;
 public:
-	Timer():delay(0),repeatCount(0),currentCount(0),running(false){};
+	Timer(Class_base* c):EventDispatcher(c),delay(0),repeatCount(0),currentCount(0),running(false){};
 	static void sinit(Class_base* c);
 	ASFUNCTION(_constructor);
 	ASFUNCTION(_getCurrentCount);
@@ -197,9 +197,11 @@ class Dictionary: public ASObject
 {
 friend class ABCVm;
 private:
-	std::map<_R<ASObject>,_R<ASObject> > data;
+	typedef std::map<_R<ASObject>,_R<ASObject>,std::less<_R<ASObject>>,
+	       reporter_allocator<std::pair<const _R<ASObject>, _R<ASObject>>>> dictType;
+	dictType data;
 public:
-	Dictionary(){}
+	Dictionary(Class_base* c);
 	void finalize();
 	static void sinit(Class_base*);
 	static void buildTraits(ASObject* o);
@@ -224,6 +226,7 @@ class Proxy: public ASObject
 {
 friend class ABCVm;
 public:
+	Proxy(Class_base* c):ASObject(c){}
 	static void sinit(Class_base*);
 	static void buildTraits(ASObject* o);
 //	ASFUNCTION(_constructor);
@@ -265,6 +268,9 @@ class IntervalRunner : public ITickJob, public EventDispatcher
 public:
 	enum INTERVALTYPE { INTERVAL, TIMEOUT };
 private:
+	// IntervalRunner will delete itself in tickFence, others
+	// should not call the destructor.
+	~IntervalRunner();
 	INTERVALTYPE type;
 	uint32_t id;
 	_R<IFunction> callback;
@@ -275,7 +281,6 @@ private:
 public:
 	IntervalRunner(INTERVALTYPE _type, uint32_t _id, _R<IFunction> _callback, ASObject** _args,
 			const unsigned int _argslen, _R<ASObject> _obj, const uint32_t _interval);
-	~IntervalRunner();
 	void tick();
 	void tickFence();
 	INTERVALTYPE getType() { return type; }

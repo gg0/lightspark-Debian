@@ -100,14 +100,19 @@ void IDataOutput::linkTraits(Class_base* c)
 	lookupAndLink(c,"writeUTFBytes","flash.utils:IDataOutput");
 }
 
-ByteArray::ByteArray(uint8_t* b, uint32_t l):bytes(b),real_len(l),len(l),position(0),littleEndian(false),objectEncoding(ObjectEncoding::AMF3)
+ByteArray::ByteArray(Class_base* c, uint8_t* b, uint32_t l):ASObject(c),bytes(b),real_len(l),len(l),position(0),
+	littleEndian(false),objectEncoding(ObjectEncoding::AMF3)
 {
 }
 
-ByteArray::ByteArray(const ByteArray& b):ASObject(b),real_len(b.len),len(b.len),position(b.position),littleEndian(b.littleEndian),objectEncoding(b.objectEncoding)
+ByteArray::ByteArray(const ByteArray& b):ASObject(b),real_len(b.len),len(b.len),position(b.position),
+	littleEndian(b.littleEndian),objectEncoding(b.objectEncoding)
 {
 	assert_and_throw(position==0);
 	bytes = (uint8_t*) malloc(len);
+#ifdef MEMORY_USAGE_PROFILING
+	getClass()->memoryAccount->addBytes(len);
+#endif
 	assert_and_throw(bytes);
 	memcpy(bytes,b.bytes,len);
 }
@@ -115,7 +120,12 @@ ByteArray::ByteArray(const ByteArray& b):ASObject(b),real_len(b.len),len(b.len),
 ByteArray::~ByteArray()
 {
 	if(bytes)
+	{
+#ifdef MEMORY_USAGE_PROFILING
+		getClass()->memoryAccount->removeBytes(real_len);
+#endif
 		free(bytes);
+	}
 }
 
 void ByteArray::sinit(Class_base* c)
@@ -193,6 +203,9 @@ uint8_t* ByteArray::getBuffer(unsigned int size, bool enableResize)
 		len=size;
 		real_len=len;
 		bytes = (uint8_t*) malloc(len);
+#ifdef MEMORY_USAGE_PROFILING
+		getClass()->memoryAccount->addBytes(len);
+#endif
 	}
 	else if(enableResize==false)
 	{
@@ -200,10 +213,14 @@ uint8_t* ByteArray::getBuffer(unsigned int size, bool enableResize)
 	}
 	else if(real_len<size) // && enableResize==true
 	{
+		uint32_t prev_real_len = real_len;
 		while(real_len < size)
 			real_len += BA_CHUNK_SIZE;
 		// Reallocate the buffer, in chunks of BA_CHUNK_SIZE bytes
 		uint8_t* bytes2 = (uint8_t*) realloc(bytes, real_len);
+#ifdef MEMORY_USAGE_PROFILING
+		getClass()->memoryAccount->addBytes(real_len-prev_real_len);
+#endif
 		assert_and_throw(bytes2);
 		bytes = bytes2;
 		len=size;
@@ -309,6 +326,8 @@ ASFUNCTIONBODY(ByteArray,_setEndian)
 		th->littleEndian = true;
 	else if(args[0]->toString() == Endian::bigEndian)
 		th->littleEndian = false;
+	else
+		throw Class<ArgumentError>::getInstanceS("Error #2008: Parameter type must be one of the accepted values.");
 	return NULL;
 }
 
@@ -362,7 +381,12 @@ ASFUNCTIONBODY(ByteArray,_setLength)
 	else
 	{
 		if (th->bytes)
+		{
+#ifdef MEMORY_USAGE_PROFILING
+			th->getClass()->memoryAccount->removeBytes(th->real_len);
+#endif
 			free(th->bytes);
+		}
 		th->bytes = NULL;
 		th->len = newLen;
 		th->real_len = newLen;
@@ -400,23 +424,19 @@ ASFUNCTIONBODY(ByteArray,readBoolean)
 ASFUNCTIONBODY(ByteArray,readBytes)
 {
 	ByteArray* th=static_cast<ByteArray*>(obj);
-	//Validate parameters
-	assert_and_throw(argslen>=1 && argslen<=3);
-	assert_and_throw(args[0]->getClass()->isSubClass(Class<ByteArray>::getClass()));
-
-	ByteArray* out=Class<ByteArray>::cast(args[0]);
-	uint32_t offset=0;
-	uint32_t length=0;
-	if(argslen>=2)
-		offset=args[1]->toInt();
-	if(argslen==3)
-		length=args[2]->toInt();
-
+	_NR<ByteArray> out;
+	uint32_t offset;
+	uint32_t length;
+	ARG_UNPACK(out)(offset, 0)(length, 0);
+	
 	if(length == 0)
-		length = th->len;
+	{
+		assert(th->len >= th->position);
+		length = th->len - th->position;
+	}
 
 	//Error checks
-	if(length > th->len)
+	if(th->position+length > th->len)
 	{
 		throw Class<EOFError>::getInstanceS("Error #2030: End of file was encountered.");
 	}
@@ -478,6 +498,10 @@ ASFUNCTIONBODY(ByteArray,readUTFBytes)
 void ByteArray::writeUTF(const tiny_string& str)
 {
 	getBuffer(position+str.numBytes()+2,true);
+	if(str.numBytes() > 65535)
+	{
+		throw Class<RangeError>::getInstanceS("Error #2006: The supplied index is out of bounds.");
+	}
 	uint16_t numBytes=endianIn((uint16_t)str.numBytes());
 	memcpy(bytes+position,&numBytes,2);
 	memcpy(bytes+position+2,str.raw_buf(),str.numBytes());
@@ -920,7 +944,7 @@ ASFUNCTIONBODY(ByteArray,readObject)
 	if(ret.isNull())
 	{
 		LOG(LOG_ERROR,"No objects in the AMF3 data. Returning Undefined");
-		return new Undefined;
+		return getSys()->getUndefinedRef();
 	}
 	ret->incRef();
 	return ret.getPtr();
@@ -958,7 +982,7 @@ _NR<ASObject> ByteArray::getVariableByMultiname(const multiname& name, GET_VARIA
 		return _MNR(abstract_ui(static_cast<uint32_t>(value)));
 	}
 	else
-		return _MNR(new Undefined);
+		return _MNR(getSys()->getUndefinedRef());
 }
 
 int32_t ByteArray::getVariableByMultiname_i(const multiname& name)
@@ -974,7 +998,7 @@ int32_t ByteArray::getVariableByMultiname_i(const multiname& name)
 		return static_cast<uint32_t>(value);
 	}
 	else
-		return _MNR(new Undefined);
+		return _MNR(getSys()->getUndefinedRef());
 }
 
 void ByteArray::setVariableByMultiname(const multiname& name, ASObject* o)
@@ -1007,10 +1031,18 @@ void ByteArray::setVariableByMultiname_i(const multiname& name, int32_t value)
 void ByteArray::acquireBuffer(uint8_t* buf, int bufLen)
 {
 	if(bytes)
+	{
+#ifdef MEMORY_USAGE_PROFILING
+		getClass()->memoryAccount->removeBytes(real_len);
+#endif
 		free(bytes);
+	}
 	bytes=buf;
 	real_len=bufLen;
 	len=bufLen;
+#ifdef MEMORY_USAGE_PROFILING
+	getClass()->memoryAccount->addBytes(real_len);
+#endif
 	position=0;
 }
 
@@ -1122,6 +1154,9 @@ void ByteArray::uncompress_zlib()
 	inflateEnd(&strm);
 
 	len=strm.total_out;
+#ifdef MEMORY_USAGE_PROFILING
+	getClass()->memoryAccount->addBytes(len-real_len);
+#endif
 	real_len = len;
 	uint8_t* bytes2=(uint8_t*) realloc(bytes, len);
 	assert_and_throw(bytes2);
@@ -1168,7 +1203,12 @@ ASFUNCTIONBODY(ByteArray,clear)
 {
 	ByteArray* th=static_cast<ByteArray*>(obj);
 	if(th->bytes)
+	{
+#ifdef MEMORY_USAGE_PROFILING
+		th->getClass()->memoryAccount->removeBytes(th->real_len);
+#endif
 		free(th->bytes);
+	}
 	th->bytes = NULL;
 	th->len=0;
 	th->real_len=0;
@@ -1426,7 +1466,7 @@ ASFUNCTIONBODY(lightspark,getDefinitionByName)
 {
 	assert_and_throw(args && argslen==1);
 	const tiny_string& tmp=args[0]->toString();
-	multiname name;
+	multiname name(NULL);
 	name.name_type=multiname::NAME_STRING;
 	name.ns.push_back(nsNameAndKind("",NAMESPACE)); //TODO: set type
 
@@ -1440,7 +1480,7 @@ ASFUNCTIONBODY(lightspark,getDefinitionByName)
 	if(o==NULL)
 	{
 		LOG(LOG_ERROR,_("Definition for '") << name << _("' not found."));
-		return new Undefined;
+		return getSys()->getUndefinedRef();
 	}
 
 	assert_and_throw(o->getObjectType()==T_CLASS);
@@ -1460,6 +1500,11 @@ ASFUNCTIONBODY(lightspark,getTimer)
 {
 	uint64_t ret=compat_msectiming() - getSys()->startTime;
 	return abstract_i(ret);
+}
+
+Dictionary::Dictionary(Class_base* c):ASObject(c),
+	data(std::less<dictType::key_type>(), reporter_allocator<dictType::value_type>(c->memoryAccount))
+{
 }
 
 void Dictionary::finalize()
@@ -1685,7 +1730,7 @@ void Proxy::setVariableByMultiname(const multiname& name, ASObject* o)
 	}
 
 	//Check if there is a custom setter defined, skipping implementation to avoid recursive calls
-	multiname setPropertyName;
+	multiname setPropertyName(NULL);
 	setPropertyName.name_type=multiname::NAME_STRING;
 	setPropertyName.name_s="setProperty";
 	setPropertyName.ns.push_back(nsNameAndKind(flash_proxy,NAMESPACE));
@@ -1722,7 +1767,7 @@ _NR<ASObject> Proxy::getVariableByMultiname(const multiname& name, GET_VARIABLE_
 		return ASObject::getVariableByMultiname(name,opt);
 
 	//Check if there is a custom getter defined, skipping implementation to avoid recursive calls
-	multiname getPropertyName;
+	multiname getPropertyName(NULL);
 	getPropertyName.name_type=multiname::NAME_STRING;
 	getPropertyName.name_s="getProperty";
 	getPropertyName.ns.push_back(nsNameAndKind(flash_proxy,NAMESPACE));
@@ -1755,7 +1800,7 @@ bool Proxy::hasPropertyByMultiname(const multiname& name, bool considerDynamic)
 	}
 
 	//Check if there is a custom deleter defined, skipping implementation to avoid recursive calls
-	multiname hasPropertyName;
+	multiname hasPropertyName(NULL);
 	hasPropertyName.name_type=multiname::NAME_STRING;
 	hasPropertyName.name_s="hasProperty";
 	hasPropertyName.ns.push_back(nsNameAndKind(flash_proxy,NAMESPACE));
@@ -1790,7 +1835,7 @@ bool Proxy::deleteVariableByMultiname(const multiname& name)
 	}
 
 	//Check if there is a custom deleter defined, skipping implementation to avoid recursive calls
-	multiname deletePropertyName;
+	multiname deletePropertyName(NULL);
 	deletePropertyName.name_type=multiname::NAME_STRING;
 	deletePropertyName.name_s="deleteProperty";
 	deletePropertyName.ns.push_back(nsNameAndKind(flash_proxy,NAMESPACE));
@@ -1822,7 +1867,7 @@ uint32_t Proxy::nextNameIndex(uint32_t cur_index)
 	assert_and_throw(implEnable);
 	LOG(LOG_CALLS,"Proxy::nextNameIndex");
 	//Check if there is a custom enumerator, skipping implementation to avoid recursive calls
-	multiname nextNameIndexName;
+	multiname nextNameIndexName(NULL);
 	nextNameIndexName.name_type=multiname::NAME_STRING;
 	nextNameIndexName.name_s="nextNameIndex";
 	nextNameIndexName.ns.push_back(nsNameAndKind(flash_proxy,NAMESPACE));
@@ -1842,7 +1887,7 @@ _R<ASObject> Proxy::nextName(uint32_t index)
 	assert_and_throw(implEnable);
 	LOG(LOG_CALLS, _("Proxy::nextName"));
 	//Check if there is a custom enumerator, skipping implementation to avoid recursive calls
-	multiname nextNameName;
+	multiname nextNameName(NULL);
 	nextNameName.name_type=multiname::NAME_STRING;
 	nextNameName.name_s="nextName";
 	nextNameName.ns.push_back(nsNameAndKind(flash_proxy,NAMESPACE));
@@ -1859,7 +1904,7 @@ _R<ASObject> Proxy::nextValue(uint32_t index)
 	assert_and_throw(implEnable);
 	LOG(LOG_CALLS, _("Proxy::nextValue"));
 	//Check if there is a custom enumerator, skipping implementation to avoid recursive calls
-	multiname nextValueName;
+	multiname nextValueName(NULL);
 	nextValueName.name_type=multiname::NAME_STRING;
 	nextValueName.name_s="nextValue";
 	nextValueName.ns.push_back(nsNameAndKind(flash_proxy,NAMESPACE));
@@ -1889,7 +1934,8 @@ ASFUNCTIONBODY(lightspark,setInterval)
 	args[0]->incRef();
 	IFunction* callback=static_cast<IFunction*>(args[0]);
 	//Add interval through manager
-	uint32_t id = getSys()->intervalManager->setInterval(_MR(callback), callbackArgs, argslen-2, _MR(new Null), args[1]->toInt());
+	uint32_t id = getSys()->intervalManager->setInterval(_MR(callback), callbackArgs, argslen-2,
+			_MR(getSys()->getNullRef()), args[1]->toInt());
 	return abstract_i(id);
 }
 
@@ -1911,7 +1957,8 @@ ASFUNCTIONBODY(lightspark,setTimeout)
 	args[0]->incRef();
 	IFunction* callback=static_cast<IFunction*>(args[0]);
 	//Add timeout through manager
-	uint32_t id = getSys()->intervalManager->setTimeout(_MR(callback), callbackArgs, argslen-2, _MR(new Null), args[1]->toInt());
+	uint32_t id = getSys()->intervalManager->setTimeout(_MR(callback), callbackArgs, argslen-2,
+			_MR(getSys()->getNullRef()), args[1]->toInt());
 	return abstract_i(id);
 }
 
@@ -1931,7 +1978,7 @@ ASFUNCTIONBODY(lightspark,clearTimeout)
 
 IntervalRunner::IntervalRunner(IntervalRunner::INTERVALTYPE _type, uint32_t _id, _R<IFunction> _callback, ASObject** _args,
 		const unsigned int _argslen, _R<ASObject> _obj, uint32_t _interval):
-	type(_type), id(_id), callback(_callback),argslen(_argslen),obj(_obj),interval(_interval)
+	EventDispatcher(NULL),type(_type), id(_id), callback(_callback),argslen(_argslen),obj(_obj),interval(_interval)
 {
 	args = new ASObject*[argslen];
 	for(uint32_t i=0; i<argslen; i++)
@@ -1953,7 +2000,7 @@ void IntervalRunner::tick()
 	{
 		args[i]->incRef();
 	}
-	_R<FunctionEvent> event(new FunctionEvent(callback, obj, args, argslen));
+	_R<FunctionEvent> event(new (getSys()->unaccountedMemory) FunctionEvent(callback, obj, args, argslen));
 	getVm()->addEvent(NullRef,event);
 	if(type == TIMEOUT)
 	{
@@ -1966,6 +2013,7 @@ void IntervalRunner::tick()
 
 void IntervalRunner::tickFence()
 {
+	delete this;
 }
 
 IntervalManager::IntervalManager() : currentID(1)
@@ -1979,7 +2027,6 @@ IntervalManager::~IntervalManager()
 	while(it != runners.end())
 	{
 		getSys()->removeJob((*it).second);
-		delete((*it).second);
 		runners.erase(it++);
 	}
 }
@@ -1989,7 +2036,8 @@ uint32_t IntervalManager::setInterval(_R<IFunction> callback, ASObject** args, c
 	Mutex::Lock l(mutex);
 
 	uint32_t id = getFreeID();
-	IntervalRunner* runner = new IntervalRunner(IntervalRunner::INTERVAL, id, callback, args, argslen, obj, interval);
+	IntervalRunner* runner = new (getSys()->unaccountedMemory)
+		IntervalRunner(IntervalRunner::INTERVAL, id, callback, args, argslen, obj, interval);
 
 	//Add runner as tickjob
 	getSys()->addTick(interval, runner);
@@ -2005,7 +2053,8 @@ uint32_t IntervalManager::setTimeout(_R<IFunction> callback, ASObject** args, co
 	Mutex::Lock l(mutex);
 
 	uint32_t id = getFreeID();
-	IntervalRunner* runner = new IntervalRunner(IntervalRunner::TIMEOUT, id, callback, args, argslen, obj, interval);
+	IntervalRunner* runner = new (getSys()->unaccountedMemory)
+		IntervalRunner(IntervalRunner::TIMEOUT, id, callback, args, argslen, obj, interval);
 
 	//Add runner as waitjob
 	getSys()->addWait(interval, runner);
@@ -2038,7 +2087,6 @@ void IntervalManager::clearInterval(uint32_t id, IntervalRunner::INTERVALTYPE ty
 		{
 			getSys()->removeJob((*it).second);
 		}
-		delete (*it).second;
 		runners.erase(it);
 	}
 }

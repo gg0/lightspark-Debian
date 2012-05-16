@@ -25,7 +25,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <cmath>
-#include <glibmm/ustring.h>
+#include <cairo.h>
 
 #include "exceptions.h"
 #include "compat.h"
@@ -34,149 +34,8 @@
 using namespace std;
 using namespace lightspark;
 
-/* Implementation of Glib::ustring conversion for libxml++.
- * We implement them in the source file to not pollute the header with glib.h
- */
-tiny_string::tiny_string(const Glib::ustring& r):buf(_buf_static),stringSize(r.bytes()+1),type(STATIC)
+multiname::multiname(MemoryAccount* m):name_type(NAME_OBJECT),name_o(NULL),ns(reporter_allocator<nsNameAndKind>(m))
 {
-	if(stringSize > STATIC_SIZE)
-		createBuffer(stringSize);
-	memcpy(buf,r.c_str(),stringSize);
-}
-
-tiny_string& tiny_string::operator=(const Glib::ustring& r)
-{
-	resetToStatic();
-	stringSize = r.bytes()+1;
-	if(stringSize > STATIC_SIZE)
-		createBuffer(stringSize);
-	memcpy(buf,r.c_str(),stringSize);
-	return *this;
-}
-
-tiny_string::operator Glib::ustring() const
-{
-	return Glib::ustring(buf,numChars());
-}
-
-bool tiny_string::operator==(const Glib::ustring& u) const
-{
-	return *this == u.raw();
-}
-
-bool tiny_string::operator!=(const Glib::ustring& u) const
-{
-	return *this != u.raw();
-}
-
-const tiny_string tiny_string::operator+(const Glib::ustring& r) const
-{
-	return *this + tiny_string(r);
-}
-
-tiny_string& tiny_string::operator+=(const Glib::ustring& s)
-{
-	//TODO: optimize
-	return *this += tiny_string(s);
-}
-
-tiny_string& tiny_string::operator+=(const char* s)
-{	//deprecated, cannot handle '\0' inside string
-	if(type==READONLY)
-	{
-		char* tmp=buf;
-		makePrivateCopy(tmp);
-	}
-	uint32_t addedLen=strlen(s);
-	uint32_t newStringSize=stringSize + addedLen;
-	if(type==STATIC && newStringSize > STATIC_SIZE)
-	{
-		createBuffer(newStringSize);
-		//don't copy trailing \0
-		memcpy(buf,_buf_static,stringSize-1);
-	}
-	else if(type==DYNAMIC && addedLen!=0)
-		resizeBuffer(newStringSize);
-	//also copy \0 at the end
-	memcpy(buf+stringSize-1,s,addedLen+1);
-	stringSize=newStringSize;
-	return *this;
-}
-
-tiny_string& tiny_string::operator+=(const tiny_string& r)
-{
-	if(type==READONLY)
-	{
-		char* tmp=buf;
-		makePrivateCopy(tmp);
-	}
-	uint32_t newStringSize=stringSize + r.stringSize-1;
-	if(type==STATIC && newStringSize > STATIC_SIZE)
-	{
-		createBuffer(newStringSize);
-		//don't copy trailing \0
-		memcpy(buf,_buf_static,stringSize-1);
-	}
-	else if(type==DYNAMIC && r.stringSize>1)
-		resizeBuffer(newStringSize);
-	//start position is where the \0 was
-	memcpy(buf+stringSize-1,r.buf,r.stringSize);
-	stringSize=newStringSize;
-	return *this;
-}
-
-const tiny_string tiny_string::operator+(const tiny_string& r) const
-{
-	tiny_string ret(*this);
-	ret+=r;
-	return ret;
-}
-
-tiny_string& tiny_string::replace(uint32_t pos1, uint32_t n1, const tiny_string& o )
-{
-	assert(pos1 <= numChars());
-	uint32_t bytestart = g_utf8_offset_to_pointer(buf,pos1)-buf;
-	if(pos1 + n1 > numChars())
-		n1 = numChars()-pos1;
-	uint32_t byteend = g_utf8_offset_to_pointer(buf,pos1+n1)-buf;
-	return replace_bytes(bytestart, byteend-bytestart, o);
-}
-
-tiny_string& tiny_string::replace_bytes(uint32_t bytestart, uint32_t bytenum, const tiny_string& o)
-{
-	//TODO avoid copy into std::string
-	*this = std::string(*this).replace(bytestart,bytenum,std::string(o));
-	return *this;
-}
-
-tiny_string tiny_string::substr_bytes(uint32_t start, uint32_t len) const
-{
-	tiny_string ret;
-	assert(start+len < stringSize);
-	if(len+1 > STATIC_SIZE)
-		ret.createBuffer(len+1);
-	memcpy(ret.buf,buf+start,len);
-	ret.buf[len]=0;
-	ret.stringSize = len+1;
-	return ret;
-}
-
-tiny_string tiny_string::substr(uint32_t start, uint32_t len) const
-{
-	assert_and_throw(start <= numChars());
-	if(start+len > numChars())
-		len = numChars()-start;
-	uint32_t bytestart = g_utf8_offset_to_pointer(buf,start) - buf;
-	uint32_t byteend = g_utf8_offset_to_pointer(buf,start+len) - buf;
-	return substr_bytes(bytestart, byteend-bytestart);
-}
-
-tiny_string tiny_string::substr(uint32_t start, const CharIterator& end) const
-{
-	assert_and_throw(start < numChars());
-	uint32_t bytestart = g_utf8_offset_to_pointer(buf,start) - buf;
-	uint32_t byteend = end.buf_ptr - buf;
-	return substr_bytes(bytestart, byteend-bytestart);
 }
 
 tiny_string multiname::qualifiedString() const
@@ -258,6 +117,52 @@ void multiname::resetNameIfObject()
 		name_o->decRef();
 		name_o=NULL;
 	}
+}
+
+bool multiname::toUInt(uint32_t& index) const
+{
+	switch(name_type)
+	{
+		//We try to convert this to an index, otherwise bail out
+		case multiname::NAME_STRING:
+		case multiname::NAME_OBJECT:
+		{
+			tiny_string str;
+			if(name_type==multiname::NAME_STRING)
+				str=name_s;
+			else
+				str=name_o->toString();
+
+			if(str.empty())
+				return false;
+			index=0;
+			for(auto i=str.begin(); i!=str.end(); ++i)
+			{
+				if(!i.isdigit())
+					return false;
+
+				index*=10;
+				index+=i.digit_value();
+			}
+			break;
+		}
+		//This is already an int, so its good enough
+		case multiname::NAME_INT:
+			if(name_i < 0)
+				return false;
+			index=name_i;
+			break;
+		case multiname::NAME_NUMBER:
+			if(!Number::isInteger(name_d) || name_d < 0)
+				return false;
+			index=name_d;
+			break;
+		default:
+			// Not reached
+			assert(false);
+	}
+
+	return true;
 }
 
 std::ostream& lightspark::operator<<(std::ostream& s, const QName& r)
@@ -390,6 +295,13 @@ void MATRIX::get4DMatrix(float matrix[16]) const
 	matrix[12]=TranslateX;
 	matrix[13]=TranslateY;
 	matrix[15]=1;
+}
+
+void MATRIX::getCairoMatrix(cairo_matrix_t* m) const
+{
+	cairo_matrix_init(m, ScaleX, RotateSkew0,
+			RotateSkew1, ScaleY,
+			TranslateX, TranslateY);
 }
 
 Vector2f MATRIX::multiply2D(const Vector2f& in) const
@@ -787,19 +699,20 @@ std::istream& lightspark::operator>>(std::istream& s, FILLSTYLE& v)
 					LOG(LOG_ERROR,"Invalid bitmap ID " << bitmapId);
 					throw ParseException("Invalid ID for bitmap");
 				}
-				v.bitmap = b;
+				b->incRef();
+				v.bitmap = _MR(b);
 			}
 			catch(RunTimeException& e)
 			{
 				//Thrown if the bitmapId does not exists in dictionary
 				LOG(LOG_ERROR,"Exception in FillStyle parsing: " << e.what());
-				v.bitmap=NULL;
+				v.bitmap=NullRef;
 			}
 		}
 		else
 		{
 			//The bitmap might be invalid, the style should not be used
-			v.bitmap=NULL;
+			v.bitmap=NullRef;
 		}
 	}
 	else
@@ -1308,4 +1221,17 @@ tiny_string QName::getQualifiedName() const
 	}
 	ret+=name;
 	return ret;
+}
+
+FILLSTYLE::FILLSTYLE(int v):version(v),Gradient(v)
+{
+}
+
+FILLSTYLE::FILLSTYLE(const FILLSTYLE& r):version(r.version),FillStyleType(r.FillStyleType),Color(r.Color),
+	Matrix(r.Matrix),Gradient(r.Gradient),FocalGradient(r.FocalGradient),bitmap(r.bitmap)
+{
+}
+
+FILLSTYLE::~FILLSTYLE()
+{
 }

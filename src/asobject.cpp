@@ -17,6 +17,7 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
+#include "scripting/abc.h"
 #include "asobject.h"
 #include "scripting/class.h"
 #include <algorithm>
@@ -177,6 +178,12 @@ unsigned int ASObject::toUInt()
 	return toInt();
 }
 
+uint16_t ASObject::toUInt16()
+{
+	unsigned int val32=toUInt();
+	return val32 & 0xFFFF;
+}
+
 int ASObject::toInt()
 {
 	return 0;
@@ -227,7 +234,7 @@ _R<ASObject> ASObject::toPrimitive(TP_HINT hint)
 
 bool ASObject::has_valueOf()
 {
-	multiname valueOfName;
+	multiname valueOfName(NULL);
 	valueOfName.name_type=multiname::NAME_STRING;
 	valueOfName.name_s="valueOf";
 	valueOfName.ns.push_back(nsNameAndKind("",NAMESPACE));
@@ -241,7 +248,7 @@ bool ASObject::has_valueOf()
  */
 _R<ASObject> ASObject::call_valueOf()
 {
-	multiname valueOfName;
+	multiname valueOfName(NULL);
 	valueOfName.name_type=multiname::NAME_STRING;
 	valueOfName.name_s="valueOf";
 	valueOfName.ns.push_back(nsNameAndKind("",NAMESPACE));
@@ -250,7 +257,8 @@ _R<ASObject> ASObject::call_valueOf()
 	assert_and_throw(hasPropertyByMultiname(valueOfName, true));
 
 	_NR<ASObject> o=getVariableByMultiname(valueOfName,SKIP_IMPL);
-	assert_and_throw(o->is<IFunction>());
+	if (!o->is<IFunction>())
+		throw Class<TypeError>::getInstanceS("Error #1006: Call attempted on an object that is not a function.");
 	IFunction* f=o->as<IFunction>();
 
 	incRef();
@@ -260,7 +268,7 @@ _R<ASObject> ASObject::call_valueOf()
 
 bool ASObject::has_toString()
 {
-	multiname toStringName;
+	multiname toStringName(NULL);
 	toStringName.name_type=multiname::NAME_STRING;
 	toStringName.name_s="toString";
 	toStringName.ns.push_back(nsNameAndKind("",NAMESPACE));
@@ -274,7 +282,7 @@ bool ASObject::has_toString()
  */
 _R<ASObject> ASObject::call_toString()
 {
-	multiname toStringName;
+	multiname toStringName(NULL);
 	toStringName.name_type=multiname::NAME_STRING;
 	toStringName.name_s="toString";
 	toStringName.ns.push_back(nsNameAndKind("",NAMESPACE));
@@ -298,6 +306,11 @@ bool ASObject::isPrimitive() const
 	return type==T_NUMBER || type ==T_UNDEFINED || type == T_NULL ||
 		type==T_STRING || type==T_BOOLEAN || type==T_INTEGER ||
 		type==T_UINTEGER;
+}
+
+variables_map::variables_map(MemoryAccount* m):
+	Variables(std::less<mapType::key_type>(), reporter_allocator<mapType::value_type>(m)),slots_vars(m)
+{
 }
 
 variable* variables_map::findObjVar(const tiny_string& n, const nsNameAndKind& ns, TRAIT_KIND createKind, uint32_t traitKinds)
@@ -463,6 +476,12 @@ void ASObject::setVariableByMultiname(const multiname& name, ASObject* o, Class_
 	bool has_getter=false;
 	variable* obj=findSettable(name, false, &has_getter);
 
+	if (obj && (obj->kind == CONSTANT_TRAIT))
+	{
+		tiny_string err=tiny_string("Error #1074: Illegal write to read-only property ")+name.normalizedName();
+		err+=tiny_string(" on type ")+this->as<Class_base>()->getQualifiedClassName();
+		throw Class<ReferenceError>::getInstanceS(err);
+	}
 	if(!obj && cls)
 	{
 		//Look for borrowed traits before
@@ -546,7 +565,7 @@ void ASObject::setVariableByQName(const tiny_string& name, const nsNameAndKind& 
 	obj->setVar(o);
 }
 
-void ASObject::initializeVariableByMultiname(const multiname& name, ASObject* o, multiname* typemname)
+void ASObject::initializeVariableByMultiname(const multiname& name, ASObject* o, multiname* typemname, ABCContext* context)
 {
 	check();
 
@@ -560,14 +579,14 @@ void ASObject::initializeVariableByMultiname(const multiname& name, ASObject* o,
 		return;
 	}
 
-	Variables.initializeVar(name, o, typemname);
+	Variables.initializeVar(name, o, typemname, context);
 }
 
 void variable::setVar(ASObject* v)
 {
 	//Resolve the typename if we have one
 	if(!type && typemname)
-		type = Type::getTypeFromMultiname(typemname);
+		type = Type::getTypeFromMultiname(typemname, getVm()->currentCallContext->context);
 
 	if(type)
 		v = type->coerce(v);
@@ -638,7 +657,6 @@ variable* variables_map::findObjVar(const multiname& mname, TRAIT_KIND createKin
 	//Name not present, insert it, if the multiname has a single ns and if we have to insert it
 	if(createKind==NO_CREATE_TRAIT)
 		return NULL;
-
 	if(createKind == DYNAMIC_TRAIT)
 	{
 		if(mname.ns.begin()->name != "")
@@ -652,7 +670,7 @@ variable* variables_map::findObjVar(const multiname& mname, TRAIT_KIND createKin
 	return &inserted->second;
 }
 
-void variables_map::initializeVar(const multiname& mname, ASObject* obj, multiname* typemname)
+void variables_map::initializeVar(const multiname& mname, ASObject* obj, multiname* typemname, ABCContext* context)
 {
 	tiny_string name=mname.normalizedName();
 
@@ -668,15 +686,14 @@ void variables_map::initializeVar(const multiname& mname, ASObject* obj, multina
 			//Casting undefined to an object (of unknown class)
 			//results in Null
 			obj->decRef();
-			obj = new Null;
+			obj = getSys()->getNullRef();
 		}
 	}
 	else
 	{
-		type = Type::getTypeFromMultiname(typemname);
+		type = Type::getTypeFromMultiname(typemname, context);
 		obj = type->coerce(obj);
 	}
-
 	Variables.insert(make_pair(name, variable(mname.ns[0], DECLARED_TRAIT, obj, typemname, type)));
 }
 
@@ -717,7 +734,7 @@ ASFUNCTIONBODY(ASObject,_toString)
 ASFUNCTIONBODY(ASObject,hasOwnProperty)
 {
 	assert_and_throw(argslen==1);
-	multiname name;
+	multiname name(NULL);
 	name.name_type=multiname::NAME_STRING;
 	name.name_s=args[0]->toString();
 	name.ns.push_back(nsNameAndKind("",NAMESPACE));
@@ -762,7 +779,7 @@ ASFUNCTIONBODY(ASObject,isPrototypeOf)
 ASFUNCTIONBODY(ASObject,propertyIsEnumerable)
 {
 	assert_and_throw(argslen==1);
-	multiname name;
+	multiname name(NULL);
 	name.name_type=multiname::NAME_STRING;
 	name.name_s=args[0]->toString();
 	name.ns.push_back(nsNameAndKind("",NAMESPACE));
@@ -943,6 +960,7 @@ void variables_map::dumpVariables()
 		switch(it->second.kind)
 		{
 			case DECLARED_TRAIT:
+			case CONSTANT_TRAIT:
 				kind="Declared: ";
 				break;
 			case BORROWED_TRAIT:
@@ -980,8 +998,8 @@ void variables_map::destroyContents()
 	Variables.clear();
 }
 
-ASObject::ASObject():type(T_OBJECT),ref_count(1),manager(NULL),classdef(NULL),constructed(false),
-		implEnable(true)
+ASObject::ASObject(MemoryAccount* m):type(T_OBJECT),Variables(m),ref_count(1),
+	manager(NULL),classdef(NULL),constructed(false),implEnable(true)
 {
 #ifndef NDEBUG
 	//Stuff only used in debugging
@@ -989,13 +1007,21 @@ ASObject::ASObject():type(T_OBJECT),ref_count(1),manager(NULL),classdef(NULL),co
 #endif
 }
 
-ASObject::ASObject(const ASObject& o):type(o.type),ref_count(1),manager(NULL),classdef(o.classdef),
-		constructed(false),implEnable(true)
+ASObject::ASObject(Class_base* c):type(T_OBJECT),Variables((c)?c->memoryAccount:NULL),ref_count(1),
+	manager(NULL),classdef(NULL),constructed(false),implEnable(true)
 {
-	if(classdef)
-	{
-		classdef->incRef();
-	}
+	setClass(c);
+#ifndef NDEBUG
+	//Stuff only used in debugging
+	initialized=false;
+#endif
+}
+
+ASObject::ASObject(const ASObject& o):type(o.type),Variables((o.classdef)?o.classdef->memoryAccount:NULL),ref_count(1),
+	manager(NULL),classdef(NULL),constructed(false),implEnable(true)
+{
+	if(o.classdef)
+		setClass(o.classdef);
 
 #ifndef NDEBUG
 	//Stuff only used in debugging
@@ -1221,7 +1247,7 @@ void ASObject::serialize(ByteArray* out, std::map<tiny_string, uint32_t>& string
 		out->writeStringVR(stringMap, alias);
 
 		//Invoke writeExternal
-		multiname writeExternalName;
+		multiname writeExternalName(NULL);
 		writeExternalName.name_type=multiname::NAME_STRING;
 		writeExternalName.name_s="writeExternal";
 		writeExternalName.ns.push_back(nsNameAndKind("",NAMESPACE));
@@ -1306,7 +1332,7 @@ ASObject *ASObject::describeType() const
 
 bool ASObject::hasprop_prototype()
 {
-	multiname prototypeName;
+	multiname prototypeName(NULL);
 	prototypeName.name_type=multiname::NAME_STRING;
 	prototypeName.name_s="prototype";
 	prototypeName.ns.push_back(nsNameAndKind("",NAMESPACE));
@@ -1316,7 +1342,7 @@ bool ASObject::hasprop_prototype()
 
 ASObject* ASObject::getprop_prototype()
 {
-	multiname prototypeName;
+	multiname prototypeName(NULL);
 	prototypeName.name_type=multiname::NAME_STRING;
 	prototypeName.name_s="prototype";
 	prototypeName.ns.push_back(nsNameAndKind("",NAMESPACE));
@@ -1335,7 +1361,7 @@ void ASObject::setprop_prototype(_NR<ASObject>& o)
 	ASObject* obj = o.getPtr();
 	obj->incRef();
 
-	multiname prototypeName;
+	multiname prototypeName(NULL);
 	prototypeName.name_type=multiname::NAME_STRING;
 	prototypeName.name_s="prototype";
 	prototypeName.ns.push_back(nsNameAndKind("",NAMESPACE));

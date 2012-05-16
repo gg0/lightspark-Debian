@@ -38,7 +38,20 @@ ASFUNCTIONBODY(Integer,_toString)
 	if(radix==10)
 		snprintf(buf,20,"%i",th->val);
 	else if(radix==16)
-		snprintf(buf,20,"%x",th->val);
+	{
+		unsigned int v;
+		const char* sign="";
+		if (th->val<0)
+		{
+			v=-th->val;
+			sign="-";
+		}
+		else
+		{
+			v=th->val;
+		}
+		snprintf(buf,20,"%s%x",sign,v);
+	}
 
 	return Class<ASString>::getInstanceS(buf);
 }
@@ -168,8 +181,8 @@ void Integer::sinit(Class_base* c)
 {
 	c->isFinal = true;
 	c->setSuper(Class<ASObject>::getRef());
-	c->setVariableByQName("MAX_VALUE","",new Integer(numeric_limits<int32_t>::max()),DECLARED_TRAIT);
-	c->setVariableByQName("MIN_VALUE","",new Integer(numeric_limits<int32_t>::min()),DECLARED_TRAIT);
+	c->setVariableByQName("MAX_VALUE","",new (c->memoryAccount) Integer(c,numeric_limits<int32_t>::max()),CONSTANT_TRAIT);
+	c->setVariableByQName("MIN_VALUE","",new (c->memoryAccount) Integer(c,numeric_limits<int32_t>::min()),CONSTANT_TRAIT);
 	c->prototype->setVariableByQName("toString",AS3,Class<IFunction>::getFunction(Integer::_toString),DYNAMIC_TRAIT);
 }
 

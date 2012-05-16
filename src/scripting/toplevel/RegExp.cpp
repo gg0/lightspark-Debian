@@ -26,11 +26,13 @@ using namespace lightspark;
 SET_NAMESPACE("");
 REGISTER_CLASS_NAME(RegExp);
 
-RegExp::RegExp():dotall(false),global(false),ignoreCase(false),extended(false),multiline(false),lastIndex(0)
+RegExp::RegExp(Class_base* c):ASObject(c),dotall(false),global(false),ignoreCase(false),
+	extended(false),multiline(false),lastIndex(0)
 {
 }
 
-RegExp::RegExp(const tiny_string& _re):dotall(false),global(false),ignoreCase(false),extended(false),multiline(false),lastIndex(0),source(_re)
+RegExp::RegExp(Class_base* c, const tiny_string& _re):ASObject(c),dotall(false),global(false),ignoreCase(false),
+	extended(false),multiline(false),lastIndex(0),source(_re)
 {
 }
 
@@ -109,7 +111,11 @@ ASFUNCTIONBODY(RegExp,_constructor)
 
 ASFUNCTIONBODY(RegExp,generator)
 {
-	if(args[0]->is<RegExp>())
+	if(argslen == 0)
+	{
+		return Class<RegExp>::getInstanceS("");
+	}
+	else if(args[0]->is<RegExp>())
 	{
 		args[0]->incRef();
 		return args[0];
@@ -142,14 +148,13 @@ ASObject *RegExp::match(const tiny_string& str)
 {
 	pcre* pcreRE = compile();
 	if (!pcreRE)
-		return new Null;
-
+		return getSys()->getNullRef();
 	int capturingGroups;
 	int infoOk=pcre_fullinfo(pcreRE, NULL, PCRE_INFO_CAPTURECOUNT, &capturingGroups);
 	if(infoOk!=0)
 	{
 		pcre_free(pcreRE);
-		return new Null;
+		return getSys()->getNullRef();
 	}
 	//Get information about named capturing groups
 	int namedGroups;
@@ -157,7 +162,7 @@ ASObject *RegExp::match(const tiny_string& str)
 	if(infoOk!=0)
 	{
 		pcre_free(pcreRE);
-		return new Null;
+		return getSys()->getNullRef();
 	}
 	//Get information about the size of named entries
 	int namedSize;
@@ -165,7 +170,7 @@ ASObject *RegExp::match(const tiny_string& str)
 	if(infoOk!=0)
 	{
 		pcre_free(pcreRE);
-		return new Null;
+		return getSys()->getNullRef();
 	}
 	struct nameEntry
 	{
@@ -178,19 +183,19 @@ ASObject *RegExp::match(const tiny_string& str)
 	{
 		pcre_free(pcreRE);
 		lastIndex=0;
-		return new Null;
+		return getSys()->getNullRef();
 	}
 	pcre_extra extra;
 	extra.match_limit_recursion=200;
 	extra.flags = PCRE_EXTRA_MATCH_LIMIT_RECURSION;
 	int ovector[(capturingGroups+1)*3];
 	int offset=global?lastIndex:0;
-	int rc=pcre_exec(pcreRE, &extra, str.raw_buf(), str.numBytes(), offset, 0, ovector, (capturingGroups+1)*3);
+	int rc=pcre_exec(pcreRE,capturingGroups > 200 ? &extra : NULL, str.raw_buf(), str.numBytes(), offset, 0, ovector, (capturingGroups+1)*3);
 	if(rc<0)
 	{
 		//No matches or error
 		pcre_free(pcreRE);
-		return new Null;
+		return getSys()->getNullRef();
 	}
 	Array* a=Class<Array>::getInstanceS();
 	//Push the whole result and the captured strings
@@ -199,7 +204,7 @@ ASObject *RegExp::match(const tiny_string& str)
 		if(ovector[i*2] >= 0)
 			a->push(_MR(Class<ASString>::getInstanceS( str.substr_bytes(ovector[i*2],ovector[i*2+1]-ovector[i*2]) )));
 		else
-			a->push(_MR(new Undefined));
+			a->push(_MR(getSys()->getUndefinedRef()));
 	}
 	a->setVariableByQName("input","",Class<ASString>::getInstanceS(str),DYNAMIC_TRAIT);
 
@@ -231,14 +236,14 @@ ASFUNCTIONBODY(RegExp,test)
 	const tiny_string& arg0 = args[0]->toString();
 	pcre* pcreRE = th->compile();
 	if (!pcreRE)
-		return new Null;
+		return getSys()->getNullRef();
 
 	int capturingGroups;
 	int infoOk=pcre_fullinfo(pcreRE, NULL, PCRE_INFO_CAPTURECOUNT, &capturingGroups);
 	if(infoOk!=0)
 	{
 		pcre_free(pcreRE);
-		return new Null;
+		return getSys()->getNullRef();
 	}
 	int ovector[(capturingGroups+1)*3];
 	

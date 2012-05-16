@@ -165,7 +165,7 @@ _R<ASObject> Amf3Deserializer::parseObject(std::vector<tiny_string>& stringMap,
 
 		_R<ASObject> ret=_MR(type->getInstance(true, NULL, 0));
 		//Invoke readExternal
-		multiname readExternalName;
+		multiname readExternalName(NULL);
 		readExternalName.name_type=multiname::NAME_STRING;
 		readExternalName.name_s="readExternal";
 		readExternalName.ns.push_back(nsNameAndKind("",NAMESPACE));
@@ -214,7 +214,7 @@ _R<ASObject> Amf3Deserializer::parseObject(std::vector<tiny_string>& stringMap,
 		_R<ASObject> value=parseValue(stringMap, objMap, traitsMap);
 		value->incRef();
 
-		multiname name;
+		multiname name(NULL);
 		name.name_type=multiname::NAME_STRING;
 		name.name_s=traits.traitsNames[i];
 		name.ns.push_back(nsNameAndKind("",NAMESPACE));
@@ -248,9 +248,9 @@ _R<ASObject> Amf3Deserializer::parseValue(std::vector<tiny_string>& stringMap,
 	switch(marker)
 	{
 		case null_marker:
-			return _MR(new Null);
+			return _MR(getSys()->getNullRef());
 		case undefined_marker:
-			return _MR(new Undefined);
+			return _MR(getSys()->getUndefinedRef());
 		case false_marker:
 			return _MR(abstract_b(false));
 		case true_marker:

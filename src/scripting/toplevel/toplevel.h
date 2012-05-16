@@ -29,6 +29,7 @@
 #include "Boolean.h"
 #include "Error.h"
 #include "XML.h"
+#include "memory_support.h"
 
 namespace lightspark
 {
@@ -64,7 +65,7 @@ public:
 	 * then an exception is thrown.
 	 * The caller does not own the object returned.
 	 */
-	static const Type* getTypeFromMultiname(const multiname* mn);
+	static const Type* getTypeFromMultiname(const multiname* mn, const ABCContext* context);
 	/*
 	 * Checks if the type is already in sys->classes
 	 */
@@ -114,7 +115,7 @@ private:
 	void describeTraits(xmlpp::Element* root, std::vector<traits_info>& traits) const;
 	//Naive garbage collection until reference cycles are detected
 	Mutex referencedObjectsMutex;
-	std::set<ASObject*> referencedObjects;
+	std::set<ASObject*, std::less<ASObject*>, reporter_allocator<ASObject*>> referencedObjects;
 	void finalizeObjects() const;
 protected:
 	void copyBorrowedTraitsFromSuper();
@@ -127,14 +128,16 @@ public:
 	_NR<Class_base> super;
 	//We need to know what is the context we are referring to
 	ABCContext* context;
-	QName class_name;
+	const QName class_name;
 	int class_index;
+	//Memory reporter to keep track of used bytes
+	MemoryAccount* memoryAccount;
 	void handleConstruction(ASObject* target, ASObject* const* args, unsigned int argslen, bool buildAndLink);
 	void setConstructor(IFunction* c);
-	Class_base(const QName& name);
+	Class_base(const QName& name, MemoryAccount* m);
 	~Class_base();
 	void finalize();
-	virtual ASObject* getInstance(bool construct, ASObject* const* args, const unsigned int argslen)=0;
+	virtual ASObject* getInstance(bool construct, ASObject* const* args, const unsigned int argslen, Class_base* realClass=NULL)=0;
 	void addImplementedInterface(const multiname& i);
 	void addImplementedInterface(Class_base* i);
 	virtual void buildInstanceTraits(ASObject* o) const=0;
@@ -182,8 +185,8 @@ public:
 class Class_object: public Class_base
 {
 private:
-	Class_object():Class_base(QName("Class","")){}
-	ASObject* getInstance(bool construct, ASObject* const* args, const unsigned int argslen)
+	Class_object():Class_base(QName("Class",""),NULL){}
+	ASObject* getInstance(bool construct, ASObject* const* args, const unsigned int argslen, Class_base* realClass)
 	{
 		throw RunTimeException("Class_object::getInstance");
 		return NULL;
@@ -207,7 +210,7 @@ public:
 class Class_function: public Class_base
 {
 private:
-	ASObject* getInstance(bool construct, ASObject* const* args, const unsigned int argslen)
+	ASObject* getInstance(bool construct, ASObject* const* args, const unsigned int argslen, Class_base* realClass)
 	{
 		throw RunTimeException("Class_function::getInstance");
 		return NULL;
@@ -218,7 +221,7 @@ private:
 	}
 public:
 	//Name is 'Object' because trace(new f()) gives "[object Object]"
-	Class_function() : Class_base(QName("Object","")) {}
+	Class_function() : Class_base(QName("Object",""),NULL) {}
 	_NR<ASObject> getVariableByMultiname(const multiname& name, GET_VARIABLE_OPTION opt=NONE)
 	{
 		return NullRef;
@@ -244,9 +247,8 @@ public:
 
 class IFunction: public ASObject
 {
-CLASSBUILDABLE(IFunction);
 protected:
-	IFunction();
+	IFunction(Class_base *c);
 	virtual IFunction* clone()=0;
 	_NR<ASObject> closure_this;
 public:
@@ -284,7 +286,6 @@ public:
 			{
 				//Generate a copy
 				ret=clone();
-				ret->classdef=NULL; //Drop the classdef and set it ex novo
 				ret->setClass(getClass());
 			}
 			ret->closure_this=c;
@@ -308,11 +309,10 @@ public:
 	typedef ASObject* (*as_function)(ASObject*, ASObject* const *, const unsigned int);
 private:
 	as_function val;
-	Function(){}
-	Function(as_function v):val(v){}
+	Function(Class_base* c, as_function v=NULL):IFunction(c),val(v){}
 	Function* clone()
 	{
-		return new Function(*this);
+		return new (getClass()->memoryAccount) Function(*this);
 	}
 	method_info* getMethodInfo() const { return NULL; }
 public:
@@ -336,13 +336,14 @@ private:
 	int hit_count;
 	method_info* mi;
 	synt_function val;
-	SyntheticFunction(method_info* m);
+	SyntheticFunction(Class_base* c,method_info* m);
 	SyntheticFunction* clone()
 	{
-		return new SyntheticFunction(*this);
+		return new (getClass()->memoryAccount) SyntheticFunction(*this);
 	}
 	method_info* getMethodInfo() const { return mi; }
 public:
+	~SyntheticFunction();
 	ASObject* call(ASObject* obj, ASObject* const* args, uint32_t num_args);
 	void finalize();
 	std::vector<scope_entry> func_scope;
@@ -369,8 +370,8 @@ template<>
 class Class<IFunction>: public Class_base
 {
 private:
-	Class<IFunction>():Class_base(QName("Function","")){}
-	ASObject* getInstance(bool construct, ASObject* const* args, const unsigned int argslen);
+	Class<IFunction>(MemoryAccount* m):Class_base(QName("Function",""),m){}
+	ASObject* getInstance(bool construct, ASObject* const* args, const unsigned int argslen, Class_base* realClass);
 public:
 	static Class<IFunction>* getClass();
 	static _R<Class<IFunction>> getRef()
@@ -382,23 +383,20 @@ public:
 	static Function* getFunction(Function::as_function v)
 	{
 		Class<IFunction>* c=Class<IFunction>::getClass();
-		Function* ret=new Function(v);
-		ret->setClass(c);
+		Function* ret=new (c->memoryAccount) Function(c, v);
 		return ret;
 	}
 	static Function* getFunction(Function::as_function v, int len)
 	{
 		Class<IFunction>* c=Class<IFunction>::getClass();
-		Function* ret=new Function(v);
-		ret->setClass(c);
+		Function* ret=new (c->memoryAccount) Function(c, v);
 		ret->length = len;
 		return ret;
 	}
 	static SyntheticFunction* getSyntheticFunction(method_info* m)
 	{
 		Class<IFunction>* c=Class<IFunction>::getClass();
-		SyntheticFunction* ret=new SyntheticFunction(m);
-		ret->setClass(c);
+		SyntheticFunction* ret=new (c->memoryAccount) SyntheticFunction(c, m);
 		c->handleConstruction(ret,NULL,0,true);
 		return ret;
 	}
@@ -420,17 +418,19 @@ public:
 	void serialize(ByteArray* out, std::map<tiny_string, uint32_t>& stringMap,
 				std::map<const ASObject*, uint32_t>& objMap,
 				std::map<const Class_base*, uint32_t>& traitsMap);
+	void setVariableByMultiname(const multiname& name, ASObject* o);
 };
 
 class Null: public ASObject
 {
 public:
-	Null(){type=T_NULL;}
+	Null();
 	bool isEqual(ASObject* r);
 	TRISTATE isLess(ASObject* r);
 	int32_t toInt();
 	_NR<ASObject> getVariableByMultiname(const multiname& name, GET_VARIABLE_OPTION opt);
 	int32_t getVariableByMultiname_i(const multiname& name);
+	void setVariableByMultiname(const multiname& name, ASObject* o);
 
 	//Serialization interface
 	void serialize(ByteArray* out, std::map<tiny_string, uint32_t>& stringMap,
@@ -442,15 +442,16 @@ class ASQName: public ASObject
 {
 friend class multiname;
 friend class Namespace;
-CLASSBUILDABLE(ASQName);
 private:
 	bool uri_is_null;
 	tiny_string uri;
 	tiny_string local_name;
-	ASQName(){type=T_QNAME; uri_is_null=false;}
 public:
+	ASQName(Class_base* c);
+	void setByNode(xmlpp::Node* node);
 	static void sinit(Class_base*);
 	ASFUNCTION(_constructor);
+	ASFUNCTION(generator);
 	ASFUNCTION(_getURI);
 	ASFUNCTION(_getLocalName);
 	ASFUNCTION(_toString);
@@ -464,17 +465,17 @@ class Namespace: public ASObject
 {
 friend class ASQName;
 friend class ABCContext;
-CLASSBUILDABLE(Namespace);
 private:
 	bool prefix_is_undefined;
 	tiny_string uri;
 	tiny_string prefix;
-	Namespace(){type=T_NAMESPACE; prefix_is_undefined=false;}
-	Namespace(const tiny_string& _uri):uri(_uri){type=T_NAMESPACE; prefix_is_undefined=false;}
 public:
+	Namespace(Class_base* c);
+	Namespace(Class_base* c, const tiny_string& _uri);
 	static void sinit(Class_base*);
 	static void buildTraits(ASObject* o);
 	ASFUNCTION(_constructor);
+	ASFUNCTION(generator);
 	ASFUNCTION(_getURI);
 	ASFUNCTION(_setURI);
 	ASFUNCTION(_getPrefix);
@@ -488,14 +489,13 @@ public:
 
 class Global : public ASObject
 {
-CLASSBUILDABLE(Global);
 private:
-	Global(ABCContext* c, int s): context(c), scriptId(s) {}
-	static void sinit(Class_base* c);
-	static void buildTraits(ASObject* o) {};
 	ABCContext* context;
 	int scriptId;
 public:
+	Global(Class_base* cb, ABCContext* c, int s);
+	static void sinit(Class_base* c);
+	static void buildTraits(ASObject* o) {};
 	_NR<ASObject> getVariableByMultiname(const multiname& name, GET_VARIABLE_OPTION opt=NONE);
 };
 

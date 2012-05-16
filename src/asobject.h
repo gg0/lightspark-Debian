@@ -24,6 +24,7 @@
 #include "swftypes.h"
 #include "smartrefs.h"
 #include "threading.h"
+#include "memory_support.h"
 #include <map>
 
 #define ASFUNCTION(name) \
@@ -120,9 +121,6 @@
 		REGISTER_GETTER(c,name); \
 		REGISTER_SETTER(c,name)
 
-#define CLASSBUILDABLE(className) \
-	friend class Class<className>; 
-
 namespace lightspark
 {
 
@@ -133,8 +131,9 @@ template<class T> class Class;
 class Class_base;
 class ByteArray;
 class Type;
+class ABCContext;
 
-enum TRAIT_KIND { NO_CREATE_TRAIT=0, DECLARED_TRAIT=1, DYNAMIC_TRAIT=2, BORROWED_TRAIT=4 };
+enum TRAIT_KIND { NO_CREATE_TRAIT=0, DECLARED_TRAIT=1, DYNAMIC_TRAIT=2, BORROWED_TRAIT=4,CONSTANT_TRAIT=9 /* constants are also declared traits */ };
 
 struct variable
 {
@@ -156,11 +155,13 @@ struct variable
 class variables_map
 {
 public:
-	std::multimap<tiny_string,variable> Variables;
+	typedef std::multimap<tiny_string,variable,std::less<tiny_string>,reporter_allocator<std::pair<const tiny_string, variable>>>
+		mapType;
+	mapType Variables;
 	typedef std::multimap<tiny_string,variable>::iterator var_iterator;
 	typedef std::multimap<tiny_string,variable>::const_iterator const_var_iterator;
-	std::vector<var_iterator> slots_vars;
-public:
+	std::vector<var_iterator, reporter_allocator<var_iterator>> slots_vars;
+	variables_map(MemoryAccount* m);
 	/**
 	   Find a variable in the map
 
@@ -171,7 +172,7 @@ public:
 	variable* findObjVar(const tiny_string& name, const nsNameAndKind& ns, TRAIT_KIND createKind, uint32_t traitKinds);
 	variable* findObjVar(const multiname& mname, TRAIT_KIND createKind, uint32_t traitKinds);
 	//Initialize a new variable specifying the type (TODO: add support for const)
-	void initializeVar(const multiname& mname, ASObject* obj, multiname* typemname);
+	void initializeVar(const multiname& mname, ASObject* obj, multiname* typemname, ABCContext* context);
 	void killObjVar(const multiname& mname);
 	ASObject* getSlot(unsigned int n)
 	{
@@ -219,8 +220,7 @@ enum METHOD_TYPE { NORMAL_METHOD=0, SETTER_METHOD=1, GETTER_METHOD=2 };
 //for toPrimitive
 enum TP_HINT { NO_HINT, NUMBER_HINT, STRING_HINT };
 
-
-class ASObject
+class ASObject: public memory_reporter
 {
 friend class Manager;
 friend class ABCVm;
@@ -228,15 +228,15 @@ friend class ABCContext;
 friend class Class_base; //Needed for forced cleanup
 friend void lookupAndLink(Class_base* c, const tiny_string& name, const tiny_string& interfaceNs);
 friend class IFunction; //Needed for clone
-CLASSBUILDABLE(ASObject);
 protected:
-	ASObject();
+	ASObject(MemoryAccount* m);
 	ASObject(const ASObject& o);
 	virtual ~ASObject();
 	SWFOBJECT_TYPE type;
 	void serializeDynamicProperties(ByteArray* out, std::map<tiny_string, uint32_t>& stringMap,
 				std::map<const ASObject*, uint32_t>& objMap,
 				std::map<const Class_base*, uint32_t> traitsMap) const;
+	void setClass(Class_base* c);
 private:
 	//maps variable name to namespace and var
 	variables_map Variables;
@@ -250,13 +250,13 @@ private:
 	Mutex constructionMutex;
 	Cond constructionSignal;
 public:
+	ASObject(Class_base* c);
 #ifndef NDEBUG
 	//Stuff only used in debugging
 	bool initialized;
 	int getRefCount(){ return ref_count; }
 #endif
 	bool implEnable;
-	void setClass(Class_base* c);
 	Class_base* getClass() const { return classdef; }
 	bool isConstructed() const { return ACQUIRE_READ(constructed); }
 	bool waitUntilConstructed(unsigned long maxwait_ms=0);
@@ -343,7 +343,7 @@ public:
 	 * If no property is found, an instance variable is created.
 	 */
 	void setVariableByMultiname(const multiname& name, ASObject* o, Class_base* cls);
-	void initializeVariableByMultiname(const multiname& name, ASObject* o, multiname* typemname);
+	void initializeVariableByMultiname(const multiname& name, ASObject* o, multiname* typemname, ABCContext* context);
 	virtual bool deleteVariableByMultiname(const multiname& name);
 	void setVariableByQName(const tiny_string& name, const tiny_string& ns, _R<ASObject> o, TRAIT_KIND traitKind)
 	{
@@ -379,6 +379,7 @@ public:
 	tiny_string toString();
 	virtual int32_t toInt();
 	virtual uint32_t toUInt();
+	uint16_t toUInt16();
 	/* Implements ECMA's 9.3 ToNumber operation, but returns the concrete value */
 	number_t toNumber();
 	/* Implements ECMA's ToPrimitive (9.1) and [[DefaultValue]] (8.6.2.6) */

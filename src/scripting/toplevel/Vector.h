@@ -30,7 +30,7 @@ class Vector: public ASObject
 {
 	Type* vec_type;
 	bool fixed;
-	std::vector<ASObject*> vec;
+	std::vector<ASObject*, reporter_allocator<ASObject*>> vec;
 	int capIndex(int i) const;
 	class sortComparatorWrapper
 	{
@@ -42,7 +42,7 @@ class Vector: public ASObject
 		bool operator()(ASObject* d1, ASObject* d2);
 	};
 public:
-	Vector() : vec_type(NULL) {}
+	Vector(Class_base* c);
 	~Vector();
 	void finalize();
 	static void sinit(Class_base* c);

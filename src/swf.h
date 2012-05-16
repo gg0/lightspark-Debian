@@ -30,7 +30,7 @@
 #include "scripting/flash/display/flashdisplay.h"
 #include "scripting/flash/net/flashnet.h"
 #include "timer.h"
-
+#include "memory_support.h"
 #include "platforms/engineutils.h"
 
 namespace lightspark
@@ -78,7 +78,7 @@ private:
 	void setOnStage(bool staged);
 	ACQUIRE_RELEASE_FLAG(finishedLoading);
 public:
-	RootMovieClip(LoaderInfo* li, _NR<ApplicationDomain> appDomain, bool isSys=false);
+	RootMovieClip(LoaderInfo* li, _NR<ApplicationDomain> appDomain, Class_base* c);
 	void finalize();
 	bool hasFinishedLoading() { return ACQUIRE_READ(finishedLoading); }
 	uint32_t version;
@@ -105,7 +105,7 @@ public:
 	void setVariableByString(const std::string& s, ASObject* o);*/
 	static RootMovieClip* getInstance(LoaderInfo* li, _R<ApplicationDomain> appDomain);
 	/*
-	 * The application domain for the main code
+	 * The application domain for this clip
 	 */
 	_NR<ApplicationDomain> applicationDomain;
 	//DisplayObject interface
@@ -138,7 +138,7 @@ public:
 	void plot(uint32_t max, cairo_t *cr);
 };
 
-class SystemState: public RootMovieClip, public ITickJob
+class SystemState: public RootMovieClip, public ITickJob, public InvalidateQueue
 {
 private:
 	class EngineCreator: public IThreadJob
@@ -189,6 +189,10 @@ private:
 	GPid childPid;
 #endif
 
+	//shared null and undefined instances
+	_NR<Null> null;
+	_NR<Undefined> undefined;
+
 	//Parameters/FlashVars
 	_NR<ASObject> parameters;
 	void setParameters(_R<ASObject> p);
@@ -224,6 +228,10 @@ private:
 	*/
 	tiny_string profOut;
 #endif
+#ifdef MEMORY_USAGE_PROFILING
+	mutable Mutex memoryAccountsMutex;
+	std::list<MemoryAccount> memoryAccounts;
+#endif
 protected:
 	~SystemState();
 public:
@@ -254,7 +262,7 @@ public:
 	void setDownloadedPath(const tiny_string& p) DLL_PUBLIC;
 	void needsAVM2(bool n);
 	//DisplayObject interface
-	_NR<Stage> getStage() const;
+	_NR<Stage> getStage();
 
 	//Be careful, SystemState constructor does some global initialization that must be done
 	//before any other thread gets started
@@ -270,6 +278,9 @@ public:
 	ThreadProfile* allocateProfiler(const RGB& color);
 	std::list<ThreadProfile*> profilingData;
 	
+	Null* getNullRef() const;
+	Undefined* getUndefinedRef() const;
+
 	Stage* stage;
 	ABCVm* currentVm;
 
@@ -279,8 +290,9 @@ public:
 	//Application starting time in milliseconds
 	uint64_t startTime;
 
-	//Class/Template map. They own one reference to each class/template
-	std::map<QName, Class_base*> classes;
+	//Classes set. They own one reference to each class/template
+	std::set<Class_base*> customClasses;
+	std::map<QName, Class_base*> builtinClasses;
 	std::map<QName, Template_base*> templates;
 
 	//Flags for command line options
@@ -311,6 +323,11 @@ public:
 	*/
 	LoaderInfo* getLoaderInfo() const { return loaderInfo.getPtr(); }
 
+	/*
+	 * The application domain for the system
+	 */
+	_NR<ApplicationDomain> systemDomain;
+
 	//Stuff to be done once for process and not for plugin instance
 	static void staticInit() DLL_PUBLIC;
 	static void staticDeinit() DLL_PUBLIC;
@@ -324,6 +341,7 @@ public:
 	SCALE_MODE scaleMode;
 	
 	//Static AS class properties
+	//TODO: Those should be different for each security domain
 	//NAMING: static$CLASSNAME$$PROPERTYNAME$
 	//	NetConnection
 	ObjectEncoding::ENCODING staticNetConnectionDefaultObjectEncoding;
@@ -352,6 +370,13 @@ public:
 	const tiny_string& getProfilingOutput() const;
 	std::vector<ABCContext*> contextes;
 	void saveProfilingInformation();
+#endif
+	MemoryAccount* allocateMemoryAccount(const tiny_string& name) DLL_PUBLIC;
+	MemoryAccount* unaccountedMemory;
+	MemoryAccount* tagsMemory;
+	MemoryAccount* stringMemory;
+#ifdef MEMORY_USAGE_PROFILING
+	void saveMemoryUsageInformation(std::ofstream& out, int snapshotCount) const;
 #endif
 };
 

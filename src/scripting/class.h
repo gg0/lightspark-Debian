@@ -53,19 +53,11 @@ public:
 class Class_inherit:public Class_base
 {
 private:
-	ASObject* getInstance(bool construct, ASObject* const* args, const unsigned int argslen);
+	ASObject* getInstance(bool construct, ASObject* const* args, const unsigned int argslen, Class_base* realClass);
 	DictionaryTag const* tag;
 	bool bindedToRoot;
 public:
-	Class_inherit(const QName& name):Class_base(name),tag(NULL),bindedToRoot(false)
-	{
-		this->incRef(); //create on reference for the classes map
-#ifndef NDEBUG
-		bool ret=
-#endif
-		getSys()->classes.insert(std::make_pair(name,this)).second;
-		assert(ret);
-	}
+	Class_inherit(const QName& name, MemoryAccount* m);
 	void finalize();
 	void buildInstanceTraits(ASObject* o) const;
 	void bindToTag(DictionaryTag const* t)
@@ -87,72 +79,113 @@ public:
 /* helper function: does Class<ASObject>::getInstances(), but solves forward declaration problem */
 ASObject* new_asobject();
 
+	template<class T,std::size_t N>
+	struct newWithOptionalClass
+	{
+		template<class F, typename... Args>
+		static T* doNew(Class_base* c, const F& f, Args&&... args)
+		{
+			return newWithOptionalClass<T, N-1>::doNew(c, std::forward<Args>(args)..., f);
+		}
+	};
+	template<class T>
+	struct newWithOptionalClass<T, 1>
+	{
+		template<class F, typename... Args>
+		static T* doNew(Class_base* c, const F& f, Args&&... args)
+		{
+			//Last parameter is not a class pointer
+			return new (c->memoryAccount) T(c, std::forward<Args>(args)..., f);
+		}
+		template<typename... Args>
+		static T* doNew(Class_base* c, Class_base* f, Args&&... args)
+		{
+			//Last parameter is a class pointer
+			return new (f->memoryAccount) T(f, std::forward<Args>(args)...);
+		}
+	};
+	template<class T>
+	struct newWithOptionalClass<T, 0>
+	{
+		static T* doNew(Class_base* c)
+		{
+			//Last parameter is not a class pointer
+			return new (c->memoryAccount) T(c);
+		}
+	};
 template< class T>
 class Class: public Class_base
 {
 protected:
-	Class(const QName& name):Class_base(name){}
+	Class(const QName& name, MemoryAccount* m):Class_base(name, m){}
 	//This function is instantiated always because of inheritance
-	T* getInstance(bool construct, ASObject* const* args, const unsigned int argslen)
+	T* getInstance(bool construct, ASObject* const* args, const unsigned int argslen, Class_base* realClass=NULL)
 	{
-		T* ret=new T;
-		ret->setClass(this);
+		if(realClass==NULL)
+			realClass=this;
+		T* ret=new (realClass->memoryAccount) T(realClass);
 		if(construct)
 			handleConstruction(ret,args,argslen,true);
 		return ret;
 	}
 public:
 #ifdef _MSC_VER
-	static T* getInstanceS()
+	static T* getInstanceS(Class_base* realClass=NULL)
 	{
 		Class<T>* c=Class<T>::getClass();
-		T* ret = new T();
-		ret->setClass(c);
+		if(realClass==NULL)
+			realClass=c;
+		T* ret = new (realClass->memoryAccount) T(realClass);
 		c->handleConstruction(ret,NULL,0,true);
 		return ret;
 	}
 	template<typename Arg1>
-	static T* getInstanceS(Arg1&& arg1)
+	static T* getInstanceS(Arg1&& arg1, Class_base* realClass=NULL)
 	{
 		Class<T>* c=Class<T>::getClass();
-		T* ret = new T(arg1);
-		ret->setClass(c);
+		if(realClass==NULL)
+			realClass=c;
+		T* ret = new (realClass->memoryAccount) T(realClass, arg1);
 		c->handleConstruction(ret,NULL,0,true);
 		return ret;
 	}
 	template<typename Arg1, typename Arg2>
-	static T* getInstanceS(Arg1&& arg1, Arg2&& arg2)
+	static T* getInstanceS(Arg1&& arg1, Arg2&& arg2, Class_base* realClass=NULL)
 	{
 		Class<T>* c=Class<T>::getClass();
-		T* ret = new T(arg1, arg2);
-		ret->setClass(c);
+		if(realClass==NULL)
+			realClass=c;
+		T* ret = new (realClass->memoryAccount) T(realClass, arg1, arg2);
 		c->handleConstruction(ret,NULL,0,true);
 		return ret;
 	}
 	template<typename Arg1, typename Arg2, typename Arg3>
-	static T* getInstanceS(Arg1&& arg1, Arg2&& arg2, Arg3&& arg3)
+	static T* getInstanceS(Arg1&& arg1, Arg2&& arg2, Arg3&& arg3, Class_base* realClass=NULL)
 	{
 		Class<T>* c=Class<T>::getClass();
-		T* ret = new T(arg1, arg2, arg3);
-		ret->setClass(c);
+		if(realClass==NULL)
+			realClass=c;
+		T* ret = new (realClass->memoryAccount) T(realClass, arg1, arg2, arg3);
 		c->handleConstruction(ret,NULL,0,true);
 		return ret;
 	}
 	template<typename Arg1, typename Arg2, typename Arg3, typename Arg4>
-	static T* getInstanceS(Arg1&& arg1, Arg2&& arg2, Arg3&& arg3, Arg4&& arg4)
+	static T* getInstanceS(Arg1&& arg1, Arg2&& arg2, Arg3&& arg3, Arg4&& arg4, Class_base* realClass=NULL)
 	{
 		Class<T>* c=Class<T>::getClass();
-		T* ret = new T(arg1, arg2, arg3, arg4);
-		ret->setClass(c);
+		if(realClass==NULL)
+			realClass=c;
+		T* ret = new (realClass->memoryAccount) T(realClass, arg1, arg2, arg3, arg4);
 		c->handleConstruction(ret,NULL,0,true);
 		return ret;
 	}
 	template<typename Arg1, typename Arg2, typename Arg3, typename Arg4, typename Arg5>
-	static T* getInstanceS(Arg1&& arg1, Arg2&& arg2, Arg3&& arg3, Arg4&& arg4, Arg5&& arg5)
+	static T* getInstanceS(Arg1&& arg1, Arg2&& arg2, Arg3&& arg3, Arg4&& arg4, Arg5&& arg5, Class_base* realClass=NULL)
 	{
 		Class<T>* c=Class<T>::getClass();
-		T* ret = new T(arg1, arg2, arg3, arg4, arg5);
-		ret->setClass(c);
+		if(realClass==NULL)
+			realClass=c;
+		T* ret = new (realClass->memoryAccount) T(realClass, arg1, arg2, arg3, arg4, arg5);
 		c->handleConstruction(ret,NULL,0,true);
 		return ret;
 	}
@@ -161,8 +194,7 @@ public:
 	static T* getInstanceS(Args&&... args)
 	{
 		Class<T>* c=Class<T>::getClass();
-		T* ret = new T(args...);
-		ret->setClass(c);
+		T* ret=newWithOptionalClass<T, sizeof...(Args)>::doNew(c, std::forward<Args>(args)...);
 		c->handleConstruction(ret,NULL,0,true);
 		return ret;
 	}
@@ -170,12 +202,13 @@ public:
 	static Class<T>* getClass()
 	{
 		QName name(ClassName<T>::name,ClassName<T>::ns);
-		std::map<QName, Class_base*>::iterator it=getSys()->classes.find(name);
+		std::map<QName, Class_base*>::iterator it=getSys()->builtinClasses.find(name);
 		Class<T>* ret=NULL;
-		if(it==getSys()->classes.end()) //This class is not yet in the map, create it
+		if(it==getSys()->builtinClasses.end()) //This class is not yet in the map, create it
 		{
-			ret=new Class<T>(name);
-			getSys()->classes.insert(std::make_pair(name,ret));
+			MemoryAccount* memoryAccount = getSys()->allocateMemoryAccount(name.name);
+			ret=new (getSys()->unaccountedMemory) Class<T>(name, memoryAccount);
+			getSys()->builtinClasses.insert(std::make_pair(name,ret));
 			ret->prototype = _MNR(new_asobject());
 			T::sinit(ret);
 			ret->setDeclaredMethodByQName("toString",AS3,Class<IFunction>::getFunction(Class_base::_toString),NORMAL_METHOD,false);
@@ -222,7 +255,7 @@ public:
 };
 
 template<>
-Global* Class<Global>::getInstance(bool construct, ASObject* const* args, const unsigned int argslen);
+Global* Class<Global>::getInstance(bool construct, ASObject* const* args, const unsigned int argslen, Class_base* realClass);
 
 template<>
 inline ASObject* Class<Number>::coerce(ASObject* o) const
@@ -260,9 +293,9 @@ template<>
 class Class<ASObject>: public Class_base
 {
 private:
-	Class<ASObject>(const QName& name):Class_base(name){}
+	Class<ASObject>(const QName& name, MemoryAccount* m):Class_base(name, m){}
 	//This function is instantiated always because of inheritance
-	ASObject* getInstance(bool construct, ASObject* const* args, const unsigned int argslen);
+	ASObject* getInstance(bool construct, ASObject* const* args, const unsigned int argslen, Class_base* realClass=NULL);
 public:
 	static ASObject* getInstanceS()
 	{
@@ -274,7 +307,8 @@ public:
 	 */
 	static _R<Class<ASObject>> getStubClass(const QName& name)
 	{
-		Class<ASObject>* ret = new Class<ASObject>(name);
+		MemoryAccount* memoryAccount = getSys()->allocateMemoryAccount(name.name);
+		Class<ASObject>* ret = new (getSys()->unaccountedMemory) Class<ASObject>(name, memoryAccount);
 
 		ret->setSuper(Class<ASObject>::getRef());
 		ret->prototype = _MNR(new_asobject());
@@ -284,19 +318,20 @@ public:
 		ret->addPrototypeGetter();
 
 		ret->setDeclaredMethodByQName("toString",AS3,Class<IFunction>::getFunction(Class_base::_toString),NORMAL_METHOD,false);
-		getSys()->classes.insert(std::make_pair(name,ret));
+		getSys()->builtinClasses.insert(std::make_pair(name,ret));
 		ret->incRef();
 		return _MR(ret);
 	}
 	static Class<ASObject>* getClass()
 	{
 		QName name(ClassName<ASObject>::name,ClassName<ASObject>::ns);
-		std::map<QName, Class_base*>::iterator it=getSys()->classes.find(name);
+		std::map<QName, Class_base*>::iterator it=getSys()->builtinClasses.find(name);
 		Class<ASObject>* ret=NULL;
-		if(it==getSys()->classes.end()) //This class is not yet in the map, create it
+		if(it==getSys()->builtinClasses.end()) //This class is not yet in the map, create it
 		{
-			ret=new Class<ASObject>(name);
-			getSys()->classes.insert(std::make_pair(name,ret));
+			MemoryAccount* memoryAccount = getSys()->allocateMemoryAccount(name.name);
+			ret=new (getSys()->unaccountedMemory) Class<ASObject>(name,memoryAccount);
+			getSys()->builtinClasses.insert(std::make_pair(name,ret));
 			ret->prototype = _MNR(new_asobject());
 			ASObject::sinit(ret);
 			ret->setDeclaredMethodByQName("toString",AS3,Class<IFunction>::getFunction(Class_base::_toString),NORMAL_METHOD,false);
@@ -354,7 +389,7 @@ class InterfaceClass: public Class_base
 {
 	virtual ~InterfaceClass() {}
 	void buildInstanceTraits(ASObject*) const {}
-	ASObject* getInstance(bool, ASObject* const*, unsigned int)
+	ASObject* getInstance(bool, ASObject* const*, unsigned int, Class_base* realClass)
 	{
 		assert(false);
 		return NULL;
@@ -364,17 +399,19 @@ class InterfaceClass: public Class_base
 		assert(argslen == 1);
 		return args[0];
 	}
-	InterfaceClass(const QName& name):Class_base(name) {}
+	InterfaceClass(const QName& name, MemoryAccount* m):Class_base(name, m) {}
 public:
 	static InterfaceClass<T>* getClass()
 	{
 		QName name(ClassName<T>::name,ClassName<T>::ns);
-		std::map<QName, Class_base*>::iterator it=getSys()->classes.find(name);
+		std::map<QName, Class_base*>::iterator it=getSys()->builtinClasses.find(name);
 		InterfaceClass<T>* ret=NULL;
-		if(it==getSys()->classes.end())
-		{	//This class is not yet in the map, create it
-			ret=new InterfaceClass<T>(name);
-			getSys()->classes.insert(std::make_pair(name,ret));
+		if(it==getSys()->builtinClasses.end())
+		{
+			//This class is not yet in the map, create it
+			MemoryAccount* memoryAccount = getSys()->allocateMemoryAccount(name.name);
+			ret=new (getSys()->unaccountedMemory) InterfaceClass<T>(name, memoryAccount);
+			getSys()->builtinClasses.insert(std::make_pair(name,ret));
 		}
 		else
 			ret=static_cast<InterfaceClass<T>*>(it->second);
@@ -398,15 +435,16 @@ private:
 	const Template_base* templ;
 	std::vector<Type*> types;
 public:
-	TemplatedClass(const QName& name, const std::vector<Type*>& _types, Template_base* _templ)
-		: Class<T>(name), templ(_templ), types(_types)
+	TemplatedClass(const QName& name, const std::vector<Type*>& _types, Template_base* _templ, MemoryAccount* m)
+		: Class<T>(name, m), templ(_templ), types(_types)
 	{
 	}
 
-	T* getInstance(bool construct, ASObject* const* args, const unsigned int argslen)
+	T* getInstance(bool construct, ASObject* const* args, const unsigned int argslen, Class_base* realClass=NULL)
 	{
-		T* ret=new T;
-		ret->setClass(this);
+		if(realClass==NULL)
+			realClass=this;
+		T* ret=new (realClass->memoryAccount) T(realClass);
 		ret->setTypes(types);
 		if(construct)
 			this->handleConstruction(ret,args,argslen,true);
@@ -459,12 +497,13 @@ public:
 	{
 		QName instantiatedQName = getQName(types);
 
-		std::map<QName, Class_base*>::iterator it=getSys()->classes.find(instantiatedQName);
+		std::map<QName, Class_base*>::iterator it=getSys()->builtinClasses.find(instantiatedQName);
 		Class<T>* ret=NULL;
-		if(it==getSys()->classes.end()) //This class is not yet in the map, create it
+		if(it==getSys()->builtinClasses.end()) //This class is not yet in the map, create it
 		{
-			ret=new TemplatedClass<T>(instantiatedQName,types,this);
-			getSys()->classes.insert(std::make_pair(instantiatedQName,ret));
+			MemoryAccount* memoryAccount = getSys()->allocateMemoryAccount(instantiatedQName.name);
+			ret=new (getSys()->unaccountedMemory) TemplatedClass<T>(instantiatedQName,types,this,memoryAccount);
+			getSys()->builtinClasses.insert(std::make_pair(instantiatedQName,ret));
 			ret->prototype = _MNR(new_asobject());
 			T::sinit(ret);
 			if(ret->super)
@@ -490,7 +529,7 @@ public:
 		Template<T>* ret=NULL;
 		if(it==getSys()->templates.end()) //This class is not yet in the map, create it
 		{
-			ret=new Template<T>(name);
+			ret=new (getSys()->unaccountedMemory) Template<T>(name);
 			getSys()->templates.insert(std::make_pair(name,ret));
 		}
 		else

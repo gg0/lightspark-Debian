@@ -34,6 +34,7 @@
 #include "backends/security.h"
 #include "backends/image.h"
 #include "backends/extscriptobject.h"
+#include "memory_support.h"
 
 #ifdef ENABLE_CURL
 #include <curl/curl.h>
@@ -70,16 +71,14 @@ ParseThread* lightspark::getParseThread()
 	return pt;
 }
 
-RootMovieClip::RootMovieClip(LoaderInfo* li, _NR<ApplicationDomain> appDomain, bool isSys):parsingIsFailed(false),frameRate(0),
+RootMovieClip::RootMovieClip(LoaderInfo* li, _NR<ApplicationDomain> appDomain, Class_base* c):
+	MovieClip(c),
+	parsingIsFailed(false),frameRate(0),
 	toBind(false),finishedLoading(false),applicationDomain(appDomain)
 {
 	if(li)
 		li->incRef();
 	loaderInfo=_MNR(li);
-
-	//We set the protoype to a generic MovieClip
-	if(!isSys)
-		setClass(Class<MovieClip>::getClass());
 }
 
 
@@ -133,8 +132,8 @@ void RootMovieClip::setOnStage(bool staged)
 
 RootMovieClip* RootMovieClip::getInstance(LoaderInfo* li, _R<ApplicationDomain> appDomain)
 {
-	RootMovieClip* ret=new RootMovieClip(li, appDomain);
-	ret->setClass(Class<MovieClip>::getClass());
+	Class_base* movieClipClass = Class<MovieClip>::getClass();
+	RootMovieClip* ret=new (movieClipClass->memoryAccount) RootMovieClip(li, appDomain, movieClipClass);
 	return ret;
 }
 
@@ -163,27 +162,38 @@ void SystemState::staticDeinit()
 }
 
 SystemState::SystemState(uint32_t fileSize):
-	RootMovieClip(NULL,NullRef,true),terminated(0),renderRate(0),error(false),shutdown(false),
+	RootMovieClip(NULL,NullRef,NULL),terminated(0),renderRate(0),error(false),shutdown(false),
 	renderThread(NULL),inputThread(NULL),engineData(NULL),mainThread(0),dumpedSWFPathAvailable(0),
 	vmVersion(VMNONE),childPid(0),
 	parameters(NullRef),
 	invalidateQueueHead(NullRef),invalidateQueueTail(NullRef),showProfilingData(false),
 	currentVm(NULL),useInterpreter(true),useJit(false),exitOnError(ERROR_NONE),downloadManager(NULL),
-	extScriptObject(NULL),scaleMode(SHOW_ALL)
+	extScriptObject(NULL),scaleMode(SHOW_ALL),unaccountedMemory(NULL),tagsMemory(NULL),stringMemory(NULL)
 {
 	cookiesFileName = NULL;
 
 	setTLSSys(this);
 
 	mainThread = Thread::self();
-	applicationDomain=_MR(Class<ApplicationDomain>::getInstanceS());
+
+	unaccountedMemory = allocateMemoryAccount("Unaccounted");
+	tagsMemory = allocateMemoryAccount("Tags");
+	stringMemory = allocateMemoryAccount("Tiny_string");
+
+	null=_MR(new (unaccountedMemory) Null);
+	undefined=_MR(new (unaccountedMemory) Undefined);
+	systemDomain = _MR(Class<ApplicationDomain>::getInstanceS());
+	applicationDomain=_MR(Class<ApplicationDomain>::getInstanceS(systemDomain));
+
 	threadPool=new ThreadPool(this);
 	timerThread=new TimerThread(this);
 	pluginManager = new PluginManager;
 	audioManager=new AudioManager(pluginManager);
 	intervalManager=new IntervalManager();
 	securityManager=new SecurityManager();
+
 	loaderInfo=_MR(Class<LoaderInfo>::getInstanceS());
+	loaderInfo->applicationDomain = applicationDomain;
 	//If the size is not known those will stay at zero
 	loaderInfo->setBytesLoaded(fileSize);
 	loaderInfo->setBytesTotal(fileSize);
@@ -371,6 +381,45 @@ void SystemState::saveProfilingInformation()
 }
 #endif
 
+MemoryAccount* SystemState::allocateMemoryAccount(const tiny_string& name)
+{
+#ifdef MEMORY_USAGE_PROFILING
+	Locker l(memoryAccountsMutex);
+	memoryAccounts.emplace_back(name);
+	return &memoryAccounts.back();
+#else
+	return NULL;
+#endif
+}
+
+#ifdef MEMORY_USAGE_PROFILING
+void SystemState::saveMemoryUsageInformation(ofstream& out, int snapshotCount) const
+{
+	out << "#-----------\nsnapshot=" << snapshotCount << "\n#-----------\ntime=" << snapshotCount << endl;
+	uint32_t totalMem=0;
+	uint32_t totalCount=0;
+	Locker l(memoryAccountsMutex);
+	auto it=memoryAccounts.begin();
+	for(;it!=memoryAccounts.end();++it)
+	{
+		if(it->bytes>0)
+		{
+			totalMem+=it->bytes;
+			totalCount++;
+		}
+	}
+
+	out << "mem_heap_B=" << totalMem << "\nmem_heap_extra_B=0\nmem_stacks_B=0\nheap_tree=detailed" << endl;
+	out << "n" << totalCount << ": " << totalMem << " ActionScript_objects" << endl;
+	it=memoryAccounts.begin();
+	for(;it!=memoryAccounts.end();++it)
+	{
+		if(it->bytes>0)
+			out << " n0: " << it->bytes << " " << it->name << endl;
+	}
+}
+#endif
+
 void SystemState::finalize()
 {
 	RootMovieClip::finalize();
@@ -378,6 +427,9 @@ void SystemState::finalize()
 	invalidateQueueTail.reset();
 	parameters.reset();
 	frameListeners.clear();
+	null.reset();
+	undefined.reset();
+	systemDomain.reset();
 }
 
 SystemState::~SystemState()
@@ -446,8 +498,11 @@ void SystemState::destroy()
 	 * 'classes' and 'templates' maps.
 	 */
 
-	std::map<QName, Class_base*>::iterator it=classes.begin();
-	for(;it!=classes.end();++it)
+	for(auto it = builtinClasses.begin(); it != builtinClasses.end(); ++it)
+		it->second->finalize();
+	for(auto it = customClasses.begin(); it != customClasses.end(); ++it)
+		(*it)->finalize();
+	for(auto it = templates.begin(); it != templates.end(); ++it)
 		it->second->finalize();
 
 	//Here we clean the events queue
@@ -455,8 +510,10 @@ void SystemState::destroy()
 		currentVm->finalize();
 
 	//Free classes by decRef'ing them
-	for(auto i = classes.begin(); i != classes.end(); ++i)
+	for(auto i = builtinClasses.begin(); i != builtinClasses.end(); ++i)
 		i->second->decRef();
+	for(auto i = customClasses.begin(); i != customClasses.end(); ++i)
+		(*i)->decRef();
 
 	//Free templates by decRef'ing them
 	for(auto i = templates.begin(); i != templates.end(); ++i)
@@ -521,7 +578,7 @@ void SystemState::setShutdownFlag()
 	Locker l(mutex);
 	if(currentVm)
 	{
-		_R<ShutdownEvent> e(new ShutdownEvent);
+		_R<ShutdownEvent> e(new (unaccountedMemory) ShutdownEvent);
 		currentVm->addEvent(NullRef,e);
 	}
 	shutdown=true;
@@ -814,7 +871,8 @@ void SystemState::needsAVM2(bool avm2)
 		assert(!currentVm);
 		vmVersion=AVM2;
 		LOG(LOG_INFO,_("Creating VM"));
-		currentVm=new ABCVm(this);
+		MemoryAccount* vmDataMemory=this->allocateMemoryAccount("VM_Data");
+		currentVm=new ABCVm(this, vmDataMemory);
 	}
 	else
 		vmVersion=AVM1;
@@ -892,7 +950,14 @@ void SystemState::flushInvalidationQueue()
 	_NR<DisplayObject> cur=invalidateQueueHead;
 	while(!cur.isNull())
 	{
-		cur->invalidate();
+		if(cur->isOnStage())
+		{
+			IDrawable* d=cur->invalidate(stage, MATRIX());
+			//Check if the drawable is valid and forge a new job to
+			//render it and upload it to GPU
+			if(d)
+				addJob(new AsyncDrawJob(d,cur));
+		}
 		_NR<DisplayObject> next=cur->invalidateQueueNext;
 		cur->invalidateQueueNext=NullRef;
 		cur=next;
@@ -901,7 +966,7 @@ void SystemState::flushInvalidationQueue()
 	invalidateQueueTail=NullRef;
 }
 
-_NR<Stage> SystemState::getStage() const
+_NR<Stage> SystemState::getStage()
 {
 	stage->incRef();
 	return _MR(stage);
@@ -1034,7 +1099,7 @@ ParseThread::ParseThread(istream& in, _NR<ApplicationDomain> appDomain, Loader *
 }
 
 ParseThread::ParseThread(std::istream& in, RootMovieClip *root)
-  : version(0),applicationDomain(NullRef), //The application domain is loaded from the root
+  : version(0),applicationDomain(NullRef), //The application domain is not really needed since the root is already loaded
     f(in),zlibFilter(NULL),backend(NULL),loader(NULL),
     parsedObject(NullRef),url(),fileType(FT_UNKNOWN)
 {
@@ -1307,7 +1372,6 @@ void ParseThread::setRootMovie(RootMovieClip *root)
 	assert(root);
 	root->incRef();
 	parsedObject=_MNR(root);
-	applicationDomain=root->applicationDomain;
 }
 
 RootMovieClip* ParseThread::getRootMovie() const
@@ -1375,7 +1439,7 @@ void RootMovieClip::commitFrame(bool another)
 		else
 		{
 			this->incRef();
-			sys->currentVm->addEvent(NullRef, _MR(new InitFrameEvent(_MNR(this))));
+			sys->currentVm->addEvent(NullRef, _MR(new (sys->unaccountedMemory) InitFrameEvent(_MNR(this))));
 		}
 	}
 }
@@ -1516,7 +1580,7 @@ void SystemState::tick()
 	/* Step 3: create legacy objects, which are new in this frame (top-down),
 	 * run their constructors (bottom-up)
 	 * and their frameScripts (Step 5) (bottom-up) */
-	getSys()->currentVm->addEvent(NullRef, _MR(new InitFrameEvent()));
+	getSys()->currentVm->addEvent(NullRef, _MR(new (unaccountedMemory) InitFrameEvent()));
 
 	/* Step 4: dispatch frameConstructed events */
 	/* (TODO: should be run between step 3 and 5 */
@@ -1544,7 +1608,7 @@ void SystemState::tick()
 	/* TODO: Step 7: dispatch render event (Assuming stage.invalidate() has been called) */
 
 	/* Step 0: Set current frame number to the next frame */
-	_R<AdvanceFrameEvent> advFrame = _MR(new AdvanceFrameEvent());
+	_R<AdvanceFrameEvent> advFrame = _MR(new (unaccountedMemory) AdvanceFrameEvent());
 	if(getSys()->currentVm->addEvent(NullRef, advFrame))
 		advFrame->done.wait();
 }
@@ -1560,6 +1624,20 @@ void SystemState::resizeCompleted() const
 		stage->incRef();
 		currentVm->addEvent(_MR(stage),_MR(Class<Event>::getInstanceS("resize",false)));
 	}
+}
+
+Null* SystemState::getNullRef() const
+{
+	Null* ret=null.getPtr();
+	ret->incRef();
+	return ret;
+}
+
+Undefined* SystemState::getUndefinedRef() const
+{
+	Undefined* ret=undefined.getPtr();
+	ret->incRef();
+	return ret;
 }
 
 /* This is run in vm's thread context */

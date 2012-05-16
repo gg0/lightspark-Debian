@@ -20,51 +20,28 @@
 #ifndef XML_H
 #define XML_H
 #include "asobject.h"
-#include <libxml/tree.h>
-#include <libxml++/parsers/domparser.h>
-#include <libxml++/exceptions/internal_error.h>
-#include <libxml/parserInternals.h>//For xmlCreateFileParserCtxt().
+#include "backends/xml_support.h"
 
 namespace lightspark
 {
 class XMLList;
-class XML: public ASObject
+class XML: public ASObject, public XMLBase
 {
 friend class XMLList;
+public:
+	typedef std::vector<_R<XML>> XMLVector;
 private:
-#ifdef XMLPP_2_35_1
-	//Create a utility derived class from xmlpp::DomParser since we want to use the recovery mode
-	class RecoveryDomParser:public xmlpp::DomParser
-	{
-	public:
-		void parse_memory_raw(const unsigned char* contents, size_type bytes_count);
-	};
-	//Also create a utility derived class from xmlpp::Document to access the protected constructor
-	class RecoveryDocument: public xmlpp::Document
-	{
-	public:
-		RecoveryDocument(_xmlDoc* d);
-	};
-	//The parser will destroy the document and all the childs on destruction
-	RecoveryDomParser parser;
-#else
-	xmlpp::DomParser parser;
-#endif
 	//Pointer to the root XML element, the one that owns the parser that created this node
 	_NR<XML> root;
 	//The node this object represent
 	xmlpp::Node* node;
 	static void recursiveGetDescendantsByQName(_R<XML> root, xmlpp::Node* node, const tiny_string& name, const tiny_string& ns, 
-			std::vector<_R<XML>>& ret);
+			XMLVector& ret);
 	tiny_string toString_priv();
-	void buildFromString(const std::string& str);
 	bool constructed;
 	bool nodesEqual(xmlpp::Node *a, xmlpp::Node *b) const;
 	XMLList* getAllAttributes();
-	void getText(std::vector<_R<XML>> &ret);
-	std::string parserQuirks(const std::string& str);
-	std::string quirkCData(const std::string& str);
-	std::string quirkXMLDeclarationInMiddle(const std::string& str);
+	void getText(XMLVector& ret);
 	bool ignoreComments;
 	bool ignoreProcessingInstructions;
 	bool ignoreWhitespace;
@@ -74,12 +51,13 @@ private:
 	 * @param name The name of the wanted children, "*" for all children
 	 *
 	 */
-	void childrenImpl(std::vector<_R<XML> >& ret, const tiny_string& name);
+	void childrenImpl(XMLVector& ret, const tiny_string& name);
+	void childrenImpl(XMLVector& ret, uint32_t index);
 public:
-	XML();
-	XML(const std::string& str);
-	XML(_R<XML> _r, xmlpp::Node* _n);
-	XML(xmlpp::Node* _n);
+	XML(Class_base* c);
+	XML(Class_base* c,const std::string& str);
+	XML(Class_base* c,_R<XML> _r, xmlpp::Node* _n);
+	XML(Class_base* c,xmlpp::Node* _n);
 	void finalize();
 	ASFUNCTION(_constructor);
 	ASFUNCTION(_toString);
@@ -90,6 +68,7 @@ public:
 	ASFUNCTION(attributes);
 	ASFUNCTION(attribute);
 	ASFUNCTION(appendChild);
+	ASFUNCTION(length);
 	ASFUNCTION(localName);
 	ASFUNCTION(name);
 	ASFUNCTION(descendants);
@@ -101,9 +80,10 @@ public:
 	ASFUNCTION(elements);
 	static void buildTraits(ASObject* o){};
 	static void sinit(Class_base* c);
-	void getDescendantsByQName(const tiny_string& name, const tiny_string& ns, std::vector<_R<XML> >& ret);
+	void getDescendantsByQName(const tiny_string& name, const tiny_string& ns, XMLVector& ret);
 	_NR<ASObject> getVariableByMultiname(const multiname& name, GET_VARIABLE_OPTION opt);
 	bool hasPropertyByMultiname(const multiname& name, bool considerDynamic);
+	void setVariableByMultiname(const multiname& name, ASObject* o);
 	tiny_string toString();
 	void toXMLString_priv(xmlBufferPtr buf);
 	bool hasSimpleContent() const;

@@ -29,19 +29,19 @@ namespace lightspark
 class XMLList: public ASObject
 {
 private:
-	std::vector<_R<XML> > nodes;
+	std::vector<_R<XML>, reporter_allocator<_R<XML>>> nodes;
 	bool constructed;
 	tiny_string toString_priv() const;
 	void buildFromString(const std::string& str);
 	void toXMLString_priv(xmlBufferPtr buf) const;
 public:
-	XMLList():constructed(false){}
+	XMLList(Class_base* c);
 	/*
 	   Special constructor to build empty XMLList out of AS code
 	*/
-	XMLList(bool c):constructed(c){assert(c);}
-	XMLList(const std::vector<_R<XML> >& r):nodes(r),constructed(true){}
-	XMLList(const std::string& str);
+	XMLList(Class_base* cb,bool c);
+	XMLList(Class_base* c,const XML::XMLVector& r);
+	XMLList(Class_base* c,const std::string& str);
 	void finalize();
 	static void buildTraits(ASObject* o){};
 	static void sinit(Class_base* c);
@@ -61,7 +61,7 @@ public:
 	_NR<ASObject> getVariableByMultiname(const multiname& name, GET_VARIABLE_OPTION opt);
 	void setVariableByMultiname(const multiname& name, ASObject* o);
 	bool hasPropertyByMultiname(const multiname& name, bool considerDynamic);
-	void getDescendantsByQName(const tiny_string& name, const tiny_string& ns, std::vector<_R<XML> >& ret);
+	void getDescendantsByQName(const tiny_string& name, const tiny_string& ns, XML::XMLVector& ret);
 	_NR<XML> convertToXML() const;
 	bool hasSimpleContent() const;
 	bool hasComplexContent() const;

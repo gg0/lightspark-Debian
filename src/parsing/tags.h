@@ -29,6 +29,7 @@
 #include "scripting/flash/text/flashtext.h"
 #include "scripting/flash/utils/flashutils.h"
 #include "scripting/flash/media/flashmedia.h"
+#include "scripting/flash/display/BitmapData.h"
 #include "scripting/class.h"
 
 namespace lightspark
@@ -100,7 +101,7 @@ public:
 	DictionaryTag(RECORDHEADER h):Tag(h),bindedTo(NULL),loadedFrom(NULL){ }
 	virtual TAGTYPE getType()const{ return DICT_TAG; }
 	virtual int getId()=0;
-	virtual ASObject* instance() const { return NULL; };
+	virtual ASObject* instance(Class_base* c=NULL) const { return NULL; };
 	void setLoadedFrom(RootMovieClip* r){loadedFrom=r;}
 };
 
@@ -123,15 +124,16 @@ protected:
 	RECT ShapeBounds;
 	SHAPEWITHSTYLE Shapes;
 	/* tokens are computed from Shapes */
-	std::vector<GeomToken> tokens;
-	DefineShapeTag(RECORDHEADER h,int v):DictionaryTag(h),Shapes(v) {}
+	tokensVector tokens;
+	DefineShapeTag(RECORDHEADER h,int v);
 public:
 	DefineShapeTag(RECORDHEADER h, std::istream& in);
 	virtual int getId(){ return ShapeId; }
-	ASObject* instance() const
+	ASObject* instance(Class_base* c=NULL) const
 	{
-		Shape* ret=new Shape(tokens, 1.0f/20.0f);
-		ret->setClass(Class<Shape>::getClass());
+		if(c==NULL)
+			c=Class<Shape>::getClass();
+		Shape* ret=new (c->memoryAccount) Shape(c, tokens, 1.0f/20.0f);
 		return ret;
 	}
 };
@@ -180,7 +182,7 @@ public:
 	DefineMorphShapeTag(RECORDHEADER h, std::istream& in);
 	int getId(){ return CharacterId; }
 	void renderImpl(RenderContext& ctxt, bool maskEnabled, number_t t1,number_t t2,number_t t3,number_t t4) const;
-	virtual ASObject* instance() const;
+	virtual ASObject* instance(Class_base* c=NULL) const;
 };
 
 
@@ -221,7 +223,7 @@ private:
 public:
 	DefineEditTextTag(RECORDHEADER h, std::istream& s);
 	int getId(){ return CharacterID; }
-	ASObject* instance() const;
+	ASObject* instance(Class_base* c=NULL) const;
 };
 
 class DefineSoundTag: public DictionaryTag
@@ -236,7 +238,7 @@ private:
 public:
 	DefineSoundTag(RECORDHEADER h, std::istream& s);
 	virtual int getId() { return SoundId; }
-	ASObject* instance() const;
+	ASObject* instance(Class_base* c=NULL) const;
 };
 
 class StartSoundTag: public Tag
@@ -357,7 +359,7 @@ private:
 public:
 	DefineButton2Tag(RECORDHEADER h, std::istream& in);
 	virtual int getId(){ return ButtonId; }
-	ASObject* instance() const;
+	ASObject* instance(Class_base* c=NULL) const;
 };
 
 class KERNINGRECORD
@@ -375,15 +377,7 @@ public:
 	DefineBinaryDataTag(RECORDHEADER h,std::istream& s);
 	~DefineBinaryDataTag() { delete[] bytes; }
 	virtual int getId(){return Tag;} 
-
-	ASObject* instance() const
-	{
-		uint8_t* b = new uint8_t[len];
-		memcpy(b,bytes,len);
-		ByteArray* ret=new ByteArray(b, len);
-		ret->setClass(Class<ByteArray>::getClass());
-		return ret;
-	}
+	ASObject* instance(Class_base* c=NULL) const;
 };
 
 class FontTag: public DictionaryTag
@@ -504,13 +498,13 @@ private:
 	UI8 GlyphBits;
 	UI8 AdvanceBits;
 	std::vector < TEXTRECORD > TextRecords;
-	mutable std::vector<GeomToken> tokens;
+	mutable tokensVector tokens;
 	void computeCached() const;
 public:
 	int version;
 	DefineTextTag(RECORDHEADER h, std::istream& in,int v=1);
 	int getId(){ return CharacterId; }
-	ASObject* instance() const;
+	ASObject* instance(Class_base* c=NULL) const;
 };
 
 class DefineText2Tag: public DefineTextTag
@@ -527,7 +521,7 @@ private:
 public:
 	DefineSpriteTag(RECORDHEADER h, std::istream& in);
 	virtual int getId(){ return SpriteID; }
-	virtual ASObject* instance() const;
+	virtual ASObject* instance(Class_base* c=NULL) const;
 };
 
 class ProtectTag: public ControlTag
@@ -549,7 +543,7 @@ private:
 public:
 	DefineBitsLosslessTag(RECORDHEADER h, std::istream& in, int version);
 	int getId(){ return CharacterId; }
-	ASObject* instance() const;
+	ASObject* instance(Class_base* c=NULL) const;
 };
 
 class DefineBitsTag: public DictionaryTag, public BitmapData
@@ -570,7 +564,7 @@ private:
 public:
 	DefineBitsJPEG2Tag(RECORDHEADER h, std::istream& in);
 	int getId(){ return CharacterId; }
-	ASObject* instance() const;
+	ASObject* instance(Class_base* c=NULL) const;
 };
 
 class DefineBitsJPEG3Tag: public DictionaryTag, public BitmapData
@@ -582,7 +576,7 @@ public:
 	DefineBitsJPEG3Tag(RECORDHEADER h, std::istream& in);
 	~DefineBitsJPEG3Tag();
 	int getId(){ return CharacterId; }
-	ASObject* instance() const;
+	ASObject* instance(Class_base* c=NULL) const;
 };
 
 class DefineScalingGridTag: public Tag
@@ -638,7 +632,7 @@ private:
 public:
 	DefineVideoStreamTag(RECORDHEADER h, std::istream& in);
 	int getId(){ return CharacterID; }
-	ASObject* instance() const;
+	ASObject* instance(Class_base* c=NULL) const;
 };
 
 class SoundStreamBlockTag: public Tag

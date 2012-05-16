@@ -84,6 +84,11 @@ void Video::finalize()
 	netStream.reset();
 }
 
+Video::Video(Class_base* c, uint32_t w, uint32_t h)
+	: DisplayObject(c),width(w),height(h),videoWidth(0),videoHeight(0),initialized(false),netStream(NullRef)
+{
+}
+
 Video::~Video()
 {
 }
@@ -94,6 +99,14 @@ void Video::renderImpl(RenderContext& ctxt, bool maskEnabled, number_t t1,number
 	if(skipRender(maskEnabled))
 		return;
 
+	//Video is especially optimized for GL rendering
+	//It needs special treatment for SOFTWARE contextes
+	if(ctxt.contextType != RenderContext::GL)
+	{
+		LOG(LOG_NOT_IMPLEMENTED, "Video::renderImpl on SOFTWARE context is not yet supported");
+		return;
+	}
+
 	if(!netStream.isNull() && netStream->lockIfReady())
 	{
 		//All operations here should be non blocking
@@ -101,21 +114,17 @@ void Video::renderImpl(RenderContext& ctxt, bool maskEnabled, number_t t1,number
 		videoWidth=netStream->getVideoWidth();
 		videoHeight=netStream->getVideoHeight();
 
-		MatrixApplier ma(getConcatenatedMatrix());
-		//if(!isSimple())
-		//	rt->acquireTempBuffer(0,width,0,height);
+		const MATRIX totalMatrix=getConcatenatedMatrix();
+		float m[16];
+		totalMatrix.get4DMatrix(m);
+		ctxt.lsglLoadMatrixf(m);
 
-		//Enable texture lookup and YUV to RGB conversion
-		glUniform1f(ctxt.maskUniform, 0);
-		glUniform1f(ctxt.yuvUniform, 1);
-		glUniform1f(ctxt.alphaUniform, clippedAlpha());
+		//Enable YUV to RGB conversion
 		//width and height will not change now (the Video mutex is acquired)
-		ctxt.renderTextured(netStream->getTexture(), 0, 0, width, height);
-
-		//if(!isSimple())
-		//	rt->blitTempBuffer(0,width,0,height);
+		ctxt.renderTextured(netStream->getTexture(), 0, 0, width, height,
+			clippedAlpha(), RenderContext::YUV_MODE,
+			RenderContext::NO_MASK);
 		
-		ma.unapply();
 		netStream->unlock();
 	}
 }
@@ -215,7 +224,7 @@ _NR<InteractiveObject> Video::hitTestImpl(_NR<InteractiveObject> last, number_t 
 		return NullRef;
 }
 
-Sound::Sound():downloader(NULL),stopped(false),audioDecoder(NULL),audioStream(NULL),
+Sound::Sound(Class_base* c):EventDispatcher(c),downloader(NULL),stopped(false),audioDecoder(NULL),audioStream(NULL),
 	bytesLoaded(0),bytesTotal(0),length(60*1000)
 {
 }
@@ -302,7 +311,7 @@ ASFUNCTIONBODY(Sound,play)
 		getSys()->addJob(th);
 	}
 
-	return new Undefined;
+	return getSys()->getUndefinedRef();
 }
 
 void Sound::execute()
@@ -316,6 +325,7 @@ void Sound::execute()
 	//We need to catch possible EOF and other error condition in the non reliable stream
 	try
 	{
+#ifdef ENABLE_LIBAVCODEC
 		streamDecoder=new FFMpegStreamDecoder(s);
 		if(!streamDecoder->isValid())
 			threadAbort();
@@ -336,6 +346,7 @@ void Sound::execute()
 			if(threadAborting)
 				throw JobTerminationException();
 		}
+#endif //ENABLE_LIBAVCODEC
 	}
 	catch(LightsparkException& e)
 	{

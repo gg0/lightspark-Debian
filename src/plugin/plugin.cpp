@@ -34,7 +34,7 @@
 #define PLUGIN_NAME    "Shockwave Flash"
 #define FAKE_PLUGIN_NAME    "Lightspark player"
 #define MIME_TYPES_DESCRIPTION  MIME_TYPES_HANDLED ":swf:" PLUGIN_NAME ";" FAKE_MIME_TYPE ":swfls:" FAKE_PLUGIN_NAME
-#define PLUGIN_DESCRIPTION "Shockwave Flash 11.1 r" SHORTVERSION
+#define PLUGIN_DESCRIPTION "Shockwave Flash 12.1 r" SHORTVERSION
 
 using namespace std;
 using namespace lightspark;
@@ -63,9 +63,7 @@ NPDownloadManager::NPDownloadManager(NPP _instance):instance(_instance)
 lightspark::Downloader* NPDownloadManager::download(const lightspark::URLInfo& url, bool cached, lightspark::ILoadable* owner)
 {
 	// Handle RTMP requests internally, not through NPAPI
-	if(url.getProtocol()=="rtmp" ||
-	   url.getProtocol()=="rtmpe" ||
-	   url.getProtocol()=="rtmps")
+	if(url.isRTMP())
 	{
 		return StandaloneDownloadManager::download(url, cached, owner);
 	}
@@ -90,9 +88,7 @@ lightspark::Downloader* NPDownloadManager::downloadWithData(const lightspark::UR
 		const char* contentType, lightspark::ILoadable* owner)
 {
 	// Handle RTMP requests internally, not through NPAPI
-	if(url.getProtocol()=="rtmp" ||
-	   url.getProtocol()=="rtmpe" ||
-	   url.getProtocol()=="rtmps")
+	if(url.isRTMP())
 	{
 		return StandaloneDownloadManager::downloadWithData(url, data, contentType, owner);
 	}
@@ -298,6 +294,10 @@ void NS_DestroyPluginInstance(nsPluginInstanceBase * aPlugin)
 	setTLSSys( NULL );
 }
 
+#ifdef MEMORY_USAGE_PROFILING
+static MemoryAccount sysAccount("sysAccount");
+#endif
+
 ////////////////////////////////////////
 //
 // nsPluginInstance class implementation
@@ -308,7 +308,11 @@ nsPluginInstance::nsPluginInstance(NPP aInstance, int16_t argc, char** argn, cha
 {
 	LOG(LOG_INFO, "Lightspark version " << VERSION << " Copyright 2009-2012 Alessandro Pignotti and others");
 	setTLSSys( NULL );
-	m_sys=new lightspark::SystemState(0);
+#ifdef MEMORY_USAGE_PROFILING
+	m_sys=new (&sysAccount) lightspark::SystemState(0);
+#else
+	m_sys=new ((MemoryAccount*)NULL) lightspark::SystemState(0);
+#endif
 	//Files running in the plugin have REMOTE sandbox
 	m_sys->securityManager->setSandboxType(lightspark::SecurityManager::REMOTE);
 	//Find flashvars argument

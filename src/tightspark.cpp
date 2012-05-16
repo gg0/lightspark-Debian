@@ -81,7 +81,12 @@ int main(int argc, char* argv[])
 	Log::setLogLevel(log_level);
 	SystemState::staticInit();
 	//NOTE: see SystemState declaration
-	SystemState* sys=new SystemState(0);
+#ifdef MEMORY_USAGE_PROFILING
+	MemoryAccount sysAccount("sysAccount");
+	SystemState* sys=new (&sysAccount) SystemState(0);
+#else
+	SystemState* sys=new ((MemoryAccount*)NULL) SystemState(0);
+#endif
 	setTLSSys(sys);
 
 	//Set a bit of SystemState using parameters
@@ -104,7 +109,8 @@ int main(int argc, char* argv[])
 	//setrlimit(RLIMIT_AS,&rl);
 #endif
 
-	ABCVm* vm=new ABCVm(sys);
+	MemoryAccount* vmDataMemory=sys->allocateMemoryAccount("VM_Data");
+	ABCVm* vm=new ABCVm(sys, vmDataMemory);
 	sys->currentVm=vm;
 	vector<ABCContext*> contexts;
 	for(unsigned int i=0;i<fileNames.size();i++)
@@ -113,10 +119,14 @@ int main(int argc, char* argv[])
 		if(f.is_open())
 		{
 			sys->incRef();
-			ABCContext* context=new ABCContext(_MR(sys), f);
+#ifdef MEMORY_USAGE_PROFILING
+			ABCContext* context=new ABCContext(_MR(sys), f, &sysAccount);
+#else
+			ABCContext* context=new ABCContext(_MR(sys), f, NULL);
+#endif
 			contexts.push_back(context);
 			f.close();
-			vm->addEvent(NullRef,_MR(new ABCContextInitEvent(context,false)));
+			vm->addEvent(NullRef,_MR(new (sys->unaccountedMemory) ABCContextInitEvent(context,false)));
 		}
 		else
 		{

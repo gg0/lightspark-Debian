@@ -28,7 +28,6 @@ namespace lightspark
 {
 
 enum VertexAttrib { VERTEX_ATTRIB=0, COLOR_ATTRIB, TEXCOORD_ATTRIB};
-enum LSGL_MATRIX {LSGL_PROJECTION=0, LSGL_MODELVIEW};
 
 /*
  * The RenderContext contains all (public) functions that are needed by DisplayObjects to draw themselves.
@@ -36,14 +35,71 @@ enum LSGL_MATRIX {LSGL_PROJECTION=0, LSGL_MODELVIEW};
 class RenderContext
 {
 protected:
-	GLuint fboId;
-
+	/* Masks */
+	std::vector<DisplayObject*> maskStack;
 	/* Modelview matrix manipulation */
 	static const GLfloat lsIdentityMatrix[16];
 	GLfloat lsMVPMatrix[16];
 	std::stack<GLfloat*> lsglMatrixStack;
+	~RenderContext(){}
+	void lsglMultMatrixf(const GLfloat *m);
+public:
+	enum CONTEXT_TYPE { CAIRO=0, GL };
+	RenderContext(CONTEXT_TYPE t);
+	CONTEXT_TYPE contextType;
+	/* Masks */
+	/**
+		Add a mask to the stack mask
+		@param d The DisplayObject used as a mask
+		\pre A reference is not acquired, we assume the object life is protected until the corresponding pop
+	*/
+	void pushMask(DisplayObject* d)
+	{
+		maskStack.push_back(d);
+	}
+	/**
+		Remove the last pushed mask
+	*/
+	void popMask()
+	{
+		maskStack.pop_back();
+	}
+	bool isMaskPresent()
+	{
+		return !maskStack.empty();
+	}
+
+	/* Modelview matrix manipulation */
+	void lsglLoadIdentity();
+	void lsglLoadMatrixf(const GLfloat *m);
+	void lsglScalef(GLfloat scaleX, GLfloat scaleY, GLfloat scaleZ);
+	void lsglTranslatef(GLfloat translateX, GLfloat translateY, GLfloat translateZ);
+
+	enum COLOR_MODE { RGB_MODE=0, YUV_MODE };
+	enum MASK_MODE { NO_MASK = 0, ENABLE_MASK };
+	/* Textures */
+	/**
+		Render a quad of given size using the given chunk
+	*/
+	virtual void renderTextured(const TextureChunk& chunk, int32_t x, int32_t y, uint32_t w, uint32_t h,
+			float alpha, COLOR_MODE colorMode, MASK_MODE maskMode)=0;
+	/**
+	 * Get the right CachedSurface from an object
+	 */
+	virtual const CachedSurface& getCachedSurface(const DisplayObject* obj) const=0;
+};
+
+class GLRenderContext: public RenderContext
+{
+protected:
+	GLuint fboId;
+
 	GLint projectionMatrixUniform;
 	GLint modelviewMatrixUniform;
+
+	GLint yuvUniform;
+	GLint maskUniform;
+	GLint alphaUniform;
 
 	/* Textures */
 	Mutex mutexLargeTexture;
@@ -58,71 +114,65 @@ protected:
 	};
 	std::vector<LargeTexture> largeTextures;
 
-	/* Masks */
-	class MaskData
-	{
-	public:
-		DisplayObject* d;
-		MATRIX m;
-		MaskData(DisplayObject* _d, const MATRIX& _m):d(_d),m(_m){}
-	};
-	std::vector<MaskData> maskStack;
-public:
-	RenderContext() : largeTextureSize(0)
-	{
-		lsglLoadIdentity();
-	}
-	/* Modelview matrix manipulation */
-	void lsglLoadMatrixf(const GLfloat *m);
-	void lsglLoadIdentity();
-	void lsglPushMatrix();
-	void lsglPopMatrix();
-	void lsglMultMatrixf(const GLfloat *m);
-	void lsglScalef(GLfloat scaleX, GLfloat scaleY, GLfloat scaleZ);
-	void lsglTranslatef(GLfloat translateX, GLfloat translateY, GLfloat translateZ);
-	void lsglOrtho(GLfloat l, GLfloat r, GLfloat b, GLfloat t, GLfloat n, GLfloat f);
+	void renderMaskToTmpBuffer();
+	~GLRenderContext(){}
+
+	enum LSGL_MATRIX {LSGL_PROJECTION=0, LSGL_MODELVIEW};
 	/*
 	 * Uploads the current matrix as the specified type.
 	 */
 	void setMatrixUniform(LSGL_MATRIX m) const;
-
-	/* Textures */
-	/**
-		Render a quad of given size using the given chunk
-	*/
-	void renderTextured(const TextureChunk& chunk, int32_t x, int32_t y, uint32_t w, uint32_t h);
-
-	/* Masks */
-	/**
-		Add a mask to the stack mask
-		@param d The DisplayObject used as a mask
-		@param m The total matrix from the parent of the object to stage
-		\pre A reference is not acquired, we assume the object life is protected until the corresponding pop
-	*/
-	void pushMask(DisplayObject* d, const MATRIX& m)
+public:
+	GLRenderContext() : RenderContext(GL), largeTextureSize(0)
 	{
-		maskStack.push_back(MaskData(d,m));
 	}
-	/**
-		Remove the last pushed mask
-	*/
-	void popMask()
-	{
-		maskStack.pop_back();
-	}
-	bool isMaskPresent()
-	{
-		return !maskStack.empty();
-	}
-	void renderMaskToTmpBuffer();
+	void lsglOrtho(GLfloat l, GLfloat r, GLfloat b, GLfloat t, GLfloat n, GLfloat f);
 
-	/* Misc uniforms TODO: create setters for them */
-	GLint yuvUniform;
-	GLint maskUniform;
-	GLint alphaUniform;
+	void renderTextured(const TextureChunk& chunk, int32_t x, int32_t y, uint32_t w, uint32_t h,
+			float alpha, COLOR_MODE colorMode, MASK_MODE maskMode);
+	/**
+	 * Get the right CachedSurface from an object
+	 * In the OpenGL case we just get the CachedSurface inside the object itself
+	 */
+	const CachedSurface& getCachedSurface(const DisplayObject* obj) const;
 
 	/* Utility */
 	static bool handleGLErrors();
+};
+
+class CairoRenderContext: public RenderContext
+{
+private:
+	std::map<const DisplayObject*, CachedSurface> customSurfaces;
+	cairo_t* cr;
+	static cairo_surface_t* getCairoSurfaceForData(uint8_t* buf, uint32_t width, uint32_t height);
+public:
+	CairoRenderContext(uint8_t* buf, uint32_t width, uint32_t height);
+	virtual ~CairoRenderContext();
+	void renderTextured(const TextureChunk& chunk, int32_t x, int32_t y, uint32_t w, uint32_t h,
+			float alpha, COLOR_MODE colorMode, MASK_MODE maskMode);
+	/**
+	 * Get the right CachedSurface from an object
+	 * In the Cairo case we get the right CachedSurface out of the map
+	 */
+	const CachedSurface& getCachedSurface(const DisplayObject* obj) const;
+
+	/**
+	 * The CairoRenderContext acquires the ownership of the buffer
+	 * it will be freed on destruction
+	 */
+	CachedSurface& allocateCustomSurface(const DisplayObject* d, uint8_t* texBuf);
+	/**
+	 * Do a fast non filtered, non scaled blit of ARGB data
+	 */
+	void simpleBlit(int32_t destX, int32_t destY, uint8_t* sourceBuf, uint32_t sourceTotalWidth, uint32_t sourceTotalHeight,
+			int32_t sourceX, int32_t sourceY, uint32_t sourceWidth, uint32_t sourceHeight);
+	/**
+	 * Do an optionally filtered blit with transformation
+	 */
+	enum FILTER_MODE { FILTER_NONE = 0, FILTER_SMOOTH };
+	void transformedBlit(const MATRIX& m, uint8_t* sourceBuf, uint32_t sourceTotalWidth, uint32_t sourceTotalHeight,
+			FILTER_MODE filterMode);
 };
 
 }

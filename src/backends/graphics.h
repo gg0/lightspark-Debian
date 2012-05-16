@@ -30,11 +30,13 @@
 #include <cairo.h>
 #include <pango/pango.h>
 #include "backends/geometry.h"
+#include "memory_support.h"
 
 namespace lightspark
 {
 
 class DisplayObject;
+class InvalidateQueue;
 
 class TextureBuffer
 {
@@ -116,26 +118,18 @@ public:
 	uint32_t getAllocHeight() const { return allocHeight;}
 };
 
-class MatrixApplier
-{
-private:
-	struct packedMatrix
-	{
-		float data[4][4];
-	};
-	std::vector<packedMatrix> savedStack;
-public:
-	MatrixApplier();
-	MatrixApplier(const MATRIX& m);
-	void concat(const MATRIX& m);
-	void unapply();
-};
-
 class TextureChunk
 {
-friend class RenderContext;
+friend class GLRenderContext;
+friend class CairoRenderContext;
 friend class RenderThread;
 private:
+	/*
+	 * For GLRenderContext texId is an OpenGL texture id and chunks is an array of used
+	 * chunks inside such texture.
+	 * For CairoRenderContext texId is an arbitrary id for the texture and chunks is
+	 * not used.
+	 */
 	uint32_t texId;
 	uint32_t* chunks;
 	TextureChunk(uint32_t w, uint32_t h);
@@ -180,28 +174,11 @@ public:
 	virtual void uploadFence()=0;
 };
 
-/**
-	The base class for render jobs based on cairo
-	Stores an internal copy of the data to be rendered
-*/
-class CairoRenderer: public ITextureUploadable, public IThreadJob
+class IDrawable
 {
 protected:
-	virtual ~CairoRenderer();
-	/**
-	 * The ASObject owning this render request. We incRef/decRef it
-	 * in our constructor/destructor to make sure that it does no go away
-	 * (especially the CachedSurface reference below) while we do our work.
-	 */
-	ASObject* owner;
-	/**
-	  The target texture for the rendering, must be non const as the operation will update the size
-	*/
-	CachedSurface& surface;
-	/**
-	  The whole transformation matrix that is applied to the rendered object
-	*/
-	MATRIX matrix;
+	int32_t width;
+	int32_t height;
 	/*
 	   The minimal x coordinate for all the points being drawn, in local coordinates
 	*/
@@ -211,18 +188,65 @@ protected:
 	*/
 	int32_t yOffset;
 	float alpha;
-	int32_t width;
-	int32_t height;
-	/*
-	   A pointer to a memory buffer where cairo will draw
-	*/
+public:
+	IDrawable(int32_t w, int32_t h, int32_t x, int32_t y, float a):
+		width(w),height(h),xOffset(x),yOffset(y),alpha(a){}
+	virtual ~IDrawable(){}
+	virtual uint8_t* getPixelBuffer()=0;
+	int32_t getWidth() const { return width; }
+	int32_t getHeight() const { return height; }
+	int32_t getXOffset() const { return xOffset; }
+	int32_t getYOffset() const { return yOffset; }
+	float getAlpha() const { return alpha; }
+};
+
+class AsyncDrawJob: public IThreadJob, public ITextureUploadable
+{
+private:
+	IDrawable* drawable;
+	/**
+	 * The DisplayObject owning this render request. We incRef/decRef it
+	 * in our constructor/destructor to make sure that it does not go away
+	 */
+	_R<DisplayObject> owner;
 	uint8_t* surfaceBytes;
+	bool uploadNeeded;
+public:
+	/*
+	 * @param o The DisplayObject that is being rendered. It is a reference to
+	 * make sure the object survives until the end of the rendering
+	 * @param d IDrawable to be rendered asynchronously. The pointer is now
+	 * owned by this instance
+	 */
+	AsyncDrawJob(IDrawable* d, _R<DisplayObject> o);
+	~AsyncDrawJob();
+	//IThreadJob interface
+	void execute();
+	void threadAbort();
+	void jobFence();
+	//ITextureUploadable interface
+	void upload(uint8_t* data, uint32_t w, uint32_t h) const;
+	void sizeNeeded(uint32_t& w, uint32_t& h) const;
+	const TextureChunk& getTexture();
+	void uploadFence();
+};
+
+/**
+	The base class for render jobs based on cairo
+	Stores an internal copy of the data to be rendered
+*/
+class CairoRenderer: public IDrawable
+{
+protected:
+	/**
+	  The whole transformation matrix that is applied to the rendered object
+	*/
+	MATRIX matrix;
 	/*
 	   The scale to be applied in both the x and y axis.
 	   Useful to adapt points defined in pixels and twips (1/20 of pixel)
 	*/
 	const float scaleFactor;
-	bool uploadNeeded;
 	/*
 	 * There are reports (http://lists.freedesktop.org/archives/cairo/2011-September/022247.html)
 	 * that cairo is not threadsafe, and I have encountered some spurious crashes, too.
@@ -231,31 +255,22 @@ protected:
 	 *       will serialize the thread pool when all thread pool workers are executing CairoRenderers!
 	 */
 	static StaticMutex cairoMutex;
-	static cairo_matrix_t MATRIXToCairo(const MATRIX& matrix);
 	static void cairoClean(cairo_t* cr);
-	cairo_surface_t* allocateSurface();
+	cairo_surface_t* allocateSurface(uint8_t*& buf);
 	virtual void executeDraw(cairo_t* cr)=0;
 public:
-	CairoRenderer(ASObject* _o, CachedSurface& _t, const MATRIX& _m,
-				int32_t _x, int32_t _y, int32_t _w, int32_t _h, float _s, float _a);
-	//ITextureUploadable interface
-	void sizeNeeded(uint32_t& w, uint32_t& h) const;
-	void upload(uint8_t* data, uint32_t w, uint32_t h) const;
-	const TextureChunk& getTexture();
-	void uploadFence();
-	//IThreadJob interface
-	void threadAbort();
-	void jobFence();
-	void execute();
+	CairoRenderer(const MATRIX& _m, int32_t _x, int32_t _y, int32_t _w, int32_t _h, float _s, float _a);
+	//IDrawable interface
+	uint8_t* getPixelBuffer();
 	/*
 	 * Converts data (which is in RGB format) to the format internally used by cairo.
 	 */
-	static void convertBitmapToCairo(std::vector<uint8_t>& data, uint8_t* inData, uint32_t width,
+	static void convertBitmapToCairo(std::vector<uint8_t, reporter_allocator<uint8_t>>& data, uint8_t* inData, uint32_t width,
 			uint32_t height, size_t* dataSize, size_t* stride);
 	/*
 	 * Converts data (which is in ARGB format) to the format internally used by cairo.
 	 */
-	static void convertBitmapWithAlphaToCairo(std::vector<uint8_t>& data, uint8_t* inData, uint32_t width,
+	static void convertBitmapWithAlphaToCairo(std::vector<uint8_t, reporter_allocator<uint8_t>>& data, uint8_t* inData, uint32_t width,
 			uint32_t height, size_t* dataSize, size_t* stride);
 };
 
@@ -284,9 +299,9 @@ public:
 	   @param _s The scale factor to be applied in both the x and y axis
 	   @param _a The alpha factor to be applied
 	*/
-	CairoTokenRenderer(ASObject* _o, CachedSurface& _t, const std::vector<GeomToken>& _g, const MATRIX& _m,
+	CairoTokenRenderer(const std::vector<GeomToken>& _g, const MATRIX& _m,
 					   int32_t _x, int32_t _y, int32_t _w, int32_t _h, float _s, float _a)
-		: CairoRenderer(_o,_t,_m,_x,_y,_w,_h,_s,_a), tokens(_g) {}
+		: CairoRenderer(_m,_x,_y,_w,_h,_s,_a), tokens(_g) {}
 	/*
 	   Hit testing helper. Uses cairo to find if a point in inside the shape
 
@@ -342,15 +357,30 @@ class CairoPangoRenderer : public CairoRenderer
 	TextData textData;
 	static void pangoLayoutFromData(PangoLayout* layout, const TextData& tData);
 public:
-	CairoPangoRenderer(ASObject* _o, CachedSurface& _t, const TextData& _textData, const MATRIX& _m,
+	CairoPangoRenderer(const TextData& _textData, const MATRIX& _m,
 			int32_t _x, int32_t _y, int32_t _w, int32_t _h, float _s, float _a)
-		: CairoRenderer(_o,_t,_m,_x,_y,_w,_h,_s,_a), textData(_textData) {}
+		: CairoRenderer(_m,_x,_y,_w,_h,_s,_a), textData(_textData) {}
 	/**
 		Helper. Uses Pango to find the size of the textdata
 		@param _texttData The textData being tested
 		@param w,h,tw,th are the (text)width and (text)height of the textData.
 	*/
 	static bool getBounds(const TextData& _textData, uint32_t& w, uint32_t& h, uint32_t& tw, uint32_t& th);
+};
+
+class InvalidateQueue
+{
+public:
+	virtual ~InvalidateQueue(){};
+	//Invalidation queue management
+	virtual void addToInvalidateQueue(_R<DisplayObject> d) = 0;
+};
+
+class SoftwareInvalidateQueue: public InvalidateQueue
+{
+public:
+	std::list<_R<DisplayObject>> queue;
+	void addToInvalidateQueue(_R<DisplayObject> d);
 };
 
 };

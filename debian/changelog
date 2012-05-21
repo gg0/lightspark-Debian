@@ -1,3 +1,11 @@
+lightspark (0.5.7-2) unstable; urgency=low
+
+  * Drop now-obsolete lintian override.
+  * Enable RTMP support. It was supposed to be enabled by default since
+    0.5.4 but wasn't. (Closes: #647149)
+
+ -- Didier Raboud <odyx@debian.org>  Mon, 21 May 2012 10:06:50 +0200
+
 lightspark (0.5.7-1) unstable; urgency=low
 
   * New 0.5.7 upstream release.

@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2009-2011  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2008-2012  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -71,16 +71,21 @@ ParseThread* lightspark::getParseThread()
 	return pt;
 }
 
-RootMovieClip::RootMovieClip(LoaderInfo* li, _NR<ApplicationDomain> appDomain, Class_base* c):
+RootMovieClip::RootMovieClip(LoaderInfo* li, _NR<ApplicationDomain> appDomain, _NR<SecurityDomain> secDomain, Class_base* c):
 	MovieClip(c),
 	parsingIsFailed(false),frameRate(0),
-	toBind(false),finishedLoading(false),applicationDomain(appDomain)
+	toBind(false),finishedLoading(false),applicationDomain(appDomain),securityDomain(secDomain)
 {
 	if(li)
 		li->incRef();
 	loaderInfo=_MNR(li);
 }
 
+RootMovieClip::~RootMovieClip()
+{
+	for(DictionaryTag* it: dictionary)
+		delete it;
+}
 
 void RootMovieClip::parsingFailed()
 {
@@ -130,10 +135,10 @@ void RootMovieClip::setOnStage(bool staged)
 	MovieClip::setOnStage(staged);
 }
 
-RootMovieClip* RootMovieClip::getInstance(LoaderInfo* li, _R<ApplicationDomain> appDomain)
+RootMovieClip* RootMovieClip::getInstance(LoaderInfo* li, _R<ApplicationDomain> appDomain, _R<SecurityDomain> secDomain)
 {
 	Class_base* movieClipClass = Class<MovieClip>::getClass();
-	RootMovieClip* ret=new (movieClipClass->memoryAccount) RootMovieClip(li, appDomain, movieClipClass);
+	RootMovieClip* ret=new (movieClipClass->memoryAccount) RootMovieClip(li, appDomain, secDomain, movieClipClass);
 	return ret;
 }
 
@@ -161,15 +166,32 @@ void SystemState::staticDeinit()
 #endif
 }
 
-SystemState::SystemState(uint32_t fileSize):
-	RootMovieClip(NULL,NullRef,NULL),terminated(0),renderRate(0),error(false),shutdown(false),
+//See BUILTIN_STRINGS enum
+static const char* builtinStrings[] = {"", "any", "void", "prototype" };
+
+SystemState::SystemState(uint32_t fileSize, FLASH_MODE mode):
+	RootMovieClip(NULL,NullRef,NullRef,NULL),terminated(0),renderRate(0),error(false),shutdown(false),
 	renderThread(NULL),inputThread(NULL),engineData(NULL),mainThread(0),dumpedSWFPathAvailable(0),
 	vmVersion(VMNONE),childPid(0),
 	parameters(NullRef),
-	invalidateQueueHead(NullRef),invalidateQueueTail(NullRef),showProfilingData(false),
+	invalidateQueueHead(NullRef),invalidateQueueTail(NullRef),lastUsedStringId(0),lastUsedNamespaceId(0x7fffffff),
+	showProfilingData(false),flashMode(mode),
 	currentVm(NULL),useInterpreter(true),useJit(false),exitOnError(ERROR_NONE),downloadManager(NULL),
 	extScriptObject(NULL),scaleMode(SHOW_ALL),unaccountedMemory(NULL),tagsMemory(NULL),stringMemory(NULL)
 {
+	//Forge the builtin strings
+	for(uint32_t i=0;i<LAST_BUILTIN_STRING;i++)
+	{
+		uint32_t tmp=getUniqueStringId(builtinStrings[i]);
+		assert(tmp==i);
+	}
+	//Forge the empty namespace and make sure it gets id 0
+	nsNameAndKindImpl emptyNs("", NAMESPACE);
+	uint32_t nsId;
+	uint32_t baseId;
+	getUniqueNamespaceId(emptyNs, 0, nsId, baseId);
+	assert(nsId==0 && baseId==0);
+
 	cookiesFileName = NULL;
 
 	setTLSSys(this);
@@ -184,6 +206,7 @@ SystemState::SystemState(uint32_t fileSize):
 	undefined=_MR(new (unaccountedMemory) Undefined);
 	systemDomain = _MR(Class<ApplicationDomain>::getInstanceS());
 	applicationDomain=_MR(Class<ApplicationDomain>::getInstanceS(systemDomain));
+	securityDomain = _MR(Class<SecurityDomain>::getInstanceS());
 
 	threadPool=new ThreadPool(this);
 	timerThread=new TimerThread(this);
@@ -443,7 +466,7 @@ void SystemState::destroy()
 #endif
 	terminated.wait();
 	//Acquire the mutex to sure that the engines are not being started right now
-	Locker l(mutex);
+	Locker l(rootMutex);
 	renderThread->wait();
 	inputThread->wait();
 	if(currentVm)
@@ -575,7 +598,7 @@ void SystemState::setError(const string& c, ERROR_TYPE type)
 
 void SystemState::setShutdownFlag()
 {
-	Locker l(mutex);
+	Locker l(rootMutex);
 	if(currentVm)
 	{
 		_R<ShutdownEvent> e(new (unaccountedMemory) ShutdownEvent);
@@ -657,7 +680,7 @@ void SystemState::delayedStopping()
 
 void SystemState::createEngines()
 {
-	Locker l(mutex);
+	Locker l(rootMutex);
 	if(shutdown)
 	{
 		//A shutdown request has arrived before the creation of engines
@@ -699,7 +722,7 @@ void SystemState::createEngines()
 
 void SystemState::launchGnash()
 {
-	Locker l(mutex);
+	Locker l(rootMutex);
 	if(Config::getConfig()->getGnashPath().empty())
 	{
 		LOG(LOG_INFO, "Unsupported flash file (AVM1), and no gnash found");
@@ -852,7 +875,7 @@ void SystemState::launchGnash()
 
 void SystemState::needsAVM2(bool avm2)
 {
-	Locker l(mutex);
+	Locker l(rootMutex);
 
 	/* Check if we already loaded another swf. If not, then
 	 * vmVersion is VMNONE.
@@ -883,7 +906,7 @@ void SystemState::needsAVM2(bool avm2)
 
 void SystemState::setParamsAndEngine(EngineData* e, bool s)
 {
-	Locker l(mutex);
+	Locker l(rootMutex);
 	engineData=e;
 	standalone=s;
 	if(vmVersion)
@@ -892,7 +915,7 @@ void SystemState::setParamsAndEngine(EngineData* e, bool s)
 
 void SystemState::setRenderRate(float rate)
 {
-	Locker l(mutex);
+	Locker l(rootMutex);
 	if(renderRate>=rate)
 		return;
 	
@@ -1090,8 +1113,8 @@ void ThreadProfile::plot(uint32_t maxTime, cairo_t *cr)
 	}
 }
 
-ParseThread::ParseThread(istream& in, _NR<ApplicationDomain> appDomain, Loader *_loader, tiny_string srcurl)
-  : version(0),applicationDomain(appDomain),
+ParseThread::ParseThread(istream& in, _R<ApplicationDomain> appDomain, _R<SecurityDomain> secDomain, Loader *_loader, tiny_string srcurl)
+  : version(0),applicationDomain(appDomain),securityDomain(secDomain),
     f(in),zlibFilter(NULL),backend(NULL),loader(_loader),
     parsedObject(NullRef),url(srcurl),fileType(FT_UNKNOWN)
 {
@@ -1099,7 +1122,7 @@ ParseThread::ParseThread(istream& in, _NR<ApplicationDomain> appDomain, Loader *
 }
 
 ParseThread::ParseThread(std::istream& in, RootMovieClip *root)
-  : version(0),applicationDomain(NullRef), //The application domain is not really needed since the root is already loaded
+  : version(0),applicationDomain(NullRef),securityDomain(NullRef), //The domains are not needed since the system state create them itself
     f(in),zlibFilter(NULL),backend(NULL),loader(NULL),
     parsedObject(NullRef),url(),fileType(FT_UNKNOWN)
 {
@@ -1208,7 +1231,7 @@ void ParseThread::parseSWF(UI8 ver)
 	if(parsedObject.isNull())
 	{
 		LoaderInfo *li=loader?loader->getContentLoaderInfo().getPtr():NULL;
-		root=RootMovieClip::getInstance(li, applicationDomain);
+		root=RootMovieClip::getInstance(li, applicationDomain, securityDomain);
 		parsedObject=_MNR(root);
 		if(!url.empty())
 			root->setOrigin(url, "");
@@ -1217,6 +1240,7 @@ void ParseThread::parseSWF(UI8 ver)
 		root=getRootMovie();
 	objectSpinlock.unlock();
 
+	std::queue<const ControlTag*> symbolClassTags;
 	try
 	{
 		parseSWFHeader(root, ver);
@@ -1229,9 +1253,9 @@ void ParseThread::parseSWF(UI8 ver)
 		}
 
 		TagFactory factory(f, true);
-		_NR<Tag> tag=factory.readTag();
+		Tag* tag=factory.readTag(root);
 
-		FileAttributesTag* fat = dynamic_cast<FileAttributesTag*>(tag.getPtr());
+		FileAttributesTag* fat = dynamic_cast<FileAttributesTag*>(tag);
 		if(!fat)
 		{
 			LOG(LOG_ERROR,"Invalid SWF - First tag must be a FileAttributesTag!");
@@ -1255,7 +1279,7 @@ void ParseThread::parseSWF(UI8 ver)
 		bool empty=true;
 		while(!done)
 		{
-			tag=factory.readTag();
+			tag=factory.readTag(root);
 			switch(tag->getType())
 			{
 				case END_TAG:
@@ -1264,7 +1288,9 @@ void ParseThread::parseSWF(UI8 ver)
 					// in the order in which they appeared in the file.
 					while(!symbolClassTags.empty())
 					{
-						symbolClassTags.front()->execute(root);
+						const ControlTag* t=symbolClassTags.front();
+						t->execute(root);
+						delete t;
 						symbolClassTags.pop();
 					}
 
@@ -1275,17 +1301,17 @@ void ParseThread::parseSWF(UI8 ver)
 					RELEASE_WRITE(root->finishedLoading,true);
 					done=true;
 					root->check();
+					delete tag;
 					break;
 				}
 				case DICT_TAG:
 				{
-					_R<DictionaryTag> d=tag.cast<DictionaryTag>();
-					d->setLoadedFrom(root);
+					DictionaryTag* d=static_cast<DictionaryTag*>(tag);
 					root->addToDictionary(d);
 					break;
 				}
 				case DISPLAY_LIST_TAG:
-					root->addToFrame(tag.cast<DisplayListTag>());
+					root->addToFrame(static_cast<const DisplayListTag*>(tag));
 					empty=false;
 					break;
 				case SHOW_TAG:
@@ -1293,12 +1319,15 @@ void ParseThread::parseSWF(UI8 ver)
 					// in the order in which they appeared in the file.
 					while(!symbolClassTags.empty())
 					{
-						symbolClassTags.front()->execute(root);
+						const ControlTag* t=symbolClassTags.front();
+						t->execute(root);
+						delete t;
 						symbolClassTags.pop();
 					}
 
 					root->commitFrame(true);
 					empty=true;
+					delete tag;
 					break;
 				case SYMBOL_CLASS_TAG:
 				{
@@ -1306,7 +1335,7 @@ void ParseThread::parseSWF(UI8 ver)
 					// frame has been parsed. This is to handle invalid SWF files that define ID's
 					// used in the SymbolClass tag only after the tag, which would otherwise result
 					// in "undefined dictionary ID" errors.
-					_R<ControlTag> stag = tag.cast<ControlTag>();
+					const ControlTag* stag = static_cast<const ControlTag*>(tag);
 					symbolClassTags.push(stag);
 					break;
 				}
@@ -1323,19 +1352,22 @@ void ParseThread::parseSWF(UI8 ver)
 					//fall through
 				case ABC_TAG:
 				{
-					_R<ControlTag> ctag = tag.cast<ControlTag>();
+					const ControlTag* ctag = static_cast<const ControlTag*>(tag);
 					ctag->execute(root);
+					delete tag;
 					break;
 				}
 				case FRAMELABEL_TAG:
 					/* No locking required, as the last frames is not
 					 * commited to the vm yet.
 					 */
-					root->addFrameLabel(root->frames.size()-1,static_cast<FrameLabelTag*>(tag.getPtr())->Name);
+					root->addFrameLabel(root->frames.size()-1,static_cast<const FrameLabelTag*>(tag)->Name);
 					empty=false;
+					delete tag;
 					break;
 				case TAG:
 					//Not yet implemented tag, ignore it
+					delete tag;
 					break;
 			}
 			if(getSys()->shouldTerminate() || threadAborting)
@@ -1347,7 +1379,7 @@ void ParseThread::parseSWF(UI8 ver)
 		root->parsingFailed();
 		throw;
 	}
-	LOG(LOG_INFO,_("End of parsing"));
+	LOG(LOG_TRACE,_("End of parsing"));
 }
 
 void ParseThread::parseBitmap()
@@ -1462,14 +1494,14 @@ void RootMovieClip::setBackground(const RGB& bg)
 }
 
 /* called in parser's thread context */
-void RootMovieClip::addToDictionary(_R<DictionaryTag> r)
+void RootMovieClip::addToDictionary(DictionaryTag* r)
 {
 	SpinlockLocker l(dictSpinlock);
 	dictionary.push_back(r);
 }
 
 /* called in vm's thread context */
-_R<DictionaryTag> RootMovieClip::dictionaryLookup(int id)
+DictionaryTag* RootMovieClip::dictionaryLookup(int id)
 {
 	SpinlockLocker l(dictSpinlock);
 	auto it = dictionary.begin();
@@ -1480,7 +1512,7 @@ _R<DictionaryTag> RootMovieClip::dictionaryLookup(int id)
 	}
 	if(it==dictionary.end())
 	{
-		LOG(LOG_ERROR,_("No such Id on dictionary ") << id);
+		LOG(LOG_ERROR,_("No such Id on dictionary ") << id << " for " << origin);
 		throw RunTimeException("Could not find an object on the dictionary");
 	}
 	return *it;
@@ -1640,6 +1672,57 @@ Undefined* SystemState::getUndefinedRef() const
 	return ret;
 }
 
+const tiny_string& SystemState::getStringFromUniqueId(uint32_t id) const
+{
+	Locker l(poolMutex);
+	auto it=uniqueStringMap.right.find(id);
+	assert(it!=uniqueStringMap.right.end());
+	return it->second;
+}
+
+uint32_t SystemState::getUniqueStringId(const tiny_string& s)
+{
+	Locker l(poolMutex);
+	auto it=uniqueStringMap.left.find(s);
+	if(it==uniqueStringMap.left.end())
+	{
+		auto ret=uniqueStringMap.left.insert(make_pair(s,lastUsedStringId));
+		assert(ret.second);
+		it=ret.first;
+		lastUsedStringId++;
+	}
+	return it->second;
+}
+
+const nsNameAndKindImpl& SystemState::getNamespaceFromUniqueId(uint32_t id) const
+{
+	Locker l(poolMutex);
+	auto it=uniqueNamespaceMap.right.find(id);
+	assert(it!=uniqueNamespaceMap.right.end());
+	return it->second;
+}
+
+void SystemState::getUniqueNamespaceId(const nsNameAndKindImpl& s, uint32_t& nsId, uint32_t& baseId)
+{
+	int32_t hintedId=ATOMIC_DECREMENT(lastUsedNamespaceId);
+	getUniqueNamespaceId(s, hintedId, nsId, baseId);
+}
+
+void SystemState::getUniqueNamespaceId(const nsNameAndKindImpl& s, uint32_t hintedId, uint32_t& nsId, uint32_t& baseId)
+{
+	Locker l(poolMutex);
+	auto it=uniqueNamespaceMap.left.find(s);
+	if(it==uniqueNamespaceMap.left.end())
+	{
+		auto ret=uniqueNamespaceMap.left.insert(make_pair(s,hintedId));
+		assert(ret.second);
+		it=ret.first;
+	}
+
+	nsId=it->second;
+	baseId=(it->first.baseId==0xffffffff)?nsId:it->first.baseId;
+}
+
 /* This is run in vm's thread context */
 void RootMovieClip::initFrame()
 {
@@ -1674,4 +1757,5 @@ void RootMovieClip::finalize()
 {
 	MovieClip::finalize();
 	applicationDomain.reset();
+	securityDomain.reset();
 }

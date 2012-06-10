@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2009-2011  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2009-2012  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -54,6 +54,16 @@ ASFUNCTIONBODY(Integer,_toString)
 	}
 
 	return Class<ASString>::getInstanceS(buf);
+}
+
+ASFUNCTIONBODY(Integer,_constructor)
+{
+	Integer* th=static_cast<Integer*>(obj);
+	if(args && argslen==1)
+		th->val=args[0]->toInt();
+	else
+		th->val=0;
+	return NULL;
 }
 
 ASFUNCTIONBODY(Integer,generator)
@@ -181,6 +191,7 @@ void Integer::sinit(Class_base* c)
 {
 	c->isFinal = true;
 	c->setSuper(Class<ASObject>::getRef());
+	c->setConstructor(Class<IFunction>::getFunction(_constructor));
 	c->setVariableByQName("MAX_VALUE","",new (c->memoryAccount) Integer(c,numeric_limits<int32_t>::max()),CONSTANT_TRAIT);
 	c->setVariableByQName("MIN_VALUE","",new (c->memoryAccount) Integer(c,numeric_limits<int32_t>::min()),CONSTANT_TRAIT);
 	c->prototype->setVariableByQName("toString",AS3,Class<IFunction>::getFunction(Integer::_toString),DYNAMIC_TRAIT);

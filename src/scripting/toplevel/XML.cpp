@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2009-2011  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2009-2012  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -232,11 +232,11 @@ ASFUNCTIONBODY(XML,name)
 ASFUNCTIONBODY(XML,descendants)
 {
 	XML* th=Class<XML>::cast(obj);
-	assert_and_throw(argslen==1);
-	assert_and_throw(args[0]->getObjectType()!=T_QNAME);
-	XMLVector ret;
-	th->getDescendantsByQName(args[0]->toString(),"",ret);
-	return Class<XMLList>::getInstanceS(ret);
+	tiny_string name;
+	ARG_UNPACK(name,"*");
+ 	XMLVector ret;
+	th->getDescendantsByQName(name,"",ret);
+ 	return Class<XMLList>::getInstanceS(ret);
 }
 
 ASFUNCTIONBODY(XML,appendChild)
@@ -467,7 +467,7 @@ ASFUNCTIONBODY(XML,child)
 	XMLVector ret;
 	uint32_t index=0;
 	multiname mname(NULL);
-	mname.name_s=arg0;
+	mname.name_s_id=getSys()->getUniqueStringId(arg0);
 	mname.name_type=multiname::NAME_STRING;
 	mname.ns.push_back(nsNameAndKind("",NAMESPACE));
 	mname.isAttribute=false;
@@ -644,7 +644,7 @@ _NR<ASObject> XML::getVariableByMultiname(const multiname& name, GET_VARIABLE_OP
 	//Normalize the name to the string form
 	const tiny_string normalizedName=name.normalizedName();
 	//TODO: support namespaces
-	assert_and_throw(name.ns.size()>0 && name.ns[0].name=="");
+	assert_and_throw(name.ns.size()>0 && name.ns[0].hasEmptyName());
 
 	const char *buf=normalizedName.raw_buf();
 	if(!normalizedName.empty() && normalizedName.charAt(0)=='@')
@@ -720,13 +720,13 @@ _NR<ASObject> XML::getVariableByMultiname(const multiname& name, GET_VARIABLE_OP
 	}
 }
 
-void XML::setVariableByMultiname(const multiname& name, ASObject* o)
+void XML::setVariableByMultiname(const multiname& name, ASObject* o, CONST_ALLOWED_FLAG allowConst)
 {
 	bool isAttr=name.isAttribute;
 	//Normalize the name to the string form
 	const tiny_string normalizedName=name.normalizedName();
 	//TODO: support namespaces
-	assert_and_throw(name.ns.size()>0 && name.ns[0].name=="");
+	assert_and_throw(name.ns.size()>0 && name.ns[0].hasEmptyName());
 
 	const char *buf=normalizedName.raw_buf();
 	if(!normalizedName.empty() && normalizedName.charAt(0)=='@')
@@ -739,11 +739,11 @@ void XML::setVariableByMultiname(const multiname& name, ASObject* o)
 		//To have attributes we must be an Element
 		xmlpp::Element* element=dynamic_cast<xmlpp::Element*>(node);
 		assert_and_throw(element);
-		element->set_attribute(name.name_s, o->toString());
+		element->set_attribute(getSys()->getStringFromUniqueId(name.name_s_id), o->toString());
 	}
 	else
 	{
-		xmlpp::Element* child=node->add_child(name.name_s);
+		xmlpp::Element* child=node->add_child(getSys()->getStringFromUniqueId(name.name_s_id));
 		child->add_child_text(o->toString());
 	}
 }
@@ -765,7 +765,7 @@ bool XML::hasPropertyByMultiname(const multiname& name, bool considerDynamic)
 	{
 		//Lookup attribute
 		//TODO: support namespaces
-		assert_and_throw(name.ns.size()>0 && name.ns[0].name=="");
+		assert_and_throw(name.ns.size()>0 && name.ns[0].hasEmptyName());
 		//Normalize the name to the string form
 		assert(node);
 		//To have attributes we must be an Element
@@ -781,7 +781,7 @@ bool XML::hasPropertyByMultiname(const multiname& name, bool considerDynamic)
 	{
 		//Lookup children
 		//TODO: support namespaces
-		assert_and_throw(name.ns.size()>0 && name.ns[0].name=="");
+		assert_and_throw(name.ns.size()>0 && name.ns[0].hasEmptyName());
 		//Normalize the name to the string form
 		assert(node);
 		const xmlpp::Node::NodeList& children=node->get_children(buf);

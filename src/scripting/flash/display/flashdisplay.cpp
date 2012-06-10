@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2009-2011  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2009-2012  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -30,6 +30,7 @@
 #include "backends/rendering.h"
 #include "backends/geometry.h"
 #include "flash/accessibility/flashaccessibility.h"
+#include "flash/display/BitmapData.h"
 #include "argconv.h"
 #include "toplevel/Vector.h"
 #include "backends/security.h"
@@ -75,12 +76,14 @@ std::ostream& lightspark::operator<<(std::ostream& s, const DisplayObject& r)
 }
 
 LoaderInfo::LoaderInfo(Class_base* c):EventDispatcher(c),bytesLoaded(0),bytesTotal(0),sharedEvents(NullRef),
-	loader(NullRef),loadStatus(STARTED),actionScriptVersion(3),applicationDomain(NullRef)
+	loader(NullRef),loadStatus(STARTED),actionScriptVersion(3),childAllowsParent(true),
+	contentType("application/x-shockwave-flash"),applicationDomain(NullRef),securityDomain(NullRef)
 {
 }
 
 LoaderInfo::LoaderInfo(Class_base* c, _R<Loader> l):EventDispatcher(c),bytesLoaded(0),bytesTotal(0),sharedEvents(NullRef),
-	loader(l),loadStatus(STARTED),actionScriptVersion(3),childAllowsParent(true),applicationDomain(NullRef)
+	loader(l),loadStatus(STARTED),actionScriptVersion(3),childAllowsParent(true),
+	contentType("application/x-shockwave-flash"),applicationDomain(NullRef),securityDomain(NullRef)
 {
 }
 
@@ -101,11 +104,13 @@ void LoaderInfo::sinit(Class_base* c)
 	REGISTER_GETTER(c,parameters);
 	REGISTER_GETTER(c,actionScriptVersion);
 	REGISTER_GETTER(c,childAllowsParent);
+	REGISTER_GETTER(c,contentType);
 }
 
 ASFUNCTIONBODY_GETTER(LoaderInfo,parameters);
 ASFUNCTIONBODY_GETTER(LoaderInfo,actionScriptVersion);
 ASFUNCTIONBODY_GETTER(LoaderInfo,childAllowsParent);
+ASFUNCTIONBODY_GETTER(LoaderInfo,contentType);
 
 void LoaderInfo::buildTraits(ASObject* o)
 {
@@ -117,6 +122,7 @@ void LoaderInfo::finalize()
 	sharedEvents.reset();
 	loader.reset();
 	applicationDomain.reset();
+	securityDomain.reset();
 }
 
 void LoaderInfo::resetState()
@@ -229,6 +235,9 @@ ASFUNCTIONBODY(LoaderInfo,_getBytesTotal)
 ASFUNCTIONBODY(LoaderInfo,_getApplicationDomain)
 {
 	LoaderInfo* th=static_cast<LoaderInfo*>(obj);
+	if(th->applicationDomain.isNull())
+		return getSys()->getNullRef();
+
 	th->applicationDomain->incRef();
 	return th->applicationDomain.getPtr();
 }
@@ -285,7 +294,7 @@ void LoaderThread::execute()
 		{
 			LOG(LOG_ERROR, "Loader::execute(): Download of URL failed: " << url);
 			getVm()->addEvent(loaderInfo,_MR(Class<IOErrorEvent>::getInstanceS()));
-			getSys()->downloadManager->destroy(downloader);
+			// downloader will be deleted in jobFence
 			return;
 		}
 		getVm()->addEvent(loaderInfo,_MR(Class<Event>::getInstanceS("open")));
@@ -303,7 +312,7 @@ void LoaderThread::execute()
 	}
 
 	istream s(sbuf);
-	ParseThread local_pt(s,loaderInfo->applicationDomain,loader.getPtr(),url.getParsedURL());
+	ParseThread local_pt(s,loaderInfo->applicationDomain,loaderInfo->securityDomain,loader.getPtr(),url.getParsedURL());
 	local_pt.execute();
 
 	{
@@ -394,11 +403,21 @@ ASFUNCTIONBODY(Loader,load)
 	th->url=r->getRequestURL();
 	th->contentLoaderInfo->setURL(th->url.getParsedURL());
 	th->contentLoaderInfo->resetState();
+	//Check if a security domain has been manually set
+	_NR<SecurityDomain> secDomain;
+	_NR<SecurityDomain> curSecDomain=ABCVm::getCurrentSecurityDomain(getVm()->currentCallContext);
+	if(!context.isNull() && !context->securityDomain.isNull())
+	{
+		//The passed domain must be the current one. See Loader::load specs.
+		if(context->securityDomain!=curSecDomain)
+			throw Class<SecurityError>::getInstanceS("SecurityError: securityDomain must be current one");
+		secDomain=curSecDomain;
+	}
 	//Default is to create a child ApplicationDomain if the file is in the same security context
 	//otherwise create a child of the system domain. If the security domain is different
 	//the passed applicationDomain is ignored
 	_R<RootMovieClip> currentRoot=getVm()->currentCallContext->context->root;
-	if(currentRoot->getOrigin().getHostname()==th->url.getHostname())
+	if(currentRoot->getOrigin().getHostname()==th->url.getHostname() || !secDomain.isNull())
 	{
 		//Same domain
 		_NR<ApplicationDomain> parentDomain = currentRoot->applicationDomain;
@@ -407,12 +426,14 @@ ASFUNCTIONBODY(Loader,load)
 			th->contentLoaderInfo->applicationDomain = _MR(Class<ApplicationDomain>::getInstanceS(parentDomain));
 		else
 			th->contentLoaderInfo->applicationDomain = context->applicationDomain;
+		th->contentLoaderInfo->securityDomain = curSecDomain;
 	}
 	else
 	{
 		//Different domain
 		_NR<ApplicationDomain> parentDomain =  getSys()->systemDomain;
 		th->contentLoaderInfo->applicationDomain = _MR(Class<ApplicationDomain>::getInstanceS(parentDomain));
+		th->contentLoaderInfo->securityDomain = _MR(Class<SecurityDomain>::getInstanceS());
 	}
 
 	if(!th->url.isValid())
@@ -867,6 +888,42 @@ void Frame::execute(_R<DisplayObjectContainer> displayList)
 		(*it)->execute(displayList.getPtr());
 }
 
+FrameContainer::FrameContainer():framesLoaded(0)
+{
+	frames.emplace_back(Frame());
+	scenes.resize(1);
+}
+
+FrameContainer::FrameContainer(const FrameContainer& f):framesLoaded((int)f.framesLoaded),frames(f.frames),scenes(f.scenes)
+{
+}
+
+/* This runs in parser thread context,
+ * but no locking is needed here as it only accesses the last frame.
+ * See comment on the 'frames' member. */
+void FrameContainer::addToFrame(const DisplayListTag* t)
+{
+	frames.back().blueprint.push_back(t);
+}
+
+/**
+ * Find the scene to which the given frame belongs and
+ * adds the frame label to that scene.
+ * The labels of the scene will stay sorted by frame.
+ */
+void FrameContainer::addFrameLabel(uint32_t frame, const tiny_string& label)
+{
+	for(size_t i=0; i<scenes.size();++i)
+	{
+		if(frame < scenes[i].startframe)
+		{
+			scenes[i-1].addFrameLabel(frame,label);
+			return;
+		}
+	}
+	scenes.back().addFrameLabel(frame,label);
+}
+
 void MovieClip::sinit(Class_base* c)
 {
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
@@ -890,16 +947,11 @@ void MovieClip::buildTraits(ASObject* o)
 {
 }
 
-MovieClip::MovieClip(Class_base* c):Sprite(c),totalFrames_unreliable(1),framesLoaded(0)
+MovieClip::MovieClip(Class_base* c):Sprite(c),totalFrames_unreliable(1)
 {
-	frames.emplace_back(Frame());
-	scenes.resize(1);
 }
 
-MovieClip::MovieClip(const MovieClip& r):Sprite(r.getClass()),frames(r.frames),
-	totalFrames_unreliable(r.totalFrames_unreliable),framesLoaded(r.framesLoaded),
-	frameScripts(r.frameScripts),scenes(r.scenes),
-	state(r.state)
+MovieClip::MovieClip(Class_base* c, const FrameContainer& f):Sprite(c),FrameContainer(f),totalFrames_unreliable(1)
 {
 }
 
@@ -917,14 +969,6 @@ void MovieClip::setTotalFrames(uint32_t t)
 	//For the root movie, this is called before the parsing
 	//with the frame count from the header
 	totalFrames_unreliable=t;
-}
-
-/* This runs in vm's thread context,
- * but no locking is needed here as it only accesses the last frame.
- * See comment on the 'frames' member. */
-void MovieClip::addToFrame(_R<DisplayListTag> t)
-{
-	frames.back().blueprint.push_back(t);
 }
 
 uint32_t MovieClip::getFrameIdByLabel(const tiny_string& l) const
@@ -1165,24 +1209,6 @@ void MovieClip::addScene(uint32_t sceneNo, uint32_t startframe, const tiny_strin
 	}
 }
 
-/**
- * Find the scene to which the given frame belongs and
- * adds the frame label to that scene.
- * The labels of the scene will stay sorted by frame.
- */
-void MovieClip::addFrameLabel(uint32_t frame, const tiny_string& label)
-{
-	for(size_t i=0; i<scenes.size();++i)
-	{
-		if(frame < scenes[i].startframe)
-		{
-			scenes[i-1].addFrameLabel(frame,label);
-			return;
-		}
-	}
-	scenes.back().addFrameLabel(frame,label);
-}
-
 void DisplayObjectContainer::sinit(Class_base* c)
 {
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
@@ -1230,9 +1256,9 @@ void DisplayObjectContainer::deleteLegacyChildAt(uint32_t depth)
 		//This is a tested behavior
 		multiname objName(NULL);
 		objName.name_type=multiname::NAME_STRING;
-		objName.name_s=obj->name;
+		objName.name_s_id=getSys()->getUniqueStringId(obj->name);
 		objName.ns.push_back(nsNameAndKind("",NAMESPACE));
-		setVariableByMultiname(objName,getSys()->getNullRef());
+		setVariableByMultiname(objName,getSys()->getNullRef(), ASObject::CONST_NOT_ALLOWED);
 	}
 
 	obj->incRef();
@@ -1254,7 +1280,7 @@ void DisplayObjectContainer::insertLegacyChildAt(uint32_t depth, DisplayObject* 
 		obj->incRef();
 		multiname objName(NULL);
 		objName.name_type=multiname::NAME_STRING;
-		objName.name_s=obj->name;
+		objName.name_s_id=getSys()->getUniqueStringId(obj->name);
 		objName.ns.push_back(nsNameAndKind("",NAMESPACE));
 		//TODO: discuss the following comment with aajanki
 		// If this function is called by PlaceObject tag
@@ -1262,9 +1288,9 @@ void DisplayObjectContainer::insertLegacyChildAt(uint32_t depth, DisplayObject* 
 		// initialize the property here to make sure that it
 		// will be a declared property and not a dynamic one.
 		if(hasPropertyByMultiname(objName,true))
-			setVariableByMultiname(objName,obj);
+			setVariableByMultiname(objName,obj,ASObject::CONST_NOT_ALLOWED);
 		else
-			setVariableByQName(objName.name_s,objName.ns[0],obj,DYNAMIC_TRAIT);
+			setVariableByQName(objName.name_s_id,objName.ns[0],obj,DYNAMIC_TRAIT);
 	}
 
 	depthToLegacyChild.insert(boost::bimap<uint32_t,DisplayObject*>::value_type(depth,obj));
@@ -1277,7 +1303,7 @@ void DisplayObjectContainer::transformLegacyChildAt(uint32_t depth, const MATRIX
 		LOG(LOG_ERROR,"transformLegacyChildAt: no child at that depth");
 		return;
 	}
-	depthToLegacyChild.left.at(depth)->setMatrix(mat);
+	depthToLegacyChild.left.at(depth)->setLegacyMatrix(mat);
 }
 
 void DisplayObjectContainer::purgeLegacyChildren()
@@ -1448,9 +1474,8 @@ void DisplayObjectContainer::_addChildAt(_R<DisplayObject> child, unsigned int i
 
 bool DisplayObjectContainer::_removeChild(_R<DisplayObject> child)
 {
-	if(!child->getParent())
+	if(!child->getParent() || child->getParent()!=this)
 		return false;
-	assert_and_throw(child->getParent()==this);
 
 	{
 		Locker l(mutexDisplayList);
@@ -1788,6 +1813,9 @@ bool DisplayObjectContainer::isOpaque(number_t x, number_t y) const
 	number_t lx, ly;
 	for(;it!=dynamicDisplayList.end();++it)
 	{
+		if(!((*it)->getMatrix()).isInvertible())
+			continue; /* The object is shrunk to zero size */
+
 		//x y are local coordinates of the container, should be local coord of *it
 		((*it)->getMatrix()).getInverted().multiply2D(x,y,lx,ly);
 		if(((*it)->isOpaque(lx,ly)))
@@ -1969,7 +1997,7 @@ ASFUNCTIONBODY(Stage,_setScaleMode)
 		getSys()->scaleMode=SystemState::NO_SCALE;
 
 	RenderThread* rt=getSys()->getRenderThread();
-	rt->requestResize(rt->windowWidth, rt->windowHeight);
+	rt->requestResize(rt->windowWidth, rt->windowHeight, true);
 	return NULL;
 }
 
@@ -2483,16 +2511,11 @@ ASFUNCTIONBODY(Graphics,beginGradientFill)
 	{
 		style.Matrix = static_cast<Matrix*>(args[4])->getMATRIX();
 		//Conversion from twips to pixels
-		style.Matrix.ScaleX /= 20.0;
-		style.Matrix.RotateSkew0 /= 20.0;
-		style.Matrix.RotateSkew1 /= 20.0;
-		style.Matrix.ScaleY /= 20.0;
-		//Traslations are ok, that is applied already in the pixel space
+		cairo_matrix_scale(&style.Matrix, 1.0f/20.0f, 1.0f/20.0f);
 	}
 	else
 	{
-		style.Matrix.ScaleX = 100.0/16384.0;
-		style.Matrix.ScaleY = 100.0/16384.0;
+		cairo_matrix_scale(&style.Matrix, 100.0/16384.0, 100.0/16384.0);
 	}
 
 	if(argslen > 5)
@@ -2545,7 +2568,7 @@ ASFUNCTIONBODY(Graphics,beginBitmapFill)
 	if(!matrix.isNull())
 		style.Matrix = matrix->getMATRIX();
 
-	style.bitmap = bitmap;
+	style.bitmap = *static_cast<BitmapContainer*>((bitmap.getPtr()));
 	th->owner->tokens.emplace_back(GeomToken(SET_FILL, style));
 	return NULL;
 }
@@ -2722,12 +2745,12 @@ void Bitmap::updatedData()
 
 	FILLSTYLE style(-1);
 	style.FillStyleType=CLIPPED_BITMAP;
-	style.bitmap=bitmapData;
+	style.bitmap=*static_cast<BitmapContainer*>(bitmapData.getPtr());
 	tokens.emplace_back(GeomToken(SET_FILL, style));
 	tokens.emplace_back(GeomToken(MOVE, Vector2(0, 0)));
-	tokens.emplace_back(GeomToken(STRAIGHT, Vector2(0, bitmapData->height)));
-	tokens.emplace_back(GeomToken(STRAIGHT, Vector2(bitmapData->width, bitmapData->height)));
-	tokens.emplace_back(GeomToken(STRAIGHT, Vector2(bitmapData->width, 0)));
+	tokens.emplace_back(GeomToken(STRAIGHT, Vector2(0, bitmapData->getHeight())));
+	tokens.emplace_back(GeomToken(STRAIGHT, Vector2(bitmapData->getWidth(), bitmapData->getHeight())));
+	tokens.emplace_back(GeomToken(STRAIGHT, Vector2(bitmapData->getWidth(), 0)));
 	tokens.emplace_back(GeomToken(STRAIGHT, Vector2(0, 0)));
 	requestInvalidation(getSys());
 }
@@ -2746,7 +2769,7 @@ IntSize Bitmap::getBitmapSize() const
 	if(bitmapData.isNull())
 		return IntSize(0, 0);
 	else
-		return IntSize(bitmapData->width, bitmapData->height);
+		return IntSize(bitmapData->getWidth(), bitmapData->getHeight());
 }
 
 void SimpleButton::sinit(Class_base* c)
@@ -2774,10 +2797,13 @@ _NR<InteractiveObject> SimpleButton::hitTestImpl(_NR<InteractiveObject> last, nu
 	_NR<InteractiveObject> ret = NullRef;
 	if(hitTestState)
 	{
-		number_t localX, localY;
-		hitTestState->getMatrix().getInverted().multiply2D(x,y,localX,localY);
-		this->incRef();
-		ret = hitTestState->hitTest(_MR(this), localX, localY, type);
+		if(hitTestState->getMatrix().isInvertible())
+		{
+			number_t localX, localY;
+			hitTestState->getMatrix().getInverted().multiply2D(x,y,localX,localY);
+			this->incRef();
+			ret = hitTestState->hitTest(_MR(this), localX, localY, type);
+		}
 	}
 	/* mouseDown events, for example, are never dispatched to the hitTestState,
 	 * but directly to this button (and with event.target = this). This has been
@@ -3070,7 +3096,7 @@ void MovieClip::initFrame()
 	if((int)state.FP < state.last_FP)
 		purgeLegacyChildren();
 
-	if(framesLoaded)
+	if(getFramesLoaded())
 	{
 		std::list<Frame>::iterator iter=frames.begin();
 		for(uint32_t i=0;i<=state.FP;i++)

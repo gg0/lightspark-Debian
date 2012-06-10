@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2009-2011  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2009-2012  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -142,10 +142,11 @@ public:
 
 class Matrix: public ASObject
 {
+private:
+	MATRIX matrix;
 public:
 	Matrix(Class_base* c);
 	Matrix(Class_base* c,const MATRIX& m);
-	number_t a, b, c, d, tx, ty;
 	static void sinit(Class_base* c);
 	static void buildTraits(ASObject* o);
 	void _createBox(number_t scaleX, number_t scaleY, number_t angle, number_t x, number_t y);
@@ -184,11 +185,17 @@ public:
 
 class Transform: public ASObject
 {
+private:
+	_NR<DisplayObject> owner;
 public:
-	Transform(Class_base* c):ASObject(c){}
+	Transform(Class_base* c):ASObject(c){};
+	Transform(Class_base* c, _R<DisplayObject> o);
+	ASFUNCTION(_constructor);
 	static void sinit(Class_base* c);
 	static void buildTraits(ASObject* o);
-	ASPROPERTY_GETTER_SETTER(_NR<Matrix>, matrix);
+	void finalize();
+	ASFUNCTION(_getMatrix);
+	ASFUNCTION(_setMatrix);
 };
 
 class Vector3D: public ASObject

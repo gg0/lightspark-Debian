@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2009-2011  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2009-2012  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -22,13 +22,11 @@
 
 #ifdef LLVM_28
 #define alignof alignOf
-#endif
-#ifdef LLVM_3
-#define LLVMTYPE llvm::Type*
-#define LLVMMAKEARRAYREF(T) makeArrayRef(T)
-#else
 #define LLVMTYPE const llvm::Type*
 #define LLVMMAKEARRAYREF(T) T
+#else
+#define LLVMTYPE llvm::Type*
+#define LLVMMAKEARRAYREF(T) makeArrayRef(T)
 #endif
 
 #include "compat.h"
@@ -200,6 +198,8 @@ public:
 	std::vector<script_info, reporter_allocator<script_info>> scripts;
 	u30 method_body_count;
 	std::vector<method_body_info, reporter_allocator<method_body_info>> method_body;
+	//Base for namespaces in this context
+	uint32_t namespaceBaseId;
 
 	std::vector<bool> hasRunScriptInit;
 	/**
@@ -218,7 +218,7 @@ public:
 	multiname* getMultiname(unsigned int m, call_context* th);
 	multiname* getMultinameImpl(ASObject* rt1, ASObject* rt2, unsigned int m);
 	void buildInstanceTraits(ASObject* obj, int class_index);
-	ABCContext(_R<RootMovieClip> r, std::istream& in, MemoryAccount* m) DLL_PUBLIC;
+	ABCContext(_R<RootMovieClip> r, std::istream& in, ABCVm* vm) DLL_PUBLIC;
 	void exec(bool lazy);
 
 	bool isinstance(ASObject* obj, multiname* name);
@@ -360,17 +360,17 @@ private:
 	static int32_t add_i(ASObject*,ASObject*);
 	static ASObject* add_oi(ASObject*,int32_t);
 	static ASObject* add_od(ASObject*,number_t);
-	static uint32_t bitAnd(ASObject*,ASObject*);
-	static uint32_t bitNot(ASObject*);
-	static uint32_t bitAnd_oi(ASObject* val1, int32_t val2);
-	static uint32_t bitOr(ASObject*,ASObject*);
-	static uint32_t bitOr_oi(ASObject*,uint32_t);
-	static uint32_t bitXor(ASObject*,ASObject*);
-	static uint32_t rShift(ASObject*,ASObject*);
+	static int32_t bitAnd(ASObject*,ASObject*);
+	static int32_t bitNot(ASObject*);
+	static int32_t bitAnd_oi(ASObject* val1, int32_t val2);
+	static int32_t bitOr(ASObject*,ASObject*);
+	static int32_t bitOr_oi(ASObject*,int32_t);
+	static int32_t bitXor(ASObject*,ASObject*);
+	static int32_t rShift(ASObject*,ASObject*);
 	static uint32_t urShift(ASObject*,ASObject*);
 	static uint32_t urShift_io(uint32_t,ASObject*);
-	static uint32_t lShift(ASObject*,ASObject*);
-	static uint32_t lShift_io(uint32_t,ASObject*);
+	static int32_t lShift(ASObject*,ASObject*);
+	static int32_t lShift_io(uint32_t,ASObject*);
 	static number_t multiply(ASObject*,ASObject*);
 	static int32_t multiply_i(ASObject*,ASObject*);
 	static number_t multiply_oi(ASObject*, int32_t);
@@ -440,12 +440,14 @@ private:
 	std::deque<eventType, reporter_allocator<eventType>> events_queue;
 	void handleEvent(std::pair<_NR<EventDispatcher>,_R<Event> > e);
 	void signalEventWaiters();
-	void buildClassAndBindTag(const std::string& s, _R<DictionaryTag> t);
+	void buildClassAndBindTag(const std::string& s, DictionaryTag* t);
 	void buildClassAndInjectBase(const std::string& s, _R<RootMovieClip> base);
 	Class_inherit* findClassInherit(const std::string& s, RootMovieClip* r);
 
 	//Profiling support
 	static uint64_t profilingCheckpoint(uint64_t& startTime);
+	// The base to assign to the next loaded context
+	ATOMIC_INT32(nextNamespaceBase);
 public:
 	call_context* currentCallContext;
 	Manager* int_manager;
@@ -480,6 +482,7 @@ public:
 	static bool strictEqualImpl(ASObject*, ASObject*);
 	static void publicHandleEvent(_R<EventDispatcher> dispatcher, _R<Event> event);
 	static _R<ApplicationDomain> getCurrentApplicationDomain(call_context* th);
+	static _R<SecurityDomain> getCurrentSecurityDomain(call_context* th);
 
 	/* The current recursion level. Each call increases this by one,
 	 * each return from a call decreases this. */
@@ -492,6 +495,8 @@ public:
 		uint32_t script_timeout;
 	} limits;
 
+	uint32_t getAndIncreaseNamespaceBase(uint32_t nsNum);
+
 };
 
 class DoABCTag: public ControlTag
@@ -501,7 +506,7 @@ private:
 public:
 	DoABCTag(RECORDHEADER h, std::istream& in);
 	TAGTYPE getType() const{ return ABC_TAG; }
-	void execute(RootMovieClip* root);
+	void execute(RootMovieClip* root) const;
 };
 
 class DoABCDefineTag: public ControlTag
@@ -513,7 +518,7 @@ private:
 public:
 	DoABCDefineTag(RECORDHEADER h, std::istream& in);
 	TAGTYPE getType() const{ return ABC_TAG; }
-	void execute(RootMovieClip* root);
+	void execute(RootMovieClip* root) const;
 };
 
 class SymbolClassTag: public ControlTag
@@ -525,7 +530,7 @@ private:
 public:
 	SymbolClassTag(RECORDHEADER h, std::istream& in);
 	TAGTYPE getType() const{ return SYMBOL_CLASS_TAG; }
-	void execute(RootMovieClip* root);
+	void execute(RootMovieClip* root) const;
 };
 
 ASObject* undefinedFunction(ASObject* obj,ASObject* const* args, const unsigned int argslen);

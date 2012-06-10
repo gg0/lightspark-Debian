@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2009-2011  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2008-2012  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -99,6 +99,7 @@ int main(int argc, char* argv[])
 	bool useJit=false;
 	SystemState::ERROR_TYPE exitOnError=SystemState::ERROR_PARSING;
 	LOG_LEVEL log_level=LOG_INFO;
+	SystemState::FLASH_MODE flashMode=SystemState::FLASH;
 
 	setlocale(LC_ALL, "");
 #ifdef _WIN32
@@ -131,6 +132,8 @@ int main(int argc, char* argv[])
 
 			url=argv[i];
 		}
+		else if(strcmp(argv[i],"--air")==0)
+			flashMode=SystemState::AIR;
 		else if(strcmp(argv[i],"-ni")==0 || strcmp(argv[i],"--disable-interpreter")==0)
 			useInterpreter=false;
 		else if(strcmp(argv[i],"-j")==0 || strcmp(argv[i],"--enable-jit")==0)
@@ -224,7 +227,7 @@ int main(int argc, char* argv[])
 		LOG(LOG_ERROR, "Usage: " << argv[0] << " [--url|-u http://loader.url/file.swf]" <<
 			" [--disable-interpreter|-ni] [--enable-jit|-j] [--log-level|-l 0-4]" <<
 			" [--parameters-file|-p params-file] [--security-sandbox|-s sandbox]" <<
-			" [--exit-on-error] [--HTTP-cookies cookie]" <<
+			" [--exit-on-error] [--HTTP-cookies cookie] [--air]" <<
 #ifdef PROFILING_SUPPORT
 			" [--profiling-output|-o profiling-file]" <<
 #endif
@@ -259,9 +262,9 @@ int main(int argc, char* argv[])
 	//NOTE: see SystemState declaration
 #ifdef MEMORY_USAGE_PROFILING
 	MemoryAccount sysAccount("sysAccount");
-	SystemState* sys = new (&sysAccount) SystemState(fileSize);
+	SystemState* sys = new (&sysAccount) SystemState(fileSize, flashMode);
 #else
-	SystemState* sys = new ((MemoryAccount*)NULL) SystemState(fileSize);
+	SystemState* sys = new ((MemoryAccount*)NULL) SystemState(fileSize, flashMode);
 #endif
 	ParseThread* pt = new ParseThread(f, sys);
 	setTLSSys(sys);

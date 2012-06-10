@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2009-2011  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2010-2012  Alessandro Pignotti (a.pignotti@sssup.it)
     Copyright (C) 2010 Alexandre Demers (papouta@hotmail.com)
 
     This program is free software: you can redistribute it and/or modify
@@ -23,7 +23,7 @@
 #include "../../../../compat.h"
 #include "../../../decoder.h"
 
-#include <locale.h>
+#include <clocale>
 #include <libintl.h>
 #define _(STRING) gettext(STRING)
 
@@ -89,7 +89,7 @@ void PulsePlugin::captureListCB ( pa_context* context, const pa_source_info* lis
 	string deviceName ( list->name );
 	if ( !eol && list )   //Device found
 	{
-		oPlugin->addDeviceToList ( &oPlugin->captureDevicesList, &deviceName );
+		oPlugin->captureDevicesList.push_back( new string (deviceName));
 	}
 }
 
@@ -99,16 +99,7 @@ void PulsePlugin::playbackListCB ( pa_context* context, const pa_sink_info* list
 	string deviceName ( list->name );
 	if ( !eol && list )   //Device found
 	{
-		oPlugin->addDeviceToList ( &oPlugin->playbackDevicesList, &deviceName );
-	}
-}
-
-void PulsePlugin::addDeviceToList ( vector< string* >* devicesList, string *deviceName )
-{
-	uint32_t index = devicesList->size(); //we want to add the plugin to the end of the list
-	if ( devicesList->size() == ( uint32_t ) ( index ) )
-	{
-		devicesList->push_back ( new string ( *deviceName ) );
+		oPlugin->playbackDevicesList.push_back( new string (deviceName) );
 	}
 }
 
@@ -319,7 +310,8 @@ void PulsePlugin::unmuteAll()
 Stream's functions
 ****************************/
 PulseAudioStream::PulseAudioStream ( PulsePlugin* m )  :
-	AudioStream(NULL), paused(false), stream ( NULL ), manager ( m ), streamStatus ( STREAM_STARTING )
+	AudioStream(NULL), paused(false), stream ( NULL ), manager ( m ), streamStatus ( STREAM_STARTING ),
+	streamVolume(0.0)
 {
 
 }
@@ -420,18 +412,37 @@ void PulseAudioStream::unmute()
 			);
 }
 
-void PulseAudioStream::setVolume(double vol)
+void PulseAudioStream::sinkInfoForSettingVolumeCB(pa_context* context, const pa_sink_info* i, int eol, PulseAudioStream* stream)
 {
+	if(eol)
+	{
+		//The callback is called multiple times even if querying a single device
+		return;
+	}
 	struct pa_cvolume volume;
-	pa_cvolume_set(&volume, pa_stream_get_sample_spec(stream)->channels,
-					vol*PA_VOLUME_NORM);
+	pa_sw_cvolume_multiply_scalar(&volume, &i->volume, stream->streamVolume*PA_VOLUME_NORM);
+
 	pa_context_set_sink_input_volume(
-			pa_stream_get_context(stream),
-			pa_stream_get_index(stream),
+			context,
+			pa_stream_get_index(stream->stream),
 			&volume,
 			NULL,
 			NULL
 			);
+}
+
+void PulseAudioStream::setVolume(double vol)
+{
+	if(vol==streamVolume)
+		return;
+	streamVolume=vol;
+	uint32_t deviceIndex = pa_stream_get_device_index(stream);
+	pa_operation* op=pa_context_get_sink_info_by_index(
+			pa_stream_get_context(stream),
+			deviceIndex,
+			(pa_sink_info_cb_t)sinkInfoForSettingVolumeCB,
+			this);
+	pa_operation_unref(op);
 }
 
 // Plugin factory function

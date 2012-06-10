@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2009-2011  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2009-2012  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -92,12 +92,37 @@ TRISTATE ASObject::isLess(ASObject* r)
 	return toPrimitive()->isLess(r);
 }
 
+int variables_map::getNextEnumerable(unsigned int start) const
+{
+	if(start>=Variables.size())
+		return -1;
+
+	const_var_iterator it=Variables.begin();
+
+	unsigned int i=0;
+	while(i<start)
+	{
+		++i;
+		++it;
+	}
+
+	while(it->second.kind!=DYNAMIC_TRAIT)
+	{
+		++i;
+		++it;
+		if(it==Variables.end())
+			return -1;
+	}
+
+	return i;
+}
+
 uint32_t ASObject::nextNameIndex(uint32_t cur_index)
 {
-	if(cur_index < numVariables())
-		return cur_index+1;
-	else
-		return 0;
+	// First -1 converts one-base cur_index to zero-based, +1
+	// moves to the next position (first position to be
+	// considered). Final +1 converts back to one-based.
+	return Variables.getNextEnumerable(cur_index-1+1)+1;
 }
 
 _R<ASObject> ASObject::nextName(uint32_t index)
@@ -236,7 +261,7 @@ bool ASObject::has_valueOf()
 {
 	multiname valueOfName(NULL);
 	valueOfName.name_type=multiname::NAME_STRING;
-	valueOfName.name_s="valueOf";
+	valueOfName.name_s_id=getSys()->getUniqueStringId("valueOf");
 	valueOfName.ns.push_back(nsNameAndKind("",NAMESPACE));
 	valueOfName.ns.push_back(nsNameAndKind(AS3,NAMESPACE));
 	valueOfName.isAttribute = false;
@@ -250,7 +275,7 @@ _R<ASObject> ASObject::call_valueOf()
 {
 	multiname valueOfName(NULL);
 	valueOfName.name_type=multiname::NAME_STRING;
-	valueOfName.name_s="valueOf";
+	valueOfName.name_s_id=getSys()->getUniqueStringId("valueOf");
 	valueOfName.ns.push_back(nsNameAndKind("",NAMESPACE));
 	valueOfName.ns.push_back(nsNameAndKind(AS3,NAMESPACE));
 	valueOfName.isAttribute = false;
@@ -270,7 +295,7 @@ bool ASObject::has_toString()
 {
 	multiname toStringName(NULL);
 	toStringName.name_type=multiname::NAME_STRING;
-	toStringName.name_s="toString";
+	toStringName.name_s_id=getSys()->getUniqueStringId("toString");
 	toStringName.ns.push_back(nsNameAndKind("",NAMESPACE));
 	toStringName.ns.push_back(nsNameAndKind(AS3,NAMESPACE));
 	toStringName.isAttribute = false;
@@ -284,7 +309,7 @@ _R<ASObject> ASObject::call_toString()
 {
 	multiname toStringName(NULL);
 	toStringName.name_type=multiname::NAME_STRING;
-	toStringName.name_s="toString";
+	toStringName.name_s_id=getSys()->getUniqueStringId("toString");
 	toStringName.ns.push_back(nsNameAndKind("",NAMESPACE));
 	toStringName.ns.push_back(nsNameAndKind(AS3,NAMESPACE));
 	toStringName.isAttribute = false;
@@ -313,16 +338,16 @@ variables_map::variables_map(MemoryAccount* m):
 {
 }
 
-variable* variables_map::findObjVar(const tiny_string& n, const nsNameAndKind& ns, TRAIT_KIND createKind, uint32_t traitKinds)
+variable* variables_map::findObjVar(uint32_t nameId, const nsNameAndKind& ns, TRAIT_KIND createKind, uint32_t traitKinds)
 {
-	pair<var_iterator, var_iterator> var_range=Variables.equal_range(n);
+	pair<var_iterator, var_iterator> var_range=Variables.equal_range(nameId);
 	var_iterator ret=var_range.first;
 	for(;ret!=var_range.second;++ret)
 	{
 		if(!(ret->second.kind & traitKinds))
 			continue;
 
-		if(ret->second.ns.count(ns))
+		if(ret->second.ns==ns)
 			return &ret->second;
 	}
 
@@ -330,7 +355,7 @@ variable* variables_map::findObjVar(const tiny_string& n, const nsNameAndKind& n
 	if(createKind==NO_CREATE_TRAIT)
 		return NULL;
 
-	var_iterator inserted=Variables.insert(var_range.first,make_pair(n, variable(ns, createKind)) );
+	var_iterator inserted=Variables.insert(var_range.first,make_pair(nameId, variable(ns, createKind)) );
 	return &inserted->second;
 }
 
@@ -370,6 +395,11 @@ void ASObject::setDeclaredMethodByQName(const tiny_string& name, const tiny_stri
 
 void ASObject::setDeclaredMethodByQName(const tiny_string& name, const nsNameAndKind& ns, IFunction* o, METHOD_TYPE type, bool isBorrowed)
 {
+	setDeclaredMethodByQName(getSys()->getUniqueStringId(name), ns, o, type, isBorrowed);
+}
+
+void ASObject::setDeclaredMethodByQName(uint32_t nameId, const nsNameAndKind& ns, IFunction* o, METHOD_TYPE type, bool isBorrowed)
+{
 	check();
 #ifndef NDEBUG
 	assert(!initialized);
@@ -388,7 +418,7 @@ void ASObject::setDeclaredMethodByQName(const tiny_string& name, const nsNameAnd
 	if(isBorrowed && o->inClass == NULL)
 		o->inClass = this->as<Class_base>();
 
-	variable* obj=Variables.findObjVar(name,ns, (isBorrowed)?BORROWED_TRAIT:DECLARED_TRAIT, (isBorrowed)?BORROWED_TRAIT:DECLARED_TRAIT);
+	variable* obj=Variables.findObjVar(nameId,ns,(isBorrowed)?BORROWED_TRAIT:DECLARED_TRAIT, (isBorrowed)?BORROWED_TRAIT:DECLARED_TRAIT);
 	switch(type)
 	{
 		case NORMAL_METHOD:
@@ -447,7 +477,7 @@ bool ASObject::deleteVariableByMultiname(const multiname& name)
 void ASObject::setVariableByMultiname_i(const multiname& name, int32_t value)
 {
 	check();
-	setVariableByMultiname(name,abstract_i(value));
+	setVariableByMultiname(name,abstract_i(value),CONST_NOT_ALLOWED);
 }
 
 variable* ASObject::findSettable(const multiname& name, bool borrowedMode, bool* has_getter)
@@ -468,7 +498,7 @@ variable* ASObject::findSettable(const multiname& name, bool borrowedMode, bool*
 }
 
 
-void ASObject::setVariableByMultiname(const multiname& name, ASObject* o, Class_base* cls)
+void ASObject::setVariableByMultiname(const multiname& name, ASObject* o, CONST_ALLOWED_FLAG allowConst, Class_base* cls)
 {
 	check();
 	assert(!cls || classdef->isSubClass(cls));
@@ -476,10 +506,11 @@ void ASObject::setVariableByMultiname(const multiname& name, ASObject* o, Class_
 	bool has_getter=false;
 	variable* obj=findSettable(name, false, &has_getter);
 
-	if (obj && (obj->kind == CONSTANT_TRAIT))
+	if (obj && (obj->kind == CONSTANT_TRAIT && allowConst==CONST_NOT_ALLOWED))
 	{
 		tiny_string err=tiny_string("Error #1074: Illegal write to read-only property ")+name.normalizedName();
-		err+=tiny_string(" on type ")+this->as<Class_base>()->getQualifiedClassName();
+		if(classdef)
+			err+=tiny_string(" on type ")+classdef->as<Class_base>()->getQualifiedClassName();
 		throw Class<ReferenceError>::getInstanceS(err);
 	}
 	if(!obj && cls)
@@ -560,12 +591,18 @@ void ASObject::setVariableByQName(const tiny_string& name, const tiny_string& ns
 
 void ASObject::setVariableByQName(const tiny_string& name, const nsNameAndKind& ns, ASObject* o, TRAIT_KIND traitKind)
 {
-	assert_and_throw(Variables.findObjVar(name,ns,NO_CREATE_TRAIT,traitKind)==NULL);
-	variable* obj=Variables.findObjVar(name,ns,traitKind,traitKind);
+	setVariableByQName(getSys()->getUniqueStringId(name), ns, o, traitKind);
+}
+
+void ASObject::setVariableByQName(uint32_t nameId, const nsNameAndKind& ns, ASObject* o, TRAIT_KIND traitKind)
+{
+	assert_and_throw(Variables.findObjVar(nameId,ns,NO_CREATE_TRAIT,traitKind)==NULL);
+	variable* obj=Variables.findObjVar(nameId,ns,traitKind,traitKind);
 	obj->setVar(o);
 }
 
-void ASObject::initializeVariableByMultiname(const multiname& name, ASObject* o, multiname* typemname, ABCContext* context)
+void ASObject::initializeVariableByMultiname(const multiname& name, ASObject* o, multiname* typemname,
+		ABCContext* context, TRAIT_KIND traitKind)
 {
 	check();
 
@@ -575,18 +612,37 @@ void ASObject::initializeVariableByMultiname(const multiname& name, ASObject* o,
 		//Initializing an already existing variable
 		LOG(LOG_NOT_IMPLEMENTED,"Variable " << name << "already initialized");
 		o->decRef();
-		assert_and_throw(obj->typemname->qualifiedString()==typemname->qualifiedString());
 		return;
 	}
 
-	Variables.initializeVar(name, o, typemname, context);
+	Variables.initializeVar(name, o, typemname, context, traitKind);
+}
+
+variable::variable(const nsNameAndKind& _ns, TRAIT_KIND _k, ASObject* _v, multiname* _t, const Type* _type)
+		: ns(_ns),var(_v),typeUnion(NULL),setter(NULL),getter(NULL),kind(_k),traitState(NO_STATE)
+{
+	if(_type)
+	{
+		//The type is known, use it instead of the typemname
+		type=_type;
+		traitState=TYPE_RESOLVED;
+	}
+	else
+	{
+		traitTypemname=_t;
+	}
 }
 
 void variable::setVar(ASObject* v)
 {
 	//Resolve the typename if we have one
-	if(!type && typemname)
-		type = Type::getTypeFromMultiname(typemname, getVm()->currentCallContext->context);
+	if(!(traitState&TYPE_RESOLVED) && traitTypemname)
+	{
+		type = Type::getTypeFromMultiname(traitTypemname, getVm()->currentCallContext->context);
+		assert(type);
+		if(type)
+			traitState=TYPE_RESOLVED;
+	}
 
 	if(type)
 		v = type->coerce(v);
@@ -596,31 +652,9 @@ void variable::setVar(ASObject* v)
 	var=v;
 }
 
-template<class Set1, class Set2>
-bool is_disjoint(const Set1 &set1, const Set2 &set2)
-{
-	if(set1.empty() || set2.empty()) return true;
-
-	typename Set1::const_iterator
-		it1 = set1.begin(),
-		it1End = set1.end();
-	typename Set2::const_iterator
-		it2 = set2.begin(),
-		it2End = set2.end();
-	if(*it1 > *set2.rbegin() || *it2 > *set1.rbegin()) return true;
-
-	while(it1 != it1End && it2 != it2End)
-	{
-		if(*it1 == *it2) return false;
-		if(*it1 < *it2) { it1++; }
-		else { it2++; }
-	}
-	return true;
-}
-
 void variables_map::killObjVar(const multiname& mname)
 {
-	tiny_string name=mname.normalizedName();
+	uint32_t name=mname.normalizedNameId();
 	const pair<var_iterator, var_iterator> ret=Variables.equal_range(name);
 	assert_and_throw(ret.first!=ret.second);
 
@@ -628,7 +662,7 @@ void variables_map::killObjVar(const multiname& mname)
 	var_iterator start=ret.first;
 	for(;start!=ret.second;++start)
 	{
-		if(!is_disjoint(mname.ns,start->second.ns))
+		if(binary_search(mname.ns.begin(),mname.ns.end(),start->second.ns))
 		{
 			Variables.erase(start);
 			return;
@@ -640,7 +674,7 @@ void variables_map::killObjVar(const multiname& mname)
 
 variable* variables_map::findObjVar(const multiname& mname, TRAIT_KIND createKind, uint32_t traitKinds)
 {
-	tiny_string name=mname.normalizedName();
+	uint32_t name=mname.normalizedNameId();
 	pair<var_iterator, var_iterator> var_range=Variables.equal_range(name);
 	assert(!mname.ns.empty());
 	var_iterator ret=var_range.first;
@@ -650,7 +684,7 @@ variable* variables_map::findObjVar(const multiname& mname, TRAIT_KIND createKin
 			continue;
 		//Check if one the namespace is already present
 		//We can use binary search, as the namespace are ordered
-		if(!is_disjoint(mname.ns,ret->second.ns))
+		if(binary_search(mname.ns.begin(),mname.ns.end(),ret->second.ns))
 			return &ret->second;
 	}
 
@@ -659,10 +693,9 @@ variable* variables_map::findObjVar(const multiname& mname, TRAIT_KIND createKin
 		return NULL;
 	if(createKind == DYNAMIC_TRAIT)
 	{
-		if(mname.ns.begin()->name != "")
+		if(!mname.ns.begin()->hasEmptyName())
 			throw Class<ReferenceError>::getInstanceS("Error #1056: Trying to create a dynamic variable with namespace != \"\"");
-		var_iterator inserted=Variables.insert(ret,make_pair(name,
-					variable(nsNameAndKind("",NAMESPACE), createKind)));
+		var_iterator inserted=Variables.insert(ret,make_pair(name, variable(mname.ns[0], createKind)));
 		return &inserted->second;
 	}
 	assert(mname.ns.size() == 1);
@@ -670,10 +703,8 @@ variable* variables_map::findObjVar(const multiname& mname, TRAIT_KIND createKin
 	return &inserted->second;
 }
 
-void variables_map::initializeVar(const multiname& mname, ASObject* obj, multiname* typemname, ABCContext* context)
+void variables_map::initializeVar(const multiname& mname, ASObject* obj, multiname* typemname, ABCContext* context, TRAIT_KIND traitKind)
 {
-	tiny_string name=mname.normalizedName();
-
 	const Type* type = NULL;
 	 /* If typename is resolvable right now, we coerce obj.
 	  * It it's not resolvable, then it must be a user defined class,
@@ -694,7 +725,10 @@ void variables_map::initializeVar(const multiname& mname, ASObject* obj, multina
 		type = Type::getTypeFromMultiname(typemname, context);
 		obj = type->coerce(obj);
 	}
-	Variables.insert(make_pair(name, variable(mname.ns[0], DECLARED_TRAIT, obj, typemname, type)));
+	assert(traitKind==DECLARED_TRAIT || traitKind==CONSTANT_TRAIT);
+
+	uint32_t name=mname.normalizedNameId();
+	Variables.insert(make_pair(name, variable(mname.ns[0], traitKind, obj, typemname, type)));
 }
 
 ASFUNCTIONBODY(ASObject,generator)
@@ -736,7 +770,7 @@ ASFUNCTIONBODY(ASObject,hasOwnProperty)
 	assert_and_throw(argslen==1);
 	multiname name(NULL);
 	name.name_type=multiname::NAME_STRING;
-	name.name_s=args[0]->toString();
+	name.name_s_id=getSys()->getUniqueStringId(args[0]->toString());
 	name.ns.push_back(nsNameAndKind("",NAMESPACE));
 	name.isAttribute=false;
 	if(obj->getClass())
@@ -781,7 +815,7 @@ ASFUNCTIONBODY(ASObject,propertyIsEnumerable)
 	assert_and_throw(argslen==1);
 	multiname name(NULL);
 	name.name_type=multiname::NAME_STRING;
-	name.name_s=args[0]->toString();
+	name.name_s_id=getSys()->getUniqueStringId(args[0]->toString());
 	name.ns.push_back(nsNameAndKind("",NAMESPACE));
 	name.isAttribute=false;
 	unsigned int index = 0;
@@ -811,7 +845,7 @@ ASFUNCTIONBODY(ASObject,_constructor)
 
 void ASObject::initSlot(unsigned int n, const multiname& name)
 {
-	Variables.initSlot(n,name.name_s,name.ns[0]);
+	Variables.initSlot(n,name.name_s_id,name.ns[0]);
 }
 
 int32_t ASObject::getVariableByMultiname_i(const multiname& name)
@@ -1061,16 +1095,16 @@ ASObject::~ASObject()
 	}
 }
 
-void variables_map::initSlot(unsigned int n, const tiny_string& name, const nsNameAndKind& ns)
+void variables_map::initSlot(unsigned int n, uint32_t nameId, const nsNameAndKind& ns)
 {
 	if(n>slots_vars.size())
 		slots_vars.resize(n,Variables.end());
 
-	pair<var_iterator, var_iterator> ret=Variables.equal_range(name);
+	pair<var_iterator, var_iterator> ret=Variables.equal_range(nameId);
 	var_iterator start=ret.first;
 	for(;start!=ret.second;++start)
 	{
-		if(start->second.ns.count(ns))
+		if(start->second.ns==ns)
 		{
 			slots_vars[n-1]=start;
 			return;
@@ -1141,7 +1175,7 @@ tiny_string variables_map::getNameAt(unsigned int index) const
 		for(unsigned int i=0;i<index;i++)
 			++it;
 
-		return it->first;
+		return getSys()->getStringFromUniqueId(it->first);
 	}
 	else
 		throw RunTimeException("getNameAt out of bounds");
@@ -1196,9 +1230,9 @@ void variables_map::serialize(ByteArray* out, std::map<tiny_string, uint32_t>& s
 	{
 		if(it->second.kind!=DYNAMIC_TRAIT)
 			continue;
-		assert_and_throw(it->second.ns.size() == 1)
-		assert_and_throw(it->second.ns.begin()->name=="");
-		out->writeStringVR(stringMap,it->first);
+		//Dynamic traits always have empty namespace
+		assert(it->second.ns.hasEmptyName());
+		out->writeStringVR(stringMap,getSys()->getStringFromUniqueId(it->first));
 		it->second.var->serialize(out, stringMap, objMap, traitsMap);
 	}
 	//The empty string closes the object
@@ -1249,7 +1283,7 @@ void ASObject::serialize(ByteArray* out, std::map<tiny_string, uint32_t>& string
 		//Invoke writeExternal
 		multiname writeExternalName(NULL);
 		writeExternalName.name_type=multiname::NAME_STRING;
-		writeExternalName.name_s="writeExternal";
+		writeExternalName.name_s_id=getSys()->getUniqueStringId("writeExternal");
 		writeExternalName.ns.push_back(nsNameAndKind("",NAMESPACE));
 		writeExternalName.isAttribute = false;
 
@@ -1279,7 +1313,14 @@ void ASObject::serialize(ByteArray* out, std::map<tiny_string, uint32_t>& string
 		for(variables_map::const_var_iterator varIt=beginIt; varIt != endIt; ++varIt)
 		{
 			if(varIt->second.kind==DECLARED_TRAIT)
+			{
+				if(!varIt->second.ns.hasEmptyName())
+				{
+					//Skip variable with a namespace, like protected ones
+					continue;
+				}
 				traitsCount++;
+			}
 		}
 		uint32_t dynamicFlag=(type->isSealed)?0:(1 << 3);
 		out->writeU29((traitsCount << 4) | dynamicFlag | 0x03);
@@ -1288,16 +1329,26 @@ void ASObject::serialize(ByteArray* out, std::map<tiny_string, uint32_t>& string
 		{
 			if(varIt->second.kind==DECLARED_TRAIT)
 			{
-				assert_and_throw(varIt->second.ns.size() == 1)
-				assert_and_throw(varIt->second.ns.begin()->name=="");
-				out->writeStringVR(stringMap, varIt->first);
+				if(!varIt->second.ns.hasEmptyName())
+				{
+					//Skip variable with a namespace, like protected ones
+					continue;
+				}
+				out->writeStringVR(stringMap, getSys()->getStringFromUniqueId(varIt->first));
 			}
 		}
 	}
 	for(variables_map::const_var_iterator varIt=beginIt; varIt != endIt; ++varIt)
 	{
 		if(varIt->second.kind==DECLARED_TRAIT)
+		{
+			if(!varIt->second.ns.hasEmptyName())
+			{
+				//Skip variable with a namespace, like protected ones
+				continue;
+			}
 			varIt->second.var->serialize(out, stringMap, objMap, traitsMap);
+		}
 	}
 	if(!type->isSealed)
 		serializeDynamicProperties(out, stringMap, objMap, traitsMap);
@@ -1332,22 +1383,15 @@ ASObject *ASObject::describeType() const
 
 bool ASObject::hasprop_prototype()
 {
-	multiname prototypeName(NULL);
-	prototypeName.name_type=multiname::NAME_STRING;
-	prototypeName.name_s="prototype";
-	prototypeName.ns.push_back(nsNameAndKind("",NAMESPACE));
-	prototypeName.isAttribute = false;
-	return findGettable(prototypeName, false) != NULL;
+	variable* var=Variables.findObjVar(BUILTIN_STRINGS::PROTOTYPE,nsNameAndKind(BUILTIN_NAMESPACES::EMPTY_NS),
+			NO_CREATE_TRAIT,(DECLARED_TRAIT|DYNAMIC_TRAIT));
+	return (var && var->var);
 }
 
 ASObject* ASObject::getprop_prototype()
 {
-	multiname prototypeName(NULL);
-	prototypeName.name_type=multiname::NAME_STRING;
-	prototypeName.name_s="prototype";
-	prototypeName.ns.push_back(nsNameAndKind("",NAMESPACE));
-	prototypeName.isAttribute = false;
-	variable* var = findGettable(prototypeName, false);
+	variable* var=Variables.findObjVar(BUILTIN_STRINGS::PROTOTYPE,nsNameAndKind(BUILTIN_NAMESPACES::EMPTY_NS),
+			NO_CREATE_TRAIT,(DECLARED_TRAIT|DYNAMIC_TRAIT));
 	return var ? var->var : NULL;
 }
 
@@ -1363,7 +1407,7 @@ void ASObject::setprop_prototype(_NR<ASObject>& o)
 
 	multiname prototypeName(NULL);
 	prototypeName.name_type=multiname::NAME_STRING;
-	prototypeName.name_s="prototype";
+	prototypeName.name_s_id=getSys()->getUniqueStringId("prototype");
 	prototypeName.ns.push_back(nsNameAndKind("",NAMESPACE));
 	bool has_getter = false;
 	variable* ret=findSettable(prototypeName,false, &has_getter);

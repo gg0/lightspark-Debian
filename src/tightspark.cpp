@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2009-2011  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2009-2012  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -83,9 +83,9 @@ int main(int argc, char* argv[])
 	//NOTE: see SystemState declaration
 #ifdef MEMORY_USAGE_PROFILING
 	MemoryAccount sysAccount("sysAccount");
-	SystemState* sys=new (&sysAccount) SystemState(0);
+	SystemState* sys=new (&sysAccount) SystemState(0, SystemState::FLASH);
 #else
-	SystemState* sys=new ((MemoryAccount*)NULL) SystemState(0);
+	SystemState* sys=new ((MemoryAccount*)NULL) SystemState(0, SystemState::FLASH);
 #endif
 	setTLSSys(sys);
 
@@ -119,11 +119,7 @@ int main(int argc, char* argv[])
 		if(f.is_open())
 		{
 			sys->incRef();
-#ifdef MEMORY_USAGE_PROFILING
-			ABCContext* context=new ABCContext(_MR(sys), f, &sysAccount);
-#else
-			ABCContext* context=new ABCContext(_MR(sys), f, NULL);
-#endif
+			ABCContext* context=new ABCContext(_MR(sys), f, vm);
 			contexts.push_back(context);
 			f.close();
 			vm->addEvent(NullRef,_MR(new (sys->unaccountedMemory) ABCContextInitEvent(context,false)));

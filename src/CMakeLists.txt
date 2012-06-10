@@ -1,7 +1,7 @@
 #**************************************************************************
 #    Lightspark, a free flash player implementation
 #
-#    Copyright (C) 2010-2011  Alessandro Pignotti <a.pignotti@sssup.it>
+#    Copyright (C) 2010-2012  Alessandro Pignotti <a.pignotti@sssup.it>
 #    Copyright (C) 2010  Giacomo Spigler <g.spigler@sssup.it>
 #
 #    This program is free software: you can redistribute it and/or modify
@@ -61,6 +61,8 @@ SET(LIBSPARK_SOURCES
   scripting/abc_opcodes.cpp
   scripting/abctypes.cpp
   scripting/flash/accessibility/flashaccessibility.cpp
+  scripting/flash/desktop/flashdesktop.cpp
+  scripting/flash/display/BitmapContainer.cpp
   scripting/flash/display/BitmapData.cpp
   scripting/flash/display/DisplayObject.cpp
   scripting/flash/display/IBitmapDrawable.cpp

@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2009-2011  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2009-2012  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -29,7 +29,8 @@ using namespace lightspark;
 
 SET_NAMESPACE("flash.text");
 
-REGISTER_CLASS_NAME2(lightspark::Font,"Font","flash.text");
+REGISTER_CLASS_NAME2(ASFont,"Font","flash.text");
+REGISTER_CLASS_NAME(AntiAliasType);
 REGISTER_CLASS_NAME(TextField);
 REGISTER_CLASS_NAME(TextFieldType);
 REGISTER_CLASS_NAME(TextFieldAutoSize);
@@ -38,16 +39,65 @@ REGISTER_CLASS_NAME(TextFormat);
 REGISTER_CLASS_NAME(StyleSheet);
 REGISTER_CLASS_NAME(StaticText);
 
-void lightspark::Font::sinit(Class_base* c)
+void lightspark::AntiAliasType::sinit(Class_base* c)
 {
-//	c->constructor=Class<IFunction>::getFunction(_constructor);
 	c->setConstructor(NULL);
-	c->setDeclaredMethodByQName("enumerateFonts","",Class<IFunction>::getFunction(enumerateFonts),NORMAL_METHOD,true);
+	c->setVariableByQName("ADVANCED","",Class<ASString>::getInstanceS("advanced"),DECLARED_TRAIT);
+	c->setVariableByQName("NORMAL","",Class<ASString>::getInstanceS("normal"),DECLARED_TRAIT);
 }
 
-ASFUNCTIONBODY(lightspark::Font,enumerateFonts)
+void ASFont::sinit(Class_base* c)
 {
-	return Class<Array>::getInstanceS();
+//	c->constructor=Class<IFunction>::getFunction(_constructor);
+	//c->setConstructor(NULL);
+	c->setSuper(Class<ASObject>::getRef());
+	c->setDeclaredMethodByQName("enumerateFonts","",Class<IFunction>::getFunction(enumerateFonts),NORMAL_METHOD,false);
+	c->setDeclaredMethodByQName("registerFont","",Class<IFunction>::getFunction(registerFont),NORMAL_METHOD,false);
+
+	REGISTER_GETTER(c,fontName);
+	REGISTER_GETTER(c,fontStyle);
+	REGISTER_GETTER(c,fontType);
+}
+void ASFont::SetFont(tiny_string& fontname,bool is_bold,bool is_italic, bool is_Embedded, bool is_EmbeddedCFF)
+{
+	fontName = fontname;
+	fontStyle = (is_bold ? 
+					 (is_italic ? "boldItalic" : "bold") :
+					 (is_italic ? "italic" : "regular")
+					 );
+	fontType = (is_Embedded ?
+					(is_EmbeddedCFF ? "embeddedCFF" : "embedded") :
+					"device");
+}
+
+std::vector<ASObject*>* ASFont::getFontList()
+{
+	static std::vector<ASObject*> fontlist;
+	return &fontlist;
+}
+ASFUNCTIONBODY_GETTER(ASFont, fontName);
+ASFUNCTIONBODY_GETTER(ASFont, fontStyle);
+ASFUNCTIONBODY_GETTER(ASFont, fontType);
+
+ASFUNCTIONBODY(ASFont,enumerateFonts)
+{
+	bool enumerateDeviceFonts=false;
+	ARG_UNPACK(enumerateDeviceFonts,false);
+
+	LOG(LOG_NOT_IMPLEMENTED,"Font::enumerateFonts: flag enumerateDeviceFonts is not handled");
+	Array* ret = Class<Array>::getInstanceS();
+	std::vector<ASObject*>* fontlist = getFontList();
+	for(auto i = fontlist->begin(); i != fontlist->end(); ++i)
+	{
+		(*i)->incRef();
+		ret->push(_MR(*i));
+	}
+	return ret;
+}
+ASFUNCTIONBODY(ASFont,registerFont)
+{
+	getFontList()->push_back(args[0]);
+	return NULL;
 }
 
 void TextField::sinit(Class_base* c)
@@ -67,7 +117,10 @@ void TextField::sinit(Class_base* c)
 	c->setDeclaredMethodByQName("autoSize","",Class<IFunction>::getFunction(TextField::_setAutoSize),SETTER_METHOD,true);
 	c->setDeclaredMethodByQName("autoSize","",Class<IFunction>::getFunction(TextField::_getAutoSize),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("appendText","",Class<IFunction>::getFunction(TextField:: appendText),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("getTextFormat","",Class<IFunction>::getFunction(_getTextFormat),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("setTextFormat","",Class<IFunction>::getFunction(_setTextFormat),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("defaultTextFormat","",Class<IFunction>::getFunction(TextField::_getDefaultTextFormat),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("defaultTextFormat","",Class<IFunction>::getFunction(TextField::_setDefaultTextFormat),SETTER_METHOD,true);
 
 	REGISTER_GETTER_SETTER(c,textColor);
 }
@@ -229,6 +282,20 @@ ASFUNCTIONBODY(TextField, appendText)
 	return NULL;
 }
 
+ASFUNCTIONBODY(TextField,_getTextFormat)
+{
+	TextField* th=Class<TextField>::cast(obj);
+	TextFormat *format=Class<TextFormat>::getInstanceS();
+
+	format->color=_MNR(abstract_ui(th->textColor.toUInt()));
+	format->font = th->font;
+	format->size = th->fontSize;
+
+	LOG(LOG_NOT_IMPLEMENTED, "getTextFormat is not fully implemeted");
+
+	return format;
+}
+
 ASFUNCTIONBODY(TextField,_setTextFormat)
 {
 	TextField* th=Class<TextField>::cast(obj);
@@ -243,8 +310,37 @@ ASFUNCTIONBODY(TextField,_setTextFormat)
 
 	if(tf->color)
 		th->textColor = tf->color->toUInt();
+	if (tf->font != "")
+		th->font = tf->font;
+	th->fontSize = tf->size;
 
 	LOG(LOG_NOT_IMPLEMENTED,"setTextFormat does not read all fields of TextFormat");
+	return NULL;
+}
+
+ASFUNCTIONBODY(TextField,_getDefaultTextFormat)
+{
+	TextField* th=Class<TextField>::cast(obj);
+	
+	TextFormat* tf = Class<TextFormat>::getInstanceS();
+	tf->font = th->font;
+	LOG(LOG_NOT_IMPLEMENTED,"getDefaultTextFormat does not get all fields of TextFormat");
+	return tf;
+}
+
+ASFUNCTIONBODY(TextField,_setDefaultTextFormat)
+{
+	TextField* th=Class<TextField>::cast(obj);
+	_NR<TextFormat> tf;
+
+	ARG_UNPACK(tf);
+
+	if(tf->color)
+		th->textColor = tf->color->toUInt();
+	if (tf->font != "")
+		th->font = tf->font;
+	th->fontSize = tf->size;
+	LOG(LOG_NOT_IMPLEMENTED,"setDefaultTextFormat does not set all fields of TextFormat");
 	return NULL;
 }
 
@@ -298,7 +394,7 @@ IDrawable* TextField::invalidate(DisplayObject* target, const MATRIX& initialMat
 	computeBoundsForTransformedRect(bxmin,bxmax,bymin,bymax,x,y,width,height,totalMatrix);
 	if(width==0 || height==0)
 		return NULL;
-	if(totalMatrix.ScaleX != 1 || totalMatrix.ScaleY != 1)
+	if(totalMatrix.getScaleX() != 1 || totalMatrix.getScaleY() != 1)
 		LOG(LOG_NOT_IMPLEMENTED, "TextField when scaled is not correctly implemented");
 	/**  TODO: The scaling is done differently for textfields : height changes are applied directly
 		on the font size. In some cases, it can change the width (if autosize is on and wordwrap off).
@@ -339,12 +435,31 @@ void TextFormatAlign ::sinit(Class_base* c)
 
 void TextFormat::sinit(Class_base* c)
 {
-	c->setConstructor(NULL);
+	c->setConstructor(Class<IFunction>::getFunction(_constructor));
 	c->setSuper(Class<ASObject>::getRef());
 	REGISTER_GETTER_SETTER(c,color);
+	REGISTER_GETTER_SETTER(c,font);
+	REGISTER_GETTER_SETTER(c,size);
+}
+ASFUNCTIONBODY(TextFormat,_constructor)
+{
+	TextFormat* th=static_cast<TextFormat*>(obj);
+	tiny_string font;
+	int32_t size;
+	_NR<ASObject> color;
+	ARG_UNPACK (font, "")(size, 12)(color,_MNR(getSys()->getNullRef()));
+	th->font = font;
+	th->size = size;
+	th->color = color;
+	LOG(LOG_NOT_IMPLEMENTED,"TextFormat: not all properties are set in constructor");
+	return NULL;
 }
 
+
+
 ASFUNCTIONBODY_GETTER_SETTER(TextFormat,color);
+ASFUNCTIONBODY_GETTER_SETTER(TextFormat,font);
+ASFUNCTIONBODY_GETTER_SETTER(TextFormat,size);
 
 void TextFormat::buildTraits(ASObject* o)
 {

@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2011  Matthias Gehre (M.Gehre@gmx.de)
+    Copyright (C) 2011-2012  Matthias Gehre (M.Gehre@gmx.de)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -16,7 +16,7 @@
     You should have received a copy of the GNU Lesser General Public License
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
-#include <stdint.h>
+#include <cstdint>
 #include <istream>
 
 extern "C" {

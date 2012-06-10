@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2009-2011  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2009-2012  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -20,13 +20,22 @@
 #ifndef COMPAT_H
 #define COMPAT_H
 
-// Set BOOST_FILEYSTEM_VERSION to 2 since boost-1.46 defaults to 3
+#include <boost/version.hpp>
+#if BOOST_VERSION >= 104600
+#define BOOST_FILESYSTEM_VERSION 3
+#else
 #define BOOST_FILESYSTEM_VERSION 2
+#endif
 
-#include <stddef.h>
-#include <assert.h>
+#include <cstddef>
+#include <cassert>
 #include <cstdint>
 #include <iostream>
+#include <cmath>
+
+#ifndef M_PI
+#	define M_PI 3.14159265358979323846
+#endif
 // TODO: This should be reworked to use CMake feature detection where possible
 
 /* gettext support */
@@ -43,9 +52,7 @@
 #define NOMINMAX
 #endif
 #define WIN32_LEAN_AND_MEAN
-//#include <winsock2.h>
 #include <windows.h>
-#include <math.h>
 #include <io.h>
 #undef DOUBLE_CLICK
 #undef RGB
@@ -119,8 +126,8 @@ long lrint(double f);
 #	define ATOMIC_INT32(x) __declspec(align(4)) volatile long x
 #	define ATOMIC_INCREMENT(x) InterlockedIncrement(&x)
 #	define ATOMIC_DECREMENT(x) InterlockedDecrement(&x)
-#	define ATOMIC_ADD(x, v) InterlockedExchangeAdd(&x, v)
-#	define ATOMIC_SUB(x, v) InterlockedExchangeAdd(&x, -v)
+#	define ATOMIC_ADD(x, v) (InterlockedExchangeAdd(&x, v)+v)
+#	define ATOMIC_SUB(x, v) (InterlockedExchangeAdd(&x, -v)-v)
 #	define ACQUIRE_RELEASE_FLAG(x) ATOMIC_INT32(x)
 #	define ACQUIRE_READ(x) InterlockedCompareExchange(const_cast<long*>(&x),1,1)
 #	define RELEASE_WRITE(x, v) InterlockedExchange(&x,v)
@@ -137,9 +144,9 @@ long lrint(double f);
 #	endif
 
 #	define ATOMIC_INT32(x) std::atomic<int32_t> x
-#	define ATOMIC_INCREMENT(x) x.fetch_add(1)
+#	define ATOMIC_INCREMENT(x) (x.fetch_add(1)+1)
 #	define ATOMIC_DECREMENT(x) (x.fetch_sub(1)-1)
-#	define ATOMIC_ADD(x, v) x.fetch_add(v)
+#	define ATOMIC_ADD(x, v) (x.fetch_add(v)+v)
 #	define ATOMIC_SUB(x, v) (x.fetch_sub(v)-v)
 
 //Boolean type with acquire release barrier semantics

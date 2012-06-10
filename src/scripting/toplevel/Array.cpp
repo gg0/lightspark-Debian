@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2009-2011  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2009-2012  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -435,14 +435,14 @@ ASFUNCTIONBODY(Array,shift)
 		// for other objects we just decrease the length property
 		multiname lengthName(NULL);
 		lengthName.name_type=multiname::NAME_STRING;
-		lengthName.name_s="length";
+		lengthName.name_s_id=getSys()->getUniqueStringId("length");
 		lengthName.ns.push_back(nsNameAndKind("",NAMESPACE));
 		lengthName.ns.push_back(nsNameAndKind(AS3,NAMESPACE));
 		lengthName.isAttribute = true;
 		_NR<ASObject> o=obj->getVariableByMultiname(lengthName,SKIP_IMPL);
 		uint32_t res = o->toUInt();
 		if (res > 0)
-			obj->setVariableByMultiname(lengthName,abstract_ui(res-1));
+			obj->setVariableByMultiname(lengthName,abstract_ui(res-1),CONST_NOT_ALLOWED);
 		return getSys()->getUndefinedRef();
 	}
 	Array* th=static_cast<Array*>(obj);
@@ -649,14 +649,14 @@ ASFUNCTIONBODY(Array,_pop)
 		// for other objects we just decrease the length property
 		multiname lengthName(NULL);
 		lengthName.name_type=multiname::NAME_STRING;
-		lengthName.name_s="length";
+		lengthName.name_s_id=getSys()->getUniqueStringId("length");
 		lengthName.ns.push_back(nsNameAndKind("",NAMESPACE));
 		lengthName.ns.push_back(nsNameAndKind(AS3,NAMESPACE));
 		lengthName.isAttribute = true;
 		_NR<ASObject> o=obj->getVariableByMultiname(lengthName,SKIP_IMPL);
 		uint32_t res = o->toUInt();
 		if (res > 0)
-			obj->setVariableByMultiname(lengthName,abstract_ui(res-1));
+			obj->setVariableByMultiname(lengthName,abstract_ui(res-1),CONST_NOT_ALLOWED);
 		return getSys()->getUndefinedRef();
 	}
 	Array* th=static_cast<Array*>(obj);
@@ -698,7 +698,10 @@ bool Array::sortComparatorDefault::operator()(const data_slot& d1, const data_sl
 
 		if(std::isnan(a) || std::isnan(b))
 			throw RunTimeException("Cannot sort non number with Array.NUMERIC option");
-		return a<b;
+		if(isDescending)
+			return b>a;
+		else
+			return a<b;
 	}
 	else
 	{
@@ -718,11 +721,22 @@ bool Array::sortComparatorDefault::operator()(const data_slot& d1, const data_sl
 		else
 			s2="undefined";
 
-		//TODO: unicode support
-		if(isCaseInsensitive)
-			return s1.strcasecmp(s2)<0;
+		if(isDescending)
+		{
+			//TODO: unicode support
+			if(isCaseInsensitive)
+				return s1.strcasecmp(s2)>0;
+			else
+				return s1>s2;
+		}
 		else
-			return s1<s2;
+		{
+			//TODO: unicode support
+			if(isCaseInsensitive)
+				return s1.strcasecmp(s2)<0;
+			else
+				return s1<s2;
+		}
 	}
 }
 
@@ -761,6 +775,7 @@ ASFUNCTIONBODY(Array,_sort)
 	IFunction* comp=NULL;
 	bool isNumeric=false;
 	bool isCaseInsensitive=false;
+	bool isDescending=false;
 	for(uint32_t i=0;i<argslen;i++)
 	{
 		if(args[i]->getObjectType()==T_FUNCTION) //Comparison func
@@ -775,7 +790,9 @@ ASFUNCTIONBODY(Array,_sort)
 				isNumeric=true;
 			if(options&CASEINSENSITIVE)
 				isCaseInsensitive=true;
-			if(options&(~(NUMERIC|CASEINSENSITIVE)))
+			if(options&DESCENDING)
+				isDescending=true;
+			if(options&(~(NUMERIC|CASEINSENSITIVE|DESCENDING)))
 				throw UnsupportedException("Array::sort not completely implemented");
 		}
 	}
@@ -790,7 +807,7 @@ ASFUNCTIONBODY(Array,_sort)
 	if(comp)
 		sort(tmp.begin(),tmp.end(),sortComparatorWrapper(comp));
 	else
-		sort(tmp.begin(),tmp.end(),sortComparatorDefault(isNumeric,isCaseInsensitive));
+		sort(tmp.begin(),tmp.end(),sortComparatorDefault(isNumeric,isCaseInsensitive,isDescending));
 
 	th->data.clear();
 	std::vector<data_slot>::iterator ittmp=tmp.begin();
@@ -825,13 +842,13 @@ ASFUNCTIONBODY(Array,unshift)
 		// for other objects we just increase the length property
 		multiname lengthName(NULL);
 		lengthName.name_type=multiname::NAME_STRING;
-		lengthName.name_s="length";
+		lengthName.name_s_id=getSys()->getUniqueStringId("length");
 		lengthName.ns.push_back(nsNameAndKind("",NAMESPACE));
 		lengthName.ns.push_back(nsNameAndKind(AS3,NAMESPACE));
 		lengthName.isAttribute = true;
 		_NR<ASObject> o=obj->getVariableByMultiname(lengthName,SKIP_IMPL);
 		uint32_t res = o->toUInt();
-		obj->setVariableByMultiname(lengthName,abstract_ui(res+argslen));
+		obj->setVariableByMultiname(lengthName,abstract_ui(res+argslen),CONST_NOT_ALLOWED);
 		return getSys()->getUndefinedRef();
 	}
 	Array* th=static_cast<Array*>(obj);
@@ -868,13 +885,13 @@ ASFUNCTIONBODY(Array,_push)
 		// for other objects we just increase the length property
 		multiname lengthName(NULL);
 		lengthName.name_type=multiname::NAME_STRING;
-		lengthName.name_s="length";
+		lengthName.name_s_id=getSys()->getUniqueStringId("length");
 		lengthName.ns.push_back(nsNameAndKind("",NAMESPACE));
 		lengthName.ns.push_back(nsNameAndKind(AS3,NAMESPACE));
 		lengthName.isAttribute = true;
 		_NR<ASObject> o=obj->getVariableByMultiname(lengthName,SKIP_IMPL);
 		uint32_t res = o->toUInt();
-		obj->setVariableByMultiname(lengthName,abstract_ui(res+argslen));
+		obj->setVariableByMultiname(lengthName,abstract_ui(res+argslen),CONST_NOT_ALLOWED);
 		return getSys()->getUndefinedRef();
 	}
 	Array* th=static_cast<Array*>(obj);
@@ -898,13 +915,13 @@ ASFUNCTIONBODY(Array,_push_as3)
 		// for other objects we just increase the length property
 		multiname lengthName(NULL);
 		lengthName.name_type=multiname::NAME_STRING;
-		lengthName.name_s="length";
+		lengthName.name_s_id=getSys()->getUniqueStringId("length");
 		lengthName.ns.push_back(nsNameAndKind("",NAMESPACE));
 		lengthName.ns.push_back(nsNameAndKind(AS3,NAMESPACE));
 		lengthName.isAttribute = true;
 		_NR<ASObject> o=obj->getVariableByMultiname(lengthName,SKIP_IMPL);
 		uint32_t res = o->toUInt();
-		obj->setVariableByMultiname(lengthName,abstract_ui(res+argslen));
+		obj->setVariableByMultiname(lengthName,abstract_ui(res+argslen),CONST_NOT_ALLOWED);
 		return getSys()->getUndefinedRef();
 	}
 	Array* th=static_cast<Array*>(obj);
@@ -1028,7 +1045,7 @@ _NR<ASObject> Array::getVariableByMultiname(const multiname& name, GET_VARIABLE_
 		return ASObject::getVariableByMultiname(name,opt);
 
 	assert_and_throw(name.ns.size()>0);
-	if(name.ns[0].name!="")
+	if(!name.ns[0].hasEmptyName())
 		return ASObject::getVariableByMultiname(name,opt);
 
 	uint32_t index=0;
@@ -1102,18 +1119,18 @@ bool Array::isValidMultiname(const multiname& name, uint32_t& index)
 	//First of all the multiname has to contain the null namespace
 	//As the namespace vector is sorted, we check only the first one
 	assert_and_throw(name.ns.size()!=0);
-	if(name.ns[0].name!="")
+	if(!name.ns[0].hasEmptyName())
 		return false;
 
 	return name.toUInt(index);
 }
 
-void Array::setVariableByMultiname(const multiname& name, ASObject* o)
+void Array::setVariableByMultiname(const multiname& name, ASObject* o, CONST_ALLOWED_FLAG allowConst)
 {
 	assert_and_throw(implEnable);
 	uint32_t index=0;
 	if(!isValidMultiname(name,index))
-		return ASObject::setVariableByMultiname(name,o);
+		return ASObject::setVariableByMultiname(name,o,allowConst);
 
 	if(index>=size())
 		resize((uint64_t)index+1);

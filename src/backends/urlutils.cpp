@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2009-2011  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2010-2012  Alessandro Pignotti (a.pignotti@sssup.it)
     Copyright (C) 2010-2011  Timon Van Overveldt (timonvo@gmail.com)
 
     This program is free software: you can redistribute it and/or modify
@@ -24,7 +24,7 @@
 #include "scripting/toplevel/Integer.h"
 #include <string>
 #include <algorithm>
-#include <ctype.h>
+#include <cctype>
 #include <sstream>
 #include <iostream>
 #include <fstream>

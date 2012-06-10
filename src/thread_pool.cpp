@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2009-2011  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2009-2012  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -16,7 +16,7 @@
     You should have received a copy of the GNU Lesser General Public License
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
-#include <assert.h>
+#include <cassert>
 
 #include "thread_pool.h"
 #include "exceptions.h"
@@ -119,10 +119,10 @@ void ThreadPool::job_worker(ThreadPool* th, uint32_t index)
 
 		l.acquire();
 		th->curJobs[index]=NULL;
-
-		myJob->jobFence();
-
 		l.release();
+
+		//jobFencing is allowed to happen outside the mutex
+		myJob->jobFence();
 	}
 }
 

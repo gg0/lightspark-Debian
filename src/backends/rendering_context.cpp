@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2009-2011  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2011-2012  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -28,8 +28,8 @@
 //- the projection of modelview matrix uniforms sent to the shader - only when
 //explicitly calling setMatrixUniform.
 
-#include <stdlib.h>
-#include <string.h>
+#include <cstdlib>
+#include <cstring>
 #include <stack>
 #include "rendering_context.h"
 #include "../logger.h"
@@ -126,11 +126,7 @@ void GLRenderContext::renderTextured(const TextureChunk& chunk, int32_t x, int32
 			float alpha, COLOR_MODE colorMode, MASK_MODE maskMode)
 {
 	if(maskMode==ENABLE_MASK)
-	{
-		glPushMatrix();
 		renderMaskToTmpBuffer();
-		glPopMatrix();
-	}
 
 	//Set color mode
 	glUniform1f(yuvUniform, (colorMode==YUV_MODE)?1:0);
@@ -324,9 +320,7 @@ void CairoRenderContext::transformedBlit(const MATRIX& m, uint8_t* sourceBuf, ui
 	cairo_surface_destroy(sourceSurface);
 	cairo_pattern_set_filter(sourcePattern, (filterMode==FILTER_SMOOTH)?CAIRO_FILTER_BILINEAR:CAIRO_FILTER_NEAREST);
 	cairo_pattern_set_extend(sourcePattern, CAIRO_EXTEND_NONE);
-	cairo_matrix_t matrix;
-	m.getCairoMatrix(&matrix);
-	cairo_set_matrix(cr, &matrix);
+	cairo_set_matrix(cr, &m);
 	cairo_set_source(cr, sourcePattern);
 	cairo_pattern_destroy(sourcePattern);
 	cairo_rectangle(cr, 0, 0, sourceTotalWidth, sourceTotalHeight);

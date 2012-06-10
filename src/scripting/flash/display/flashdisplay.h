@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2009-2011  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2009-2012  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -41,7 +41,8 @@ class InteractiveObject;
 class Downloader;
 class RenderContext;
 class ApplicationDomain;
-class Bitmap;
+class SecurityDomain;
+class BitmapData;
 
 class InteractiveObject: public DisplayObject
 {
@@ -265,6 +266,7 @@ public:
 	ASPROPERTY_GETTER(_NR<ASObject>,parameters);
 	ASPROPERTY_GETTER(uint32_t,actionScriptVersion);
 	ASPROPERTY_GETTER(bool, childAllowsParent);
+	ASPROPERTY_GETTER(tiny_string, contentType);
 	LoaderInfo(Class_base* c);
 	LoaderInfo(Class_base* c, _R<Loader> l);
 	void finalize();
@@ -278,6 +280,7 @@ public:
 	ASFUNCTION(_getBytesTotal);
 	ASFUNCTION(_getApplicationDomain);
 	_NR<ApplicationDomain> applicationDomain;
+	_NR<SecurityDomain> securityDomain;
 	ASFUNCTION(_getLoader);
 	ASFUNCTION(_getContent);
 	ASFUNCTION(_getSharedEvents);
@@ -417,15 +420,16 @@ public:
 class Frame
 {
 public:
-	std::list<_R<DisplayListTag>> blueprint;
+	std::list<const DisplayListTag*> blueprint;
 	void execute(_R<DisplayObjectContainer> displayList);
 };
 
-class MovieClip: public Sprite
+class FrameContainer
 {
-friend class ParserThread;
 private:
-	uint32_t getCurrentScene();
+	//No need for any lock, just make sure accesses are atomic
+	ATOMIC_INT32(framesLoaded);
+protected:
 	/* This list is accessed by both the vm thread and the parsing thread,
 	 * but the parsing thread only accesses frames.back(), while
 	 * the vm thread only accesses the frames before that frame (until
@@ -440,22 +444,32 @@ private:
 	 * It cannot be implemented as std::vector, because then reallocation
 	 * would break concurrent access.
 	 */
-protected:
 	std::list<Frame> frames;
+	std::vector<Scene_data> scenes;
+	void addToFrame(const DisplayListTag* r);
+	uint32_t getFramesLoaded() { return framesLoaded; }
+	void setFramesLoaded(uint32_t fl) { framesLoaded = fl; }
+	FrameContainer();
+	FrameContainer(const FrameContainer& f);
+public:
+	void addFrameLabel(uint32_t frame, const tiny_string& label);
+};
+
+class MovieClip: public Sprite, public FrameContainer
+{
+friend class ParserThread;
+private:
+	uint32_t getCurrentScene();
+protected:
 	/* This is read from the SWF header. It's only purpose is for flash.display.MovieClip.totalFrames */
 	uint32_t totalFrames_unreliable;
-	uint32_t getFramesLoaded() { SpinlockLocker l(framesLoadedLock); return framesLoaded; }
-	void setFramesLoaded(uint32_t fl) { SpinlockLocker l(framesLoadedLock); framesLoaded = fl; }
 	void constructionComplete();
 private:
-	Spinlock framesLoadedLock;
-	uint32_t framesLoaded;
 	std::map<uint32_t,_NR<IFunction> > frameScripts;
-	std::vector<Scene_data> scenes;
 public:
 	RunState state;
 	MovieClip(Class_base* c);
-	MovieClip(const MovieClip& r);
+	MovieClip(Class_base* c, const FrameContainer& f);
 	void finalize();
 	ASObject* gotoAnd(ASObject* const* args, const unsigned int argslen, bool stop);
 	static void sinit(Class_base* c);
@@ -482,19 +496,12 @@ public:
 	ASFUNCTION(_getScenes);
 	ASFUNCTION(_getCurrentScene);
 
-	virtual void addToFrame(_R<DisplayListTag> r);
-
 	void advanceFrame();
 	void initFrame();
 	uint32_t getFrameIdByLabel(const tiny_string& l) const;
 	void setTotalFrames(uint32_t t);
 
-	void check() const
-	{
-		assert_and_throw(frames.size()==framesLoaded);
-	}
 	void addScene(uint32_t sceneNo, uint32_t startframe, const tiny_string& name);
-	void addFrameLabel(uint32_t frame, const tiny_string& label);
 };
 
 class Stage: public DisplayObjectContainer

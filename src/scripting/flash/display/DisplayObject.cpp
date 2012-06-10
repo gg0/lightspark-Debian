@@ -38,16 +38,8 @@ ATOMIC_INT32(DisplayObject::instanceCount);
 Vector2f DisplayObject::getXY()
 {
 	Vector2f ret;
-	if(ACQUIRE_READ(useMatrix))
-	{
-		ret.x = getMatrix().TranslateX;
-		ret.y = getMatrix().TranslateY;
-	}
-	else
-	{
-		ret.x = tx;
-		ret.y = ty;
-	}
+	ret.x = getMatrix().getTranslateX();
+	ret.y = getMatrix().getTranslateY();
 	return ret;
 }
 
@@ -138,18 +130,11 @@ void DisplayObject::hitTestEpilogue() const
 		getSys()->getInputThread()->popMask();
 }
 
-DisplayObject::DisplayObject(Class_base* c):EventDispatcher(c),useMatrix(true),tx(0),ty(0),rotation(0),
+DisplayObject::DisplayObject(Class_base* c):EventDispatcher(c),useLegacyMatrix(true),tx(0),ty(0),rotation(0),
 	sx(1),sy(1),alpha(1.0),maskOf(),parent(),mask(),onStage(false),
 	loaderInfo(),visible(true),invalidateQueueNext()
 {
 	name = tiny_string("instance") + Integer::toString(ATOMIC_INCREMENT(instanceCount));
-}
-
-DisplayObject::DisplayObject(const DisplayObject& d):EventDispatcher(d.getClass()),useMatrix(true),tx(d.tx),ty(d.ty),
-	rotation(d.rotation),sx(d.sx),sy(d.sy),alpha(d.alpha),maskOf(),
-	parent(),mask(),onStage(false),loaderInfo(),visible(d.visible),name(d.name),invalidateQueueNext()
-{
-	assert(!d.isConstructed());
 }
 
 DisplayObject::~DisplayObject() {}
@@ -163,7 +148,6 @@ void DisplayObject::finalize()
 	loaderInfo.reset();
 	invalidateQueueNext.reset();
 	accessibilityProperties.reset();
-	transform.reset();
 }
 
 void DisplayObject::sinit(Class_base* c)
@@ -222,15 +206,12 @@ ASFUNCTIONBODY_GETTER_SETTER(DisplayObject,accessibilityProperties);
 ASFUNCTIONBODY(DisplayObject,_getTransform)
 {
 	DisplayObject* th=static_cast<DisplayObject*>(obj);
-
-	if(th->transform.isNull())
-		th->transform = _MR(Class<Transform>::getInstanceS());
+	//The tested behaviour is that every time ::transform is accessed
+	//a new object is generated
 
 	LOG(LOG_NOT_IMPLEMENTED, "DisplayObject::transform is a stub and does not reflect the real display state");
-
-	th->transform->matrix=_MR(Class<lightspark::Matrix>::getInstanceS(th->getMatrix()));
-	th->transform->incRef();
-	return th->transform.getPtr();
+	th->incRef();
+	return Class<Transform>::getInstanceS(_MR(th));
 }
 
 void DisplayObject::buildTraits(ASObject* o)
@@ -239,20 +220,24 @@ void DisplayObject::buildTraits(ASObject* o)
 
 void DisplayObject::setMatrix(const lightspark::MATRIX& m)
 {
-	if(ACQUIRE_READ(useMatrix))
+	bool mustInvalidate=false;
 	{
-		bool mustInvalidate=false;
+		SpinlockLocker locker(spinlock);
+		if(Matrix!=m)
 		{
-			SpinlockLocker locker(spinlock);
-			if(Matrix!=m)
-			{
-				Matrix=m;
-				mustInvalidate=true;
-			}
+			Matrix=m;
+			extractValuesFromMatrix();
+			mustInvalidate=true;
 		}
-		if(mustInvalidate && onStage)
-			requestInvalidation(getSys());
 	}
+	if(mustInvalidate && onStage)
+		requestInvalidation(getSys());
+}
+
+void DisplayObject::setLegacyMatrix(const lightspark::MATRIX& m)
+{
+	if(useLegacyMatrix)
+		setMatrix(m);
 }
 
 void DisplayObject::becomeMaskOf(_NR<DisplayObject> m)
@@ -307,34 +292,30 @@ float DisplayObject::getConcatenatedAlpha() const
 
 MATRIX DisplayObject::getMatrix() const
 {
-	MATRIX ret;
-	if(ACQUIRE_READ(useMatrix))
-	{
-		SpinlockLocker locker(spinlock);
-		ret=Matrix;
-	}
-	else
-	{
-		ret.TranslateX=tx;
-		ret.TranslateY=ty;
-		ret.ScaleX=sx*cos(rotation*M_PI/180);
-		ret.RotateSkew1=-sx*sin(rotation*M_PI/180);
-		ret.RotateSkew0=sy*sin(rotation*M_PI/180);
-		ret.ScaleY=sy*cos(rotation*M_PI/180);
-	}
+	SpinlockLocker locker(spinlock);
+	//Start from the residual matrix and construct the whole one
+	MATRIX ret=Matrix;
+	ret.scale(sx,sy);
+	ret.rotate(rotation*M_PI/180);
+	ret.translate(tx,ty);
 	return ret;
 }
 
-void DisplayObject::valFromMatrix()
+void DisplayObject::extractValuesFromMatrix()
 {
-	assert(useMatrix);
-	SpinlockLocker locker(spinlock);
-	tx=Matrix.TranslateX;
-	ty=Matrix.TranslateY;
-	sx=Matrix.ScaleX;
-	sy=Matrix.ScaleY;
-	if(Matrix.RotateSkew0 || Matrix.RotateSkew1)
-		LOG(LOG_ERROR,"valFromMatrix may has dropped rotation!");
+	//Extract the base components from the matrix and leave in
+	//it only the residual components
+	tx=Matrix.getTranslateX();
+	ty=Matrix.getTranslateY();
+	sx=Matrix.getScaleX();
+	sy=Matrix.getScaleY();
+	rotation=Matrix.getRotation();
+	//Deapply translation
+	Matrix.translate(-tx,-ty);
+	//Deapply rotation
+	Matrix.rotate(-rotation*M_PI/180);
+	//Deapply scaling
+	Matrix.scale(1.0/sx,1.0/sy);
 }
 
 bool DisplayObject::isSimple() const
@@ -514,10 +495,18 @@ ASFUNCTIONBODY(DisplayObject,_setMask)
 ASFUNCTIONBODY(DisplayObject,_getScaleX)
 {
 	DisplayObject* th=static_cast<DisplayObject*>(obj);
-	if(ACQUIRE_READ(th->useMatrix))
-		return abstract_d(th->Matrix.ScaleX);
-	else
-		return abstract_d(th->sx);
+	return abstract_d(th->sx);
+}
+
+void DisplayObject::setScaleX(number_t val)
+{
+	//Apply the difference
+	if(sx!=val)
+	{
+		sx=val;
+		if(onStage)
+			requestInvalidation(getSys());
+	}
 }
 
 ASFUNCTIONBODY(DisplayObject,_setScaleX)
@@ -525,24 +514,28 @@ ASFUNCTIONBODY(DisplayObject,_setScaleX)
 	DisplayObject* th=static_cast<DisplayObject*>(obj);
 	assert_and_throw(argslen==1);
 	number_t val=args[0]->toNumber();
-	if(ACQUIRE_READ(th->useMatrix))
-	{
-		th->valFromMatrix();
-		RELEASE_WRITE(th->useMatrix,false);
-	}
-	th->sx=val;
-	if(th->onStage)
-		th->requestInvalidation(getSys());
+	//Stop using the legacy matrix
+	if(th->useLegacyMatrix)
+		th->useLegacyMatrix=false;
+	th->setScaleX(val);
 	return NULL;
 }
 
 ASFUNCTIONBODY(DisplayObject,_getScaleY)
 {
 	DisplayObject* th=static_cast<DisplayObject*>(obj);
-	if(ACQUIRE_READ(th->useMatrix))
-		return abstract_d(th->Matrix.ScaleY);
-	else
-		return abstract_d(th->sy);
+	return abstract_d(th->sy);
+}
+
+void DisplayObject::setScaleY(number_t val)
+{
+	//Apply the difference
+	if(sy!=val)
+	{
+		sy=val;
+		if(onStage)
+			requestInvalidation(getSys());
+	}
 }
 
 ASFUNCTIONBODY(DisplayObject,_setScaleY)
@@ -550,48 +543,45 @@ ASFUNCTIONBODY(DisplayObject,_setScaleY)
 	DisplayObject* th=static_cast<DisplayObject*>(obj);
 	assert_and_throw(argslen==1);
 	number_t val=args[0]->toNumber();
-	if(ACQUIRE_READ(th->useMatrix))
-	{
-		th->valFromMatrix();
-		RELEASE_WRITE(th->useMatrix,false);
-	}
-	th->sy=val;
-	if(th->onStage)
-		th->requestInvalidation(getSys());
+	//Stop using the legacy matrix
+	if(th->useLegacyMatrix)
+		th->useLegacyMatrix=false;
+	th->setScaleY(val);
 	return NULL;
 }
 
 ASFUNCTIONBODY(DisplayObject,_getX)
 {
 	DisplayObject* th=static_cast<DisplayObject*>(obj);
-	if(ACQUIRE_READ(th->useMatrix))
-		return abstract_d(th->Matrix.TranslateX);
-	else
-		return abstract_d(th->tx);
+	return abstract_d(th->tx);
 }
 
 void DisplayObject::setX(number_t val)
 {
-	if(ACQUIRE_READ(useMatrix))
+	//Stop using the legacy matrix
+	if(useLegacyMatrix)
+		useLegacyMatrix=false;
+	//Apply translation, it's trivial
+	if(tx!=val)
 	{
-		valFromMatrix();
-		RELEASE_WRITE(useMatrix,false);
+		tx=val;
+		if(onStage)
+			requestInvalidation(getSys());
 	}
-	tx=val;
-	if(onStage)
-		requestInvalidation(getSys());
 }
 
 void DisplayObject::setY(number_t val)
 {
-	if(ACQUIRE_READ(useMatrix))
+	//Stop using the legacy matrix
+	if(useLegacyMatrix)
+		useLegacyMatrix=false;
+	//Apply translation, it's trivial
+	if(ty!=val)
 	{
-		valFromMatrix();
-		RELEASE_WRITE(useMatrix,false);
+		ty=val;
+		if(onStage)
+			requestInvalidation(getSys());
 	}
-	ty=val;
-	if(onStage)
-		requestInvalidation(getSys());
 }
 
 ASFUNCTIONBODY(DisplayObject,_setX)
@@ -606,10 +596,7 @@ ASFUNCTIONBODY(DisplayObject,_setX)
 ASFUNCTIONBODY(DisplayObject,_getY)
 {
 	DisplayObject* th=static_cast<DisplayObject*>(obj);
-	if(ACQUIRE_READ(th->useMatrix))
-		return abstract_d(th->Matrix.TranslateY);
-	else
-		return abstract_d(th->ty);
+	return abstract_d(th->ty);
 }
 
 ASFUNCTIONBODY(DisplayObject,_setY)
@@ -639,8 +626,15 @@ ASFUNCTIONBODY(DisplayObject,_getBounds)
 		m = m.multiplyMatrix(cur->getMatrix());
 		cur=cur->parent.getPtr();
 	}
-	if(!cur)
-		return Class<Rectangle>::getInstanceS();
+	if(cur==NULL)
+	{
+		//We crawled all the parent chain without finding the target
+		//The target is unrelated, compute it's transformation matrix
+		const MATRIX& targetMatrix=target->getConcatenatedMatrix();
+		//If it's not invertible just use the previous computed one
+		if(targetMatrix.isInvertible())
+			m = targetMatrix.getInverted().multiplyMatrix(m);
+	}
 
 	Rectangle* ret=Class<Rectangle>::getInstanceS();
 	number_t x1,x2,y1,y2;
@@ -743,14 +737,16 @@ ASFUNCTIONBODY(DisplayObject,_setRotation)
 	DisplayObject* th=static_cast<DisplayObject*>(obj);
 	assert_and_throw(argslen==1);
 	number_t val=args[0]->toNumber();
-	if(ACQUIRE_READ(th->useMatrix))
+	//Stop using the legacy matrix
+	if(th->useLegacyMatrix)
+		th->useLegacyMatrix=false;
+	//Apply the difference
+	if(th->rotation!=val)
 	{
-		th->valFromMatrix();
-		RELEASE_WRITE(th->useMatrix,false);
+		th->rotation=val;
+		if(th->onStage)
+			th->requestInvalidation(getSys());
 	}
-	th->rotation=val;
-	if(th->onStage)
-		th->requestInvalidation(getSys());
 	return NULL;
 }
 
@@ -802,12 +798,6 @@ ASFUNCTIONBODY(DisplayObject,_getRoot)
 ASFUNCTIONBODY(DisplayObject,_getRotation)
 {
 	DisplayObject* th=static_cast<DisplayObject*>(obj);
-	//There is no easy way to get rotation from matrix, let's ignore the matrix
-	if(ACQUIRE_READ(th->useMatrix))
-	{
-		th->valFromMatrix();
-		RELEASE_WRITE(th->useMatrix,false);
-	}
 	return abstract_d(th->rotation);
 }
 
@@ -878,14 +868,9 @@ ASFUNCTIONBODY(DisplayObject,_setWidth)
 	
 	if(width*th->sx!=newwidth) //If the width is changing, calculate new scale
 	{
-		if(ACQUIRE_READ(th->useMatrix))
-		{
-			th->valFromMatrix();
-			RELEASE_WRITE(th->useMatrix,false);
-		}
-		th->sx = newwidth/width;
-		if(th->onStage)
-			th->requestInvalidation(getSys());
+		if(th->useLegacyMatrix)
+			th->useLegacyMatrix=false;
+		th->setScaleX(newwidth/width);
 	}
 	return NULL;
 }
@@ -911,14 +896,9 @@ ASFUNCTIONBODY(DisplayObject,_setHeight)
 	
 	if(height*th->sy!=newheight) //If the height is changing, calculate new scale
 	{
-		if(ACQUIRE_READ(th->useMatrix))
-		{
-			th->valFromMatrix();
-			RELEASE_WRITE(th->useMatrix,false);
-		}
-		th->sy=newheight/height;
-		if(th->onStage)
-			th->requestInvalidation(getSys());
+		if(th->useLegacyMatrix)
+			th->useLegacyMatrix=false;
+		th->setScaleY(newheight/height);
 	}
 	return NULL;
 }

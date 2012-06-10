@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2009-2011  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2008-2012  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -27,12 +27,13 @@
 #include <cairo.h>
 
 #include "logger.h"
-#include <stdlib.h>
-#include <assert.h>
+#include <cstdlib>
+#include <cassert>
 #include "exceptions.h"
 #include "smartrefs.h"
 #include "tiny_string.h"
 #include "memory_support.h"
+#include "scripting/flash/display/BitmapContainer.h"
 
 #ifdef BIG_ENDIAN
 #include <algorithm>
@@ -80,7 +81,8 @@ enum FILE_TYPE { FT_UNKNOWN=0, FT_SWF, FT_COMPRESSED_SWF, FT_PNG, FT_JPEG, FT_GI
 typedef double number_t;
 
 class ASObject;
-class BitmapData;
+class ABCContext;
+class namespace_info;
 
 struct multiname;
 class QName
@@ -282,23 +284,65 @@ public:
 enum NS_KIND { NAMESPACE=0x08, PACKAGE_NAMESPACE=0x16, PACKAGE_INTERNAL_NAMESPACE=0x17, PROTECTED_NAMESPACE=0x18, 
 			EXPLICIT_NAMESPACE=0x19, STATIC_PROTECTED_NAMESPACE=0x1A, PRIVATE_NAMESPACE=0x05 };
 
-struct nsNameAndKind
+struct nsNameAndKindImpl
 {
 	tiny_string name;
 	NS_KIND kind;
-	nsNameAndKind(const tiny_string& _name, NS_KIND _kind):name(_name),kind(_kind){}
-	nsNameAndKind(const char* _name, NS_KIND _kind):name(_name),kind(_kind){}
+	uint32_t baseId;
+	nsNameAndKindImpl(const tiny_string& _name, NS_KIND _kind, uint32_t b=-1):name(_name),kind(_kind),baseId(b){}
+	nsNameAndKindImpl(const char* _name, NS_KIND _kind, uint32_t b=-1):name(_name),kind(_kind),baseId(b){}
+	bool operator<(const nsNameAndKindImpl& r) const
+	{
+		if(kind==r.kind)
+			return name < r.name;
+		else
+			return kind < r.kind;
+	}
+	bool operator>(const nsNameAndKindImpl& r) const
+	{
+		if(kind==r.kind)
+			return name > r.name;
+		else
+			return kind > r.kind;
+	}
+};
+
+struct nsNameAndKind
+{
+	uint32_t nsId;
+	uint32_t nsRealId;
+	bool nameIsEmpty;
+	nsNameAndKind(const tiny_string& _name, NS_KIND _kind);
+	nsNameAndKind(const char* _name, NS_KIND _kind);
+	nsNameAndKind(ABCContext * c, uint32_t nsContextIndex);
+	/*
+	 * Special constructor for protected namespace, which have
+	 * different representationId
+	 */
+	nsNameAndKind(const tiny_string& _name, uint32_t _baseId, NS_KIND _kind);
+	/*
+	 * Special version to create the empty bultin namespace
+	 */
+	nsNameAndKind(uint32_t id):nsId(id),nsRealId(id),nameIsEmpty(true)
+	{
+		assert(nsId==0);
+	}
 	bool operator<(const nsNameAndKind& r) const
 	{
-		return name < r.name;
+		return nsId < r.nsId;
 	}
 	bool operator>(const nsNameAndKind& r) const
 	{
-		return name > r.name;
+		return nsId > r.nsId;
 	}
 	bool operator==(const nsNameAndKind& r) const
 	{
-		return /*kind==r.kind &&*/ name==r.name;
+		return nsId==r.nsId;
+	}
+	const nsNameAndKindImpl& getImpl() const;
+	bool hasEmptyName() const
+	{
+		return nameIsEmpty;
 	}
 };
 
@@ -307,9 +351,9 @@ struct multiname: public memory_reporter
 	multiname(MemoryAccount* m);
 	enum NAME_TYPE {NAME_STRING,NAME_INT,NAME_NUMBER,NAME_OBJECT};
 	NAME_TYPE name_type;
-	tiny_string name_s;
 	union
 	{
+		uint32_t name_s_id;
 		int32_t name_i;
 		number_t name_d;
 		ASObject* name_o;
@@ -320,6 +364,10 @@ struct multiname: public memory_reporter
 		Returns a string name whatever is the name type
 	*/
 	tiny_string normalizedName() const;
+	/*
+	 * 	Return a string id whatever is the name type
+	 */
+	uint32_t normalizedNameId() const;
 	tiny_string qualifiedString() const;
 	/* sets name_type, name_s/name_d based on the object n */
 	void setName(ASObject* n);
@@ -327,16 +375,6 @@ struct multiname: public memory_reporter
 	bool isQName() const { return ns.size() == 1; }
 	bool toUInt(uint32_t& out) const;
 };
-
-inline QName::operator multiname() const
-{
-	multiname ret(NULL);
-	ret.name_type = multiname::NAME_STRING;
-	ret.name_s = name;
-	ret.ns.push_back( nsNameAndKind(ns, PACKAGE_NAMESPACE) );
-	ret.isAttribute = false;
-	return ret;
-}
 
 class FLOAT 
 {
@@ -722,27 +760,68 @@ public:
 template<class T> class Vector2Tmpl;
 typedef Vector2Tmpl<double> Vector2f;
 
-class MATRIX
+class MATRIX: public cairo_matrix_t
 {
 	friend std::istream& operator>>(std::istream& stream, MATRIX& v);
 	friend std::ostream& operator<<(std::ostream& s, const MATRIX& r);
 public:
-	number_t ScaleX;
-	number_t ScaleY;
-	number_t RotateSkew0;
-	number_t RotateSkew1;
-	int TranslateX;
-	int TranslateY;
-public:
-	MATRIX(number_t sx=1, number_t sy=1, number_t sk0=0, number_t sk1=0, int tx=0, int ty=0):ScaleX(sx),ScaleY(sy),RotateSkew0(sk0),RotateSkew1(sk1),TranslateX(tx),TranslateY(ty){}
+	MATRIX(number_t sx=1, number_t sy=1, number_t sk0=0, number_t sk1=0, number_t tx=0, number_t ty=0);
 	void get4DMatrix(float matrix[16]) const;
-	void getCairoMatrix(cairo_matrix_t* m) const;
 	void multiply2D(number_t xin, number_t yin, number_t& xout, number_t& yout) const;
 	Vector2f multiply2D(const Vector2f& in) const;
 	MATRIX multiplyMatrix(const MATRIX& r) const;
 	bool operator!=(const MATRIX& r) const;
 	MATRIX getInverted() const;
 	bool isInvertible() const;
+	number_t getTranslateX() const
+	{
+		return x0;
+	}
+	number_t getTranslateY() const
+	{
+		return y0;
+	}
+	number_t getScaleX() const
+	{
+		number_t ret=sqrt(xx*xx + yx*yx);
+		if(xx>0)
+			return ret;
+		else
+			return -ret;
+	}
+	number_t getScaleY() const
+	{
+		number_t ret=sqrt(yy*yy + xy*xy);
+		if(yy>0)
+			return ret;
+		else
+			return -ret;
+	}
+	number_t getRotation() const
+	{
+		return atan(xx/yx)*180/M_PI;
+	}
+	/*
+	 * Implement flash style premultiply matrix operators
+	 */
+	void rotate(number_t angle)
+	{
+		cairo_matrix_t tmp;
+		cairo_matrix_init_rotate(&tmp,angle);
+		cairo_matrix_multiply(this,this,&tmp);
+	}
+	void scale(number_t sx, number_t sy)
+	{
+		cairo_matrix_t tmp;
+		cairo_matrix_init_scale(&tmp,sx,sy);
+		cairo_matrix_multiply(this,this,&tmp);
+	}
+	void translate(number_t dx, number_t dy)
+	{
+		cairo_matrix_t tmp;
+		cairo_matrix_init_translate(&tmp,dx,dy);
+		cairo_matrix_multiply(this,this,&tmp);
+	}
 };
 
 class GRADRECORD
@@ -801,7 +880,7 @@ public:
 	MATRIX Matrix;
 	GRADIENT Gradient;
 	FOCALGRADIENT FocalGradient;
-	_NR<BitmapData> bitmap;
+	BitmapContainer bitmap;
 };
 
 class MORPHFILLSTYLE:public FILLSTYLE
@@ -812,6 +891,8 @@ public:
 	RGBA EndColor;
 	MATRIX StartGradientMatrix;
 	MATRIX EndGradientMatrix;
+	MATRIX StartBitmapMatrix;
+	MATRIX EndBitmapMatrix;
 	UI8 NumGradients;
 	std::vector<UI8> StartRatios;
 	std::vector<UI8> EndRatios;
@@ -857,6 +938,21 @@ public:
 	RGBA EndColor;
 };
 
+class MORPHLINESTYLE2: public MORPHLINESTYLE
+{
+public:
+	UB StartCapStyle;
+	UB JoinStyle;
+	UB HasFillFlag;
+	UB NoHScaleFlag;
+	UB NoVScaleFlag;
+	UB PixelHintingFlag;
+	UB NoClose;
+	UB EndCapStyle;
+	UI16_SWF MiterLimitFactor;
+	MORPHFILLSTYLE FillType;
+};
+
 class LINESTYLEARRAY
 {
 public:
@@ -871,8 +967,11 @@ public:
 class MORPHLINESTYLEARRAY
 {
 public:
+	MORPHLINESTYLEARRAY(int v):version(v){}
+	const int version;
 	UI8 LineStyleCount;
-	MORPHLINESTYLE* LineStyles;
+	std::list<MORPHLINESTYLE> LineStyles;
+	std::list<MORPHLINESTYLE2> LineStyles2;
 };
 
 class FILLSTYLEARRAY
@@ -889,7 +988,7 @@ class MORPHFILLSTYLEARRAY
 {
 public:
 	UI8 FillStyleCount;
-	MORPHFILLSTYLE* FillStyles;
+	std::list<MORPHFILLSTYLE> FillStyles;
 };
 
 class SHAPE;
@@ -1225,6 +1324,7 @@ std::istream& operator>>(std::istream& stream, MORPHLINESTYLEARRAY& v);
 std::istream& operator>>(std::istream& stream, LINESTYLE& v);
 std::istream& operator>>(std::istream& stream, LINESTYLE2& v);
 std::istream& operator>>(std::istream& stream, MORPHLINESTYLE& v);
+std::istream& operator>>(std::istream& stream, MORPHLINESTYLE2& v);
 std::istream& operator>>(std::istream& stream, FILLSTYLE& v);
 std::istream& operator>>(std::istream& stream, MORPHFILLSTYLE& v);
 std::istream& operator>>(std::istream& stream, SHAPERECORD& v);

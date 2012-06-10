@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2009-2011  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2009-2012  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -175,9 +175,12 @@ ASFUNCTIONBODY(ApplicationDomain,hasDefinition)
 
 	multiname name(NULL);
 	name.name_type=multiname::NAME_STRING;
-	name.ns.push_back(nsNameAndKind("",NAMESPACE)); //TODO: set type
 
-	stringToQName(tmp,name.name_s,name.ns[0].name);
+	tiny_string nsName;
+	tiny_string tmpName;
+	stringToQName(tmp,tmpName,nsName);
+	name.name_s_id=getSys()->getUniqueStringId(tmpName);
+	name.ns.push_back(nsNameAndKind(nsName,NAMESPACE));
 
 	LOG(LOG_CALLS,_("Looking for definition of ") << name);
 	ASObject* target;
@@ -202,9 +205,12 @@ ASFUNCTIONBODY(ApplicationDomain,getDefinition)
 
 	multiname name(NULL);
 	name.name_type=multiname::NAME_STRING;
-	name.ns.push_back(nsNameAndKind("",NAMESPACE)); //TODO: set type
 
-	stringToQName(tmp,name.name_s,name.ns[0].name);
+	tiny_string nsName;
+	tiny_string tmpName;
+	stringToQName(tmp,tmpName,nsName);
+	name.name_s_id=getSys()->getUniqueStringId(tmpName);
+	name.ns.push_back(nsNameAndKind(nsName,NAMESPACE));
 
 	LOG(LOG_CALLS,_("Looking for definition of ") << name);
 	ASObject* target;
@@ -231,12 +237,12 @@ ASObject* ApplicationDomain::getVariableByString(const std::string& str, ASObjec
 	name.name_type=multiname::NAME_STRING;
 	if(index==str.npos) //No dot
 	{
-		name.name_s=str;
+		name.name_s_id=getSys()->getUniqueStringId(str);
 		name.ns.push_back(nsNameAndKind("",NAMESPACE)); //TODO: use ns kind
 	}
 	else
 	{
-		name.name_s=str.substr(index+1);
+		name.name_s_id=getSys()->getUniqueStringId(str.substr(index+1));
 		name.ns.push_back(nsNameAndKind(str.substr(0,index),NAMESPACE));
 	}
 	return getVariableAndTargetByMultiname(name, target);
@@ -269,12 +275,14 @@ void LoaderContext::sinit(Class_base* c)
 {
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
 	REGISTER_GETTER_SETTER(c, applicationDomain);
+	REGISTER_GETTER_SETTER(c, securityDomain);
 }
 
 void LoaderContext::finalize()
 {
 	ASObject::finalize();
 	applicationDomain.reset();
+	securityDomain.reset();
 }
 
 ASFUNCTIONBODY(LoaderContext,_constructor)
@@ -284,12 +292,14 @@ ASFUNCTIONBODY(LoaderContext,_constructor)
 	_NR<ApplicationDomain> appDomain;
 	_NR<SecurityDomain> secDomain;
 	ARG_UNPACK (checkPolicy, false) (appDomain, NullRef) (secDomain, NullRef);
-	//TODO: Support checkPolicyFile and securityDomain
+	//TODO: Support checkPolicyFile
 	th->applicationDomain=appDomain;
+	th->securityDomain=secDomain;
 	return NULL;
 }
 
 ASFUNCTIONBODY_GETTER_SETTER(LoaderContext, applicationDomain);
+ASFUNCTIONBODY_GETTER_SETTER(LoaderContext, securityDomain);
 
 void SecurityDomain::sinit(Class_base* c)
 {
@@ -309,7 +319,9 @@ ASFUNCTIONBODY(SecurityDomain,_constructor)
 
 ASFUNCTIONBODY(SecurityDomain,_getCurrentDomain)
 {
-	return Class<SecurityDomain>::getInstanceS();
+	_NR<SecurityDomain> ret=ABCVm::getCurrentSecurityDomain(getVm()->currentCallContext);
+	ret->incRef();
+	return ret.getPtr();
 }
 
 void Security::sinit(Class_base* c)

@@ -1,3 +1,9 @@
+lightspark (0.6.0.1-1) unstable; urgency=low
+
+  * New 0.6.0.1 upstream release.
+
+ -- Didier Raboud <odyx@debian.org>  Sun, 10 Jun 2012 15:12:49 +0200
+
 lightspark (0.5.7-2) unstable; urgency=low
 
   * Drop now-obsolete lintian override.

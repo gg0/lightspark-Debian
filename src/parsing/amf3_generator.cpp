@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2010-2011  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2010-2012  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -167,7 +167,7 @@ _R<ASObject> Amf3Deserializer::parseObject(std::vector<tiny_string>& stringMap,
 		//Invoke readExternal
 		multiname readExternalName(NULL);
 		readExternalName.name_type=multiname::NAME_STRING;
-		readExternalName.name_s="readExternal";
+		readExternalName.name_s_id=getSys()->getUniqueStringId("readExternal");
 		readExternalName.ns.push_back(nsNameAndKind("",NAMESPACE));
 		readExternalName.isAttribute = false;
 
@@ -216,11 +216,11 @@ _R<ASObject> Amf3Deserializer::parseObject(std::vector<tiny_string>& stringMap,
 
 		multiname name(NULL);
 		name.name_type=multiname::NAME_STRING;
-		name.name_s=traits.traitsNames[i];
+		name.name_s_id=getSys()->getUniqueStringId(traits.traitsNames[i]);
 		name.ns.push_back(nsNameAndKind("",NAMESPACE));
 		name.isAttribute=false;
 
-		ret->setVariableByMultiname(name,value.getPtr(),traits.type);
+		ret->setVariableByMultiname(name,value.getPtr(),ASObject::CONST_ALLOWED,traits.type);
 	}
 
 	//Read dynamic name, value pairs

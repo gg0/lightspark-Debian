@@ -1,7 +1,7 @@
 /**************************************************************************
     Lighspark, a free flash player implementation
 
-    Copyright (C) 2009-2011  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2009-2012  Alessandro Pignotti (a.pignotti@sssup.it)
     Copyright (C) 2010-2011  Timon Van Overveldt (timonvo@gmail.com)
 
     This program is free software: you can redistribute it and/or modify
@@ -24,8 +24,8 @@
 //
 #include "compat.h"
 #include "npplat.h"
-#include <stdio.h>
-#include <stdlib.h>
+#include <cstdio>
+#include <cstdlib>
 
 extern NPNetscapeFuncs NPNFuncs;
 

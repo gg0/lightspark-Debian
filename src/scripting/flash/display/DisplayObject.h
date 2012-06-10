@@ -40,6 +40,7 @@ class DisplayObject: public EventDispatcher, public IBitmapDrawable
 friend class TokenContainer;
 friend class GLRenderContext;
 friend class AsyncDrawJob;
+friend class Transform;
 friend std::ostream& operator<<(std::ostream& s, const DisplayObject& r);
 public:
 	enum HIT_TYPE { GENERIC_HIT, DOUBLE_CLICK };
@@ -47,7 +48,7 @@ private:
 	ASPROPERTY_GETTER_SETTER(_NR<AccessibilityProperties>,accessibilityProperties);
 	static ATOMIC_INT32(instanceCount);
 	MATRIX Matrix;
-	ACQUIRE_RELEASE_FLAG(useMatrix);
+	bool useLegacyMatrix;
 	number_t tx,ty;
 	number_t rotation;
 	number_t sx,sy;
@@ -59,11 +60,15 @@ private:
 	void becomeMaskOf(_NR<DisplayObject> m);
 	void setMask(_NR<DisplayObject> m);
 	_NR<DisplayObjectContainer> parent;
-	_NR<Transform> transform;
 	/* cachedSurface may only be read/written from within the render thread
 	 * It is the cached version of the object for fast draw on the Stage
 	 */
 	CachedSurface cachedSurface;
+	/*
+	 * Utility function to set internal MATRIX
+	 * Also used by Transform
+	 */
+	void setMatrix(const MATRIX& m);
 protected:
 	~DisplayObject();
 	/**
@@ -74,7 +79,10 @@ protected:
 	void computeBoundsForTransformedRect(number_t xmin, number_t xmax, number_t ymin, number_t ymax,
 			int32_t& outXMin, int32_t& outYMin, uint32_t& outWidth, uint32_t& outHeight,
 			const MATRIX& m) const;
-	void valFromMatrix();
+	/*
+	 * Assume the lock is held and the matrix will not change
+	 */
+	void extractValuesFromMatrix();
 	bool onStage;
 	_NR<LoaderInfo> loaderInfo;
 	number_t computeWidth();
@@ -85,7 +93,6 @@ protected:
 	bool visible;
 
 	void defaultRender(RenderContext& ctxt, bool maskEnabled) const;
-	DisplayObject(const DisplayObject& d);
 	void renderPrologue(RenderContext& ctxt) const;
 	void renderEpilogue(RenderContext& ctxt) const;
 	void hitTestPrologue() const;
@@ -146,13 +153,15 @@ public:
 	bool isOnStage() const { return onStage; }
 	virtual _NR<RootMovieClip> getRoot();
 	virtual _NR<Stage> getStage();
-	void setMatrix(const MATRIX& m);
+	void setLegacyMatrix(const MATRIX& m);
 	virtual void advanceFrame() {}
 	virtual void initFrame();
 	Vector2f getLocalMousePos();
 	Vector2f getXY();
 	void setX(number_t x);
 	void setY(number_t y);
+	void setScaleX(number_t val);
+	void setScaleY(number_t val);
 	// Nominal width and heigt are the size before scaling and rotation
 	number_t getNominalWidth();
 	number_t getNominalHeight();

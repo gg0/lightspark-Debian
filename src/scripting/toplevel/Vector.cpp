@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2009-2011  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2011-2012  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -816,7 +816,7 @@ bool Vector::hasPropertyByMultiname(const multiname& name, bool considerDynamic)
 	if(!considerDynamic)
 		return ASObject::hasPropertyByMultiname(name, considerDynamic);
 
-	if(name.ns[0].name!="")
+	if(!name.ns[0].hasEmptyName())
 		return ASObject::hasPropertyByMultiname(name, considerDynamic);
 
 	unsigned int index=0;
@@ -836,7 +836,7 @@ _NR<ASObject> Vector::getVariableByMultiname(const multiname& name, GET_VARIABLE
 		return ASObject::getVariableByMultiname(name,opt);
 
 	assert_and_throw(name.ns.size()>0);
-	if(name.ns[0].name!="")
+	if(!name.ns[0].hasEmptyName())
 		return ASObject::getVariableByMultiname(name,opt);
 
 	unsigned int index=0;
@@ -859,15 +859,15 @@ _NR<ASObject> Vector::getVariableByMultiname(const multiname& name, GET_VARIABLE
 	}
 }
 
-void Vector::setVariableByMultiname(const multiname& name, ASObject* o)
+void Vector::setVariableByMultiname(const multiname& name, ASObject* o, CONST_ALLOWED_FLAG allowConst)
 {
 	assert_and_throw(name.ns.size()>0);
-	if(name.ns[0].name!="")
-		return ASObject::setVariableByMultiname(name, o);
+	if(!name.ns[0].hasEmptyName())
+		return ASObject::setVariableByMultiname(name, o, allowConst);
 
 	unsigned int index=0;
 	if(!Vector::isValidMultiname(name,index))
-		return ASObject::setVariableByMultiname(name, o);
+		return ASObject::setVariableByMultiname(name, o, allowConst);
 	ASObject* o2 = this->vec_type->coerce(o);
 	  
 	if(index < vec.size())
@@ -940,7 +940,7 @@ bool Vector::isValidMultiname(const multiname& name, uint32_t& index)
 	//First of all the multiname has to contain the null namespace
 	//As the namespace vector is sorted, we check only the first one
 	assert_and_throw(name.ns.size()!=0);
-	if(name.ns[0].name!="")
+	if(!name.ns[0].hasEmptyName())
 		return false;
 
 	bool validIndex=name.toUInt(index);

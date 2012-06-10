@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2009-2011  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2011-2012  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -42,6 +42,7 @@ void RTMPDownloader::threadAbort()
 void RTMPDownloader::execute()
 {
 #ifdef ENABLE_RTMP
+	bool downloadFailed=true;
 	//Allocate and initialize the RTMP context
 	RTMP* rtmpCtx=RTMP_Alloc();
 	RTMP_Init(rtmpCtx);
@@ -49,9 +50,10 @@ void RTMPDownloader::execute()
 	tiny_string rtmpUrl=url;
 	rtmpUrl+=" playpath=";
 	rtmpUrl+=stream;
-	rtmpUrl+=" swfUrl=";
+	rtmpUrl+=" swfVfy=";
 	rtmpUrl+=getSys()->getOrigin().getURL();
-	rtmpUrl+=" swfVfy=1";
+	rtmpUrl+=" tcUrl=";
+	rtmpUrl+=url;
 	//Setup url needs a char*, not a const char*...
 	int urlLen=rtmpUrl.numBytes();
 	char* urlBuf=new char[urlLen+1];
@@ -81,14 +83,22 @@ void RTMPDownloader::execute()
 	char buf[4096];
 	RTMP_SetBufferMS(rtmpCtx, 3600000);
 	RTMP_UpdateBufferMS(rtmpCtx);
-	while(1)
+	// looping conditions copied from rtmpdump sources
+	do
 	{
 		//TODO: avoid the copy in the temporary buffer
 		ret=RTMP_Read(rtmpCtx,buf,4096);
-		if(ret==0 || hasFailed() || threadAborting)
-			break;
-		append((uint8_t*)buf,ret);
+		if(ret>0)
+			append((uint8_t*)buf,ret);
 	}
+	while(ret >= 0 && !threadAborting && !hasFailed() && RTMP_IsConnected(rtmpCtx) && !RTMP_IsTimedout(rtmpCtx));
+
+	// Apparently negative ret indicates error only if
+	// m_read.status isn't a success code, see rtmpdump sources
+	downloadFailed=ret < 0 && rtmpCtx->m_read.status != RTMP_READ_COMPLETE;
+	if(downloadFailed || RTMP_IsTimedout(rtmpCtx))
+		setFailed();
+
 cleanup:
 	RTMP_Close(rtmpCtx);
 	RTMP_Free(rtmpCtx);
@@ -99,6 +109,8 @@ cleanup:
 	setFailed();
 	return;
 #endif
-	//Notify the downloader no more data should be expected
-	setFinished();
+	//Notify the downloader no more data should be expected. Do
+	//this only if setFailed() hasn't been called above.
+	if(!hasFinished())
+		setFinished();
 }

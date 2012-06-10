@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2009-2011  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2009-2012  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -71,6 +71,7 @@ ASFUNCTIONBODY(Boolean,generator)
 
 void Boolean::sinit(Class_base* c)
 {
+	c->isFinal=true;
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
 	c->setSuper(Class<ASObject>::getRef());
 	c->prototype->setVariableByQName("toString",AS3,Class<IFunction>::getFunction(_toString),DYNAMIC_TRAIT);

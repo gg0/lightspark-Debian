@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2009-2011  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2009-2012  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -239,6 +239,8 @@ public:
 
 class MouseEvent: public Event
 {
+private:
+	Event* cloneImpl() const;
 public:
 	MouseEvent(Class_base* c);
 	MouseEvent(Class_base* c, const tiny_string& t, number_t lx, number_t ly, bool b=true, _NR<InteractiveObject> relObj = NullRef);
@@ -252,6 +254,15 @@ public:
 	ASPROPERTY_GETTER(number_t,stageX);
 	ASPROPERTY_GETTER(number_t,stageY);
 	ASPROPERTY_GETTER(_NR<InteractiveObject>,relatedObject);	
+};
+
+class InvokeEvent: public Event
+{
+public:
+	InvokeEvent(Class_base* c) : Event(c, "invoke"){}
+	static void sinit(Class_base* c);
+	static void buildTraits(ASObject* o){}
+	ASFUNCTION(_constructor);
 };
 
 class listener
@@ -292,6 +303,10 @@ class EventDispatcher: public ASObject, public IEventDispatcher
 private:
 	Mutex handlersMutex;
 	std::map<tiny_string,std::list<listener> > handlers;
+	/*
+	 * This will be used when a target is passed to EventDispatcher constructor
+	 */
+	_NR<ASObject> forcedTarget;
 public:
 	EventDispatcher(Class_base* c);
 	void finalize();
@@ -331,11 +346,11 @@ class BindClassEvent: public Event
 friend class ABCVm;
 private:
 	_NR<RootMovieClip> base;
-	_NR<DictionaryTag> tag;
+	DictionaryTag* tag;
 	tiny_string class_name;
 public:
 	BindClassEvent(_R<RootMovieClip> b, const tiny_string& c);
-	BindClassEvent(_R<DictionaryTag> t, const tiny_string& c);
+	BindClassEvent(DictionaryTag* t, const tiny_string& c);
 	static void sinit(Class_base*);
 	EVENT_TYPE getEventType() const { return BIND_CLASS;}
 };

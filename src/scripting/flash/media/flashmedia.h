@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2009-2011  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2010-2012  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -74,6 +74,16 @@ public:
 	ASPROPERTY_GETTER_SETTER(number_t,pan);
 	static void sinit(Class_base*);
 	ASFUNCTION(_constructor);
+};
+
+class SoundChannel : public EventDispatcher
+{
+public:
+	SoundChannel(Class_base* c) : EventDispatcher(c) {}
+	static void sinit(Class_base* c);
+	static void buildTraits(ASObject* o);
+	ASFUNCTION(_constructor);
+	ASFUNCTION(addEventListener);
 };
 
 class Video: public DisplayObject

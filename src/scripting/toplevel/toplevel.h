@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2009-2011  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2009-2012  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -42,6 +42,7 @@ class ASString;
 class method_info;
 struct call_context;
 struct traits_info;
+class namespace_info;
 class Any;
 class Void;
 /* This abstract class represents a type, i.e. something that a value can be coerced to.
@@ -108,8 +109,10 @@ template<class T> friend class Template;
 private:
 	mutable std::vector<multiname> interfaces;
 	mutable std::vector<Class_base*> interfaces_added;
+	//TODO: move in Class_inherit
 	bool use_protected;
 	nsNameAndKind protected_ns;
+	void initializeProtectedNamespace(const tiny_string& name, const namespace_info& ns);
 	void recursiveBuild(ASObject* target);
 	IFunction* constructor;
 	void describeTraits(xmlpp::Element* root, std::vector<traits_info>& traits) const;
@@ -142,7 +145,7 @@ public:
 	void addImplementedInterface(Class_base* i);
 	virtual void buildInstanceTraits(ASObject* o) const=0;
 	const std::vector<Class_base*>& getInterfaces() const;
-	void linkInterface(Class_base* c) const;
+	virtual void linkInterface(Class_base* c) const;
 	/*
 	 * Returns true when 'this' is a subclass of 'cls',
 	 * i.e. this == cls or cls equals some super of this.
@@ -235,7 +238,7 @@ public:
 	{
 		throw UnsupportedException("Class_function::setVariableByMultiname_i");
 	}
-	void setVariableByMultiname(const multiname& name, ASObject* o)
+	void setVariableByMultiname(const multiname& name, ASObject* o, CONST_ALLOWED_FLAG allowConst)
 	{
 		throw UnsupportedException("Class_function::setVariableByMultiname");
 	}
@@ -418,7 +421,7 @@ public:
 	void serialize(ByteArray* out, std::map<tiny_string, uint32_t>& stringMap,
 				std::map<const ASObject*, uint32_t>& objMap,
 				std::map<const Class_base*, uint32_t>& traitsMap);
-	void setVariableByMultiname(const multiname& name, ASObject* o);
+	void setVariableByMultiname(const multiname& name, ASObject* o, CONST_ALLOWED_FLAG allowConst);
 };
 
 class Null: public ASObject
@@ -430,7 +433,7 @@ public:
 	int32_t toInt();
 	_NR<ASObject> getVariableByMultiname(const multiname& name, GET_VARIABLE_OPTION opt);
 	int32_t getVariableByMultiname_i(const multiname& name);
-	void setVariableByMultiname(const multiname& name, ASObject* o);
+	void setVariableByMultiname(const multiname& name, ASObject* o, CONST_ALLOWED_FLAG allowConst);
 
 	//Serialization interface
 	void serialize(ByteArray* out, std::map<tiny_string, uint32_t>& stringMap,
@@ -497,6 +500,10 @@ public:
 	static void sinit(Class_base* c);
 	static void buildTraits(ASObject* o) {};
 	_NR<ASObject> getVariableByMultiname(const multiname& name, GET_VARIABLE_OPTION opt=NONE);
+	/*
+	 * Utility method to register builtin methods and classes
+	 */
+	void registerBuiltin(const char* name, const char* ns, _R<ASObject> o);
 };
 
 ASObject* eval(ASObject* obj,ASObject* const* args, const unsigned int argslen);

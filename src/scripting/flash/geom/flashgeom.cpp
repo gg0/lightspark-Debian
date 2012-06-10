@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2009-2011  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2009-2012  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -920,26 +920,58 @@ ASFUNCTIONBODY(Point,polar)
 	return ret;
 }
 
-void Transform::sinit(Class_base* c)
+Transform::Transform(Class_base* c, _R<DisplayObject> o):ASObject(c),owner(o)
 {
-	//c->constructor=Class<IFunction>::getFunction(_constructor);
-	c->setConstructor(NULL);
-	c->setDeclaredMethodByQName("colorTransform","",Class<IFunction>::getFunction(undefinedFunction),SETTER_METHOD,true);
-	REGISTER_GETTER_SETTER(c,matrix);
 }
 
-ASFUNCTIONBODY_GETTER_SETTER(Transform, matrix);
+void Transform::finalize()
+{
+	owner.reset();
+}
+
+void Transform::sinit(Class_base* c)
+{
+	c->setConstructor(Class<IFunction>::getFunction(_constructor));
+	c->setDeclaredMethodByQName("colorTransform","",Class<IFunction>::getFunction(undefinedFunction),SETTER_METHOD,true);
+	c->setDeclaredMethodByQName("matrix","",Class<IFunction>::getFunction(_getMatrix),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("matrix","",Class<IFunction>::getFunction(_setMatrix),SETTER_METHOD,true);
+}
+
+ASFUNCTIONBODY(Transform,_constructor)
+{
+	assert_and_throw(argslen==0);
+	return NULL;
+}
+
+ASFUNCTIONBODY(Transform,_getMatrix)
+{
+	Transform* th=Class<Transform>::cast(obj);
+	assert_and_throw(argslen==0);
+	const MATRIX& ret=th->owner->getMatrix();
+	return Class<Matrix>::getInstanceS(ret);
+}
+
+ASFUNCTIONBODY(Transform,_setMatrix)
+{
+	Transform* th=Class<Transform>::cast(obj);
+	_NR<Matrix> m;
+	ARG_UNPACK(m);
+	if(m.isNull())
+		return NULL;
+
+	th->owner->setMatrix(m->getMATRIX());
+	return NULL;
+}
 
 void Transform::buildTraits(ASObject* o)
 {
 }
 
-Matrix::Matrix(Class_base* c):ASObject(c),a(0),b(0),c(0),d(0),tx(0),ty(0)
+Matrix::Matrix(Class_base* c):ASObject(c)
 {
 }
 
-Matrix::Matrix(Class_base* c, const MATRIX& m):ASObject(c),a(m.ScaleX),b(m.RotateSkew1),c(m.ScaleY),
-	d(m.RotateSkew0),tx(m.TranslateX),ty(m.TranslateY)
+Matrix::Matrix(Class_base* c, const MATRIX& m):ASObject(c),matrix(m)
 {
 }
 
@@ -984,22 +1016,26 @@ ASFUNCTIONBODY(Matrix,_constructor)
 	
 	Matrix* th=static_cast<Matrix*>(obj);
 	
-	//Identity matrix
-	th->a = 1.0; th->c = 0.0; th->tx = 0.0;
-	th->b = 0.0; th->d = 1.0; th->ty = 0.0;
+	//Mapping to cairo_matrix_t
+	//a -> xx
+	//b -> yx
+	//c -> xy
+	//d -> yy
+	//tx -> x0
+	//ty -> y0
 	
 	if (argslen >= 1)
-		th->a = args[0]->toNumber();
+		th->matrix.xx = args[0]->toNumber();
 	if (argslen >= 2)
-		th->b = args[1]->toNumber();
+		th->matrix.yx = args[1]->toNumber();
 	if (argslen >= 3)
-		th->c = args[2]->toNumber();
+		th->matrix.xy = args[2]->toNumber();
 	if (argslen >= 4)
-		th->d = args[3]->toNumber();
+		th->matrix.yy = args[3]->toNumber();
 	if (argslen >= 5)
-		th->tx = args[4]->toNumber();
+		th->matrix.x0 = args[4]->toNumber();
 	if (argslen == 6)
-		th->ty = args[5]->toNumber();
+		th->matrix.y0 = args[5]->toNumber();
 
 	return NULL;
 }
@@ -1013,103 +1049,96 @@ ASFUNCTIONBODY(Matrix,_toString)
 	Matrix* th=static_cast<Matrix*>(obj);
 	char buf[512];
 	snprintf(buf,512,"(a=%f, b=%f, c=%f, d=%f, tx=%f, ty=%f)",
-			th->a, th->b, th->c, th->d, th->tx, th->ty);
+			th->matrix.xx, th->matrix.yx, th->matrix.xy, th->matrix.yy, th->matrix.x0, th->matrix.y0);
 	return Class<ASString>::getInstanceS(buf);
 }
 
 MATRIX Matrix::getMATRIX() const
 {
-	MATRIX ret;
-	ret.ScaleX = a;
-	ret.ScaleY = d;
-	ret.RotateSkew1 = c;
-	ret.RotateSkew0 = b;
-	ret.TranslateX = tx;
-	ret.TranslateY = ty;
-	return ret;
+	return matrix;
 }
 
 ASFUNCTIONBODY(Matrix,_get_a)
 {
 	Matrix* th=static_cast<Matrix*>(obj);
-	return abstract_d(th->a);
+	return abstract_d(th->matrix.xx);
 }
 
 ASFUNCTIONBODY(Matrix,_set_a)
 {
 	Matrix* th=static_cast<Matrix*>(obj);
 	assert_and_throw(argslen==1);
-	th->a = args[0]->toNumber();
+	th->matrix.xx = args[0]->toNumber();
 	return NULL;
 }
 
 ASFUNCTIONBODY(Matrix,_get_b)
 {
 	Matrix* th=static_cast<Matrix*>(obj);
-	return abstract_d(th->b);
+	return abstract_d(th->matrix.yx);
 }
 
 ASFUNCTIONBODY(Matrix,_set_b)
 {
 	Matrix* th=static_cast<Matrix*>(obj);
 	assert_and_throw(argslen==1);
-	th->b = args[0]->toNumber();
+	th->matrix.yx = args[0]->toNumber();
 	return NULL;
 }
 
 ASFUNCTIONBODY(Matrix,_get_c)
 {
 	Matrix* th=static_cast<Matrix*>(obj);
-	return abstract_d(th->c);
+	return abstract_d(th->matrix.xy);
 }
 
 ASFUNCTIONBODY(Matrix,_set_c)
 {
 	Matrix* th=static_cast<Matrix*>(obj);
 	assert_and_throw(argslen==1);
-	th->c = args[0]->toNumber();
+	th->matrix.xy = args[0]->toNumber();
 	return NULL;
 }
 
 ASFUNCTIONBODY(Matrix,_get_d)
 {
 	Matrix* th=static_cast<Matrix*>(obj);
-	return abstract_d(th->d);
+	return abstract_d(th->matrix.yy);
 }
 
 ASFUNCTIONBODY(Matrix,_set_d)
 {
 	Matrix* th=static_cast<Matrix*>(obj);
 	assert_and_throw(argslen==1);
-	th->d = args[0]->toNumber();
+	th->matrix.yy = args[0]->toNumber();
 	return NULL;
 }
 
 ASFUNCTIONBODY(Matrix,_get_tx)
 {
 	Matrix* th=static_cast<Matrix*>(obj);
-	return abstract_d(th->tx);
+	return abstract_d(th->matrix.x0);
 }
 
 ASFUNCTIONBODY(Matrix,_set_tx)
 {
 	Matrix* th=static_cast<Matrix*>(obj);
 	assert_and_throw(argslen==1);
-	th->tx = args[0]->toNumber();
+	th->matrix.x0 = args[0]->toNumber();
 	return NULL;
 }
 
 ASFUNCTIONBODY(Matrix,_get_ty)
 {
 	Matrix* th=static_cast<Matrix*>(obj);
-	return abstract_d(th->ty);
+	return abstract_d(th->matrix.y0);
 }
 
 ASFUNCTIONBODY(Matrix,_set_ty)
 {
 	Matrix* th=static_cast<Matrix*>(obj);
 	assert_and_throw(argslen==1);
-	th->ty = args[0]->toNumber();
+	th->matrix.y0 = args[0]->toNumber();
 	return NULL;
 }
 
@@ -1118,11 +1147,7 @@ ASFUNCTIONBODY(Matrix,clone)
 	assert_and_throw(argslen==0);
 
 	Matrix* th=static_cast<Matrix*>(obj);
-	Matrix* ret=Class<Matrix>::getInstanceS();
-	
-	ret->a = th->a; ret->c = th->c; ret->tx = th->tx;
-	ret->b = th->b; ret->d = th->d; ret->ty = th->ty;
-		
+	Matrix* ret=Class<Matrix>::getInstanceS(th->matrix);
 	return ret;
 }
 
@@ -1133,22 +1158,8 @@ ASFUNCTIONBODY(Matrix,concat)
 	Matrix* th=static_cast<Matrix*>(obj);
 	Matrix* m=static_cast<Matrix*>(args[0]);
 
-	number_t ta, tb, tc, td, tx, ty;
-
-	ta = m->a * th->a + m->c * th->b;
-	tb = m->b * th->a + m->d * th->b;
-	tc = m->a * th->c + m->c * th->d;
-	td = m->b * th->c + m->d * th->d;
-	tx = m->a * th->tx + m->c * th->ty + m->tx;
-	ty = m->b * th->tx + m->d * th->ty + m->ty;
-
-	th->a = ta;
-	th->b = tb;
-	th->c = tc;
-	th->d = td;
-	th->tx = tx;
-	th->ty = ty;
-
+	//Premultiply, which is flash convention
+	cairo_matrix_multiply(&th->matrix,&th->matrix,&m->matrix);
 	return NULL;
 }
 
@@ -1157,9 +1168,7 @@ ASFUNCTIONBODY(Matrix,identity)
 	Matrix* th=static_cast<Matrix*>(obj);
 	assert_and_throw(argslen==0);
 	
-	th->a = 1.0; th->c = 0.0; th->tx = 0.0;
-	th->b = 0.0; th->d = 1.0; th->ty = 0.0;
-		
+	cairo_matrix_init_identity(&th->matrix);
 	return NULL;
 }
 
@@ -1167,31 +1176,7 @@ ASFUNCTIONBODY(Matrix,invert)
 {
 	assert_and_throw(argslen==0);
 	Matrix* th=static_cast<Matrix*>(obj);
-	
-	number_t ta, tb, tc, td, ttx, tty;
-	number_t Z;
-
-	Z = th->a * th->d - th->b * th-> c;
-	ta = th->d;
-	ta /= Z;
-	tc = -(th->c);
-	tc /= Z;
-	ttx = th->c * th->ty - th->d * th->tx;
-	ttx /= Z;
-	tb = -(th->b);
-	tb /= Z;
-	td = th->a;
-	td /= Z;
-	tty = th->b * th->tx - th->a * th->ty;
-	tty /= Z;
-
-	th->a = ta;
-	th->b = tb;
-	th->c = tc;
-	th->d = td;
-	th->tx = ttx;
-	th->ty = tty;
-
+	th->matrix=th->matrix.getInverted();
 	return NULL;
 }
 
@@ -1202,18 +1187,7 @@ ASFUNCTIONBODY(Matrix,translate)
 	number_t dx = args[0]->toNumber();
 	number_t dy = args[1]->toNumber();
 
-	/*
-	                      [a     c    tx   ]
-	                      [b     d    ty   ]
-	                      [0     0    1    ]
-	      
-	      [1     0   dx]  [a     c    tx+dx]
-	      [0     1   dy]  [b     d    ty+dy]
-	      [0     0    1]  [0     0    1    ]
-	*/
-	th->tx += dx;
-	th->ty += dy;
-
+	th->matrix.translate(dx,dy);
 	return NULL;
 }
 
@@ -1222,33 +1196,8 @@ ASFUNCTIONBODY(Matrix,rotate)
 	assert_and_throw(argslen==1);
 	Matrix* th=static_cast<Matrix*>(obj);
 	number_t angle = args[0]->toNumber();
-	number_t ta, tb, tc, td, tx, ty;
 
-        /*
-	  with sin = sin(angle) and cos = cos(angle):
-
-	                  [a            c            tx           ]
-                          [b            d            ty           ]
-	                  [0            0            1            ]
-
-	  [cos   -sin  0] [a*cos-b*sin  c*cos-d*sin  tx*cos-ty*sin]
-	  [sin   cos   0] [a*sin+b*cos  c*sin+d*cos  tx*sin+ty*cos]
-	  [0     0     1] [0            0            1            ]
-	*/
-	ta = th->a * cos(angle) - th->b * sin(angle);
-	tb = th->a * sin(angle) + th->b * cos(angle);
-	tc = th->c * cos(angle) - th->d * sin(angle);
-	td = th->c * sin(angle) + th->d * cos(angle);
-	tx = th->tx * cos(angle) - th->ty * sin(angle);
-	ty = th->tx * sin(angle) + th->ty * cos(angle);
-
-	th->a = ta;
-	th->b = tb;
-	th->c = tc;
-	th->d = td;
-	th->tx = tx;
-	th->ty = ty;
-
+	th->matrix.rotate(angle);
 	return NULL;
 }
 
@@ -1259,39 +1208,24 @@ ASFUNCTIONBODY(Matrix,scale)
 	number_t sx = args[0]->toNumber();
 	number_t sy = args[1]->toNumber();
 
-	/*
-	                      [a     c    tx   ]
-	                      [b     d    ty   ]
-	                      [0     0    1    ]
-	      
-	      [sx    0     0] [a*sx  c*sx tx*sx]
-	      [0     sy    0] [b*sy  d*sy ty*sy]
-	      [0     0     1] [0     0    1    ]
-	*/
-	th->a *= sx;
-	th->b *= sy;
-	th->c *= sx;
-	th->d *= sy;
-	th->tx *= sx;
-	th->ty *= sy;
-		
+	th->matrix.scale(sx, sy);
 	return NULL;
 }
 
 void Matrix::_createBox (number_t scaleX, number_t scaleY, number_t angle, number_t x, number_t y) {
 	/*
-	 * sequence:
+	 * sequence written in the spec:
 	 *      identity();
 	 *      rotate(angle);
 	 *      scale(scaleX, scaleY);
 	 *      translate(x, y);
 	 */
-	a = scaleX * cos(angle);
-	b = scaleY * sin(angle);
-	c = scaleX * -sin(angle);
-	d = scaleY * cos(angle);
-	tx = x;
-	ty = y;
+
+	//Initialize using rotation
+	cairo_matrix_init_rotate(&matrix,angle);
+
+	matrix.scale(scaleX,scaleY);
+	matrix.translate(x,y);
 }
 
 ASFUNCTIONBODY(Matrix,createBox)
@@ -1342,9 +1276,9 @@ ASFUNCTIONBODY(Matrix,transformPoint)
 	Matrix* th=static_cast<Matrix*>(obj);
 	Point* pt=static_cast<Point*>(args[0]);
 
-	number_t ttx = th->a * pt->getX() + th->c * pt->getY() + th->tx;
-	number_t tty = th->b * pt->getX() + th->d * pt->getY() + th->ty;
-
+	number_t ttx = pt->getX();
+	number_t tty = pt->getY();
+	cairo_matrix_transform_point(&th->matrix,&ttx,&tty);
 	return Class<Point>::getInstanceS(ttx, tty);
 }
 
@@ -1354,9 +1288,9 @@ ASFUNCTIONBODY(Matrix,deltaTransformPoint)
 	Matrix* th=static_cast<Matrix*>(obj);
 	Point* pt=static_cast<Point*>(args[0]);
 
-	number_t ttx = th->a * pt->getX() + th->c * pt->getY();
-	number_t tty = th->b * pt->getX() + th->d * pt->getY();
-
+	number_t ttx = pt->getX();
+	number_t tty = pt->getY();
+	cairo_matrix_transform_distance(&th->matrix,&ttx,&tty);
 	return Class<Point>::getInstanceS(ttx, tty);
 }
 

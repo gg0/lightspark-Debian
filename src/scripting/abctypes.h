@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2009-2011  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2009-2012  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -33,6 +33,11 @@ private:
 	uint32_t val;
 public:
 	operator uint32_t() const{return val;}
+	u8& operator=(uint32_t v)
+	{
+		val=v;
+		return *this;
+	}
 };
 
 class u16

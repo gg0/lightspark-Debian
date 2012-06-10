@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2009-2011  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2009-2012  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -57,8 +57,9 @@ private:
 	private:
 		bool isNumeric;
 		bool isCaseInsensitive;
+		bool isDescending;
 	public:
-		sortComparatorDefault(bool n, bool ci):isNumeric(n),isCaseInsensitive(ci){}
+		sortComparatorDefault(bool n, bool ci, bool d):isNumeric(n),isCaseInsensitive(ci),isDescending(d){}
 		bool operator()(const data_slot& d1, const data_slot& d2);
 	};
 	class sortComparatorWrapper
@@ -133,7 +134,7 @@ public:
 	void resize(uint64_t n);
 	_NR<ASObject> getVariableByMultiname(const multiname& name, GET_VARIABLE_OPTION opt);
 	int32_t getVariableByMultiname_i(const multiname& name);
-	void setVariableByMultiname(const multiname& name, ASObject* o);
+	void setVariableByMultiname(const multiname& name, ASObject* o, CONST_ALLOWED_FLAG allowConst);
 	bool deleteVariableByMultiname(const multiname& name);
 	void setVariableByMultiname_i(const multiname& name, int32_t value);
 	bool hasPropertyByMultiname(const multiname& name, bool considerDynamic);

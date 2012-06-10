@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2009-2011  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2009-2012  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -144,7 +144,7 @@ public:
 	*/
 	void addUploadJob(ITextureUploadable* u);
 
-	void requestResize(uint32_t w, uint32_t h);
+	void requestResize(uint32_t w, uint32_t h, bool force);
 	void waitForInitialization()
 	{
 		initialized.wait();

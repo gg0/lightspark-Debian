@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2009-2011  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2008-2012  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -29,7 +29,7 @@
 #include "scripting/flash/text/flashtext.h"
 #include "scripting/flash/utils/flashutils.h"
 #include "scripting/flash/media/flashmedia.h"
-#include "scripting/flash/display/BitmapData.h"
+#include "scripting/flash/display/BitmapContainer.h"
 #include "scripting/class.h"
 
 namespace lightspark
@@ -41,8 +41,6 @@ void ignore(std::istream& i, int count);
 
 class Tag
 {
-private:
-	ATOMIC_INT32(ref_count);
 protected:
 	RECORDHEADER Header;
 	void skip(std::istream& in) const
@@ -50,25 +48,9 @@ protected:
 		ignore(in,Header.getLength());
 	}
 public:
-	Tag(const Tag& t):ref_count(1),Header(t.Header) {}
-	Tag(RECORDHEADER h):ref_count(1),Header(h) {}
+	Tag(RECORDHEADER h):Header(h) {}
 	virtual TAGTYPE getType() const{ return TAG; }
 	virtual ~Tag(){}
-	void incRef()
-	{
-		ATOMIC_INCREMENT(ref_count);
-		assert(ref_count>0);
-	}
-	void decRef()
-	{
-		assert(ref_count>0);
-		uint32_t t=ATOMIC_DECREMENT(ref_count);
-		if(t==0)
-		{
-			ref_count=-1024;
-			delete this;
-		}
-	}
 };
 
 class EndTag:public Tag
@@ -83,7 +65,7 @@ class DisplayListTag: public Tag
 public:
 	DisplayListTag(RECORDHEADER h):Tag(h){}
 	virtual TAGTYPE getType() const{ return DISPLAY_LIST_TAG; }
-	virtual void execute(DisplayObjectContainer* parent)=0;
+	virtual void execute(DisplayObjectContainer* parent) const=0;
 };
 
 class DictionaryTag: public Tag
@@ -98,11 +80,10 @@ public:
 	*/
 	Class_base* bindedTo;
 	RootMovieClip* loadedFrom;
-	DictionaryTag(RECORDHEADER h):Tag(h),bindedTo(NULL),loadedFrom(NULL){ }
+	DictionaryTag(RECORDHEADER h, RootMovieClip* root):Tag(h),bindedTo(NULL),loadedFrom(root){ }
 	virtual TAGTYPE getType()const{ return DICT_TAG; }
-	virtual int getId()=0;
+	virtual int getId() const=0;
 	virtual ASObject* instance(Class_base* c=NULL) const { return NULL; };
-	void setLoadedFrom(RootMovieClip* r){loadedFrom=r;}
 };
 
 /*
@@ -114,7 +95,7 @@ class ControlTag: public Tag
 public:
 	ControlTag(RECORDHEADER h):Tag(h){}
 	virtual TAGTYPE getType()const{ return CONTROL_TAG; }
-	virtual void execute(RootMovieClip* root)=0;
+	virtual void execute(RootMovieClip* root) const=0;
 };
 
 class DefineShapeTag: public DictionaryTag
@@ -125,10 +106,10 @@ protected:
 	SHAPEWITHSTYLE Shapes;
 	/* tokens are computed from Shapes */
 	tokensVector tokens;
-	DefineShapeTag(RECORDHEADER h,int v);
+	DefineShapeTag(RECORDHEADER h,int v,RootMovieClip* root);
 public:
-	DefineShapeTag(RECORDHEADER h, std::istream& in);
-	virtual int getId(){ return ShapeId; }
+	DefineShapeTag(RECORDHEADER h,std::istream& in, RootMovieClip* root);
+	virtual int getId() const{ return ShapeId; }
 	ASObject* instance(Class_base* c=NULL) const
 	{
 		if(c==NULL)
@@ -141,18 +122,18 @@ public:
 class DefineShape2Tag: public DefineShapeTag
 {
 protected:
-	DefineShape2Tag(RECORDHEADER h, int v):DefineShapeTag(h,v){};
+	DefineShape2Tag(RECORDHEADER h, int v, RootMovieClip* root):DefineShapeTag(h,v,root){};
 public:
-	DefineShape2Tag(RECORDHEADER h, std::istream& in);
+	DefineShape2Tag(RECORDHEADER h, std::istream& in, RootMovieClip* root);
 };
 
 class DefineShape3Tag: public DefineShape2Tag
 {
 protected:
-	DefineShape3Tag(RECORDHEADER h,int v):DefineShape2Tag(h,v){};
+	DefineShape3Tag(RECORDHEADER h, int v, RootMovieClip* root):DefineShape2Tag(h,v,root){};
 public:
-	DefineShape3Tag(RECORDHEADER h, std::istream& in);
-	virtual int getId(){ return ShapeId; }
+	DefineShape3Tag(RECORDHEADER h, std::istream& in, RootMovieClip* root);
+	virtual int getId() const { return ShapeId; }
 };
 
 class DefineShape4Tag: public DefineShape3Tag
@@ -163,28 +144,37 @@ private:
 	UB UsesNonScalingStrokes;
 	UB UsesScalingStrokes;
 public:
-	DefineShape4Tag(RECORDHEADER h, std::istream& in);
-	virtual int getId(){ return ShapeId; }
+	DefineShape4Tag(RECORDHEADER h, std::istream& in, RootMovieClip* root);
+	virtual int getId() const { return ShapeId; }
 };
 
-class DefineMorphShapeTag: public DictionaryTag, public MorphShape
+class DefineMorphShapeTag: public DictionaryTag
 {
-private:
+protected:
 	UI16_SWF CharacterId;
 	RECT StartBounds;
 	RECT EndBounds;
-	UI32_SWF Offset;
 	MORPHFILLSTYLEARRAY MorphFillStyles;
 	MORPHLINESTYLEARRAY MorphLineStyles;
 	SHAPE StartEdges;
 	SHAPE EndEdges;
+	DefineMorphShapeTag(RECORDHEADER h, RootMovieClip* root, int version):DictionaryTag(h,root),MorphLineStyles(version){}
 public:
-	DefineMorphShapeTag(RECORDHEADER h, std::istream& in);
-	int getId(){ return CharacterId; }
-	void renderImpl(RenderContext& ctxt, bool maskEnabled, number_t t1,number_t t2,number_t t3,number_t t4) const;
+	DefineMorphShapeTag(RECORDHEADER h, std::istream& in, RootMovieClip* root);
+	int getId() const { return CharacterId; }
 	virtual ASObject* instance(Class_base* c=NULL) const;
 };
 
+class DefineMorphShape2Tag: public DefineMorphShapeTag
+{
+private:
+	RECT StartEdgeBounds;
+	RECT EndEdgeBounds;
+	UB UsesNonScalingStrokes;
+	UB UsesScalingStrokes;
+public:
+	DefineMorphShape2Tag(RECORDHEADER h, std::istream& in, RootMovieClip* root);
+};
 
 class DefineEditTextTag: public DictionaryTag
 {
@@ -221,8 +211,8 @@ private:
 	STRING InitialText;
 	TextData textData;
 public:
-	DefineEditTextTag(RECORDHEADER h, std::istream& s);
-	int getId(){ return CharacterID; }
+	DefineEditTextTag(RECORDHEADER h, std::istream& s, RootMovieClip* root);
+	int getId() const { return CharacterID; }
 	ASObject* instance(Class_base* c=NULL) const;
 };
 
@@ -236,8 +226,8 @@ private:
 	char SoundType;
 	UI32_SWF SoundSampleCount;
 public:
-	DefineSoundTag(RECORDHEADER h, std::istream& s);
-	virtual int getId() { return SoundId; }
+	DefineSoundTag(RECORDHEADER h, std::istream& s, RootMovieClip* root);
+	virtual int getId() const { return SoundId; }
 	ASObject* instance(Class_base* c=NULL) const;
 };
 
@@ -278,7 +268,7 @@ private:
 
 public:
 	RemoveObject2Tag(RECORDHEADER h, std::istream& in);
-	void execute(DisplayObjectContainer* parent);
+	void execute(DisplayObjectContainer* parent) const;
 };
 
 class PlaceObject2Tag: public DisplayListTag
@@ -301,11 +291,11 @@ protected:
 	CLIPACTIONS ClipActions;
 	PlaceObject2Tag(RECORDHEADER h):DisplayListTag(h){}
 	void setProperties(DisplayObject* obj, DisplayObjectContainer* parent) const;
-
+	const DictionaryTag* placedTag;
 public:
 	STRING Name;
-	PlaceObject2Tag(RECORDHEADER h, std::istream& in);
-	void execute(DisplayObjectContainer* parent);
+	PlaceObject2Tag(RECORDHEADER h, std::istream& in, RootMovieClip* root);
+	void execute(DisplayObjectContainer* parent) const;
 };
 
 class PlaceObject3Tag: public PlaceObject2Tag
@@ -322,7 +312,7 @@ private:
 	UI8 BitmapCache;
 
 public:
-	PlaceObject3Tag(RECORDHEADER h, std::istream& in);
+	PlaceObject3Tag(RECORDHEADER h, std::istream& in, RootMovieClip* root);
 };
 
 class FrameLabelTag: public Tag
@@ -339,7 +329,7 @@ private:
 	RGB BackgroundColor;
 public:
 	SetBackgroundColorTag(RECORDHEADER h, std::istream& in);
-	void execute(RootMovieClip* root);
+	void execute(RootMovieClip* root) const;
 };
 
 class SoundStreamHead2Tag: public Tag
@@ -357,8 +347,8 @@ private:
 	UI16_SWF ActionOffset;
 	std::vector<BUTTONRECORD> Characters;
 public:
-	DefineButton2Tag(RECORDHEADER h, std::istream& in);
-	virtual int getId(){ return ButtonId; }
+	DefineButton2Tag(RECORDHEADER h, std::istream& in, RootMovieClip* root);
+	virtual int getId() const { return ButtonId; }
 	ASObject* instance(Class_base* c=NULL) const;
 };
 
@@ -374,9 +364,9 @@ private:
 	uint8_t* bytes;
 	uint32_t len;
 public:
-	DefineBinaryDataTag(RECORDHEADER h,std::istream& s);
+	DefineBinaryDataTag(RECORDHEADER h,std::istream& s,RootMovieClip* root);
 	~DefineBinaryDataTag() { delete[] bytes; }
-	virtual int getId(){return Tag;} 
+	virtual int getId() const {return Tag;}
 	ASObject* instance(Class_base* c=NULL) const;
 };
 
@@ -391,12 +381,12 @@ public:
 	 * DefineFont3Tag sets 1 here, the rest set 20
 	 */
 	const int scaling;
-	FontTag(RECORDHEADER h, int _scaling):DictionaryTag(h), scaling(_scaling) {}
+	FontTag(RECORDHEADER h, int _scaling,RootMovieClip* root):DictionaryTag(h,root), scaling(_scaling) {}
 	const std::vector<SHAPE>& getGlyphShapes() const
 	{
 		return GlyphShapeTable;
 	}
-	int getId() { return FontID; }
+	int getId() const { return FontID; }
 };
 
 class DefineFontTag: public FontTag
@@ -405,7 +395,8 @@ class DefineFontTag: public FontTag
 protected:
 	std::vector<uint16_t> OffsetTable;
 public:
-	DefineFontTag(RECORDHEADER h, std::istream& in);
+	DefineFontTag(RECORDHEADER h, std::istream& in, RootMovieClip* root);
+	ASObject* instance(Class_base* c=NULL) const;
 };
 
 class DefineFontInfoTag: public Tag
@@ -442,7 +433,8 @@ private:
 	std::vector <KERNINGRECORD> FontKerningTable;
 
 public:
-	DefineFont2Tag(RECORDHEADER h, std::istream& in);
+	DefineFont2Tag(RECORDHEADER h, std::istream& in, RootMovieClip* root);
+	ASObject* instance(Class_base* c=NULL) const;
 };
 
 class DefineFont3Tag: public FontTag
@@ -472,7 +464,8 @@ private:
 	std::vector <KERNINGRECORD> FontKerningTable;
 
 public:
-	DefineFont3Tag(RECORDHEADER h, std::istream& in);
+	DefineFont3Tag(RECORDHEADER h, std::istream& in, RootMovieClip* root);
+	ASObject* instance(Class_base* c=NULL) const;
 };
 
 class DefineFont4Tag : public DictionaryTag
@@ -484,8 +477,9 @@ private:
 	UB FontFlagsBold;
 	STRING FontName;
 public:
-	DefineFont4Tag(RECORDHEADER h, std::istream& in);
-	virtual int getId() { return FontID; }
+	DefineFont4Tag(RECORDHEADER h, std::istream& in,RootMovieClip* root);
+	virtual int getId() const { return FontID; }
+	ASObject* instance(Class_base* c=NULL) const;
 };
 
 class DefineTextTag: public DictionaryTag
@@ -502,25 +496,25 @@ private:
 	void computeCached() const;
 public:
 	int version;
-	DefineTextTag(RECORDHEADER h, std::istream& in,int v=1);
-	int getId(){ return CharacterId; }
+	DefineTextTag(RECORDHEADER h, std::istream& in,RootMovieClip* root,int v=1);
+	int getId() const { return CharacterId; }
 	ASObject* instance(Class_base* c=NULL) const;
 };
 
 class DefineText2Tag: public DefineTextTag
 {
 public:
-	DefineText2Tag(RECORDHEADER h, std::istream& in) : DefineTextTag(h,in,2) {}
+	DefineText2Tag(RECORDHEADER h, std::istream& in,RootMovieClip* root) : DefineTextTag(h,in,root,2) {}
 };
 
-class DefineSpriteTag: public DictionaryTag, public MovieClip
+class DefineSpriteTag: public DictionaryTag, public FrameContainer
 {
 private:
 	UI16_SWF SpriteID;
 	UI16_SWF FrameCount;
 public:
-	DefineSpriteTag(RECORDHEADER h, std::istream& in);
-	virtual int getId(){ return SpriteID; }
+	DefineSpriteTag(RECORDHEADER h, std::istream& in, RootMovieClip* root);
+	virtual int getId() const { return SpriteID; }
 	virtual ASObject* instance(Class_base* c=NULL) const;
 };
 
@@ -528,10 +522,17 @@ class ProtectTag: public ControlTag
 {
 public:
 	ProtectTag(RECORDHEADER h, std::istream& in);
-	void execute(RootMovieClip* root){};
+	void execute(RootMovieClip* root) const{};
 };
 
-class DefineBitsLosslessTag: public DictionaryTag, public BitmapData
+class BitmapTag: public DictionaryTag, public BitmapContainer
+{
+public:
+	BitmapTag(RECORDHEADER h,RootMovieClip* root);
+	ASObject* instance(Class_base* c=NULL) const;
+};
+
+class DefineBitsLosslessTag: public BitmapTag
 {
 private:
 	UI16_SWF CharacterId;
@@ -541,42 +542,39 @@ private:
 	UI8 BitmapColorTableSize;
 	//ZlibBitmapData;
 public:
-	DefineBitsLosslessTag(RECORDHEADER h, std::istream& in, int version);
-	int getId(){ return CharacterId; }
-	ASObject* instance(Class_base* c=NULL) const;
+	DefineBitsLosslessTag(RECORDHEADER h, std::istream& in, int version, RootMovieClip* root);
+	int getId() const{ return CharacterId; }
 };
 
-class DefineBitsTag: public DictionaryTag, public BitmapData
+class DefineBitsTag: public BitmapTag
 {
 private:
 	UI16_SWF CharacterId;
 	uint8_t* data;
 public:
-	DefineBitsTag(RECORDHEADER h, std::istream& in);
+	DefineBitsTag(RECORDHEADER h, std::istream& in, RootMovieClip* root);
 	~DefineBitsTag();
-	int getId(){ return CharacterId; }
+	int getId() const{ return CharacterId; }
 };
 
-class DefineBitsJPEG2Tag: public DictionaryTag, public BitmapData
+class DefineBitsJPEG2Tag: public BitmapTag
 {
 private:
 	UI16_SWF CharacterId;
 public:
-	DefineBitsJPEG2Tag(RECORDHEADER h, std::istream& in);
-	int getId(){ return CharacterId; }
-	ASObject* instance(Class_base* c=NULL) const;
+	DefineBitsJPEG2Tag(RECORDHEADER h, std::istream& in, RootMovieClip* root);
+	int getId() const{ return CharacterId; }
 };
 
-class DefineBitsJPEG3Tag: public DictionaryTag, public BitmapData
+class DefineBitsJPEG3Tag: public BitmapTag
 {
 private:
 	UI16_SWF CharacterId;
 	uint8_t* alphaData;
 public:
-	DefineBitsJPEG3Tag(RECORDHEADER h, std::istream& in);
+	DefineBitsJPEG3Tag(RECORDHEADER h, std::istream& in, RootMovieClip* root);
 	~DefineBitsJPEG3Tag();
-	int getId(){ return CharacterId; }
-	ASObject* instance(Class_base* c=NULL) const;
+	int getId() const{ return CharacterId; }
 };
 
 class DefineScalingGridTag: public Tag
@@ -603,7 +601,7 @@ public:
 	std::vector<u32> FrameNum;
 	std::vector<STRING> FrameLabel;
 	DefineSceneAndFrameLabelDataTag(RECORDHEADER h, std::istream& in);
-	void execute(RootMovieClip* root);
+	void execute(RootMovieClip* root) const;
 };
 
 class DefineFontNameTag: public Tag
@@ -630,8 +628,8 @@ private:
 	UB VideoFlagsSmoothing;
 	UI8 CodecID;
 public:
-	DefineVideoStreamTag(RECORDHEADER h, std::istream& in);
-	int getId(){ return CharacterID; }
+	DefineVideoStreamTag(RECORDHEADER h, std::istream& in, RootMovieClip* root);
+	int getId() const{ return CharacterID; }
 	ASObject* instance(Class_base* c=NULL) const;
 };
 
@@ -663,7 +661,7 @@ private:
 public:
 	ScriptLimitsTag(RECORDHEADER h, std::istream& in);
 	TAGTYPE getType() const{ return ABC_TAG; }
-	void execute(RootMovieClip* root);
+	void execute(RootMovieClip* root) const;
 };
 
 class ProductInfoTag: public Tag
@@ -724,7 +722,11 @@ private:
 	bool topLevel;
 public:
 	TagFactory(std::istream& in, bool t):f(in),firstTag(true),topLevel(t){}
-	_NR<Tag> readTag();
+	/**
+	 * The RootMovieClip that is the owner of the content.
+	 * It is needed to solve references to other tags during construction
+	 */
+	Tag* readTag(RootMovieClip* root);
 };
 
 };

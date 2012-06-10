@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2009-2011  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2010-2012  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -36,6 +36,7 @@ REGISTER_CLASS_NAME(SoundTransform);
 REGISTER_CLASS_NAME(Video);
 REGISTER_CLASS_NAME(Sound);
 REGISTER_CLASS_NAME(SoundLoaderContext);
+REGISTER_CLASS_NAME(SoundChannel);
 
 void SoundTransform::sinit(Class_base* c)
 {
@@ -300,9 +301,11 @@ ASFUNCTIONBODY(Sound,load)
 ASFUNCTIONBODY(Sound,play)
 {
 	Sound* th=Class<Sound>::cast(obj);
-	assert_and_throw(argslen==1);
-	//number_t startTime=args[0]->toNumber();
+	number_t startTime;
+	ARG_UNPACK(startTime, 0);
 	//TODO: use startTime
+	if(startTime!=0)
+		LOG(LOG_NOT_IMPLEMENTED,"startTime not supported in Sound::play");
 
 	if(th->downloader && !th->downloader->hasFailed())
 	{
@@ -447,3 +450,18 @@ ASFUNCTIONBODY(SoundLoaderContext,_constructor)
 
 ASFUNCTIONBODY_GETTER_SETTER(SoundLoaderContext,bufferTime);
 ASFUNCTIONBODY_GETTER_SETTER(SoundLoaderContext,checkPolicyFile);
+
+void SoundChannel::sinit(Class_base* c)
+{
+	c->setConstructor(Class<IFunction>::getFunction(_constructor));
+	c->setSuper(Class<EventDispatcher>::getRef());
+}
+
+void SoundChannel::buildTraits(ASObject* o)
+{
+}
+
+ASFUNCTIONBODY(SoundChannel, _constructor)
+{
+	return NULL;
+}

@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2009-2011  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2009-2012  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -19,7 +19,7 @@
 
 #include <list>
 #include <algorithm>
-#include <string.h>
+#include <cstring>
 #include <sstream>
 #define __STDC_FORMAT_MACROS
 #include <inttypes.h>
@@ -29,8 +29,8 @@
 #include <limits>
 #include <cstdio>
 #include <cstdlib>
-#include <ctype.h>
-#include <errno.h>
+#include <cctype>
+#include <cerrno>
 
 #include <glib.h>
 
@@ -117,7 +117,7 @@ void Undefined::serialize(ByteArray* out, std::map<tiny_string, uint32_t>& strin
 	out->writeByte(undefined_marker);
 }
 
-void Undefined::setVariableByMultiname(const multiname& name, ASObject* o)
+void Undefined::setVariableByMultiname(const multiname& name, ASObject* o, CONST_ALLOWED_FLAG allowConst)
 {
 	LOG(LOG_NOT_IMPLEMENTED, "Ignoring set on Undefined " << name);
 	o->decRef();
@@ -587,13 +587,6 @@ int32_t Null::getVariableByMultiname_i(const multiname& name)
 
 _NR<ASObject> Null::getVariableByMultiname(const multiname& name, GET_VARIABLE_OPTION opt)
 {
-	if((opt & SKIP_IMPL)!=0 || !implEnable)
-		return ASObject::getVariableByMultiname(name,opt);
-
-	assert_and_throw(name.ns.size()>0);
-	if(name.ns[0].name!="")
-		return ASObject::getVariableByMultiname(name,opt);
-
 	throw Class<TypeError>::getInstanceS("Error #1009: null has no properties.");
 }
 
@@ -609,7 +602,7 @@ void Null::serialize(ByteArray* out, std::map<tiny_string, uint32_t>& stringMap,
 	out->writeByte(null_marker);
 }
 
-void Null::setVariableByMultiname(const multiname& name, ASObject* o)
+void Null::setVariableByMultiname(const multiname& name, ASObject* o, CONST_ALLOWED_FLAG allowConst)
 {
 	o->decRef();
 	throw Class<TypeError>::getInstanceS("Cannot set on null");
@@ -628,15 +621,15 @@ bool Type::isTypeResolvable(const multiname* mn)
 	assert(mn->name_type == multiname::NAME_STRING);
 	if(mn == 0)
 		return true; //any
-	if(mn->name_type == multiname::NAME_STRING && mn->name_s=="any"
-		&& mn->ns[0].name == "")
+	if(mn->name_type == multiname::NAME_STRING && mn->name_s_id==BUILTIN_STRINGS::ANY
+		&& mn->ns[0].hasEmptyName())
 		return true;
-	if(mn->name_type == multiname::NAME_STRING && mn->name_s=="void"
-		&& mn->ns[0].name == "")
+	if(mn->name_type == multiname::NAME_STRING && mn->name_s_id==BUILTIN_STRINGS::VOID
+		&& mn->ns[0].hasEmptyName())
 		return true;
 
 	//Check if the class has already been defined
-	auto i = getSys()->builtinClasses.find(QName(mn->name_s, mn->ns[0].name));
+	auto i = getSys()->builtinClasses.find(QName(getSys()->getStringFromUniqueId(mn->name_s_id), mn->ns[0].getImpl().name));
 	return i != getSys()->builtinClasses.end();
 }
 
@@ -650,12 +643,12 @@ const Type* Type::getTypeFromMultiname(const multiname* mn, const ABCContext* co
 	if(mn == 0) //multiname idx zero indicates any type
 		return Type::anyType;
 
-	if(mn->name_type == multiname::NAME_STRING && mn->name_s=="any"
-		&& mn->ns.size() == 1 && mn->ns[0].name == "")
+	if(mn->name_type == multiname::NAME_STRING && mn->name_s_id==BUILTIN_STRINGS::ANY
+		&& mn->ns.size() == 1 && mn->ns[0].hasEmptyName())
 		return Type::anyType;
 
-	if(mn->name_type == multiname::NAME_STRING && mn->name_s=="void"
-		&& mn->ns.size() == 1 && mn->ns[0].name == "")
+	if(mn->name_type == multiname::NAME_STRING && mn->name_s_id==BUILTIN_STRINGS::VOID
+		&& mn->ns.size() == 1 && mn->ns[0].hasEmptyName())
 		return Type::voidType;
 
 	ASObject* typeObject;
@@ -683,11 +676,17 @@ const Type* Type::getTypeFromMultiname(const multiname* mn, const ABCContext* co
 		return Type::anyType;
 	}
 
-	assert_and_throw(typeObject->is<Type>());
+	if(!typeObject->is<Type>())
+	{
+		//It actually happens in the wild that the class for a member might be a private class
+		//that is defined later in the same script. We have no way to solve the dependency, so return any
+		LOG(LOG_NOT_IMPLEMENTED,"Not resolvable type " << *mn << ", using AnyType");
+		return Type::anyType;
+	}
 	return typeObject->as<Type>();
 }
 
-Class_base::Class_base(const QName& name, MemoryAccount* m):ASObject(m),use_protected(false),protected_ns("",PACKAGE_NAMESPACE),constructor(NULL),
+Class_base::Class_base(const QName& name, MemoryAccount* m):ASObject(m),use_protected(false),protected_ns("",NAMESPACE),constructor(NULL),
 	referencedObjects(std::less<ASObject*>(), reporter_allocator<ASObject*>(m)),
 	isFinal(false),isSealed(false),context(NULL),class_name(name),class_index(-1),memoryAccount(m)
 {
@@ -711,7 +710,7 @@ void Class_base::copyBorrowedTraitsFromSuper()
 	variables_map::var_iterator i = super->Variables.Variables.begin();
 	for(;i != super->Variables.Variables.end(); ++i)
 	{
-		const tiny_string& name = i->first;
+		uint32_t name = i->first;
 		variable& v = i->second;
 		//copy only static and instance methods
 		if(v.kind != BORROWED_TRAIT)
@@ -722,16 +721,8 @@ void Class_base::copyBorrowedTraitsFromSuper()
 			v.getter->incRef();
 		if(v.setter)
 			v.setter->incRef();
-		const variables_map::var_iterator ret_end=Variables.Variables.upper_bound(name);
-		variables_map::var_iterator inserted=Variables.Variables.insert(ret_end,make_pair(name,v));
 
-		//Overwrite protected ns
-		if(super->use_protected && v.ns.count(nsNameAndKind(super->protected_ns.name,PROTECTED_NAMESPACE)))
-		{
-			assert(use_protected);
-			//add this classes protected ns
-			inserted->second.ns.insert(nsNameAndKind(protected_ns.name,PROTECTED_NAMESPACE));
-		}
+		Variables.Variables.insert(make_pair(name,v));
 	}
 }
 
@@ -965,11 +956,7 @@ const std::vector<Class_base*>& Class_base::getInterfaces() const
 
 void Class_base::linkInterface(Class_base* c) const
 {
-	if(class_index==-1)
-	{
-		//LOG(LOG_NOT_IMPLEMENTED,_("Linking of builtin interface ") << class_name << _(" not supported"));
-		return;
-	}
+	assert(class_index!=-1);
 	//Recursively link interfaces implemented by this interface
 	for(unsigned int i=0;i<getInterfaces().size();i++)
 		getInterfaces()[i]->linkInterface(c);
@@ -1098,7 +1085,7 @@ void Class_base::describeTraits(xmlpp::Element* root,
 		int kind=t.kind&0xf;
 		multiname* mname=context->getMultiname(t.name,NULL);
 		if (mname->name_type!=multiname::NAME_STRING ||
-		    (mname->ns.size()==1 && mname->ns[0].name!="") ||
+		    (mname->ns.size()==1 && !mname->ns[0].hasEmptyName()) ||
 		    mname->ns.size() > 1)
 			continue;
 		
@@ -1109,19 +1096,19 @@ void Class_base::describeTraits(xmlpp::Element* root,
 
 			const char *nodename=kind==traits_info::Const?"constant":"variable";
 			xmlpp::Element* node=root->add_child(nodename);
-			node->set_attribute("name", mname->name_s.raw_buf());
-			node->set_attribute("type", type->name_s.raw_buf());
+			node->set_attribute("name", getSys()->getStringFromUniqueId(mname->name_s_id).raw_buf());
+			node->set_attribute("type", getSys()->getStringFromUniqueId(type->name_s_id).raw_buf());
 		}
 		else if (kind==traits_info::Method)
 		{
 			xmlpp::Element* node=root->add_child("method");
-			node->set_attribute("name", mname->name_s.raw_buf());
+			node->set_attribute("name", getSys()->getStringFromUniqueId(mname->name_s_id).raw_buf());
 			node->set_attribute("declaredBy", getQualifiedClassName().raw_buf());
 
 			method_info& method=context->methods[t.method];
 			const multiname* rtname=method.returnTypeName();
 			assert(rtname->name_type==multiname::NAME_STRING);
-			node->set_attribute("returnType", rtname->name_s.raw_buf());
+			node->set_attribute("returnType", getSys()->getStringFromUniqueId(rtname->name_s_id).raw_buf());
 
 			assert(method.numArgs() >= method.numOptions());
 			uint32_t firstOpt=method.numArgs() - method.numOptions();
@@ -1129,7 +1116,7 @@ void Class_base::describeTraits(xmlpp::Element* root,
 			{
 				xmlpp::Element* param=node->add_child("parameter");
 				param->set_attribute("index", UInteger::toString(j+1).raw_buf());
-				param->set_attribute("type", method.paramTypeName(j)->name_s.raw_buf());
+				param->set_attribute("type", getSys()->getStringFromUniqueId(method.paramTypeName(j)->name_s_id).raw_buf());
 				param->set_attribute("optional", j>=firstOpt?"true":"false");
 			}
 		}
@@ -1150,7 +1137,7 @@ void Class_base::describeTraits(xmlpp::Element* root,
 			else
 				node=existing->second;
 
-			node->set_attribute("name", mname->name_s.raw_buf());
+			node->set_attribute("name", getSys()->getStringFromUniqueId(mname->name_s_id).raw_buf());
 
 			const char* access=NULL;
 			tiny_string oldAccess;
@@ -1175,11 +1162,11 @@ void Class_base::describeTraits(xmlpp::Element* root,
 			{
 				const multiname* rtname=method.returnTypeName();
 				assert(rtname->name_type==multiname::NAME_STRING);
-				type=rtname->name_s.raw_buf();
+				type=getSys()->getStringFromUniqueId(rtname->name_s_id).raw_buf();
 			}
 			else if(method.numArgs()>0) // setter
 			{
-				type=method.paramTypeName(0)->name_s.raw_buf();
+				type=getSys()->getStringFromUniqueId(method.paramTypeName(0)->name_s_id).raw_buf();
 			}
 			if(type)
 				node->set_attribute("type", type);
@@ -1187,6 +1174,25 @@ void Class_base::describeTraits(xmlpp::Element* root,
 			node->set_attribute("declaredBy", getQualifiedClassName().raw_buf());
 		}
 	}
+}
+
+void Class_base::initializeProtectedNamespace(const tiny_string& name, const namespace_info& ns)
+{
+	Class_inherit* cur=dynamic_cast<Class_inherit*>(super.getPtr());
+	nsNameAndKind* baseNs=NULL;
+	while(cur)
+	{
+		if(cur->use_protected)
+		{
+			baseNs=&cur->protected_ns;
+			break;
+		}
+		cur=dynamic_cast<Class_inherit*>(cur->super.getPtr());
+	}
+	if(baseNs==NULL)
+		protected_ns=nsNameAndKind(name,(NS_KIND)(int)ns.kind);
+	else
+		protected_ns=nsNameAndKind(name,baseNs->nsId,(NS_KIND)(int)ns.kind);
 }
 
 ASQName::ASQName(Class_base* c):ASObject(c)
@@ -1761,6 +1767,12 @@ _NR<ASObject> Global::getVariableByMultiname(const multiname& name, GET_VARIABLE
 	LOG(LOG_CALLS,"Access to " << name << ", running script init");
 	context->runScriptInit(scriptId, this);
 	return ASObject::getVariableByMultiname(name, opt);
+}
+
+void Global::registerBuiltin(const char* name, const char* ns, _R<ASObject> o)
+{
+	o->incRef();
+	setVariableByQName(name,nsNameAndKind(ns,NAMESPACE),o.getPtr(),DECLARED_TRAIT);
 }
 
 ASFUNCTIONBODY(lightspark,eval)

@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2009-2011  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2008-2012  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -30,6 +30,7 @@
 #include "exceptions.h"
 #include "compat.h"
 #include "scripting/toplevel/ASString.h"
+#include "scripting/flash/display/BitmapData.h"
 
 using namespace std;
 using namespace lightspark;
@@ -42,13 +43,15 @@ tiny_string multiname::qualifiedString() const
 {
 	assert_and_throw(ns.size()==1);
 	assert_and_throw(name_type==NAME_STRING);
-	if(ns[0].name.empty())
-		return name_s;
+	const tiny_string nsName=ns[0].getImpl().name;
+	const tiny_string& name=getSys()->getStringFromUniqueId(name_s_id);
+	if(nsName.empty())
+		return name;
 	else
 	{
-		tiny_string ret=ns[0].name;
+		tiny_string ret=nsName;
 		ret+="::";
-		ret+=name_s;
+		ret+=name;
 		return ret;
 	}
 }
@@ -62,13 +65,30 @@ tiny_string multiname::normalizedName() const
 		case multiname::NAME_NUMBER:
 			return Number::toString(name_d);
 		case multiname::NAME_STRING:
-			return name_s;
+			return getSys()->getStringFromUniqueId(name_s_id);
 		case multiname::NAME_OBJECT:
 			return name_o->toString();
 		default:
 			assert("Unexpected name kind" && false);
 			//Should never reach this
 			return "";
+	}
+}
+
+uint32_t multiname::normalizedNameId() const
+{
+	switch(name_type)
+	{
+		case multiname::NAME_STRING:
+			return name_s_id;
+		case multiname::NAME_INT:
+		case multiname::NAME_NUMBER:
+		case multiname::NAME_OBJECT:
+			return getSys()->getUniqueStringId(normalizedName());
+		default:
+			assert("Unexpected name kind" && false);
+			//Should never reach this
+			return -1;
 	}
 }
 
@@ -93,13 +113,13 @@ void multiname::setName(ASObject* n)
 	else if(n->getObjectType()==T_QNAME)
 	{
 		ASQName* qname=static_cast<ASQName*>(n);
-		name_s=qname->local_name;
+		name_s_id=getSys()->getUniqueStringId(qname->local_name);
 		name_type = NAME_STRING;
 	}
 	else if(n->getObjectType()==T_STRING)
 	{
 		ASString* o=static_cast<ASString*>(n);
-		name_s=o->data;
+		name_s_id=getSys()->getUniqueStringId(o->data);
 		name_type = NAME_STRING;
 	}
 	else
@@ -129,7 +149,7 @@ bool multiname::toUInt(uint32_t& index) const
 		{
 			tiny_string str;
 			if(name_type==multiname::NAME_STRING)
-				str=name_s;
+				str=getSys()->getStringFromUniqueId(name_s_id);
 			else
 				str=name_o->toString();
 
@@ -180,8 +200,8 @@ std::ostream& lightspark::operator<<(std::ostream& s, const tiny_string& r)
 
 std::ostream& lightspark::operator<<(std::ostream& s, const nsNameAndKind& r)
 {
-	string prefix;
-	switch(r.kind)
+	const char* prefix;
+	switch(r.getImpl().kind)
 	{
 		case 0x08:
 			prefix="ns:";
@@ -205,7 +225,7 @@ std::ostream& lightspark::operator<<(std::ostream& s, const nsNameAndKind& r)
 			prefix="privns:";
 			break;
 	}
-	s << prefix << r.name;
+	s << prefix << r.getImpl().name;
 	return s;
 }
 
@@ -220,7 +240,7 @@ std::ostream& lightspark::operator<<(std::ostream& s, const multiname& r)
 	else if(r.name_type==multiname::NAME_NUMBER)
 		s << r.name_d;
 	else if(r.name_type==multiname::NAME_STRING)
-		s << r.name_s;
+		s << getSys()->getStringFromUniqueId(r.name_s_id);
 	else
 		s << r.name_o; //We print the hexadecimal value
 	return s;
@@ -259,49 +279,55 @@ std::ostream& lightspark::operator<<(std::ostream& s, const RGB& r)
 	return s;
 }
 
+MATRIX::MATRIX(number_t sx, number_t sy, number_t sk0, number_t sk1, number_t tx, number_t ty)
+{
+	xx=sx;
+	yy=sy;
+	yx=sk0;
+	xy=sk1;
+	x0=tx;
+	y0=ty;
+}
+
 MATRIX MATRIX::getInverted() const
 {
-	MATRIX ret;
-	number_t den=ScaleX*ScaleY-RotateSkew0*RotateSkew1;
-	/* regularize so we can work with singular matrices */
-	if(fabs(den) < 1e-6)
-		den = copysign(1e-6,den);
-	ret.ScaleX=ScaleY/den;
-	ret.RotateSkew1=-RotateSkew1/den;
-	ret.RotateSkew0=-RotateSkew0/den;
-	ret.ScaleY=ScaleX/den;
-	ret.TranslateX=(RotateSkew1*TranslateY-ScaleY*TranslateX)/den;
-	ret.TranslateY=(RotateSkew0*TranslateX-ScaleX*TranslateY)/den;
+	MATRIX ret(*this);
+	cairo_status_t status=cairo_matrix_invert(&ret);
+	if(status==CAIRO_STATUS_INVALID_MATRIX)
+	{
+		//Flash does not fail for non invertible matrices
+		//but the result contains a few NaN and Infinite.
+		//Just fill the result with NaN
+		ret.xx=numeric_limits<double>::quiet_NaN();
+		ret.yx=numeric_limits<double>::quiet_NaN();
+		ret.xy=numeric_limits<double>::quiet_NaN();
+		ret.yy=numeric_limits<double>::quiet_NaN();
+		ret.x0=numeric_limits<double>::quiet_NaN();
+		ret.y0=numeric_limits<double>::quiet_NaN();
+	}
 	return ret;
 }
 
 bool MATRIX::isInvertible() const
 {
-	const number_t den=ScaleX*ScaleY-RotateSkew0*RotateSkew1;
+	const number_t den=xx*yy-yx*xy;
 	return (fabs(den) > 1e-6);
 }
 
 void MATRIX::get4DMatrix(float matrix[16]) const
 {
 	memset(matrix,0,sizeof(float)*16);
-	matrix[0]=ScaleX;
-	matrix[1]=RotateSkew0;
+	matrix[0]=xx;
+	matrix[1]=yx;
 
-	matrix[4]=RotateSkew1;
-	matrix[5]=ScaleY;
+	matrix[4]=xy;
+	matrix[5]=yy;
 
 	matrix[10]=1;
 
-	matrix[12]=TranslateX;
-	matrix[13]=TranslateY;
+	matrix[12]=x0;
+	matrix[13]=y0;
 	matrix[15]=1;
-}
-
-void MATRIX::getCairoMatrix(cairo_matrix_t* m) const
-{
-	cairo_matrix_init(m, ScaleX, RotateSkew0,
-			RotateSkew1, ScaleY,
-			TranslateX, TranslateY);
 }
 
 Vector2f MATRIX::multiply2D(const Vector2f& in) const
@@ -313,37 +339,30 @@ Vector2f MATRIX::multiply2D(const Vector2f& in) const
 
 void MATRIX::multiply2D(number_t xin, number_t yin, number_t& xout, number_t& yout) const
 {
-	xout=xin*ScaleX + yin*RotateSkew1 + TranslateX;
-	yout=xin*RotateSkew0 + yin*ScaleY + TranslateY;
+	xout=xin;
+	yout=yin;
+	cairo_matrix_transform_point(this, &xout, &yout);
 }
 
 MATRIX MATRIX::multiplyMatrix(const MATRIX& r) const
 {
 	MATRIX ret;
-	ret.ScaleX=ScaleX*r.ScaleX + RotateSkew1*r.RotateSkew0;
-	ret.RotateSkew1=ScaleX*r.RotateSkew1 + RotateSkew1*r.ScaleY;
-	ret.RotateSkew0=RotateSkew0*r.ScaleX + ScaleY*r.RotateSkew0;
-	ret.ScaleY=RotateSkew0*r.RotateSkew1 + ScaleY*r.ScaleY;
-	ret.TranslateX=ScaleX*r.TranslateX + RotateSkew1*r.TranslateY + TranslateX;
-	ret.TranslateY=RotateSkew0*r.TranslateX + ScaleY*r.TranslateY + TranslateY;
+	//Do post multiplication
+	cairo_matrix_multiply(&ret,&r,this);
 	return ret;
 }
 
 bool MATRIX::operator!=(const MATRIX& r) const
 {
-	return ScaleX!=r.ScaleX ||
-		RotateSkew1!=r.RotateSkew1 ||
-		RotateSkew0!=r.RotateSkew0 ||
-		ScaleY!=r.ScaleY ||
-		TranslateX!=r.TranslateX ||
-		TranslateY!=r.TranslateY;
+	return xx!=r.xx || yx!=r.yx || xy!=r.xy || yy!=yy ||
+		x0!=r.x0 || y0!=r.y0;
 }
 
 std::ostream& lightspark::operator<<(std::ostream& s, const MATRIX& r)
 {
-	s << "| " << r.ScaleX << ' ' << r.RotateSkew0 << " |" << std::endl;
-	s << "| " << r.RotateSkew1 << ' ' << r.ScaleY << " |" << std::endl;
-	s << "| " << (int)r.TranslateX << ' ' << (int)r.TranslateY << " |" << std::endl;
+	s << "| " << r.xx << ' ' << r.yx << " |" << std::endl;
+	s << "| " << r.xy << ' ' << r.yy << " |" << std::endl;
+	s << "| " << (int)r.x0 << ' ' << (int)r.y0 << " |" << std::endl;
 	return s;
 }
 
@@ -430,10 +449,24 @@ std::istream& lightspark::operator>>(std::istream& s, MORPHLINESTYLEARRAY& v)
 	s >> v.LineStyleCount;
 	if(v.LineStyleCount==0xff)
 		LOG(LOG_ERROR,_("Line array extended not supported"));
-	v.LineStyles=new MORPHLINESTYLE[v.LineStyleCount];
-	for(int i=0;i<v.LineStyleCount;i++)
+	assert(v.version==1 || v.version==2);
+	if(v.version==1)
 	{
-		s >> v.LineStyles[i];
+		for(int i=0;i<v.LineStyleCount;i++)
+		{
+			MORPHLINESTYLE t;
+			s >> t;
+			v.LineStyles.emplace_back(t);
+		}
+	}
+	else
+	{
+		for(int i=0;i<v.LineStyleCount;i++)
+		{
+			MORPHLINESTYLE2 t;
+			s >> t;
+			v.LineStyles2.emplace_back(t);
+		}
 	}
 	return s;
 }
@@ -468,10 +501,11 @@ std::istream& lightspark::operator>>(std::istream& s, MORPHFILLSTYLEARRAY& v)
 	s >> v.FillStyleCount;
 	if(v.FillStyleCount==0xff)
 		LOG(LOG_ERROR,_("Fill array extended not supported"));
-	v.FillStyles=new MORPHFILLSTYLE[v.FillStyleCount];
 	for(int i=0;i<v.FillStyleCount;i++)
 	{
-		s >> v.FillStyles[i];
+		MORPHFILLSTYLE t;
+		s >> t;
+		v.FillStyles.emplace_back(t);
 	}
 	return s;
 }
@@ -549,6 +583,28 @@ istream& lightspark::operator>>(istream& s, LINESTYLE& v)
 istream& lightspark::operator>>(istream& s, MORPHLINESTYLE& v)
 {
 	s >> v.StartWidth >> v.EndWidth >> v.StartColor >> v.EndColor;
+	return s;
+}
+
+istream& lightspark::operator>>(istream& s, MORPHLINESTYLE2& v)
+{
+	s >> v.StartWidth >> v.EndWidth;
+	BitStream bs(s);
+	v.StartCapStyle = UB(2,bs);
+	v.JoinStyle = UB(2,bs);
+	v.HasFillFlag = UB(1,bs);
+	v.NoHScaleFlag = UB(1,bs);
+	v.NoVScaleFlag = UB(1,bs);
+	v.PixelHintingFlag = UB(1,bs);
+	UB(5,bs);
+	v.NoClose = UB(1,bs);
+	v.EndCapStyle = UB(2,bs);
+	if(v.JoinStyle==2)
+		s >> v.MiterLimitFactor;
+	if(v.HasFillFlag==0)
+		s >> v.StartColor >> v.EndColor;
+	else
+		s >> v.FillType;
 	return s;
 }
 
@@ -692,15 +748,14 @@ std::istream& lightspark::operator>>(std::istream& s, FILLSTYLE& v)
 		{
 			try
 			{
-				_R<DictionaryTag> dict=getParseThread()->getRootMovie()->dictionaryLookup(bitmapId);
-				BitmapData* b = dynamic_cast<BitmapData*>(dict.getPtr());
+				const DictionaryTag* dict=getParseThread()->getRootMovie()->dictionaryLookup(bitmapId);
+				const BitmapTag* b = dynamic_cast<const BitmapTag*>(dict);
 				if(!b)
 				{
 					LOG(LOG_ERROR,"Invalid bitmap ID " << bitmapId);
 					throw ParseException("Invalid ID for bitmap");
 				}
-				b->incRef();
-				v.bitmap = _MR(b);
+				v.bitmap = *b;
 			}
 			catch(RunTimeException& e)
 			{
@@ -729,11 +784,11 @@ std::istream& lightspark::operator>>(std::istream& s, MORPHFILLSTYLE& v)
 	UI8 tmp;
 	s >> tmp;
 	v.FillStyleType=(FILL_STYLE_TYPE)(int)tmp;
-	if(v.FillStyleType==0x00)
+	if(v.FillStyleType==SOLID_FILL)
 	{
 		s >> v.StartColor >> v.EndColor;
 	}
-	else if(v.FillStyleType==0x10 || v.FillStyleType==0x12)
+	else if(v.FillStyleType==LINEAR_GRADIENT || v.FillStyleType==RADIAL_GRADIENT)
 	{
 		s >> v.StartGradientMatrix >> v.EndGradientMatrix;
 		s >> v.NumGradients;
@@ -749,9 +804,17 @@ std::istream& lightspark::operator>>(std::istream& s, MORPHFILLSTYLE& v)
 			v.EndColors.push_back(t2);
 		}
 	}
+	else if(v.FillStyleType==REPEATING_BITMAP
+		|| v.FillStyleType==CLIPPED_BITMAP
+		|| v.FillStyleType==NON_SMOOTHED_REPEATING_BITMAP
+		|| v.FillStyleType==NON_SMOOTHED_CLIPPED_BITMAP)
+	{
+		UI16_SWF bitmapId;
+		s >> bitmapId >> v.StartBitmapMatrix >> v.EndBitmapMatrix;
+	}
 	else
 	{
-		LOG(LOG_ERROR,_("Not supported fill style ") << (int)v.FillStyleType << _("... Aborting"));
+		LOG(LOG_ERROR,_("Not supported fill style 0x") << hex << (int)v.FillStyleType << dec << _("... Aborting"));
 	}
 	return s;
 }
@@ -873,19 +936,19 @@ std::istream& lightspark::operator>>(std::istream& stream, MATRIX& v)
 	if(HasScale)
 	{
 		int NScaleBits=UB(5,bs);
-		v.ScaleX=FB(NScaleBits,bs);
-		v.ScaleY=FB(NScaleBits,bs);
+		v.xx=FB(NScaleBits,bs);
+		v.yy=FB(NScaleBits,bs);
 	}
 	int HasRotate=UB(1,bs);
 	if(HasRotate)
 	{
 		int NRotateBits=UB(5,bs);
-		v.RotateSkew0=FB(NRotateBits,bs);
-		v.RotateSkew1=FB(NRotateBits,bs);
+		v.yx=FB(NRotateBits,bs);
+		v.xy=FB(NRotateBits,bs);
 	}
 	int NTranslateBits=UB(5,bs);
-	v.TranslateX=SB(NTranslateBits,bs)/20;
-	v.TranslateY=SB(NTranslateBits,bs)/20;
+	v.x0=SB(NTranslateBits,bs)/20;
+	v.y0=SB(NTranslateBits,bs)/20;
 	return stream;
 }
 
@@ -1223,7 +1286,17 @@ tiny_string QName::getQualifiedName() const
 	return ret;
 }
 
-FILLSTYLE::FILLSTYLE(int v):version(v),Gradient(v)
+QName::operator multiname() const
+{
+	multiname ret(NULL);
+	ret.name_type = multiname::NAME_STRING;
+	ret.name_s_id = getSys()->getUniqueStringId(name);
+	ret.ns.push_back( nsNameAndKind(ns, NAMESPACE) );
+	ret.isAttribute = false;
+	return ret;
+}
+
+FILLSTYLE::FILLSTYLE(int v):version(v),Gradient(v),bitmap(getSys()->unaccountedMemory)
 {
 }
 
@@ -1234,4 +1307,47 @@ FILLSTYLE::FILLSTYLE(const FILLSTYLE& r):version(r.version),FillStyleType(r.Fill
 
 FILLSTYLE::~FILLSTYLE()
 {
+}
+
+nsNameAndKind::nsNameAndKind(const tiny_string& _name, NS_KIND _kind)
+{
+	nsNameAndKindImpl tmp(_name, _kind);
+	getSys()->getUniqueNamespaceId(tmp, nsRealId, nsId);
+	nameIsEmpty=_name.empty();
+}
+
+nsNameAndKind::nsNameAndKind(const char* _name, NS_KIND _kind)
+{
+	nsNameAndKindImpl tmp(_name, _kind);
+	getSys()->getUniqueNamespaceId(tmp, nsRealId, nsId);
+	nameIsEmpty=(_name[0]=='\0');
+}
+
+nsNameAndKind::nsNameAndKind(const tiny_string& _name, uint32_t _baseId, NS_KIND _kind)
+{
+	assert(_kind==PROTECTED_NAMESPACE);
+	nsId=_baseId;
+	nsNameAndKindImpl tmp(_name, _kind, nsId);
+	uint32_t tmpId;
+	getSys()->getUniqueNamespaceId(tmp, nsRealId, tmpId);
+	assert(tmpId==_baseId);
+	nameIsEmpty=_name.empty();
+}
+
+nsNameAndKind::nsNameAndKind(ABCContext* c, uint32_t nsContextIndex)
+{
+	const namespace_info& ns=c->constant_pool.namespaces[nsContextIndex];
+	const tiny_string& nsName=c->getString(ns.name);
+	nsNameAndKindImpl tmp(nsName, (NS_KIND)(int)ns.kind);
+	//Give an id hint, in case the namespace is created in the map
+	getSys()->getUniqueNamespaceId(tmp, c->namespaceBaseId+nsContextIndex, nsRealId, nsId);
+	//Special handling for private namespaces, they are always compared by id
+	if(ns.kind==PRIVATE_NAMESPACE)
+		nsId=c->namespaceBaseId+nsContextIndex;
+	nameIsEmpty=nsName.empty();
+}
+
+const nsNameAndKindImpl& nsNameAndKind::getImpl() const
+{
+	return getSys()->getNamespaceFromUniqueId(nsRealId);
 }

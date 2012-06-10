@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2009-2011  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2009-2012  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -26,6 +26,8 @@
 
 namespace lightspark
 {
+
+class SecurityDomain;
 
 class Capabilities: public ASObject
 {
@@ -94,6 +96,7 @@ public:
 	static void sinit(Class_base* c);
 	ASFUNCTION(_constructor);
 	ASPROPERTY_GETTER_SETTER(_NR<ApplicationDomain>, applicationDomain);
+	ASPROPERTY_GETTER_SETTER(_NR<SecurityDomain>, securityDomain);
 	void finalize();
 };
 

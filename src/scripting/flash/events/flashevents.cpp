@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2009-2011  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2009-2012  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -48,6 +48,7 @@ REGISTER_CLASS_NAME(SecurityErrorEvent);
 REGISTER_CLASS_NAME(AsyncErrorEvent);
 REGISTER_CLASS_NAME(StatusEvent);
 REGISTER_CLASS_NAME(DataEvent);
+REGISTER_CLASS_NAME(InvokeEvent);
 
 void IEventDispatcher::linkTraits(Class_base* c)
 {
@@ -92,6 +93,7 @@ void Event::sinit(Class_base* c)
 	c->setVariableByQName("RESIZE","",Class<ASString>::getInstanceS("resize"),DECLARED_TRAIT);
 	c->setVariableByQName("MOUSE_LEAVE","",Class<ASString>::getInstanceS("mouseLeave"),DECLARED_TRAIT);
 	c->setVariableByQName("SELECT","",Class<ASString>::getInstanceS("select"),DECLARED_TRAIT);
+	c->setVariableByQName("SOUND_COMPLETE","",Class<ASString>::getInstanceS("soundComplete"),DECLARED_TRAIT);
 	c->setVariableByQName("FULLSCREEN","",Class<ASString>::getInstanceS("fullScreen"),DECLARED_TRAIT);
 	c->setVariableByQName("TAB_CHILDREN_CHANGE","",Class<ASString>::getInstanceS("tabChildrenChange"),DECLARED_TRAIT);
 	c->setVariableByQName("TAB_ENABLED_CHANGE","",Class<ASString>::getInstanceS("tabEnabledChange"),DECLARED_TRAIT);
@@ -160,8 +162,8 @@ ASFUNCTIONBODY(Event,formatToString)
 
 		multiname propName(NULL);
 		propName.name_type=multiname::NAME_STRING;
-		propName.name_s=prop;
-		propName.ns.push_back(nsNameAndKind("",PACKAGE_NAMESPACE));
+		propName.name_s_id=getSys()->getUniqueStringId(prop);
+		propName.ns.push_back(nsNameAndKind("",NAMESPACE));
 		_NR<ASObject> value=th->getVariableByMultiname(propName);
 		if (!value.isNull())
 			msg += value->toString();
@@ -220,6 +222,11 @@ MouseEvent::MouseEvent(Class_base* c):Event(c, "mouseEvent"), localX(0), localY(
 MouseEvent::MouseEvent(Class_base* c, const tiny_string& t, number_t lx, number_t ly, bool b, _NR<InteractiveObject> relObj):Event(c,t,b),
 	 localX(lx), localY(ly), stageX(0), stageY(0), relatedObject(relObj)
 {
+}
+
+Event* MouseEvent::cloneImpl() const
+{
+	return Class<MouseEvent>::getInstanceS(type,localX,localY,bubbles,relatedObject);
 }
 
 ProgressEvent::ProgressEvent(Class_base* c):Event(c, "progress",false),bytesLoaded(0),bytesTotal(0)
@@ -399,6 +406,7 @@ void EventDispatcher::finalize()
 {
 	ASObject::finalize();
 	handlers.clear();
+	forcedTarget.reset();
 }
 
 void EventDispatcher::sinit(Class_base* c)
@@ -541,8 +549,8 @@ ASFUNCTIONBODY(EventDispatcher,dispatchEvent)
 		//Object must be cloned, closing is implemented with the clone AS method
 		multiname cloneName(NULL);
 		cloneName.name_type=multiname::NAME_STRING;
-		cloneName.name_s="clone";
-		cloneName.ns.push_back(nsNameAndKind("",PACKAGE_NAMESPACE));
+		cloneName.name_s_id=getSys()->getUniqueStringId("clone");
+		cloneName.ns.push_back(nsNameAndKind("",NAMESPACE));
 
 		_NR<ASObject> clone=e->getVariableByMultiname(cloneName);
 		//Clone always exists since it's implemented in Event itself
@@ -560,6 +568,8 @@ ASFUNCTIONBODY(EventDispatcher,dispatchEvent)
 		}
 		e=_MR(newEvent);
 	}
+	if(!th->forcedTarget.isNull())
+		e->setTarget(th->forcedTarget);
 	th->incRef();
 	ABCVm::publicHandleEvent(_MR(th), e);
 	return abstract_b(true);
@@ -567,6 +577,17 @@ ASFUNCTIONBODY(EventDispatcher,dispatchEvent)
 
 ASFUNCTIONBODY(EventDispatcher,_constructor)
 {
+	EventDispatcher* th=Class<EventDispatcher>::cast(obj);
+	_NR<ASObject> forcedTarget;
+	ARG_UNPACK(forcedTarget, NullRef);
+	if(!forcedTarget.isNull())
+	{
+		if(forcedTarget->getObjectType()==T_NULL || forcedTarget->getObjectType()==T_UNDEFINED)
+			forcedTarget=NullRef;
+		else if(!forcedTarget->getClass()->isSubClass(InterfaceClass<IEventDispatcher>::getClass()))
+			throw Class<ArgumentError>::getInstanceS("Wrong argument for EventDispatcher");
+	}
+	th->forcedTarget=forcedTarget;
 	return NULL;
 }
 
@@ -587,7 +608,6 @@ void EventDispatcher::handleEvent(_R<Event> e)
 	//Create a temporary copy of the listeners, as the list can be modified during the calls
 	vector<listener> tmpListener(h->second.begin(),h->second.end());
 	l.release();
-	//TODO: check, ok we should also bind the level
 	for(unsigned int i=0;i<tmpListener.size();i++)
 	{
 		if( (e->eventPhase == EventPhase::BUBBLING_PHASE && tmpListener[i].use_capture)
@@ -835,10 +855,11 @@ ExternalCallEvent::~ExternalCallEvent()
 }
 
 BindClassEvent::BindClassEvent(_R<RootMovieClip> b, const tiny_string& c)
-	: Event(NULL, "bindClass"),base(b),class_name(c)
+	: Event(NULL, "bindClass"),base(b),tag(NULL),class_name(c)
 {
 }
-BindClassEvent::BindClassEvent(_R<DictionaryTag> t, const tiny_string& c)
+
+BindClassEvent::BindClassEvent(DictionaryTag* t, const tiny_string& c)
 	: Event(NULL, "bindClass"),tag(t),class_name(c)
 {
 }
@@ -874,4 +895,19 @@ void DataEvent::sinit(Class_base* c)
 	c->setVariableByQName("DATA","",Class<ASString>::getInstanceS("data"),DECLARED_TRAIT);
 	/* TODO: dispatch this event */
 	c->setVariableByQName("UPLOAD_COMPLETE_DATA","",Class<ASString>::getInstanceS("uploadCompleteData"),DECLARED_TRAIT);
+}
+
+void InvokeEvent::sinit(Class_base* c)
+{
+	c->setConstructor(Class<IFunction>::getFunction(_constructor));
+	c->setSuper(Class<Event>::getRef());
+
+	c->setVariableByQName("INVOKE","",Class<ASString>::getInstanceS("invoke"),DECLARED_TRAIT);
+}
+
+ASFUNCTIONBODY(InvokeEvent,_constructor)
+{
+	uint32_t baseClassArgs=imin(argslen,3);
+	Event::_constructor(obj,args,baseClassArgs);
+	return NULL;
 }

@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2009-2011  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2009-2012  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -229,6 +229,10 @@ private:
 	bool rawAccessAllowed;
 	number_t oldVolume;
 	ASPROPERTY_GETTER_SETTER(NullableRef<SoundTransform>,soundTransform);
+
+	ASObject *createMetaDataObject(StreamDecoder* streamDecoder);
+	ASObject *createPlayStatusObject(const tiny_string& code);
+	void sendClientNotification(const tiny_string& name, ASObject *args);
 public:
 	NetStream(Class_base* c);
 	~NetStream();

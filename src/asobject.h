@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2009-2011  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2009-2012  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -134,32 +134,38 @@ class Type;
 class ABCContext;
 
 enum TRAIT_KIND { NO_CREATE_TRAIT=0, DECLARED_TRAIT=1, DYNAMIC_TRAIT=2, BORROWED_TRAIT=4,CONSTANT_TRAIT=9 /* constants are also declared traits */ };
+enum TRAIT_STATE { NO_STATE=0, HAS_GETTER_SETTER=1, TYPE_RESOLVED=2 };
 
 struct variable
 {
-	std::set<nsNameAndKind> ns;
+	nsNameAndKind ns;
 	ASObject* var;
-	multiname* typemname;
-	const Type* type;
+	union
+	{
+		multiname* traitTypemname;
+		const Type* type;
+		void* typeUnion;
+	};
 	IFunction* setter;
 	IFunction* getter;
 	TRAIT_KIND kind;
-	//obj_var(ASObject* _v, Class_base* _t):var(_v),type(_t),{}
+	TRAIT_STATE traitState;
 	variable(const nsNameAndKind& _ns, TRAIT_KIND _k)
-		: var(NULL),typemname(NULL),type(NULL),setter(NULL),getter(NULL),kind(_k) { ns.insert(_ns); }
-	variable(const nsNameAndKind& _ns, TRAIT_KIND _k, ASObject* _v, multiname* _t, const Type* type)
-		: var(_v),typemname(_t),type(type),setter(NULL),getter(NULL),kind(_k) { ns.insert(_ns); }
+		: ns(_ns),var(NULL),typeUnion(NULL),setter(NULL),getter(NULL),kind(_k),traitState(NO_STATE) {}
+	variable(const nsNameAndKind& _ns, TRAIT_KIND _k, ASObject* _v, multiname* _t, const Type* type);
 	void setVar(ASObject* v);
 };
 
 class variables_map
 {
 public:
-	typedef std::multimap<tiny_string,variable,std::less<tiny_string>,reporter_allocator<std::pair<const tiny_string, variable>>>
+	//Names are represented by strings in the string pools
+	//Values are something like contextBase+contextOffset
+	typedef std::multimap<uint32_t,variable,std::less<uint32_t>,reporter_allocator<std::pair<const uint32_t, variable>>>
 		mapType;
 	mapType Variables;
-	typedef std::multimap<tiny_string,variable>::iterator var_iterator;
-	typedef std::multimap<tiny_string,variable>::const_iterator const_var_iterator;
+	typedef std::multimap<uint32_t,variable>::iterator var_iterator;
+	typedef std::multimap<uint32_t,variable>::const_iterator const_var_iterator;
 	std::vector<var_iterator, reporter_allocator<var_iterator>> slots_vars;
 	variables_map(MemoryAccount* m);
 	/**
@@ -169,10 +175,10 @@ public:
 				a new one is created with the given kind
 	   @param traitKinds Bitwise OR of accepted trait kinds
 	*/
-	variable* findObjVar(const tiny_string& name, const nsNameAndKind& ns, TRAIT_KIND createKind, uint32_t traitKinds);
+	variable* findObjVar(uint32_t nameId, const nsNameAndKind& ns, TRAIT_KIND createKind, uint32_t traitKinds);
 	variable* findObjVar(const multiname& mname, TRAIT_KIND createKind, uint32_t traitKinds);
 	//Initialize a new variable specifying the type (TODO: add support for const)
-	void initializeVar(const multiname& mname, ASObject* obj, multiname* typemname, ABCContext* context);
+	void initializeVar(const multiname& mname, ASObject* obj, multiname* typemname, ABCContext* context, TRAIT_KIND traitKind);
 	void killObjVar(const multiname& mname);
 	ASObject* getSlot(unsigned int n)
 	{
@@ -180,13 +186,14 @@ public:
 		return slots_vars[n-1]->second.var;
 	}
 	void setSlot(unsigned int n,ASObject* o);
-	void initSlot(unsigned int n,const tiny_string& name, const nsNameAndKind& ns);
+	void initSlot(unsigned int n, uint32_t nameId, const nsNameAndKind& ns);
 	int size() const
 	{
 		return Variables.size();
 	}
 	tiny_string getNameAt(unsigned int i) const;
 	variable* getValueAt(unsigned int i);
+	int getNextEnumerable(unsigned int i) const;
 	~variables_map();
 	void check() const;
 	void serialize(ByteArray* out, std::map<tiny_string, uint32_t>& stringMap,
@@ -332,29 +339,36 @@ public:
 	_NR<ASObject> getVariableByMultiname(const multiname& name, GET_VARIABLE_OPTION opt, Class_base* cls);
 	virtual int32_t getVariableByMultiname_i(const multiname& name);
 	virtual void setVariableByMultiname_i(const multiname& name, int32_t value);
-	virtual void setVariableByMultiname(const multiname& name, ASObject* o)
+	enum CONST_ALLOWED_FLAG { CONST_ALLOWED=0, CONST_NOT_ALLOWED };
+	virtual void setVariableByMultiname(const multiname& name, ASObject* o, CONST_ALLOWED_FLAG allowConst)
 	{
-		setVariableByMultiname(name,o,classdef);
+		setVariableByMultiname(name,o,allowConst,classdef);
 	}
 	/*
 	 * Sets  variable of this object. It looks through all classes (beginning at cls),
 	 * then the prototype chain, and then instance variables.
 	 * If the property found is a setter, it is called with the given 'o'.
 	 * If no property is found, an instance variable is created.
+	 * Setting CONSTANT_TRAIT is only allowed if allowConst is true
 	 */
-	void setVariableByMultiname(const multiname& name, ASObject* o, Class_base* cls);
-	void initializeVariableByMultiname(const multiname& name, ASObject* o, multiname* typemname, ABCContext* context);
+	void setVariableByMultiname(const multiname& name, ASObject* o, CONST_ALLOWED_FLAG allowConst, Class_base* cls);
+	/*
+	 * Called by ABCVm::buildTraits to create DECLARED_TRAIT or CONSTANT_TRAIT and set their type
+	 */
+	void initializeVariableByMultiname(const multiname& name, ASObject* o, multiname* typemname,
+			ABCContext* context, TRAIT_KIND traitKind);
+	/*
+	 * Called by ABCVm::initProperty (implementation of ABC instruction), it is allowed to set CONSTANT_TRAIT
+	 */
+	void initializeVariableByMultiname(const multiname& name, ASObject* o);
 	virtual bool deleteVariableByMultiname(const multiname& name);
-	void setVariableByQName(const tiny_string& name, const tiny_string& ns, _R<ASObject> o, TRAIT_KIND traitKind)
-	{
-		o->incRef();
-		setVariableByQName(name,ns,o.getPtr(),traitKind);
-	}
 	void setVariableByQName(const tiny_string& name, const tiny_string& ns, ASObject* o, TRAIT_KIND traitKind);
 	void setVariableByQName(const tiny_string& name, const nsNameAndKind& ns, ASObject* o, TRAIT_KIND traitKind);
+	void setVariableByQName(uint32_t nameId, const nsNameAndKind& ns, ASObject* o, TRAIT_KIND traitKind);
 	//NOTE: the isBorrowed flag is used to distinguish methods/setters/getters that are inside a class but on behalf of the instances
 	void setDeclaredMethodByQName(const tiny_string& name, const tiny_string& ns, IFunction* o, METHOD_TYPE type, bool isBorrowed);
 	void setDeclaredMethodByQName(const tiny_string& name, const nsNameAndKind& ns, IFunction* o, METHOD_TYPE type, bool isBorrowed);
+	void setDeclaredMethodByQName(uint32_t nameId, const nsNameAndKind& ns, IFunction* o, METHOD_TYPE type, bool isBorrowed);
 	virtual bool hasPropertyByMultiname(const multiname& name, bool considerDynamic);
 	ASObject* getSlot(unsigned int n)
 	{

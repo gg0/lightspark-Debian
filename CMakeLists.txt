@@ -1,7 +1,7 @@
 #**************************************************************************
 #    Lightspark, a free flash player implementation
 #
-#    Copyright (C) 2010-2011  Alessandro Pignotti <a.pignotti@sssup.it>
+#    Copyright (C) 2010-2012  Alessandro Pignotti <a.pignotti@sssup.it>
 #    Copyright (C) 2010  Giacomo Spigler <g.spigler@sssup.it>
 #
 #    This program is free software: you can redistribute it and/or modify
@@ -24,9 +24,9 @@ CMAKE_MINIMUM_REQUIRED(VERSION 2.6)
 # Name & Version
 PROJECT(LIGHTSPARK)
 SET(MAJOR_VERSION "0")
-SET(MINOR_VERSION "5")
-SET(PATCH_VERSION "7")
-SET(SUBPATCH_VERSION "0")
+SET(MINOR_VERSION "6")
+SET(PATCH_VERSION "0")
+SET(SUBPATCH_VERSION "1")
 
 IF(EXISTS "${CMAKE_SOURCE_DIR}/.git/")
 	SET(GIT_VERSION "-git")
@@ -198,7 +198,7 @@ SET(COMPILE_PLUGIN TRUE CACHE BOOL "Compile the browser plugin?")
 SET(ENABLE_CURL TRUE CACHE BOOL "Enable CURL? (Required for Downloader functionality)")
 SET(ENABLE_GLES2 FALSE CACHE BOOL "Build with OpenGLES 2.0 support instead of OpenGL")
 SET(ENABLE_LIBAVCODEC TRUE CACHE BOOL "Enable libavcodec and dependent functionality?")
-SET(ENABLE_RTMP FALSE CACHE BOOL "Enable librtmp and dependent functionality?")
+SET(ENABLE_RTMP TRUE CACHE BOOL "Enable librtmp and dependent functionality?")
 SET(ENABLE_PROFILING FALSE CACHE BOOL "Enable profiling support? (Causes performance issues)")
 SET(ENABLE_MEMORY_USAGE_PROFILING FALSE CACHE BOOL "Enable profiling of memory usage? (Causes performance issues)")
 SET(PLUGIN_DIRECTORY "${LIBDIR}/mozilla/plugins" CACHE STRING "Directory to install Firefox plugin to")
@@ -229,9 +229,12 @@ ENDIF(${LLVM_STRING_VERSION} VERSION_EQUAL 2.9)
 IF(${LLVM_STRING_VERSION} VERSION_EQUAL 2.8)
 	ADD_DEFINITIONS(-DLLVM_28)
 ENDIF(${LLVM_STRING_VERSION} VERSION_EQUAL 2.8)
-IF(${LLVM_STRING_VERSION} VERSION_GREATER 2.9)
-	ADD_DEFINITIONS(-DLLVM_3)
-ENDIF(${LLVM_STRING_VERSION} VERSION_GREATER 2.9)
+IF(${LLVM_STRING_VERSION} VERSION_EQUAL 3.0)
+	ADD_DEFINITIONS(-DLLVM_30)
+ENDIF(${LLVM_STRING_VERSION} VERSION_EQUAL 3.0)
+IF(${LLVM_STRING_VERSION} VERSION_GREATER 3.0)
+	ADD_DEFINITIONS(-DLLVM_31)
+ENDIF(${LLVM_STRING_VERSION} VERSION_GREATER 3.0)
 INCLUDE(FindZLIB REQUIRED)
 INCLUDE(FindFreetype REQUIRED)
 IF(NOT(ENABLE_GLES2))
@@ -285,6 +288,7 @@ IF(ENABLE_LIBAVCODEC)
   CHECK_FUNCTION_EXISTS(avcodec_decode_video2 HAVE_AVCODEC_DECODE_VIDEO2)
   CHECK_FUNCTION_EXISTS(avcodec_decode_audio3 HAVE_AVCODEC_DECODE_AUDIO3)
   CHECK_FUNCTION_EXISTS(avcodec_decode_audio4 HAVE_AVCODEC_DECODE_AUDIO4)
+  CHECK_FUNCTION_EXISTS(avio_alloc_context HAVE_AVIO_ALLOC_CONTEXT)
   SET(CMAKE_REQUIRED_FLAGS)
   SET(CMAKE_REQUIRED_INCLUDES)
   SET(CMAKE_REQUIRED_LIBRARIES)
@@ -297,6 +301,9 @@ IF(ENABLE_LIBAVCODEC)
   IF(HAVE_AVCODEC_DECODE_AUDIO4)
     ADD_DEFINITIONS(-DHAVE_AVCODEC_DECODE_AUDIO4)
   ENDIF(HAVE_AVCODEC_DECODE_AUDIO4)
+  IF(HAVE_AVIO_ALLOC_CONTEXT)
+    ADD_DEFINITIONS(-DHAVE_AVIO_ALLOC_CONTEXT)
+  ENDIF(HAVE_AVIO_ALLOC_CONTEXT)
   ADD_DEFINITIONS(-DENABLE_LIBAVCODEC)
 ENDIF(ENABLE_LIBAVCODEC)
 
@@ -413,7 +420,7 @@ ENDIF(CMAKE_COMPILER_IS_GNUCC)
 
 #Install icons and desktop file
 if(UNIX)
-  FOREACH(i 16 20 22 24 32 36 48 64 72 96 128 192 256 )
+  FOREACH(i 16 22 24 32 36 48 64 72 96 128 192 256 )
     INSTALL(FILES media/lightspark-ico-${i}x${i}.png
             DESTINATION ${DATADIR}/icons/hicolor/${i}x${i}/apps
             RENAME lightspark.png

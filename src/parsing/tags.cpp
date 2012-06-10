@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2009-2011  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2008-2012  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -32,13 +32,14 @@
 #include "logger.h"
 #include "compat.h"
 #include "streams.h"
+#include "scripting/flash/display/BitmapData.h"
 
 #undef RGB
 
 using namespace std;
 using namespace lightspark;
 
-_NR<Tag> TagFactory::readTag()
+Tag* TagFactory::readTag(RootMovieClip* root)
 {
 	RECORDHEADER h;
 
@@ -52,7 +53,7 @@ _NR<Tag> TagFactory::readTag()
 			throw e;
 		f.clear();
 		LOG(LOG_INFO,"Simulating EndTag at EOF @ " << f.tellg());
-		return _MR(new EndTag(h,f));
+		return new EndTag(h,f);
 	}
 
 	unsigned int expectedLen=h.getLength();
@@ -68,27 +69,27 @@ _NR<Tag> TagFactory::readTag()
 			ret=new ShowFrameTag(h,f);
 			break;
 		case 2:
-			ret=new DefineShapeTag(h,f);
+			ret=new DefineShapeTag(h,f,root);
 			break;
 	//	case 4:
 	//		ret=new PlaceObjectTag(h,f);
 		case 6:
-			ret=new (getSys()->unaccountedMemory) DefineBitsTag(h,f);
+			ret=new DefineBitsTag(h,f,root);
 			break;
 		case 9:
 			ret=new SetBackgroundColorTag(h,f);
 			break;
 		case 10:
-			ret=new DefineFontTag(h,f);
+			ret=new DefineFontTag(h,f,root);
 			break;
 		case 11:
-			ret=new DefineTextTag(h,f);
+			ret=new DefineTextTag(h,f,root);
 			break;
 		case 13:
 			ret=new DefineFontInfoTag(h,f);
 			break;
 		case 14:
-			ret=new DefineSoundTag(h,f);
+			ret=new DefineSoundTag(h,f,root);
 			break;
 		case 15:
 			ret=new StartSoundTag(h,f);
@@ -100,43 +101,43 @@ _NR<Tag> TagFactory::readTag()
 			ret=new SoundStreamBlockTag(h,f);
 			break;
 		case 20:
-			ret=new (getSys()->unaccountedMemory) DefineBitsLosslessTag(h,f,1);
+			ret=new DefineBitsLosslessTag(h,f,1,root);
 			break;
 		case 21:
-			ret=new (getSys()->unaccountedMemory) DefineBitsJPEG2Tag(h,f);
+			ret=new DefineBitsJPEG2Tag(h,f,root);
 			break;
 		case 22:
-			ret=new DefineShape2Tag(h,f);
+			ret=new DefineShape2Tag(h,f,root);
 			break;
 		case 24:
 			ret=new ProtectTag(h,f);
 			break;
 		case 26:
-			ret=new PlaceObject2Tag(h,f);
+			ret=new PlaceObject2Tag(h,f,root);
 			break;
 		case 28:
 			ret=new RemoveObject2Tag(h,f);
 			break;
 		case 32:
-			ret=new DefineShape3Tag(h,f);
+			ret=new DefineShape3Tag(h,f,root);
 			break;
 		case 33:
-			ret=new DefineText2Tag(h,f);
+			ret=new DefineText2Tag(h,f,root);
 			break;
 		case 34:
-			ret=new DefineButton2Tag(h,f);
+			ret=new DefineButton2Tag(h,f,root);
 			break;
 		case 35:
-			ret=new (getSys()->unaccountedMemory) DefineBitsJPEG3Tag(h,f);
+			ret=new DefineBitsJPEG3Tag(h,f,root);
 			break;
 		case 36:
-			ret=new (getSys()->unaccountedMemory) DefineBitsLosslessTag(h,f,2);
+			ret=new DefineBitsLosslessTag(h,f,2,root);
 			break;
 		case 37:
-			ret=new DefineEditTextTag(h,f);
+			ret=new DefineEditTextTag(h,f,root);
 			break;
 		case 39:
-			ret=new (getSys()->unaccountedMemory) DefineSpriteTag(h,f);
+			ret=new DefineSpriteTag(h,f,root);
 			break;
 		case 41:
 			ret=new ProductInfoTag(h,f);
@@ -148,16 +149,16 @@ _NR<Tag> TagFactory::readTag()
 			ret=new SoundStreamHead2Tag(h,f);
 			break;
 		case 46:
-			ret=new (getSys()->unaccountedMemory) DefineMorphShapeTag(h,f);
+			ret=new DefineMorphShapeTag(h,f,root);
 			break;
 		case 48:
-			ret=new DefineFont2Tag(h,f);
+			ret=new DefineFont2Tag(h,f,root);
 			break;
 		case 58:
 			ret=new EnableDebuggerTag(h,f);
 			break;
 		case 60:
-			ret=new DefineVideoStreamTag(h,f);
+			ret=new DefineVideoStreamTag(h,f,root);
 			break;
 		case 63:
 			ret=new DebugIDTag(h,f);
@@ -175,7 +176,7 @@ _NR<Tag> TagFactory::readTag()
 			ret=new FileAttributesTag(h,f);
 			break;
 		case 70:
-			ret=new PlaceObject3Tag(h,f);
+			ret=new PlaceObject3Tag(h,f,root);
 			break;
 		case 72:
 			ret=new DoABCTag(h,f);
@@ -187,7 +188,7 @@ _NR<Tag> TagFactory::readTag()
 			ret=new CSMTextSettingsTag(h,f);
 			break;
 		case 75:
-			ret=new DefineFont3Tag(h,f);
+			ret=new DefineFont3Tag(h,f,root);
 			break;
 		case 76:
 			ret=new SymbolClassTag(h,f);
@@ -202,19 +203,22 @@ _NR<Tag> TagFactory::readTag()
 			ret=new DoABCDefineTag(h,f);
 			break;
 		case 83:
-			ret=new DefineShape4Tag(h,f);
+			ret=new DefineShape4Tag(h,f,root);
+			break;
+		case 84:
+			ret=new DefineMorphShape2Tag(h,f,root);
 			break;
 		case 86:
 			ret=new DefineSceneAndFrameLabelDataTag(h,f);
 			break;
 		case 87:
-			ret=new DefineBinaryDataTag(h,f);
+			ret=new DefineBinaryDataTag(h,f,root);
 			break;
 		case 88:
 			ret=new DefineFontNameTag(h,f);
 			break;
 		case 91:
-			ret=new DefineFont4Tag(h,f);
+			ret=new DefineFont4Tag(h,f,root);
 			break;
 		default:
 			LOG(LOG_NOT_IMPLEMENTED,_("Unsupported tag type ") << h.getTagType());
@@ -238,7 +242,7 @@ _NR<Tag> TagFactory::readTag()
 		throw ParseException("Malformed SWF file");
 	}
 	
-	return _MNR(ret);
+	return ret;
 }
 
 RemoveObject2Tag::RemoveObject2Tag(RECORDHEADER h, std::istream& in):DisplayListTag(h)
@@ -247,7 +251,7 @@ RemoveObject2Tag::RemoveObject2Tag(RECORDHEADER h, std::istream& in):DisplayList
 	LOG(LOG_TRACE,_("RemoveObject2 Depth: ") << Depth);
 }
 
-void RemoveObject2Tag::execute(DisplayObjectContainer* parent)
+void RemoveObject2Tag::execute(DisplayObjectContainer* parent) const
 {
 	parent->deleteLegacyChildAt(Depth);
 }
@@ -257,7 +261,7 @@ SetBackgroundColorTag::SetBackgroundColorTag(RECORDHEADER h, std::istream& in):C
 	in >> BackgroundColor;
 }
 
-DefineEditTextTag::DefineEditTextTag(RECORDHEADER h, std::istream& in):DictionaryTag(h)
+DefineEditTextTag::DefineEditTextTag(RECORDHEADER h, std::istream& in, RootMovieClip* root):DictionaryTag(h,root)
 {
 	//setVariableByName("text",SWFObject(new Integer(0)));
 	in >> CharacterID >> Bounds;
@@ -315,19 +319,19 @@ ASObject* DefineEditTextTag::instance(Class_base* c) const
 	return ret;
 }
 
-DefineSpriteTag::DefineSpriteTag(RECORDHEADER h, std::istream& in):DictionaryTag(h),MovieClip(Class<MovieClip>::getClass())
+DefineSpriteTag::DefineSpriteTag(RECORDHEADER h, std::istream& in, RootMovieClip* root):DictionaryTag(h,root)
 {
 	in >> SpriteID >> FrameCount;
 
 	LOG(LOG_TRACE,_("DefineSprite ID: ") << SpriteID);
 	//Create a non top level TagFactory
 	TagFactory factory(in, false);
-	_NR<Tag> tag;
+	Tag* tag;
 	bool done=false;
 	bool empty=true;
 	do
 	{
-		tag=factory.readTag();
+		tag=factory.readTag(root);
 		/* We need no locking here, because the vm can only
 		 * access this object after construction
 		 */
@@ -336,7 +340,7 @@ DefineSpriteTag::DefineSpriteTag(RECORDHEADER h, std::istream& in):DictionaryTag
 			case DICT_TAG:
 				throw ParseException("Dictionary tag inside a sprite. Should not happen.");
 			case DISPLAY_LIST_TAG:
-				addToFrame(tag.cast<DisplayListTag>());
+				addToFrame(static_cast<DisplayListTag*>(tag));
 				empty=false;
 				break;
 			case SHOW_TAG:
@@ -350,7 +354,7 @@ DefineSpriteTag::DefineSpriteTag(RECORDHEADER h, std::istream& in):DictionaryTag
 			case CONTROL_TAG:
 				throw ParseException("Control tag inside a sprite. Should not happen.");
 			case FRAMELABEL_TAG:
-				addFrameLabel(frames.size()-1,static_cast<FrameLabelTag*>(tag.getPtr())->Name);
+				addFrameLabel(frames.size()-1,static_cast<FrameLabelTag*>(tag)->Name);
 				empty=false;
 				break;
 			case TAG:
@@ -386,9 +390,7 @@ ASObject* DefineSpriteTag::instance(Class_base* c) const
 	else
 		retClass=Class<MovieClip>::getClass();
 
-	DefineSpriteTag* ret=new (retClass->memoryAccount) DefineSpriteTag(*this);
-	ret->setClass(retClass);
-	return ret;
+	return new (retClass->memoryAccount) MovieClip(retClass, *this);
 }
 
 void lightspark::ignore(istream& i, int count)
@@ -400,7 +402,7 @@ void lightspark::ignore(istream& i, int count)
 	delete[] buf;
 }
 
-DefineFontTag::DefineFontTag(RECORDHEADER h, std::istream& in):FontTag(h, 20)
+DefineFontTag::DefineFontTag(RECORDHEADER h, std::istream& in, RootMovieClip* root):FontTag(h, 20, root)
 {
 	LOG(LOG_TRACE,_("DefineFont"));
 	in >> FontID;
@@ -424,8 +426,24 @@ DefineFontTag::DefineFontTag(RECORDHEADER h, std::istream& in):FontTag(h, 20)
 		GlyphShapeTable.push_back(t);
 	}
 }
+ASObject* DefineFontTag::instance(Class_base* c) const
+{ 
+	tiny_string fontname("");
+	Class_base* retClass=NULL;
+	if(c)
+		retClass=c;
+	else if(bindedTo)
+		retClass=bindedTo;
+	else
+		retClass=Class<ASFont>::getClass();
 
-DefineFont2Tag::DefineFont2Tag(RECORDHEADER h, std::istream& in):FontTag(h, 20)
+	ASFont* ret=new (retClass->memoryAccount) ASFont(retClass);
+	LOG(LOG_NOT_IMPLEMENTED,"DefineFontTag::instance doesn't handle all font properties");
+	ret->SetFont(fontname,false,false,true,false);
+	return ret;
+}
+
+DefineFont2Tag::DefineFont2Tag(RECORDHEADER h, std::istream& in, RootMovieClip* root):FontTag(h, 20, root)
 {
 	LOG(LOG_TRACE,_("DefineFont2"));
 	in >> FontID;
@@ -513,8 +531,24 @@ DefineFont2Tag::DefineFont2Tag(RECORDHEADER h, std::istream& in):FontTag(h, 20)
 	//TODO: implmented Kerning support
 	ignore(in,KerningCount*4);
 }
+ASObject* DefineFont2Tag::instance(Class_base* c) const
+{ 
+	tiny_string fontname((const char*)FontName.data(),true);
+	Class_base* retClass=NULL;
+	if(c)
+		retClass=c;
+	else if(bindedTo)
+		retClass=bindedTo;
+	else
+		retClass=Class<ASFont>::getClass();
 
-DefineFont3Tag::DefineFont3Tag(RECORDHEADER h, std::istream& in):FontTag(h, 1)
+	ASFont* ret=new (retClass->memoryAccount) ASFont(retClass);
+	LOG(LOG_NOT_IMPLEMENTED,"DefineFont2Tag::instance doesn't handle all font properties");
+	ret->SetFont(fontname,FontFlagsBold,FontFlagsItalic,true,false);
+	return ret;
+}
+
+DefineFont3Tag::DefineFont3Tag(RECORDHEADER h, std::istream& in, RootMovieClip* root):FontTag(h, 1, root)
 {
 	LOG(LOG_TRACE,_("DefineFont3"));
 	in >> FontID;
@@ -597,8 +631,24 @@ DefineFont3Tag::DefineFont3Tag(RECORDHEADER h, std::istream& in):FontTag(h, 1)
 	//TODO: implment Kerning support
 	ignore(in,KerningCount*4);
 }
+ASObject* DefineFont3Tag::instance(Class_base* c) const
+{ 
+	tiny_string fontname((const char*)FontName.data(),true);
+	Class_base* retClass=NULL;
+	if(c)
+		retClass=c;
+	else if(bindedTo)
+		retClass=bindedTo;
+	else
+		retClass=Class<ASFont>::getClass();
 
-DefineFont4Tag::DefineFont4Tag(RECORDHEADER h, std::istream& in):DictionaryTag(h)
+	ASFont* ret=new (retClass->memoryAccount) ASFont(retClass);
+	LOG(LOG_NOT_IMPLEMENTED,"DefineFont3Tag::instance doesn't handle all font properties");
+	ret->SetFont(fontname,FontFlagsBold,FontFlagsItalic,true,false);
+	return ret;
+}
+
+DefineFont4Tag::DefineFont4Tag(RECORDHEADER h, std::istream& in, RootMovieClip* root):DictionaryTag(h,root)
 {
 	LOG(LOG_TRACE,_("DefineFont4"));
 	int dest=in.tellg();
@@ -616,9 +666,28 @@ DefineFont4Tag::DefineFont4Tag(RECORDHEADER h, std::istream& in):DictionaryTag(h
 		LOG(LOG_NOT_IMPLEMENTED,"DefineFont4Tag with FontData");
 	ignore(in,dest-in.tellg());
 }
+ASObject* DefineFont4Tag::instance(Class_base* c) const
+{ 
+	tiny_string fontname = FontName;
+	Class_base* retClass=NULL;
+	if(c)
+		retClass=c;
+	else if(bindedTo)
+		retClass=bindedTo;
+	else
+		retClass=Class<ASFont>::getClass();
 
-DefineBitsLosslessTag::DefineBitsLosslessTag(RECORDHEADER h, istream& in, int version):
-	DictionaryTag(h),BitmapData(Class<BitmapData>::getClass())
+	ASFont* ret=new (retClass->memoryAccount) ASFont(retClass);
+	LOG(LOG_NOT_IMPLEMENTED,"DefineFont4Tag::instance doesn't handle all font properties");
+	ret->SetFont(fontname,FontFlagsBold,FontFlagsItalic,FontFlagsHasFontData,false);
+	return ret;
+}
+
+BitmapTag::BitmapTag(RECORDHEADER h,RootMovieClip* root):DictionaryTag(h,root),BitmapContainer(getSys()->tagsMemory)
+{
+}
+
+DefineBitsLosslessTag::DefineBitsLosslessTag(RECORDHEADER h, istream& in, int version, RootMovieClip* root):BitmapTag(h,root)
 {
 	int dest=in.tellg();
 	dest+=h.getLength();
@@ -659,7 +728,7 @@ DefineBitsLosslessTag::DefineBitsLosslessTag(RECORDHEADER h, istream& in, int ve
 	fromRGB(inData, BitmapWidth, BitmapHeight, true);
 }
 
-ASObject* DefineBitsLosslessTag::instance(Class_base* c) const
+ASObject* BitmapTag::instance(Class_base* c) const
 {
 	Class_base* realClass=(c)?c:bindedTo;
 	//Flex imports bitmaps using BitmapAsset as the base class, which is derived from bitmap
@@ -671,17 +740,16 @@ ASObject* DefineBitsLosslessTag::instance(Class_base* c) const
 	else if(realClass && realClass->isSubClass(Class<BitmapData>::getClass()))
 		classRet = realClass;
 
-	DefineBitsLosslessTag* ret=new (classRet->memoryAccount) DefineBitsLosslessTag(*this);
-	ret->setClass(classRet);
+	BitmapData* ret=new (classRet->memoryAccount) BitmapData(classRet, *this);
 	if(returnBitmap)
 	{
-		Bitmap* bitmapRet=new (realClass->memoryAccount) Bitmap(realClass,_MR((BitmapData*)ret));
+		Bitmap* bitmapRet=new (realClass->memoryAccount) Bitmap(realClass,_MR(ret));
 		return bitmapRet;
 	}
 	return ret;
 }
 
-DefineTextTag::DefineTextTag(RECORDHEADER h, istream& in, int v):DictionaryTag(h),
+DefineTextTag::DefineTextTag(RECORDHEADER h, istream& in, RootMovieClip* root,int v):DictionaryTag(h,root),
 	tokens(reporter_allocator<GeomToken>(getSys()->tagsMemory)),version(v)
 {
 	in >> CharacterId >> TextBounds >> TextMatrix >> GlyphBits >> AdvanceBits;
@@ -721,7 +789,7 @@ void DefineTextTag::computeCached() const
 	if(!tokens.empty())
 		return;
 
-	FontTag* curFont = NULL;
+	const FontTag* curFont = NULL;
 	std::list<FILLSTYLE> fillStyles;
 	Vector2 curPos;
 	FILLSTYLE fs(1);
@@ -733,8 +801,8 @@ void DefineTextTag::computeCached() const
 	{
 		if(TextRecords[i].StyleFlagsHasFont)
 		{
-			_R<DictionaryTag> it3=loadedFrom->dictionaryLookup(TextRecords[i].FontID);
-			curFont=dynamic_cast<FontTag*>(it3.getPtr());
+			const DictionaryTag* it3=loadedFrom->dictionaryLookup(TextRecords[i].FontID);
+			curFont=dynamic_cast<const FontTag*>(it3);
 			assert_and_throw(curFont);
 		}
 		assert_and_throw(curFont);
@@ -770,12 +838,12 @@ void DefineTextTag::computeCached() const
 	}
 }
 
-DefineShapeTag::DefineShapeTag(RECORDHEADER h,int v):DictionaryTag(h),Shapes(v),
+DefineShapeTag::DefineShapeTag(RECORDHEADER h,int v,RootMovieClip* root):DictionaryTag(h,root),Shapes(v),
 	tokens(reporter_allocator<GeomToken>(getSys()->tagsMemory))
 {
 }
 
-DefineShapeTag::DefineShapeTag(RECORDHEADER h, std::istream& in):DictionaryTag(h),Shapes(1),
+DefineShapeTag::DefineShapeTag(RECORDHEADER h, std::istream& in,RootMovieClip* root):DictionaryTag(h,root),Shapes(1),
 	tokens(reporter_allocator<GeomToken>(getSys()->tagsMemory))
 {
 	LOG(LOG_TRACE,_("DefineShapeTag"));
@@ -783,23 +851,23 @@ DefineShapeTag::DefineShapeTag(RECORDHEADER h, std::istream& in):DictionaryTag(h
 	TokenContainer::FromShaperecordListToShapeVector(Shapes.ShapeRecords,tokens,Shapes.FillStyles.FillStyles);
 }
 
-DefineShape2Tag::DefineShape2Tag(RECORDHEADER h, std::istream& in):DefineShapeTag(h,2)
+DefineShape2Tag::DefineShape2Tag(RECORDHEADER h, std::istream& in,RootMovieClip* root):DefineShapeTag(h,2,root)
 {
 	LOG(LOG_TRACE,_("DefineShape2Tag"));
 	in >> ShapeId >> ShapeBounds >> Shapes;
 	TokenContainer::FromShaperecordListToShapeVector(Shapes.ShapeRecords,tokens,Shapes.FillStyles.FillStyles);
 }
 
-DefineShape3Tag::DefineShape3Tag(RECORDHEADER h, std::istream& in):DefineShape2Tag(h,3)
+DefineShape3Tag::DefineShape3Tag(RECORDHEADER h, std::istream& in,RootMovieClip* root):DefineShape2Tag(h,3,root)
 {
-	LOG(LOG_TRACE,_("DefineShape3Tag"));
+	LOG(LOG_TRACE,"DefineShape3Tag");
 	in >> ShapeId >> ShapeBounds >> Shapes;
 	TokenContainer::FromShaperecordListToShapeVector(Shapes.ShapeRecords,tokens,Shapes.FillStyles.FillStyles);
 }
 
-DefineShape4Tag::DefineShape4Tag(RECORDHEADER h, std::istream& in):DefineShape3Tag(h,4)
+DefineShape4Tag::DefineShape4Tag(RECORDHEADER h, std::istream& in, RootMovieClip* root):DefineShape3Tag(h,4,root)
 {
-	LOG(LOG_TRACE,_("DefineShape4Tag"));
+	LOG(LOG_TRACE,"DefineShape4Tag");
 	in >> ShapeId >> ShapeBounds >> EdgeBounds;
 	BitStream bs(in);
 	UB(5,bs);
@@ -810,13 +878,20 @@ DefineShape4Tag::DefineShape4Tag(RECORDHEADER h, std::istream& in):DefineShape3T
 	TokenContainer::FromShaperecordListToShapeVector(Shapes.ShapeRecords,tokens,Shapes.FillStyles.FillStyles);
 }
 
-DefineMorphShapeTag::DefineMorphShapeTag(RECORDHEADER h, std::istream& in):DictionaryTag(h),MorphShape(Class<MorphShape>::getClass())
+DefineMorphShapeTag::DefineMorphShapeTag(RECORDHEADER h, std::istream& in, RootMovieClip* root):DictionaryTag(h, root),
+	MorphLineStyles(1)
 {
-	int dest=in.tellg();
-	dest+=h.getLength();
-	in >> CharacterId >> StartBounds >> EndBounds >> Offset >> MorphFillStyles >> MorphLineStyles >> StartEdges >> EndEdges;
-	if(in.tellg()<dest)
-		ignore(in,dest-in.tellg());
+	LOG(LOG_TRACE,"DefineMorphShapeTag");
+	UI32_SWF Offset;
+	in >> CharacterId >> StartBounds >> EndBounds >> Offset >> MorphFillStyles >> MorphLineStyles;
+	try
+	{
+		in >> StartEdges >> EndEdges;
+	}
+	catch(LightsparkException& e)
+	{
+		LOG(LOG_ERROR,_("Invalid data for morph shape"));
+	}
 }
 
 ASObject* DefineMorphShapeTag::instance(Class_base* c) const
@@ -824,47 +899,28 @@ ASObject* DefineMorphShapeTag::instance(Class_base* c) const
 	assert_and_throw(bindedTo==NULL);
 	if(c==NULL)
 		c=Class<MorphShape>::getClass();
-	DefineMorphShapeTag* ret=new (c->memoryAccount) DefineMorphShapeTag(*this);
-	ret->setClass(c);
-	return ret;
+	LOG(LOG_NOT_IMPLEMENTED, _("MorphShape not really supported"));
+	return Class<MorphShape>::getInstanceS(c);
 }
 
-void DefineMorphShapeTag::renderImpl(RenderContext& ctxt, bool maskEnabled, number_t t1,number_t t2,number_t t3,number_t t4) const
+DefineMorphShape2Tag::DefineMorphShape2Tag(RECORDHEADER h, std::istream& in, RootMovieClip* root):DefineMorphShapeTag(h, root, 2)
 {
-	if(clippedAlpha()==0)
-		return;
-	if(!visible)
-		return;
-	//TODO: implement morph shape support
-/*	std::vector < GeomShape > shapes;
-	SHAPERECORD* cur=&(EndEdges.ShapeRecords);
-
-	FromShaperecordListToShapeVector(cur,shapes);
-
-//	for(unsigned int i=0;i<shapes.size();i++)
-//		shapes[i].BuildFromEdges(MorphFillStyles.FillStyles);
-
-	float matrix[16];
-	Matrix.get4DMatrix(matrix);
-	lsglPushMatrix();
-	lsglMultMatrixf(matrix);
-	setMatrixUniform(LSGL_MODELVIEW);
-
-	rt->acquireFramebuffer();
-
-	std::vector < GeomShape >::iterator it=shapes.begin();
-	for(;it!=shapes.end();++it)
-		it->Render();
-
-	rt->blitFramebuffer();
-	if(rt->acquireIdBuffer())
+	LOG(LOG_TRACE,"DefineMorphShape2Tag");
+	UI32_SWF Offset;
+	in >> CharacterId >> StartBounds >> EndBounds >> StartEdgeBounds >> EndEdgeBounds;
+	BitStream bs(in);
+	UB(6,bs);
+	UsesNonScalingStrokes=UB(1,bs);
+	UsesScalingStrokes=UB(1,bs);
+	in >> Offset >> MorphFillStyles >> MorphLineStyles;
+	try
 	{
-		std::vector < GeomShape >::iterator it=shapes.begin();
-		for(;it!=shapes.end();++it)
-			it->Render();
-		rt->releaseIdBuffer();
+		in >> StartEdges >> EndEdges;
 	}
-	lsglPopMatrix();*/
+	catch(LightsparkException& e)
+	{
+		LOG(LOG_ERROR,_("Invalid data for morph shape"));
+	}
 }
 
 //void DefineFont3Tag::genGlyphShape(vector<GeomShape>& s, int glyph)
@@ -990,7 +1046,7 @@ void PlaceObject2Tag::setProperties(DisplayObject* obj, DisplayObjectContainer* 
 	}
 }
 
-void PlaceObject2Tag::execute(DisplayObjectContainer* parent)
+void PlaceObject2Tag::execute(DisplayObjectContainer* parent) const
 {
 	//TODO: support clipping
 	if(ClipDepth!=0)
@@ -1010,21 +1066,15 @@ void PlaceObject2Tag::execute(DisplayObjectContainer* parent)
 		//A new character must be placed
 		LOG(LOG_TRACE,_("Placing ID ") << CharacterId);
 
-		RootMovieClip* localRoot=NULL;
-		DictionaryTag* parentDict=dynamic_cast<DictionaryTag*>(parent);
-		//TODO: clean up this nonsense. Of course the parent is a dictionary tag!
-		if(parentDict)
-			localRoot=parentDict->loadedFrom;
-		else
-			localRoot=parent->getRoot().getPtr();
-		_R<DictionaryTag> dict=localRoot->dictionaryLookup(CharacterId);
+		if(placedTag==NULL)
+			throw RunTimeException("No tag to place");
 
 		//We can create the object right away
-		DisplayObject* toAdd=dynamic_cast<DisplayObject*>(dict->instance());
+		DisplayObject* toAdd=dynamic_cast<DisplayObject*>(placedTag->instance());
 
 		assert_and_throw(toAdd);
 		//The matrix must be set before invoking the constructor
-		toAdd->setMatrix(Matrix);
+		toAdd->setLegacyMatrix(Matrix);
 
 		setProperties(toAdd, parent);
 
@@ -1051,7 +1101,7 @@ void PlaceObject2Tag::execute(DisplayObjectContainer* parent)
 	}
 }
 
-PlaceObject2Tag::PlaceObject2Tag(RECORDHEADER h, std::istream& in):DisplayListTag(h)
+PlaceObject2Tag::PlaceObject2Tag(RECORDHEADER h, std::istream& in, RootMovieClip* root):DisplayListTag(h),placedTag(NULL)
 {
 	LOG(LOG_TRACE,_("PlaceObject2"));
 
@@ -1086,10 +1136,13 @@ PlaceObject2Tag::PlaceObject2Tag(RECORDHEADER h, std::istream& in):DisplayListTa
 	if(PlaceFlagHasClipAction)
 		in >> ClipActions;
 
-	assert_and_throw(!(PlaceFlagHasCharacter && CharacterId==0))
+	assert_and_throw(!(PlaceFlagHasCharacter && CharacterId==0));
+
+	if(PlaceFlagHasCharacter)
+		placedTag=root->dictionaryLookup(CharacterId);
 }
 
-PlaceObject3Tag::PlaceObject3Tag(RECORDHEADER h, std::istream& in):PlaceObject2Tag(h)
+PlaceObject3Tag::PlaceObject3Tag(RECORDHEADER h, std::istream& in, RootMovieClip* root):PlaceObject2Tag(h)
 {
 	LOG(LOG_TRACE,_("PlaceObject3"));
 
@@ -1144,9 +1197,12 @@ PlaceObject3Tag::PlaceObject3Tag(RECORDHEADER h, std::istream& in):PlaceObject2T
 		in >> ClipActions;
 
 	assert_and_throw(!(PlaceFlagHasCharacter && CharacterId==0))
+
+	if(PlaceFlagHasCharacter)
+		placedTag=root->dictionaryLookup(CharacterId);
 }
 
-void SetBackgroundColorTag::execute(RootMovieClip* root)
+void SetBackgroundColorTag::execute(RootMovieClip* root) const
 {
 	root->setBackground(BackgroundColor);
 }
@@ -1178,7 +1234,7 @@ FrameLabelTag::FrameLabelTag(RECORDHEADER h, std::istream& in):Tag(h)
 		in >> NamedAnchor;
 }
 
-DefineButton2Tag::DefineButton2Tag(RECORDHEADER h, std::istream& in):DictionaryTag(h)
+DefineButton2Tag::DefineButton2Tag(RECORDHEADER h, std::istream& in,RootMovieClip* root):DictionaryTag(h,root)
 {
 	in >> ButtonId;
 	BitStream bs(in);
@@ -1225,13 +1281,13 @@ ASObject* DefineButton2Tag::instance(Class_base* c) const
 				continue;
 			if(j==3 && !i->ButtonStateUp)
 				continue;
-			_R<DictionaryTag> dict=loadedFrom->dictionaryLookup(i->CharacterID);
+			const DictionaryTag* dict=loadedFrom->dictionaryLookup(i->CharacterID);
 
 			//We can create the object right away
 			DisplayObject* state=dynamic_cast<DisplayObject*>(dict->instance());
 			assert_and_throw(state);
 			//The matrix must be set before invoking the constructor
-			state->setMatrix(i->PlaceMatrix);
+			state->setLegacyMatrix(i->PlaceMatrix);
 			/*
 			 * TODO: BlendMode, filerList, PlaceDepth, ColorTransfrom
 			 */
@@ -1261,9 +1317,9 @@ ASObject* DefineButton2Tag::instance(Class_base* c) const
 	return ret;
 }
 
-DefineVideoStreamTag::DefineVideoStreamTag(RECORDHEADER h, std::istream& in):DictionaryTag(h)
+DefineVideoStreamTag::DefineVideoStreamTag(RECORDHEADER h, std::istream& in, RootMovieClip* root):DictionaryTag(h, root)
 {
-	LOG(LOG_INFO,_("DefineVideoStreamTag"));
+	LOG(LOG_INFO,"DefineVideoStreamTag");
 	in >> CharacterID >> NumFrames >> Width >> Height;
 	BitStream bs(in);
 	UB(4,bs);
@@ -1286,7 +1342,7 @@ ASObject* DefineVideoStreamTag::instance(Class_base* c) const
 	return ret;
 }
 
-DefineBinaryDataTag::DefineBinaryDataTag(RECORDHEADER h,std::istream& s):DictionaryTag(h)
+DefineBinaryDataTag::DefineBinaryDataTag(RECORDHEADER h,std::istream& s,RootMovieClip* root):DictionaryTag(h,root)
 {
 	LOG(LOG_TRACE,_("DefineBinaryDataTag"));
 	int size=h.getLength();
@@ -1310,9 +1366,6 @@ ASObject* DefineBinaryDataTag::instance(Class_base* c) const
 	else
 		classRet=Class<ByteArray>::getClass();
 
-#ifdef MEMORY_USAGE_PROFILING
-	classRet->memoryAccount->addBytes(len);
-#endif
 	ByteArray* ret=new (classRet->memoryAccount) ByteArray(classRet, b, len);
 	return ret;
 }
@@ -1331,7 +1384,7 @@ FileAttributesTag::FileAttributesTag(RECORDHEADER h, std::istream& in):Tag(h)
 	UB(24,bs);
 }
 
-DefineSoundTag::DefineSoundTag(RECORDHEADER h, std::istream& in):DictionaryTag(h)
+DefineSoundTag::DefineSoundTag(RECORDHEADER h, std::istream& in,RootMovieClip* root):DictionaryTag(h,root)
 {
 	LOG(LOG_TRACE,_("DefineSound Tag"));
 	in >> SoundId;
@@ -1420,7 +1473,7 @@ MetadataTag::MetadataTag(RECORDHEADER h, std::istream& in):Tag(h)
 	}
 }
 
-DefineBitsTag::DefineBitsTag(RECORDHEADER h, std::istream& in):DictionaryTag(h),BitmapData(Class<BitmapData>::getClass())
+DefineBitsTag::DefineBitsTag(RECORDHEADER h, std::istream& in,RootMovieClip* root):BitmapTag(h,root)
 {
 	LOG(LOG_TRACE,_("DefineBitsTag Tag"));
 	in >> CharacterId;
@@ -1435,7 +1488,7 @@ DefineBitsTag::~DefineBitsTag()
 	delete[] data;
 }
 
-DefineBitsJPEG2Tag::DefineBitsJPEG2Tag(RECORDHEADER h, std::istream& in):DictionaryTag(h),BitmapData(Class<BitmapData>::getClass())
+DefineBitsJPEG2Tag::DefineBitsJPEG2Tag(RECORDHEADER h, std::istream& in, RootMovieClip* root):BitmapTag(h,root)
 {
 	LOG(LOG_TRACE,_("DefineBitsJPEG2Tag Tag"));
 	in >> CharacterId;
@@ -1448,23 +1501,7 @@ DefineBitsJPEG2Tag::DefineBitsJPEG2Tag(RECORDHEADER h, std::istream& in):Diction
 	delete[] inData;
 }
 
-ASObject* DefineBitsJPEG2Tag::instance(Class_base* c) const
-{
-	Class_base* classRet = NULL;
-	if(c)
-		classRet=c;
-	else if(bindedTo)
-		classRet=bindedTo;
-	else
-		classRet=Class<BitmapData>::getClass();
-
-	DefineBitsJPEG2Tag* ret=new (classRet->memoryAccount) DefineBitsJPEG2Tag(*this);
-	ret->setClass(classRet);
-	return ret;
-}
-
-DefineBitsJPEG3Tag::DefineBitsJPEG3Tag(RECORDHEADER h, std::istream& in):DictionaryTag(h),BitmapData(Class<BitmapData>::getClass()),
-	alphaData(NULL)
+DefineBitsJPEG3Tag::DefineBitsJPEG3Tag(RECORDHEADER h, std::istream& in, RootMovieClip* root):BitmapTag(h,root),alphaData(NULL)
 {
 	LOG(LOG_TRACE,_("DefineBitsJPEG3Tag Tag"));
 	UI32_SWF dataSize;
@@ -1507,21 +1544,6 @@ DefineBitsJPEG3Tag::DefineBitsJPEG3Tag(RECORDHEADER h, std::istream& in):Diction
 	}
 }
 
-ASObject* DefineBitsJPEG3Tag::instance(Class_base* c) const
-{
-	Class_base* classRet = NULL;
-	if(c)
-		classRet=c;
-	else if(bindedTo)
-		classRet=bindedTo;
-	else
-		classRet=Class<BitmapData>::getClass();
-
-	DefineBitsJPEG3Tag* ret=new (classRet->memoryAccount) DefineBitsJPEG3Tag(*this);
-	ret->setClass(classRet);
-	return ret;
-}
-
 DefineBitsJPEG3Tag::~DefineBitsJPEG3Tag()
 {
 	delete[] alphaData;
@@ -1546,7 +1568,7 @@ DefineSceneAndFrameLabelDataTag::DefineSceneAndFrameLabelDataTag(RECORDHEADER h,
 	}
 }
 
-void DefineSceneAndFrameLabelDataTag::execute(RootMovieClip* root)
+void DefineSceneAndFrameLabelDataTag::execute(RootMovieClip* root) const
 {
 	for(size_t i=0;i<SceneCount;++i)
 	{

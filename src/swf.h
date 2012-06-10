@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2009-2011  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2008-2012  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -25,6 +25,7 @@
 #include <list>
 #include <queue>
 #include <map>
+#include <boost/bimap.hpp>
 #include <string>
 #include "swftypes.h"
 #include "scripting/flash/display/flashdisplay.h"
@@ -51,19 +52,19 @@ class RenderThread;
 class SecurityManager;
 class Tag;
 class ApplicationDomain;
+class SecurityDomain;
 
-//RootMovieClip is used as a ThreadJob for timed rendering purpose
 class RootMovieClip: public MovieClip
 {
 friend class ParseThread;
 protected:
-	Mutex mutex;
+	Mutex rootMutex;
 	URLInfo origin;
 private:
 	bool parsingIsFailed;
 	RGB Background;
 	Spinlock dictSpinlock;
-	std::list < _R<DictionaryTag> > dictionary;
+	std::list < DictionaryTag* > dictionary;
 	//frameSize and frameRate are valid only after the header has been parsed
 	RECT frameSize;
 	float frameRate;
@@ -78,7 +79,8 @@ private:
 	void setOnStage(bool staged);
 	ACQUIRE_RELEASE_FLAG(finishedLoading);
 public:
-	RootMovieClip(LoaderInfo* li, _NR<ApplicationDomain> appDomain, Class_base* c);
+	RootMovieClip(LoaderInfo* li, _NR<ApplicationDomain> appDomain, _NR<SecurityDomain> secDomain, Class_base* c);
+	~RootMovieClip();
 	void finalize();
 	bool hasFinishedLoading() { return ACQUIRE_READ(finishedLoading); }
 	uint32_t version;
@@ -89,8 +91,8 @@ public:
 	RECT getFrameSize() const;
 	float getFrameRate() const;
 	void setFrameRate(float f);
-	void addToDictionary(_R<DictionaryTag> r);
-	_R<DictionaryTag> dictionaryLookup(int id);
+	void addToDictionary(DictionaryTag* r);
+	DictionaryTag* dictionaryLookup(int id);
 	void labelCurrentFrame(const STRING& name);
 	void commitFrame(bool another);
 	void revertFrame();
@@ -103,11 +105,15 @@ public:
 	void setVariableByQName(const tiny_string& name, const tiny_string& ns, ASObject* o);
 	void setVariableByMultiname(multiname& name, ASObject* o);
 	void setVariableByString(const std::string& s, ASObject* o);*/
-	static RootMovieClip* getInstance(LoaderInfo* li, _R<ApplicationDomain> appDomain);
+	static RootMovieClip* getInstance(LoaderInfo* li, _R<ApplicationDomain> appDomain, _R<SecurityDomain> secDomain);
 	/*
 	 * The application domain for this clip
 	 */
 	_NR<ApplicationDomain> applicationDomain;
+	/*
+	 * The security domain for this clip
+	 */
+	_NR<SecurityDomain> securityDomain;
 	//DisplayObject interface
 	_NR<RootMovieClip> getRoot();
 };
@@ -137,6 +143,9 @@ public:
 	void tick();
 	void plot(uint32_t max, cairo_t *cr);
 };
+
+enum BUILTIN_STRINGS { EMPTY=0, ANY, VOID, PROTOTYPE, LAST_BUILTIN_STRING };
+enum BUILTIN_NAMESPACES { EMPTY_NS=0 };
 
 class SystemState: public RootMovieClip, public ITickJob, public InvalidateQueue
 {
@@ -232,6 +241,15 @@ private:
 	mutable Mutex memoryAccountsMutex;
 	std::list<MemoryAccount> memoryAccounts;
 #endif
+	/*
+	 * Pooling support
+	 */
+	mutable Mutex poolMutex;
+	boost::bimap<tiny_string, uint32_t> uniqueStringMap;
+	uint32_t lastUsedStringId;
+	boost::bimap<nsNameAndKindImpl, uint32_t> uniqueNamespaceMap;
+	//This needs to be atomic because it's decremented without the mutex held
+	ATOMIC_INT32(lastUsedNamespaceId);
 protected:
 	~SystemState();
 public:
@@ -240,6 +258,9 @@ public:
 	//Interative analysis flags
 	bool showProfilingData;
 	bool standalone;
+	//Flash for execution mode
+	enum FLASH_MODE { FLASH=0, AIR };
+	const FLASH_MODE flashMode;
 	
 	// Error types used to decide when to exit, extend as a bitmap
 	enum ERROR_TYPE { ERROR_NONE    = 0x0000,
@@ -264,9 +285,13 @@ public:
 	//DisplayObject interface
 	_NR<Stage> getStage();
 
-	//Be careful, SystemState constructor does some global initialization that must be done
-	//before any other thread gets started
-	SystemState(uint32_t fileSize) DLL_PUBLIC;
+	/**
+	 * Be careful, SystemState constructor does some global initialization that must be done
+	 * before any other thread gets started
+	 * \param fileSize The size of the SWF being parsed, if known
+	 * \param mode FLASH or AIR
+	 */
+	SystemState(uint32_t fileSize, FLASH_MODE mode) DLL_PUBLIC;
 	void finalize();
 	/* Stop engines, threads and free classes and objects.
 	 * This call will decRef this object in the end,
@@ -378,6 +403,24 @@ public:
 #ifdef MEMORY_USAGE_PROFILING
 	void saveMemoryUsageInformation(std::ofstream& out, int snapshotCount) const;
 #endif
+	/*
+	 * Pooling support
+	 */
+	uint32_t getUniqueStringId(const tiny_string& s);
+	const tiny_string& getStringFromUniqueId(uint32_t id) const;
+	/*
+	 * Looks for the given nsNameAndKindImpl in the map.
+	 * If not present it will be created with hintedId as it's id.
+	 * The namespace id and the baseId are returned by reference.
+	 */
+	void getUniqueNamespaceId(const nsNameAndKindImpl& s, uint32_t hintedId, uint32_t& nsId, uint32_t& baseId);
+	/*
+	 * Looks for the given nsNameAndKindImpl in the map.
+	 * If not present it will be create with an id chosen internally.
+	 * The namespace id and the baseId are returned by reference.
+	 */
+	void getUniqueNamespaceId(const nsNameAndKindImpl& s, uint32_t& nsId, uint32_t& baseId);
+	const nsNameAndKindImpl& getNamespaceFromUniqueId(uint32_t id) const;
 };
 
 class ParseThread: public IThreadJob
@@ -387,7 +430,7 @@ public:
 	// Parse an object from stream. The type is detected
 	// automatically. After parsing the new object is available
 	// from getParsedObject().
-	ParseThread(std::istream& in, _NR<ApplicationDomain> appDomain, Loader *loader, tiny_string url) DLL_PUBLIC;
+	ParseThread(std::istream& in, _R<ApplicationDomain> appDomain, _R<SecurityDomain> secDomain, Loader *loader, tiny_string url) DLL_PUBLIC;
 	// Parse a clip from stream into root. The stream must be an
 	// SWF file.
 	ParseThread(std::istream& in, RootMovieClip *root) DLL_PUBLIC;
@@ -398,6 +441,7 @@ public:
 	static FILE_TYPE recognizeFile(uint8_t c1, uint8_t c2, uint8_t c3, uint8_t c4);
 	void execute();
 	_NR<ApplicationDomain> applicationDomain;
+	_NR<SecurityDomain> securityDomain;
 private:
 	std::istream& f;
 	std::streambuf* zlibFilter;
@@ -407,7 +451,6 @@ private:
 	Spinlock objectSpinlock;
 	tiny_string url;
 	FILE_TYPE fileType;
-	std::queue<_R<ControlTag>> symbolClassTags;
 	void threadAbort();
 	void jobFence() {};
 	void parseSWFHeader(RootMovieClip *root, UI8 ver);

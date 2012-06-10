@@ -1,8 +1,8 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2009-2011  Alessandro Pignotti (a.pignotti@sssup.it)
-    Copyright (C) 2010-2011  Timon Van Overveldt (timonvo@gmail.com)
+    Copyright (C) 2010-2012  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2010-2012  Timon Van Overveldt (timonvo@gmail.com)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -27,7 +27,7 @@
 #include "security.h"
 #include <string>
 #include <algorithm>
-#include <ctype.h>
+#include <cctype>
 #include <iostream>
 #include <fstream>
 #ifdef ENABLE_CURL
@@ -1353,12 +1353,17 @@ bool DownloaderThreadBase::createDownloader(bool cached,
 
 void DownloaderThreadBase::jobFence()
 {
-	SpinlockLocker l(downloaderLock);
-	if(downloader) {
-		getSys()->downloadManager->destroy(downloader);
+	//Get a copy of the downloader, do hold the lock less time.
+	//It's safe to set this->downloader to NULL, this is the last function that will
+	//be called over this thread job
+	Downloader* d=NULL;
+	{
+		SpinlockLocker l(downloaderLock);
+		d=downloader;
 		downloader=NULL;
 	}
-	l.release();
+	if(d)
+		getSys()->downloadManager->destroy(d);
 
 	listener->threadFinished(this);
 }

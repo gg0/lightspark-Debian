@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2009-2011  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2009-2012  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -27,13 +27,27 @@
 namespace lightspark
 {
 
-class Font: public ASObject
+class AntiAliasType : public ASObject
 {
 public:
-	Font(Class_base* c):ASObject(c){}
+	AntiAliasType(Class_base* c):ASObject(c){}
+	static void sinit(Class_base* c);
+};
+
+class ASFont: public ASObject
+{
+private:
+	static std::vector<ASObject*>* getFontList();
+public:
+	ASFont(Class_base* c):ASObject(c),fontType("device"){}
+	void SetFont(tiny_string& fontname,bool is_bold,bool is_italic, bool is_Embedded, bool is_EmbeddedCFF);
 	static void sinit(Class_base* c);
 //	static void buildTraits(ASObject* o);
 	ASFUNCTION(enumerateFonts);
+	ASFUNCTION(registerFont);
+	ASPROPERTY_GETTER(tiny_string, fontName);
+	ASPROPERTY_GETTER(tiny_string, fontStyle);
+	ASPROPERTY_GETTER(tiny_string, fontType);
 };
 
 class TextField: public InteractiveObject, public TextData
@@ -65,7 +79,11 @@ public:
 	ASFUNCTION(_getWordWrap);
 	ASFUNCTION(_getTextWidth);
 	ASFUNCTION(_getTextHeight);
+	ASFUNCTION(_getTextFormat);
 	ASFUNCTION(_setTextFormat);
+	ASFUNCTION(_getDefaultTextFormat);
+	ASFUNCTION(_setDefaultTextFormat);
+	
 	ASFUNCTION_GETTER_SETTER(textColor);
 };
 
@@ -75,7 +93,10 @@ public:
 	TextFormat(Class_base* c):ASObject(c){}
 	static void sinit(Class_base* c);
 	static void buildTraits(ASObject* o);
+	ASFUNCTION(_constructor);
 	ASPROPERTY_GETTER_SETTER(_NR<ASObject>,color);
+	ASPROPERTY_GETTER_SETTER(tiny_string,font);
+	ASPROPERTY_GETTER_SETTER(int32_t,size);
 };
 
 class TextFieldType: public ASObject

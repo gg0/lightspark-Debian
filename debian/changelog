@@ -1,3 +1,9 @@
+lightspark (0.6.0.1-2) unstable; urgency=low
+
+  * Cherry-pick upstream f1675d6 'Fix handling of resizing'.
+
+ -- Didier Raboud <odyx@debian.org>  Thu, 14 Jun 2012 19:54:28 +0200
+
 lightspark (0.6.0.1-1) unstable; urgency=low
 
   * New 0.6.0.1 upstream release.

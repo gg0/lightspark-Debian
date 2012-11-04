@@ -74,7 +74,7 @@ Description: High-performance SWF player - Mozilla Plugin (experimental)
 
 Package: lightspark-common
 Architecture: any
-Depends: ${shlibs:Depends}, ${misc:Depends}, ttf-liberation
+Depends: ${shlibs:Depends}, ${misc:Depends}, fonts-liberation
 Recommends: pulseaudio
 Description: High-performance SWF player - common data
  Lightspark is a free Flash player for Linux which aims for high-performance

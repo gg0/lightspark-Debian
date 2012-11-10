@@ -17,10 +17,11 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
-#include "XMLList.h"
-#include "class.h"
+#include "scripting/toplevel/XMLList.h"
+#include "scripting/class.h"
 #include "compat.h"
-#include "argconv.h"
+#include "scripting/argconv.h"
+#include "abc.h"
 #include <libxml/tree.h>
 #include <libxml++/parsers/domparser.h>
 #include <libxml++/nodes/textnode.h>
@@ -28,8 +29,26 @@
 using namespace std;
 using namespace lightspark;
 
-SET_NAMESPACE("");
-REGISTER_CLASS_NAME(XMLList);
+/* XMLList of size 1 delegates function calls to the single XML
+ * object, if no method with the same name has been defined for
+ * XMLList. */
+#define REGISTER_XML_DELEGATE(name) \
+	c->setDeclaredMethodByQName(#name,AS3,Class<IFunction>::getFunction(name),NORMAL_METHOD,true)
+
+#define REGISTER_XML_DELEGATE2(asname,cppname) \
+	c->setDeclaredMethodByQName(#asname,AS3,Class<IFunction>::getFunction(cppname),NORMAL_METHOD,true)
+
+#define ASFUNCTIONBODY_XML_DELEGATE(name) \
+	ASObject* XMLList::name(ASObject* obj, ASObject* const* args, const unsigned int argslen) \
+	{ \
+		XMLList* th=obj->as<XMLList>(); \
+		if(!th) \
+			throw Class<ArgumentError>::getInstanceS("Function applied to wrong object"); \
+		if(th->nodes.size()==1) \
+			return XML::name(th->nodes[0].getPtr(), args, argslen); \
+		else \
+			throw Class<TypeError>::getInstanceS("Error #1086: The method only works on lists of one item."); \
+	}
 
 XMLList::XMLList(Class_base* c):ASObject(c),nodes(c->memoryAccount),constructed(false)
 {
@@ -53,6 +72,7 @@ XMLList::XMLList(Class_base* c,const XML::XMLVector& r):
 void XMLList::finalize()
 {
 	nodes.clear();
+	ASObject::finalize();
 }
 
 void XMLList::sinit(Class_base* c)
@@ -60,10 +80,15 @@ void XMLList::sinit(Class_base* c)
 	c->setSuper(Class<ASObject>::getRef());
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
 	c->setDeclaredMethodByQName("length","",Class<IFunction>::getFunction(_getLength),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("appendChild",AS3,Class<IFunction>::getFunction(appendChild),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("attribute",AS3,Class<IFunction>::getFunction(attribute),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("attributes",AS3,Class<IFunction>::getFunction(attributes),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("child",AS3,Class<IFunction>::getFunction(child),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("children",AS3,Class<IFunction>::getFunction(children),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("contains",AS3,Class<IFunction>::getFunction(contains),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("copy",AS3,Class<IFunction>::getFunction(copy),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("descendants",AS3,Class<IFunction>::getFunction(descendants),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("elements",AS3,Class<IFunction>::getFunction(elements),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("parent",AS3,Class<IFunction>::getFunction(parent),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("hasSimpleContent",AS3,Class<IFunction>::getFunction(_hasSimpleContent),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("hasComplexContent",AS3,Class<IFunction>::getFunction(_hasComplexContent),NORMAL_METHOD,true);
 	c->prototype->setVariableByQName("toString","",Class<IFunction>::getFunction(_toString),DYNAMIC_TRAIT);
@@ -72,7 +97,44 @@ void XMLList::sinit(Class_base* c)
 	c->setDeclaredMethodByQName("valueOf",AS3,Class<IFunction>::getFunction(valueOf),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("toXMLString",AS3,Class<IFunction>::getFunction(toXMLString),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("text",AS3,Class<IFunction>::getFunction(text),NORMAL_METHOD,true);
+	REGISTER_XML_DELEGATE(addNamespace);
+	REGISTER_XML_DELEGATE(appendChild);
+	REGISTER_XML_DELEGATE(childIndex);
+	REGISTER_XML_DELEGATE(inScopeNamespaces);
+	//REGISTER_XML_DELEGATE(insertChildAfter);
+	//REGISTER_XML_DELEGATE(insertChildBefore);
+	REGISTER_XML_DELEGATE(localName);
+	REGISTER_XML_DELEGATE(name);
+	REGISTER_XML_DELEGATE2(namespace,_namespace);
+	//REGISTER_XML_DELEGATE(namespaceDeclarations);
+	REGISTER_XML_DELEGATE(nodeKind);
+	//REGISTER_XML_DELEGATE(prependChild);
+	//REGISTER_XML_DELEGATE(removeNamespace);
+	//REGISTER_XML_DELEGATE(replace);
+	//REGISTER_XML_DELEGATE(setChildren);
+	REGISTER_XML_DELEGATE2(setLocalName,_setLocalName);
+	REGISTER_XML_DELEGATE2(setName,_setName);
+	REGISTER_XML_DELEGATE2(setNamespace,_setNamespace);
 }
+
+ASFUNCTIONBODY_XML_DELEGATE(addNamespace);
+ASFUNCTIONBODY_XML_DELEGATE(appendChild);
+ASFUNCTIONBODY_XML_DELEGATE(childIndex);
+ASFUNCTIONBODY_XML_DELEGATE(inScopeNamespaces);
+//ASFUNCTIONBODY_XML_DELEGATE(insertChildAfter);
+//ASFUNCTIONBODY_XML_DELEGATE(insertChildBefore);
+ASFUNCTIONBODY_XML_DELEGATE(localName);
+ASFUNCTIONBODY_XML_DELEGATE(name);
+ASFUNCTIONBODY_XML_DELEGATE(_namespace);
+//ASFUNCTIONBODY_XML_DELEGATE(namespaceDeclarations);
+ASFUNCTIONBODY_XML_DELEGATE(nodeKind);
+//ASFUNCTIONBODY_XML_DELEGATE(prependChild);
+//ASFUNCTIONBODY_XML_DELEGATE(removeNamespace);
+//ASFUNCTIONBODY_XML_DELEGATE(replace);
+//ASFUNCTIONBODY_XML_DELEGATE(setChildren);
+ASFUNCTIONBODY_XML_DELEGATE(_setLocalName);
+ASFUNCTIONBODY_XML_DELEGATE(_setName);
+ASFUNCTIONBODY_XML_DELEGATE(_setNamespace);
 
 ASFUNCTIONBODY(XMLList,_constructor)
 {
@@ -118,14 +180,22 @@ ASFUNCTIONBODY(XMLList,_constructor)
 void XMLList::buildFromString(const std::string& str)
 {
 	xmlpp::DomParser parser;
-	std::string expanded="<parent>" + str + "</parent>";
+	std::string default_ns=getVm()->getDefaultXMLNamespace();
+	std::string expanded="<parent xmlns=\"" + default_ns + "\">" + str + "</parent>";
 	try
 	{
 		parser.parse_memory(expanded);
 	}
 	catch(const exception& e)
 	{
-		throw RunTimeException("Error while parsing XML");
+		try
+		{
+			parser.parse_memory(str);
+		}
+		catch(const exception& e)
+		{
+			throw RunTimeException("Error while parsing XML");
+		}
 	}
 	const xmlpp::Node::NodeList& children=\
 	  parser.get_document()->get_root_node()->get_children();
@@ -149,14 +219,6 @@ ASFUNCTIONBODY(XMLList,_getLength)
 	XMLList* th=Class<XMLList>::cast(obj);
 	assert_and_throw(argslen==0);
 	return abstract_i(th->nodes.size());
-}
-
-ASFUNCTIONBODY(XMLList,appendChild)
-{
-	XMLList* th=Class<XMLList>::cast(obj);
-	assert_and_throw(th->nodes.size()==1);
-	//Forward to the XML object
-	return XML::appendChild(th->nodes[0].getPtr(),args,argslen);
 }
 
 ASFUNCTIONBODY(XMLList,_hasSimpleContent)
@@ -212,11 +274,48 @@ ASFUNCTIONBODY(XMLList,generator)
 ASFUNCTIONBODY(XMLList,descendants)
 {
 	XMLList* th=Class<XMLList>::cast(obj);
-	assert_and_throw(argslen==1);
-	assert_and_throw(args[0]->getObjectType()!=T_QNAME);
+	tiny_string name;
+	assert_and_throw(argslen==0 || args[0]->getObjectType()!=T_QNAME);
+	ARG_UNPACK(name,"*");
 	XML::XMLVector ret;
-	th->getDescendantsByQName(args[0]->toString(),"",ret);
+	th->getDescendantsByQName(name,"",ret);
 	return Class<XMLList>::getInstanceS(ret);
+}
+
+ASFUNCTIONBODY(XMLList,elements)
+{
+	XMLList* th=Class<XMLList>::cast(obj);
+	tiny_string name;
+	ARG_UNPACK(name, "");
+
+	XML::XMLVector elems;
+	auto it=th->nodes.begin();
+        for(; it!=th->nodes.end(); ++it)
+        {
+		(*it)->getElementNodes(name, elems);
+	}
+	return Class<XMLList>::getInstanceS(elems);
+}
+
+ASFUNCTIONBODY(XMLList,parent)
+{
+	XMLList* th=Class<XMLList>::cast(obj);
+
+	if(th->nodes.size()==0)
+		return getSys()->getUndefinedRef();
+
+	auto it=th->nodes.begin();
+	ASObject *parent=(*it)->getParentNode();
+	++it;
+
+        for(; it!=th->nodes.end(); ++it)
+        {
+		ASObject *otherParent=(*it)->getParentNode();
+		if(!parent->isEqual(otherParent))
+			return getSys()->getUndefinedRef();
+	}
+
+	return parent;
 }
 
 ASFUNCTIONBODY(XMLList,valueOf)
@@ -267,14 +366,88 @@ ASFUNCTIONBODY(XMLList,text)
 	return Class<XMLList>::getInstanceS(ret);
 }
 
+ASFUNCTIONBODY(XMLList,contains)
+{
+	XMLList* th = obj->as<XMLList>();
+	_NR<ASObject> value;
+	ARG_UNPACK (value);
+	if(!value->is<XML>())
+		return abstract_b(false);
+
+	auto it=th->nodes.begin();
+        for(; it!=th->nodes.end(); ++it)
+        {
+		if((*it)->isEqual(value.getPtr()))
+			return abstract_b(true);
+	}
+
+	return abstract_b(false);
+}
+
+ASFUNCTIONBODY(XMLList,copy)
+{
+	XMLList* th = obj->as<XMLList>();
+	XMLList *dest = Class<XMLList>::getInstanceS();
+	auto it=th->nodes.begin();
+        for(; it!=th->nodes.end(); ++it)
+        {
+		dest->nodes.push_back(_MR((*it)->copy()));
+	}
+	return dest;
+}
+
+ASFUNCTIONBODY(XMLList,attribute)
+{
+	XMLList *th = obj->as<XMLList>();
+
+	if(argslen > 0 && args[0]->is<QName>())
+		LOG(LOG_NOT_IMPLEMENTED,"XMLList.attribute called with QName");
+
+	tiny_string attrname;
+	ARG_UNPACK (attrname);
+	multiname mname(NULL);
+	mname.name_type=multiname::NAME_STRING;
+	mname.name_s_id=getSys()->getUniqueStringId(attrname);
+	mname.ns.push_back(nsNameAndKind("",NAMESPACE));
+	mname.isAttribute = true;
+
+	_NR<ASObject> attr=th->getVariableByMultiname(mname, NONE);
+	assert(!attr.isNull());
+	attr->incRef();
+	return attr.getPtr();
+}
+
+ASFUNCTIONBODY(XMLList,attributes)
+{
+	XMLList *th = obj->as<XMLList>();
+	XMLList *res = Class<XMLList>::getInstanceS();
+	auto it=th->nodes.begin();
+	for(; it!=th->nodes.end(); ++it)
+	{
+		XML::XMLVector nodeAttributes = (*it)->getAttributes();
+		res->nodes.insert(res->nodes.end(), nodeAttributes.begin(), nodeAttributes.end());
+	}
+	return res;
+}
+
 _NR<ASObject> XMLList::getVariableByMultiname(const multiname& name, GET_VARIABLE_OPTION opt)
 {
 	if((opt & SKIP_IMPL)!=0 || !implEnable)
-		return ASObject::getVariableByMultiname(name,opt);
+	{
+		_NR<ASObject> res=ASObject::getVariableByMultiname(name,opt);
 
-	assert_and_throw(name.ns.size()>0);
-	if(!name.ns[0].hasEmptyName())
-		return ASObject::getVariableByMultiname(name,opt);
+		//If a method is not found on XMLList object and this
+		//is a single element list with simple content,
+		//delegate to ASString
+		if(res.isNull() && nodes.size()==1 && nodes[0]->hasSimpleContent())
+		{
+			ASString *contentstr=Class<ASString>::getInstanceS(nodes[0]->toString_priv());
+			res=contentstr->getVariableByMultiname(name, opt);
+			contentstr->decRef();
+		}
+
+		return res;
+	}
 
 	unsigned int index=0;
 	if(Array::isValidMultiname(name,index))
@@ -305,14 +478,14 @@ _NR<ASObject> XMLList::getVariableByMultiname(const multiname& name, GET_VARIABL
 	}
 }
 
-bool XMLList::hasPropertyByMultiname(const multiname& name, bool considerDynamic)
+bool XMLList::hasPropertyByMultiname(const multiname& name, bool considerDynamic, bool considerPrototype)
 {
 	if(considerDynamic==false)
-		return ASObject::hasPropertyByMultiname(name, considerDynamic);
+		return ASObject::hasPropertyByMultiname(name, considerDynamic, considerPrototype);
 
 	assert_and_throw(name.ns.size()>0);
 	if(!name.ns[0].hasEmptyName())
-		return ASObject::hasPropertyByMultiname(name, considerDynamic);
+		return ASObject::hasPropertyByMultiname(name, considerDynamic, considerPrototype);
 
 	unsigned int index=0;
 	if(Array::isValidMultiname(name,index))
@@ -323,13 +496,13 @@ bool XMLList::hasPropertyByMultiname(const multiname& name, bool considerDynamic
 		auto it=nodes.begin();
 		for(; it!=nodes.end(); ++it)
 		{
-			bool ret=(*it)->hasPropertyByMultiname(name, considerDynamic);
+			bool ret=(*it)->hasPropertyByMultiname(name, considerDynamic, considerPrototype);
 			if(ret)
 				return ret;
 		}
 	}
 
-	return ASObject::hasPropertyByMultiname(name, considerDynamic);
+	return ASObject::hasPropertyByMultiname(name, considerDynamic, considerPrototype);
 }
 
 void XMLList::setVariableByMultiname(const multiname& name, ASObject* o, CONST_ALLOWED_FLAG allowConst)
@@ -514,4 +687,16 @@ _R<ASObject> XMLList::nextValue(uint32_t index)
 		return nodes[index-1];
 	else
 		throw RunTimeException("XMLList::nextValue out of bounds");
+}
+
+void XMLList::appendNodesTo(XML *dest) const
+{
+	std::vector<_R<XML>, reporter_allocator<_R<XML>>>::const_iterator it;
+	for (it=nodes.begin(); it!=nodes.end(); ++it)
+	{
+		ASObject *arg0=it->getPtr();
+		ASObject *ret=XML::appendChild(dest, &arg0, 1);
+		if(ret)
+			ret->decRef();
+	}
 }

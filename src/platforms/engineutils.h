@@ -17,28 +17,19 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
-#ifndef ENGINEUTILS_H
-#define ENGINEUTILS_H
+#ifndef PLATFORMS_ENGINEUTILS_H
+#define PLATFORMS_ENGINEUTILS_H 1
 
 #include <gtk/gtk.h>
-#ifdef _WIN32
-#	include <gdk/gdkwin32.h>
-#else
-#	include <sys/resource.h>
-#	include <gdk/gdkx.h>
-#endif
-
 #include "compat.h"
 #include "threading.h"
 
 namespace lightspark
 {
 
-/* There is GdkNativeWindow, but that is not HWND on win32!? */
-#ifdef _WIN32
-typedef HWND NativeWindow;
-#else
-typedef Window NativeWindow;
+#ifndef _WIN32
+//taken from X11/X.h
+typedef unsigned long VisualID;
 #endif
 
 class DLL_PUBLIC EngineData
@@ -67,7 +58,7 @@ protected:
 public:
 	int width;
 	int height;
-	NativeWindow window;
+	GdkNativeWindow window;
 #ifndef _WIN32
 	VisualID visual;
 #endif
@@ -76,36 +67,17 @@ public:
 	virtual bool isSizable() const = 0;
 	virtual void stopMainDownload() = 0;
 	/* you may not call getWindowForGnash and showWindow on the same EngineData! */
-	virtual NativeWindow getWindowForGnash()=0;
+	virtual GdkNativeWindow getWindowForGnash()=0;
 	/* Runs 'func' in the thread of gtk_main() */
 	static void runInGtkThread(const sigc::slot<void>& func)
 	{
 		g_idle_add((GSourceFunc)callHelper,new sigc::slot<void>(func));
 	}
 	/* This function must be called from the gtk main thread
-	 * and within gdk_threads_enter/leave */
-	void showWindow(uint32_t w, uint32_t h)
-	{
-		RecMutex::Lock l(mutex);
-
-		assert(!widget);
-		widget = createGtkWidget();
-		/* create a window handle */
-		gtk_widget_realize(widget);
-#if _WIN32
-		window = (HWND)GDK_WINDOW_HWND(gtk_widget_get_window(widget));
-#else
-		window = GDK_WINDOW_XID(gtk_widget_get_window(widget));
-#endif
-		if(isSizable())
-		{
-			gtk_widget_set_size_request(widget, w, h);
-			width = w;
-			height = h;
-		}
-		gtk_widget_show(widget);
-		gtk_widget_map(widget);
-	}
+	 * and within gdk_threads_enter/leave.
+	 * It fills this->widget and this->window.
+         */
+	void showWindow(uint32_t w, uint32_t h);
 	static gboolean inputDispatch(GtkWidget *widget, GdkEvent *event, EngineData* e)
 	{
 		RecMutex::Lock l(e->mutex);
@@ -168,4 +140,4 @@ public:
 };
 
 };
-#endif
+#endif /* PLATFORMS_ENGINEUTILS_H */

@@ -18,9 +18,9 @@
 **************************************************************************/
 
 #include "scripting/abc.h"
-#include "audio.h"
-#include "input.h"
-#include "rendering.h"
+#include "backends/audio.h"
+#include "backends/input.h"
+#include "backends/rendering.h"
 #include "compat.h"
 
 #if GTK_CHECK_VERSION (2,21,8)
@@ -159,7 +159,7 @@ _NR<InteractiveObject> InputThread::getMouseTarget(uint32_t x, uint32_t y, Displ
 	_NR<InteractiveObject> selected = NullRef;
 	try
 	{
-		selected=m_sys->getStage()->hitTest(NullRef,x,y, type);
+		selected=m_sys->mainClip->getStage()->hitTest(NullRef,x,y, type);
 	}
 	catch(LightsparkException& e)
 	{
@@ -167,7 +167,6 @@ _NR<InteractiveObject> InputThread::getMouseTarget(uint32_t x, uint32_t y, Displ
 		m_sys->setError(e.cause);
 		return NullRef;
 	}
-	assert(maskStack.empty());
 	assert(selected); /* atleast we hit the stage */
 	assert_and_throw(selected->getClass()->isSubClass(Class<InteractiveObject>::getClass()));
 	return selected;
@@ -322,17 +321,4 @@ void InputThread::stopDrag(Sprite* s)
 		delete dragLimit;
 		dragLimit = 0;
 	}
-}
-
-bool InputThread::isMasked(number_t x, number_t y) const
-{
-	for(uint32_t i=0;i<maskStack.size();i++)
-	{
-		number_t localX, localY;
-		maskStack[i].m.multiply2D(x,y,localX,localY);//m is the concatenated matrix
-		if(maskStack[i].d->isOpaque(localX, localY))//If one of the masks is opaque then you are masked
-			return true;
-	}
-
-	return false;
 }

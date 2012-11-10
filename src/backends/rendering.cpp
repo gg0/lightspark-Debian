@@ -19,9 +19,19 @@
 
 #include "scripting/abc.h"
 #include "parsing/textfile.h"
-#include "rendering.h"
+#include "backends/rendering.h"
 #include "compat.h"
 #include <sstream>
+
+#ifdef _WIN32
+#   define WIN32_LEAN_AND_MEAN
+#	include <windows.h>
+#endif
+//None is #defined by X11/X.h, but because it conflicts with libxml++
+//headers Lightspark undefines it elsewhere except in this file.
+#ifndef None
+#define None 0L
+#endif
 
 //The interpretation of texture data change with the endianness
 #if __BYTE_ORDER == __BIG_ENDIAN
@@ -62,7 +72,7 @@ RenderThread::RenderThread(SystemState* s):
 	pixelBufferWidth(0),pixelBufferHeight(0),prevUploadJob(NULL),
 	renderNeeded(false),uploadNeeded(false),resizeNeeded(false),newTextureNeeded(false),event(0),newWidth(0),newHeight(0),scaleX(1),scaleY(1),
 	offsetX(0),offsetY(0),tempBufferAcquired(false),frameCount(0),secsCount(0),initialized(0),
-	tempTex(false),hasNPOTTextures(false),cairoTextureContext(NULL)
+	hasNPOTTextures(false),cairoTextureContext(NULL)
 {
 	LOG(LOG_INFO,_("RenderThread this=") << this);
 #ifdef _WIN32
@@ -204,7 +214,7 @@ void RenderThread::init()
 			0,
 			0, 0, 0
 		};
-	if(!(mDC = GetDC(engineData->window)))
+	if(!(mDC = GetDC((HWND)engineData->window)))
 		throw RunTimeException("GetDC failed");
 	int PixelFormat;
 	if (!(PixelFormat=ChoosePixelFormat(mDC,&pfd)))
@@ -339,11 +349,13 @@ void RenderThread::worker()
 
 			if(resizeNeeded)
 			{
+				//Order of the operations here matters for requestResize
 				windowWidth=newWidth;
 				windowHeight=newHeight;
+				resizeNeeded=false;
 				newWidth=0;
 				newHeight=0;
-				resizeNeeded=false;
+				//End of order critical part
 				LOG(LOG_INFO,_("Window resized to ") << windowWidth << 'x' << windowHeight);
 				commonGLResize();
 				m_sys->resizeCompleted();
@@ -508,8 +520,6 @@ bool RenderThread::loadShaderPrograms()
 void RenderThread::commonGLDeinit()
 {
 	glBindFramebuffer(GL_FRAMEBUFFER,0);
-	glDeleteFramebuffers(1,&fboId);
-	tempTex.shutdown();
 	for(uint32_t i=0;i<largeTextures.size();i++)
 	{
 		glDeleteTextures(1,&largeTextures[i].id);
@@ -558,8 +568,6 @@ void RenderThread::commonGLInit(int width, int height)
 	glActiveTexture(GL_TEXTURE0);
 	//Viewport setup is left for GLResize	
 
-	tempTex.init(width, height, GL_NEAREST);
-
 	//Get the maximum allowed texture size, up to 1024
 	int maxTexSize;
 	glGetIntegerv(GL_MAX_TEXTURE_SIZE, &maxTexSize);
@@ -580,8 +588,6 @@ void RenderThread::commonGLInit(int width, int height)
 
 	//The uniform that enables YUV->RGB transform on the texels (needed for video)
 	yuvUniform =glGetUniformLocation(gpu_program,"yuv");
-	//The uniform that tells the shader if a mask is being rendered
-	maskUniform =glGetUniformLocation(gpu_program,"mask");
 	//The uniform that tells the alpha value multiplied to the alpha of every pixel
 	alphaUniform =glGetUniformLocation(gpu_program,"alpha");
 	//The uniform that tells to draw directly using the selected color
@@ -591,30 +597,10 @@ void RenderThread::commonGLInit(int width, int height)
 	modelviewMatrixUniform =glGetUniformLocation(gpu_program,"ls_ModelViewMatrix");
 
 	fragmentTexScaleUniform=glGetUniformLocation(gpu_program,"texScale");
-	if(fragmentTexScaleUniform!=-1)
-		tempTex.setTexScale(fragmentTexScaleUniform);
 
 	//Texturing must be enabled otherwise no tex coord will be sent to the shaders
 	glEnable(GL_TEXTURE_2D);
-	//At least two texture unit are guaranteed in OpenGL 1.3
-	//The second unit will be used to access the temporary buffer
-	glActiveTexture(GL_TEXTURE1);
-	glEnable(GL_TEXTURE_2D);
-	glBindTexture(GL_TEXTURE_2D, tempTex.getId());
-
-	glActiveTexture(GL_TEXTURE0);
-	//Create a framebuffer object
-	glGenFramebuffers(1, &fboId);
-	glBindFramebuffer(GL_FRAMEBUFFER, fboId);
-	glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,GL_TEXTURE_2D, tempTex.getId(), 0);
 	
-	// check FBO status
-	GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
-	if(status != GL_FRAMEBUFFER_COMPLETE)
-	{
-		LOG(LOG_ERROR,_("Incomplete FBO status ") << status << _("... Aborting"));
-		throw RunTimeException("Rendering: Could not initialize OpenGL framebuffer object");
-	}
 	glGenTextures(1, &cairoTextureID);
 
 	if(handleGLErrors())
@@ -626,7 +612,7 @@ void RenderThread::commonGLInit(int width, int height)
 void RenderThread::commonGLResize()
 {
 	//Get the size of the content
-	RECT r=m_sys->getFrameSize();
+	RECT r=m_sys->mainClip->getFrameSize();
 	r.Xmax/=20;
 	r.Ymax/=20;
 	//Now compute the scalings and offsets
@@ -704,13 +690,22 @@ void RenderThread::commonGLResize()
 	lsglTranslatef(offsetX,windowHeight-offsetY,0);
 	lsglScalef(scaleX,-scaleY,1);
 	setMatrixUniform(LSGL_PROJECTION);
-	tempTex.resize(windowWidth, windowHeight);
 }
 
 void RenderThread::requestResize(uint32_t w, uint32_t h, bool force)
 {
-	if(!force && windowWidth==w && windowHeight==h)
+	//We can skip the resize if the current size is correct
+	//and there is no pending resize or if there is already a
+	//pending resize with the correct size
+
+	//This test is correct only if the order of operation where
+	//the resize is handled does not change!
+	if(!force &&
+		((windowWidth==w && windowHeight==h && resizeNeeded==false) ||
+		 (newWidth==w && newHeight==h)))
+	{
 		return;
+	}
 	newWidth=w;
 	newHeight=h;
 	resizeNeeded=true;
@@ -791,7 +786,7 @@ void RenderThread::plotProfilingData()
 	glUniform1f(directUniform, 1);
 
 	char frameBuf[20];
-	snprintf(frameBuf,20,"Frame %u",m_sys->state.FP);
+	snprintf(frameBuf,20,"Frame %u",m_sys->mainClip->state.FP);
 
 	GLfloat vertex_coords[40];
 	GLfloat color_coords[80];
@@ -816,8 +811,8 @@ void RenderThread::plotProfilingData()
 	glDisableVertexAttribArray(COLOR_ATTRIB);
  
 	list<ThreadProfile*>::iterator it=m_sys->profilingData.begin();
-	for(;it!=m_sys->profilingData.end();it++)
-		(*it)->plot(1000000/m_sys->getFrameRate(),cr);
+	for(;it!=m_sys->profilingData.end();++it)
+		(*it)->plot(1000000/m_sys->mainClip->getFrameRate(),cr);
 	glUniform1f(directUniform, 0);
 
 	mapCairoTexture(windowWidth, windowHeight);
@@ -835,14 +830,13 @@ void RenderThread::coreRendering()
 	glBindFramebuffer(GL_FRAMEBUFFER, 0);
 	glDrawBuffer(GL_BACK);
 	//Clear the back buffer
-	RGB bg=m_sys->getBackground();
+	RGB bg=m_sys->mainClip->getBackground();
 	glClearColor(bg.Red/255.0F,bg.Green/255.0F,bg.Blue/255.0F,1);
 	glClear(GL_COLOR_BUFFER_BIT);
 	lsglLoadIdentity();
 	setMatrixUniform(LSGL_MODELVIEW);
 
-	m_sys->getStage()->Render(*this, false);
-	assert(maskStack.empty());
+	m_sys->mainClip->getStage()->Render(*this);
 
 	if(m_sys->showProfilingData)
 		plotProfilingData();
@@ -869,7 +863,7 @@ void RenderThread::renderErrorPage(RenderThread *th, bool standalone)
 			0,th->windowHeight/2+20);
 
 	stringstream errorMsg;
-	errorMsg << "SWF file: " << th->m_sys->getOrigin().getParsedURL();
+	errorMsg << "SWF file: " << th->m_sys->mainClip->getOrigin().getParsedURL();
 	renderText(cr, errorMsg.str().c_str(),0,th->windowHeight/2);
 
 	errorMsg.str("");

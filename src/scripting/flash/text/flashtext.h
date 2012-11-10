@@ -17,12 +17,12 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
-#ifndef _FLASH_TEXT_H
-#define _FLASH_TEXT_H
+#ifndef SCRIPTING_FLASH_TEXT_FLASHTEXT_H
+#define SCRIPTING_FLASH_TEXT_FLASHTEXT_H 1
 
 #include "compat.h"
 #include "asobject.h"
-#include "flash/display/flashdisplay.h"
+#include "scripting/flash/display/flashdisplay.h"
 
 namespace lightspark
 {
@@ -54,7 +54,7 @@ class TextField: public InteractiveObject, public TextData
 {
 private:
 	_NR<InteractiveObject> hitTestImpl(_NR<InteractiveObject> last, number_t x, number_t y, HIT_TYPE type);
-	void renderImpl(RenderContext& ctxt, bool maskEnabled, number_t t1, number_t t2, number_t t3, number_t t4) const;
+	void renderImpl(RenderContext& ctxt) const;
 	bool boundsRect(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const;
 	IDrawable* invalidate(DisplayObject* target, const MATRIX& initialMatrix);
 	void requestInvalidation(InvalidateQueue* q);
@@ -141,8 +141,8 @@ private:
 protected:
 	bool boundsRect(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const
 		{ return TokenContainer::boundsRect(xmin,xmax,ymin,ymax); }
-	void renderImpl(RenderContext& ctxt, bool maskEnabled, number_t t1, number_t t2, number_t t3, number_t t4) const
-		{ TokenContainer::renderImpl(ctxt, maskEnabled,t1,t2,t3,t4); }
+	void renderImpl(RenderContext& ctxt) const
+		{ TokenContainer::renderImpl(ctxt); }
 	_NR<InteractiveObject> hitTestImpl(_NR<InteractiveObject> last, number_t x, number_t y, HIT_TYPE type)
 		{ return TokenContainer::hitTestImpl(last, x, y, type); }
 public:
@@ -154,6 +154,41 @@ public:
 	IDrawable* invalidate(DisplayObject* target, const MATRIX& initialMatrix)
 	{ return TokenContainer::invalidate(target, initialMatrix); }
 };
+
+class FontStyle: public ASObject
+{
+public:
+	FontStyle(Class_base* c):ASObject(c){}
+	static void sinit(Class_base* c);
 };
 
-#endif
+class FontType: public ASObject
+{
+public:
+	FontType(Class_base* c):ASObject(c){}
+	static void sinit(Class_base* c);
+};
+
+class TextDisplayMode: public ASObject
+{
+public:
+	TextDisplayMode(Class_base* c):ASObject(c){}
+	static void sinit(Class_base* c);
+};
+
+class TextColorType: public ASObject
+{
+public:
+	TextColorType(Class_base* c):ASObject(c){}
+	static void sinit(Class_base* c);
+};
+
+class GridFitType: public ASObject
+{
+public:
+	GridFitType(Class_base* c):ASObject(c){}
+	static void sinit(Class_base* c);
+};
+};
+
+#endif /* SCRIPTING_FLASH_TEXT_FLASHTEXT_H */

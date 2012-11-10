@@ -18,10 +18,10 @@
 **************************************************************************/
 
 #include <cairo.h>
-#include "TokenContainer.h"
+#include "scripting/flash/display/TokenContainer.h"
 #include "swf.h"
 #include "backends/input.h"
-#include "BitmapData.h"
+#include "scripting/flash/display/BitmapData.h"
 
 using namespace lightspark;
 using namespace std;
@@ -31,14 +31,14 @@ TokenContainer::TokenContainer(DisplayObject* _o) : owner(_o), scaling(1.0f)
 }
 
 TokenContainer::TokenContainer(DisplayObject* _o, const tokensVector& _tokens, float _scaling) :
-	owner(_o), scaling(_scaling),
-	tokens(_tokens.begin(),_tokens.end())
+	owner(_o), tokens(_tokens.begin(),_tokens.end()), scaling(_scaling)
+
 {
 }
 
-void TokenContainer::renderImpl(RenderContext& ctxt, bool maskEnabled, number_t t1, number_t t2, number_t t3, number_t t4) const
+void TokenContainer::renderImpl(RenderContext& ctxt) const
 {
-	owner->defaultRender(ctxt, maskEnabled);
+	owner->defaultRender(ctxt);
 }
 
 /*! \brief Generate a vector of shapes from a SHAPERECORD list
@@ -135,41 +135,25 @@ IDrawable* TokenContainer::invalidate(DisplayObject* target, const MATRIX& initi
 		return NULL;
 	}
 
+	//Compute the matrix and the masks that are relevant
 	MATRIX totalMatrix;
-	DisplayObject* cur=owner;
-	while(cur!=target)
-	{
-		totalMatrix=cur->getMatrix().multiplyMatrix(totalMatrix);
-		cur=cur->getParent().getPtr();
-	}
+	std::vector<IDrawable::MaskData> masks;
+	owner->computeMasksAndMatrix(target,masks,totalMatrix);
 	totalMatrix=initialMatrix.multiplyMatrix(totalMatrix);
 	owner->computeBoundsForTransformedRect(bxmin,bxmax,bymin,bymax,x,y,width,height,totalMatrix);
 	if(width==0 || height==0)
 		return NULL;
 	return new CairoTokenRenderer(tokens,
 				totalMatrix, x, y, width, height, scaling,
-				owner->getConcatenatedAlpha());
-}
-
-bool TokenContainer::isOpaqueImpl(number_t x, number_t y) const
-{
-	return CairoTokenRenderer::isOpaque(tokens, scaling, x, y);
+				owner->getConcatenatedAlpha(), masks);
 }
 
 _NR<InteractiveObject> TokenContainer::hitTestImpl(_NR<InteractiveObject> last, number_t x, number_t y, DisplayObject::HIT_TYPE type) const
 {
-	//TODO: test against the CachedSurface
+	//Masks have been already checked along the way
+
 	if(CairoTokenRenderer::hitTest(tokens, scaling, x, y))
-	{
-		if(getSys()->getInputThread()->isMaskPresent())
-		{
-			number_t globalX, globalY;
-			owner->getConcatenatedMatrix().multiply2D(x,y,globalX,globalY);
-			if(!getSys()->getInputThread()->isMasked(globalX, globalY))//You must be under the mask to be hit
-				return NullRef;
-		}
 		return last;
-	}
 	return NullRef;
 }
 

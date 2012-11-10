@@ -17,8 +17,8 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
-#ifndef TOPLEVEL_VECTOR_H
-#define TOPLEVEL_VECTOR_H
+#ifndef SCRIPTING_TOPLEVEL_VECTOR_H
+#define SCRIPTING_TOPLEVEL_VECTOR_H 1
 
 #include "asobject.h"
 
@@ -42,7 +42,7 @@ class Vector: public ASObject
 		bool operator()(ASObject* d1, ASObject* d2);
 	};
 public:
-	Vector(Class_base* c);
+	Vector(Class_base* c, Type *vtype=NULL);
 	~Vector();
 	void finalize();
 	static void sinit(Class_base* c);
@@ -54,7 +54,7 @@ public:
 	//Overloads
 	tiny_string toString(bool debugMsg=false);
 	void setVariableByMultiname(const multiname& name, ASObject* o, CONST_ALLOWED_FLAG allowConst);
-	bool hasPropertyByMultiname(const multiname& name, bool considerDynamic);
+	bool hasPropertyByMultiname(const multiname& name, bool considerDynamic, bool considerPrototype);
 	_NR<ASObject> getVariableByMultiname(const multiname& name, GET_VARIABLE_OPTION opt);
 	static bool isValidMultiname(const multiname& name, uint32_t& index);
 
@@ -104,4 +104,4 @@ public:
 
 
 }
-#endif
+#endif /* SCRIPTING_TOPLEVEL_VECTOR_H */

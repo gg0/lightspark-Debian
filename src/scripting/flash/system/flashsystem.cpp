@@ -21,29 +21,23 @@
 #include <libxml++/parsers/textreader.h>
 
 #include "version.h"
-#include "flashsystem.h"
-#include "abc.h"
-#include "argconv.h"
+#include "scripting/flash/system/flashsystem.h"
+#include "scripting/abc.h"
+#include "scripting/argconv.h"
 #include "compat.h"
 #include "backends/security.h"
 
 #include <istream>
+#include <gdk/gdk.h>
 
 using namespace lightspark;
 
-SET_NAMESPACE("flash.system");
-
-REGISTER_CLASS_NAME(ApplicationDomain);
-REGISTER_CLASS_NAME(Capabilities);
-REGISTER_CLASS_NAME(LoaderContext);
-REGISTER_CLASS_NAME(Security);
-REGISTER_CLASS_NAME(SecurityDomain);
-
-
 #ifdef _WIN32
 const char* Capabilities::EMULATED_VERSION = "WIN 11,1,0," SHORTVERSION;
+const char* Capabilities::MANUFACTURER = "Adobe Windows";
 #else
 const char* Capabilities::EMULATED_VERSION = "LNX 11,1,0," SHORTVERSION;
+const char* Capabilities::MANUFACTURER = "Adobe Linux";
 #endif
 
 
@@ -56,8 +50,11 @@ void Capabilities::sinit(Class_base* c)
 	c->setDeclaredMethodByQName("isDebugger","",Class<IFunction>::getFunction(_getIsDebugger),GETTER_METHOD,false);
 	c->setDeclaredMethodByQName("isEmbeddedInAcrobat","",Class<IFunction>::getFunction(_getIsEmbeddedInAcrobat),GETTER_METHOD,false);
 	c->setDeclaredMethodByQName("localFileReadDisable","",Class<IFunction>::getFunction(_getLocalFileReadDisable),GETTER_METHOD,false);
+	c->setDeclaredMethodByQName("manufacturer","",Class<IFunction>::getFunction(_getManufacturer),GETTER_METHOD,false);
 	c->setDeclaredMethodByQName("os","",Class<IFunction>::getFunction(_getOS),GETTER_METHOD,false);
 	c->setDeclaredMethodByQName("serverString","",Class<IFunction>::getFunction(_getServerString),GETTER_METHOD,false);
+	c->setDeclaredMethodByQName("screenResolutionX","",Class<IFunction>::getFunction(_getScreenResolutionX),GETTER_METHOD,false);
+	c->setDeclaredMethodByQName("screenResolutionY","",Class<IFunction>::getFunction(_getScreenResolutionY),GETTER_METHOD,false);
 }
 
 ASFUNCTIONBODY(Capabilities,_getPlayerType)
@@ -91,6 +88,11 @@ ASFUNCTIONBODY(Capabilities,_getLocalFileReadDisable)
 	return abstract_b(true);
 }
 
+ASFUNCTIONBODY(Capabilities,_getManufacturer)
+{
+	return Class<ASString>::getInstanceS(MANUFACTURER);
+}
+
 ASFUNCTIONBODY(Capabilities,_getOS)
 {
 	return Class<ASString>::getInstanceS("Linux");
@@ -105,6 +107,18 @@ ASFUNCTIONBODY(Capabilities,_getServerString)
 {
 	LOG(LOG_NOT_IMPLEMENTED, "Capabilities.serverString is not implemented");
 	return Class<ASString>::getInstanceS("");
+}
+ASFUNCTIONBODY(Capabilities,_getScreenResolutionX)
+{
+	GdkScreen*  screen = gdk_screen_get_default();
+	gint width = gdk_screen_get_width (screen);
+	return abstract_d(width);
+}
+ASFUNCTIONBODY(Capabilities,_getScreenResolutionY)
+{
+	GdkScreen*  screen = gdk_screen_get_default();
+	gint height = gdk_screen_get_height (screen);
+	return abstract_d(height);
 }
 
 ApplicationDomain::ApplicationDomain(Class_base* c, _NR<ApplicationDomain> p):ASObject(c),parentDomain(p)
@@ -248,6 +262,28 @@ ASObject* ApplicationDomain::getVariableByString(const std::string& str, ASObjec
 	return getVariableAndTargetByMultiname(name, target);
 }
 
+bool ApplicationDomain::findTargetByMultiname(const multiname& name, ASObject*& target)
+{
+	//Check in the parent first
+	if(!parentDomain.isNull())
+	{
+		bool ret=parentDomain->findTargetByMultiname(name, target);
+		if(ret)
+			return true;
+	}
+
+	for(uint32_t i=0;i<globalScopes.size();i++)
+	{
+		bool ret=globalScopes[i]->hasPropertyByMultiname(name,true,true);
+		if(ret)
+		{
+			target=globalScopes[i];
+			return true;
+		}
+	}
+	return false;
+}
+
 ASObject* ApplicationDomain::getVariableAndTargetByMultiname(const multiname& name, ASObject*& target)
 {
 	//Check in the parent first
@@ -264,6 +300,28 @@ ASObject* ApplicationDomain::getVariableAndTargetByMultiname(const multiname& na
 		if(!o.isNull())
 		{
 			target=globalScopes[i];
+			// No incRef, return a reference borrowed from globalScopes
+			return o.getPtr();
+		}
+	}
+	return NULL;
+}
+
+ASObject* ApplicationDomain::getVariableByMultinameOpportunistic(const multiname& name)
+{
+	//Check in the parent first
+	if(!parentDomain.isNull())
+	{
+		ASObject* ret=parentDomain->getVariableByMultinameOpportunistic(name);
+		if(ret)
+			return ret;
+	}
+
+	for(uint32_t i=0;i<globalScopes.size();i++)
+	{
+		_NR<ASObject> o=globalScopes[i]->getVariableByMultinameOpportunistic(name);
+		if(!o.isNull())
+		{
 			// No incRef, return a reference borrowed from globalScopes
 			return o.getPtr();
 		}
@@ -391,8 +449,8 @@ ASFUNCTIONBODY(Security, allowInsecureDomain)
 
 ASFUNCTIONBODY(Security, loadPolicyFile)
 {
-	LOG(LOG_INFO, "Loading policy file: " << getSys()->getOrigin().goToURL(args[0]->toString()));
-	getSys()->securityManager->addPolicyFile(getSys()->getOrigin().goToURL(args[0]->toString()));
+	LOG(LOG_INFO, "Loading policy file: " << getSys()->mainClip->getOrigin().goToURL(args[0]->toString()));
+	getSys()->securityManager->addPolicyFile(getSys()->mainClip->getOrigin().goToURL(args[0]->toString()));
 	assert_and_throw(argslen == 1);
 	return NULL;
 }
@@ -413,4 +471,17 @@ ASFUNCTIONBODY(lightspark, fscommand)
 		getSys()->setShutdownFlag();
 	}
 	return NULL;
+}
+
+
+void System::sinit(Class_base* c)
+{
+	c->setDeclaredMethodByQName("totalMemory","",Class<IFunction>::getFunction(totalMemory),GETTER_METHOD,false);
+}
+
+
+ASFUNCTIONBODY(System,totalMemory)
+{
+	LOG(LOG_NOT_IMPLEMENTED, "System.totalMemory not implemented");
+	return abstract_d(0);
 }

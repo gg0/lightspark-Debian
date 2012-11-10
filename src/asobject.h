@@ -18,7 +18,7 @@
 **************************************************************************/
 
 #ifndef ASOBJECT_H
-#define ASOBJECT_H
+#define ASOBJECT_H 1
 
 #include "compat.h"
 #include "swftypes.h"
@@ -26,6 +26,7 @@
 #include "threading.h"
 #include "memory_support.h"
 #include <map>
+#include <boost/intrusive/list.hpp>
 
 #define ASFUNCTION(name) \
 	static ASObject* name(ASObject* , ASObject* const* args, const unsigned int argslen)
@@ -126,19 +127,18 @@ namespace lightspark
 
 class ASObject;
 class IFunction;
-class Manager;
 template<class T> class Class;
 class Class_base;
 class ByteArray;
+class Loader;
 class Type;
 class ABCContext;
 
-enum TRAIT_KIND { NO_CREATE_TRAIT=0, DECLARED_TRAIT=1, DYNAMIC_TRAIT=2, BORROWED_TRAIT=4,CONSTANT_TRAIT=9 /* constants are also declared traits */ };
+enum TRAIT_KIND { NO_CREATE_TRAIT=0, DECLARED_TRAIT=1, DYNAMIC_TRAIT=2, CONSTANT_TRAIT=9 /* constants are also declared traits */ };
 enum TRAIT_STATE { NO_STATE=0, HAS_GETTER_SETTER=1, TYPE_RESOLVED=2 };
 
 struct variable
 {
-	nsNameAndKind ns;
 	ASObject* var;
 	union
 	{
@@ -150,22 +150,43 @@ struct variable
 	IFunction* getter;
 	TRAIT_KIND kind;
 	TRAIT_STATE traitState;
-	variable(const nsNameAndKind& _ns, TRAIT_KIND _k)
-		: ns(_ns),var(NULL),typeUnion(NULL),setter(NULL),getter(NULL),kind(_k),traitState(NO_STATE) {}
-	variable(const nsNameAndKind& _ns, TRAIT_KIND _k, ASObject* _v, multiname* _t, const Type* type);
+	variable(TRAIT_KIND _k)
+		: var(NULL),typeUnion(NULL),setter(NULL),getter(NULL),kind(_k),traitState(NO_STATE) {}
+	variable(TRAIT_KIND _k, ASObject* _v, multiname* _t, const Type* type);
 	void setVar(ASObject* v);
+	/*
+	 * To be used only if the value is guaranteed to be of the right type
+	 */
+	void setVarNoCoerce(ASObject* v);
+};
+
+struct varName
+{
+	uint32_t nameId;
+	nsNameAndKind ns;
+	varName(uint32_t name, const nsNameAndKind& _ns):nameId(name),ns(_ns){}
+	bool operator<(const varName& r) const
+	{
+		//Sort by name first
+		if(nameId==r.nameId)
+		{
+			//Then by namespace
+			return ns<r.ns;
+		}
+		else
+			return nameId<r.nameId;
+	}
 };
 
 class variables_map
 {
 public:
-	//Names are represented by strings in the string pools
-	//Values are something like contextBase+contextOffset
-	typedef std::multimap<uint32_t,variable,std::less<uint32_t>,reporter_allocator<std::pair<const uint32_t, variable>>>
+	//Names are represented by strings in the string and namespace pools
+	typedef std::map<varName,variable,std::less<varName>,reporter_allocator<std::pair<const varName, variable>>>
 		mapType;
 	mapType Variables;
-	typedef std::multimap<uint32_t,variable>::iterator var_iterator;
-	typedef std::multimap<uint32_t,variable>::const_iterator const_var_iterator;
+	typedef std::map<varName,variable>::iterator var_iterator;
+	typedef std::map<varName,variable>::const_iterator const_var_iterator;
 	std::vector<var_iterator, reporter_allocator<var_iterator>> slots_vars;
 	variables_map(MemoryAccount* m);
 	/**
@@ -177,15 +198,28 @@ public:
 	*/
 	variable* findObjVar(uint32_t nameId, const nsNameAndKind& ns, TRAIT_KIND createKind, uint32_t traitKinds);
 	variable* findObjVar(const multiname& mname, TRAIT_KIND createKind, uint32_t traitKinds);
+	/**
+	 * Const version of findObjVar, useful when looking for getters
+	 */
+	const variable* findObjVar(const multiname& mname, uint32_t traitKinds) const;
 	//Initialize a new variable specifying the type (TODO: add support for const)
 	void initializeVar(const multiname& mname, ASObject* obj, multiname* typemname, ABCContext* context, TRAIT_KIND traitKind);
 	void killObjVar(const multiname& mname);
 	ASObject* getSlot(unsigned int n)
 	{
-		assert(n<=slots_vars.size());
+		assert_and_throw(n > 0 && n<=slots_vars.size());
 		return slots_vars[n-1]->second.var;
 	}
+	/*
+	 * This method does throw if the slot id is not valid
+	 */
+	void validateSlotId(unsigned int n) const;
 	void setSlot(unsigned int n,ASObject* o);
+	/*
+	 * This version of the call is guarantee to require no type conversion
+	 * this is verified at optimization time
+	 */
+	void setSlotNoCoerce(unsigned int n,ASObject* o);
 	void initSlot(unsigned int n, uint32_t nameId, const nsNameAndKind& ns);
 	int size() const
 	{
@@ -203,38 +237,23 @@ public:
 	void destroyContents();
 };
 
-/*
- * This class manages a list of unreferenced
- * objects (ref_count == 0), which can be reused
- * to save new/delete. ASObjects that have their
- * 'manager' property set wont delete themselves
- * on decRef to zero, but call Manager::put.
- */
-class Manager
-{
-private:
-	std::vector<ASObject*> available;
-	uint32_t maxCache;
-public:
-	Manager(uint32_t m):maxCache(m){}
-template<class T>
-	T* get();
-	void put(ASObject* o);
-	~Manager();
-};
-
 enum METHOD_TYPE { NORMAL_METHOD=0, SETTER_METHOD=1, GETTER_METHOD=2 };
 //for toPrimitive
 enum TP_HINT { NO_HINT, NUMBER_HINT, STRING_HINT };
 
-class ASObject: public memory_reporter
+class ASObject: public memory_reporter, public boost::intrusive::list_base_hook<>
 {
-friend class Manager;
 friend class ABCVm;
 friend class ABCContext;
 friend class Class_base; //Needed for forced cleanup
 friend void lookupAndLink(Class_base* c, const tiny_string& name, const tiny_string& interfaceNs);
 friend class IFunction; //Needed for clone
+private:
+	variables_map Variables;
+	Class_base* classdef;
+	ATOMIC_INT32(ref_count);
+	const variable* findGettable(const multiname& name) const DLL_LOCAL;
+	variable* findSettable(const multiname& name, bool* has_getter=NULL) DLL_LOCAL;
 protected:
 	ASObject(MemoryAccount* m);
 	ASObject(const ASObject& o);
@@ -244,29 +263,17 @@ protected:
 				std::map<const ASObject*, uint32_t>& objMap,
 				std::map<const Class_base*, uint32_t> traitsMap) const;
 	void setClass(Class_base* c);
-private:
-	//maps variable name to namespace and var
-	variables_map Variables;
-	variable* findGettable(const multiname& name, bool borrowedMode) DLL_LOCAL;
-	variable* findSettable(const multiname& name, bool borrowedMode, bool* has_getter=NULL) DLL_LOCAL;
-
-	ATOMIC_INT32(ref_count);
-	Manager* manager;
-	Class_base* classdef;
-	ACQUIRE_RELEASE_FLAG(constructed);
-	Mutex constructionMutex;
-	Cond constructionSignal;
+	static variable* findSettableImpl(variables_map& map, const multiname& name, bool* has_getter);
+	static const variable* findGettableImpl(const variables_map& map, const multiname& name);
 public:
 	ASObject(Class_base* c);
 #ifndef NDEBUG
 	//Stuff only used in debugging
-	bool initialized;
+	bool initialized:1;
 	int getRefCount(){ return ref_count; }
 #endif
-	bool implEnable;
+	bool implEnable:1;
 	Class_base* getClass() const { return classdef; }
-	bool isConstructed() const { return ACQUIRE_READ(constructed); }
-	bool waitUntilConstructed(unsigned long maxwait_ms=0);
 	ASFUNCTION(_constructor);
 	ASFUNCTION(_toString);
 	ASFUNCTION(hasOwnProperty);
@@ -283,19 +290,14 @@ public:
 	void decRef()
 	{
 		//std::cout << "decref " << this << std::endl;
-		assert_and_throw(ref_count>0);
+		assert(ref_count>0);
 		uint32_t t=ATOMIC_DECREMENT(ref_count);
 		if(t==0)
 		{
-			if(manager)
-				manager->put(this);
-			else
-			{
-				//Let's make refcount very invalid
-				ref_count=-1024;
-				//std::cout << "delete " << this << std::endl;
-				delete this;
-			}
+			//Let's make refcount very invalid
+			ref_count=-1024;
+			//std::cout << "delete " << this << std::endl;
+			delete this;
 		}
 	}
 	void fake_decRef()
@@ -331,6 +333,11 @@ public:
 	{
 		return getVariableByMultiname(name,opt,classdef);
 	}
+	/*
+	 * Helper method using the get the raw variable struct instead of calling the getter.
+	 * It is used by getVariableByMultiname and by early binding code
+	 */
+	const variable* findVariableByMultiname(const multiname& name, GET_VARIABLE_OPTION opt, Class_base* cls);
 	/*
 	 * Gets a variable of this object. It looks through all classes (beginning at cls),
 	 * then the prototype chain, and then instance variables.
@@ -369,7 +376,7 @@ public:
 	void setDeclaredMethodByQName(const tiny_string& name, const tiny_string& ns, IFunction* o, METHOD_TYPE type, bool isBorrowed);
 	void setDeclaredMethodByQName(const tiny_string& name, const nsNameAndKind& ns, IFunction* o, METHOD_TYPE type, bool isBorrowed);
 	void setDeclaredMethodByQName(uint32_t nameId, const nsNameAndKind& ns, IFunction* o, METHOD_TYPE type, bool isBorrowed);
-	virtual bool hasPropertyByMultiname(const multiname& name, bool considerDynamic);
+	virtual bool hasPropertyByMultiname(const multiname& name, bool considerDynamic, bool considerPrototype);
 	ASObject* getSlot(unsigned int n)
 	{
 		return Variables.getSlot(n);
@@ -377,6 +384,10 @@ public:
 	void setSlot(unsigned int n,ASObject* o)
 	{
 		Variables.setSlot(n,o);
+	}
+	void setSlotNoCoerce(unsigned int n,ASObject* o)
+	{
+		Variables.setSlotNoCoerce(n,o);
 	}
 	void initSlot(unsigned int n, const multiname& name);
 	unsigned int numVariables() const;
@@ -417,6 +428,7 @@ public:
 
 	//Comparison operators
 	virtual bool isEqual(ASObject* r);
+	virtual bool isEqualStrict(ASObject* r);
 	virtual TRISTATE isLess(ASObject* r);
 
 	static void sinit(Class_base* c);
@@ -477,4 +489,4 @@ template<> inline bool ASObject::is<Class_base>() const { return type==T_CLASS; 
 template<> inline bool ASObject::is<Template_base>() const { return type==T_TEMPLATE; }
 template<> inline bool ASObject::is<Type>() const { return type==T_CLASS; }
 }
-#endif
+#endif /* ASOBJECT_H */

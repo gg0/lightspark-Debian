@@ -18,15 +18,11 @@
 **************************************************************************/
 
 #include "parsing/amf3_generator.h"
-#include "argconv.h"
-#include "Number.h"
+#include "scripting/argconv.h"
+#include "scripting/toplevel/Number.h"
 
 using namespace std;
 using namespace lightspark;
-
-SET_NAMESPACE("");
-
-REGISTER_CLASS_NAME(Number);
 
 const number_t Number::NaN = numeric_limits<double>::quiet_NaN();
 
@@ -177,15 +173,13 @@ void Number::purgeTrailingZeroes(char* buf)
 
 ASFUNCTIONBODY(Number,_toString)
 {
-	if(Class<Number>::getClass()->prototype == obj)
+	if(Class<Number>::getClass()->prototype->getObj() == obj)
 		return Class<ASString>::getInstanceS("0");
 	if(!obj->is<Number>())
 		throw Class<TypeError>::getInstanceS("Error #1004: Number.toString is not generic");
 	Number* th=static_cast<Number*>(obj);
 	int radix=10;
 	ARG_UNPACK (radix,10);
-	if (radix < 2 || radix > 36)
-		throw Class<RangeError>::getInstanceS("Error #1003");
 
 	if(radix==10 || std::isnan(th->val) || std::isinf(th->val))
 	{
@@ -194,24 +188,8 @@ ASFUNCTIONBODY(Number,_toString)
 	}
 	else
 	{
-		tiny_string res = "";
-		static char digits[] ="0123456789abcdefghijklmnopqrstuvwxyz";
-		number_t v = th->val;
-		number_t r = (number_t)radix;
-		bool negative = v<0;
-		if (negative) 
-			v = -v;
-		do 
-		{
-			res = tiny_string::fromChar(digits[(int)(v-(floor(v/r)*radix))])+res;
-			v = v/r;
-		} 
-		while (v >= 1.0);
-		if (negative) 
-			res = tiny_string::fromChar('-')+res;
-		return Class<ASString>::getInstanceS(res);
+		return Class<ASString>::getInstanceS(Number::toStringRadix(th->val, radix));
 	}
-
 }
 
 ASFUNCTIONBODY(Number,generator)
@@ -252,6 +230,32 @@ tiny_string Number::toString(number_t val)
 	return tiny_string(buf,true);
 }
 
+tiny_string Number::toStringRadix(number_t val, int radix)
+{
+	if(radix < 2 || radix > 36)
+		throw Class<RangeError>::getInstanceS("Error #1003");
+
+	if(std::isnan(val) || std::isinf(val))
+		return Number::toString(val);
+
+	tiny_string res = "";
+	static char digits[] ="0123456789abcdefghijklmnopqrstuvwxyz";
+	number_t v = val;
+	const number_t r = (number_t)radix;
+	bool negative = v<0;
+	if (negative) 
+		v = -v;
+	do 
+	{
+		res = tiny_string::fromChar(digits[(int)(v-(floor(v/r)*r))])+res;
+		v = v/r;
+	} 
+	while (v >= 1.0);
+	if (negative)
+		res = tiny_string::fromChar('-')+res;
+	return res;
+}
+
 void Number::sinit(Class_base* c)
 {
 	c->isFinal = true;
@@ -276,10 +280,12 @@ void Number::sinit(Class_base* c)
 ASFUNCTIONBODY(Number,_constructor)
 {
 	Number* th=static_cast<Number*>(obj);
-	if(args && argslen==1)
-		th->val=args[0]->toNumber();
-	else
-		th->val=0;
+	if(argslen==0)
+	{
+		//The number is already initialized to NaN
+		return NULL;
+	}
+	th->val=args[0]->toNumber();
 	return NULL;
 }
 

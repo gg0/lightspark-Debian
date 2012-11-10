@@ -19,15 +19,18 @@
 **************************************************************************/
 
 #include "version.h"
-#include "plugin.h"
+#include "plugin/plugin.h"
 #include "logger.h"
 #include "compat.h"
 #include <string>
 #include <algorithm>
+#ifdef _WIN32
+#	include <gdk/gdkwin32.h>
+#endif
 #include "backends/urlutils.h"
 #include "backends/security.h"
 
-#include "npscriptobject.h"
+#include "plugin/npscriptobject.h"
 
 #define MIME_TYPES_HANDLED  "application/x-shockwave-flash"
 #define FAKE_MIME_TYPE  "application/x-lightspark"
@@ -81,21 +84,22 @@ lightspark::Downloader* NPDownloadManager::download(const lightspark::URLInfo& u
    Returns a pointer to the newly create Downloader for the given URL
  * \param[in] url The URL (as a \c URLInfo) the \c Downloader is requested for
  * \param[in] data Additional data that will be sent with the request
+ * \param[in] headers Request headers in the full form, f.e. "Content-Type: ..."
  * \return A pointer to a newly created \c Downloader for the given URL.
  * \see DownloadManager::destroy()
  */
 lightspark::Downloader* NPDownloadManager::downloadWithData(const lightspark::URLInfo& url, const std::vector<uint8_t>& data, 
-		const char* contentType, lightspark::ILoadable* owner)
+		const std::list<tiny_string>& headers, lightspark::ILoadable* owner)
 {
 	// Handle RTMP requests internally, not through NPAPI
 	if(url.isRTMP())
 	{
-		return StandaloneDownloadManager::downloadWithData(url, data, contentType, owner);
+		return StandaloneDownloadManager::downloadWithData(url, data, headers, owner);
 	}
 
 	LOG(LOG_INFO, _("NET: PLUGIN: DownloadManager::downloadWithData '") << url.getParsedURL());
 	//Register this download
-	NPDownloader* downloader=new NPDownloader(url.getParsedURL(), data, contentType, instance, owner);
+	NPDownloader* downloader=new NPDownloader(url.getParsedURL(), data, headers, instance, owner);
 	addDownloader(downloader);
 	return downloader;
 }
@@ -162,8 +166,8 @@ NPDownloader::NPDownloader(const lightspark::tiny_string& _url, bool _cached, NP
  * \param[in] owner The \c LoaderInfo object that keeps track of this download
  */
 NPDownloader::NPDownloader(const lightspark::tiny_string& _url, const std::vector<uint8_t>& _data,
-		const char* contentType, NPP _instance, lightspark::ILoadable* owner):
-	Downloader(_url, _data, contentType, owner),instance(_instance),cleanupInDestroyStream(false),state(INIT)
+		const std::list<tiny_string>& headers, NPP _instance, lightspark::ILoadable* owner):
+	Downloader(_url, _data, headers, owner),instance(_instance),cleanupInDestroyStream(false),state(INIT)
 {
 	NPN_PluginThreadAsyncCall(instance, dlStartCallback, this);
 }
@@ -183,10 +187,17 @@ void NPDownloader::dlStartCallback(void* t)
 		e=NPN_GetURLNotify(th->instance, th->url.raw_buf(), NULL, th);
 	else
 	{
+		const char *linefeed="\r\n";
+		const char *linefeedend=linefeed+strlen(linefeed);
 		vector<uint8_t> tmpData;
-		tmpData.insert(tmpData.end(), th->contentType, th->contentType+strlen(th->contentType));
+		std::list<tiny_string>::const_iterator it;
+		for(it=th->requestHeaders.begin(); it!=th->requestHeaders.end(); ++it)
+		{
+			tmpData.insert(tmpData.end(), it->raw_buf(), it->raw_buf()+it->numBytes());
+			tmpData.insert(tmpData.end(), linefeed, linefeedend);
+		}
 		char buf[40];
-		snprintf(buf, 40, "\nContent-Length: %lu\n\n", th->data.size());
+		snprintf(buf, 40, "Content-Length: %lu\r\n\r\n", th->data.size());
 		tmpData.insert(tmpData.end(), buf, buf+strlen(buf));
 		tmpData.insert(tmpData.end(), th->data.begin(), th->data.end());
 		e=NPN_PostURLNotify(th->instance, th->url.raw_buf(), NULL, tmpData.size(), (const char*)&tmpData[0], false, th);
@@ -209,8 +220,10 @@ NPError NS_PluginInitialize()
 
 	/* setup glib/gtk, this is already done on firefox/linux, but needs to be done
 	 * on firefox/windows (because there we statically link to gtk) */
+#ifdef HAVE_G_THREAD_INIT
 	if(!g_thread_supported())
 		g_thread_init(NULL);
+#endif
 #ifdef _WIN32
 	//Calling gdk_threads_init multiple times (once by firefox, once by us)
 	//will break in various different ways (hangs, segfaults, etc.)
@@ -294,10 +307,6 @@ void NS_DestroyPluginInstance(nsPluginInstanceBase * aPlugin)
 	setTLSSys( NULL );
 }
 
-#ifdef MEMORY_USAGE_PROFILING
-static MemoryAccount sysAccount("sysAccount");
-#endif
-
 ////////////////////////////////////////
 //
 // nsPluginInstance class implementation
@@ -308,14 +317,11 @@ nsPluginInstance::nsPluginInstance(NPP aInstance, int16_t argc, char** argn, cha
 {
 	LOG(LOG_INFO, "Lightspark version " << VERSION << " Copyright 2009-2012 Alessandro Pignotti and others");
 	setTLSSys( NULL );
-#ifdef MEMORY_USAGE_PROFILING
-	m_sys=new (&sysAccount) lightspark::SystemState(0, lightspark::SystemState::FLASH);
-#else
-	m_sys=new ((MemoryAccount*)NULL) lightspark::SystemState(0, lightspark::SystemState::FLASH);
-#endif
+	m_sys=new lightspark::SystemState(0, lightspark::SystemState::FLASH);
 	//Files running in the plugin have REMOTE sandbox
 	m_sys->securityManager->setSandboxType(lightspark::SecurityManager::REMOTE);
-	//Find flashvars argument
+	//Parse OBJECT/EMBED tag attributes
+	string baseURL;
 	for(int i=0;i<argc;i++)
 	{
 		if(argn[i]==NULL || argv[i]==NULL)
@@ -324,8 +330,18 @@ nsPluginInstance::nsPluginInstance(NPP aInstance, int16_t argc, char** argn, cha
 		{
 			m_sys->parseParametersFromFlashvars(argv[i]);
 		}
+		else if(strcasecmp(argn[i],"base")==0)
+		{
+			baseURL = argv[i];
+			//This is a directory, not a file
+			baseURL += "/";
+		}
 		//The SWF file url should be getted from NewStream
 	}
+	//basedir is a qualified URL or a path relative to the HTML page
+	URLInfo page(getPageURL());
+	m_sys->mainClip->setBaseURL(page.goToURL(baseURL).getURL());
+
 	m_sys->downloadManager=new NPDownloadManager(mInstance);
 
 	int p_major, p_minor, n_major, n_minor;
@@ -357,6 +373,7 @@ nsPluginInstance::~nsPluginInstance()
 	m_sys->setShutdownFlag();
 
 	m_sys->destroy();
+	delete m_sys;
 	delete m_pt;
 	setTLSSys(NULL);
 }
@@ -427,7 +444,7 @@ NPError nsPluginInstance::GetValue(NPPVariable aVariable, void *aValue)
  */
 GtkWidget* PluginEngineData::createGtkWidget()
 {
-	HWND parent_hwnd = instance->mWindow;
+	HWND parent_hwnd = (HWND)instance->mWindow;
 
 	GtkWidget* widget=gtk_window_new(GTK_WINDOW_TOPLEVEL);
 	/* Remove window decorations */
@@ -474,7 +491,16 @@ NPError nsPluginInstance::SetWindow(NPWindow* aWindow)
 	mY = aWindow->y;
 	uint32_t width = aWindow->width;
 	uint32_t height = aWindow->height;
-	if (mWindow == (NativeWindow) aWindow->window)
+	/* aWindow->window is always a void*,
+	 * GdkNativeWindow is int on linux and void* on win32.
+	 * Casting void* to int gvies an error (loss of precision), so we cast to intptr_t.
+	 */
+#ifdef _WIN32
+	GdkNativeWindow win = reinterpret_cast<GdkNativeWindow>(aWindow->window);
+#else
+	GdkNativeWindow win = reinterpret_cast<intptr_t>(aWindow->window);
+#endif
+	if (mWindow == win )
 	{
 		// The page with the plugin is being resized.
 		// Save any UI information because the next time
@@ -485,7 +511,7 @@ NPError nsPluginInstance::SetWindow(NPWindow* aWindow)
 	assert(mWindow==0);
 
 	PluginEngineData* e = new PluginEngineData(this, width, height);
-	mWindow = (NativeWindow) aWindow->window;
+	mWindow = win;
 
 	LOG(LOG_INFO,"From Browser: Window " << mWindow << " Width: " << width << " Height: " << height);
 
@@ -588,7 +614,8 @@ NPError nsPluginInstance::NewStream(NPMIMEType type, NPStream* stream, NPBool se
 	else if(m_pt==NULL)
 	{
 		//This is the main file
-		m_sys->setOrigin(stream->url);
+		m_sys->mainClip->setOrigin(stream->url);
+		m_sys->parseParametersFromURL(m_sys->mainClip->getOrigin());
 		*stype=NP_ASFILE;
 		//Let's get the cookies now, they might be useful
 		uint32_t len = 0;
@@ -606,11 +633,11 @@ NPError nsPluginInstance::NewStream(NPMIMEType type, NPStream* stream, NPBool se
 			m_sys->setCookies(packedCookies.c_str());
 		}
 		//Now create a Downloader for this
-		dl=new NPDownloader(stream->url,m_sys->getLoaderInfo());
+		dl=new NPDownloader(stream->url,m_sys->mainClip->loaderInfo.getPtr());
 		dl->setLength(stream->end);
 		mainDownloader=dl;
 		mainDownloaderStream.rdbuf(mainDownloader);
-		m_pt=new lightspark::ParseThread(mainDownloaderStream,m_sys);
+		m_pt=new lightspark::ParseThread(mainDownloaderStream,m_sys->mainClip);
 		m_sys->addJob(m_pt);
 	}
 	//The downloader is set as the private data for this stream
@@ -645,6 +672,7 @@ int32_t nsPluginInstance::Write(NPStream *stream, int32_t offset, int32_t len, v
 		{
 			//NPN_DestroyStream will call NPP_DestroyStream
 			NPError e=NPN_DestroyStream(mInstance, stream, NPRES_USER_BREAK);
+			(void)e; // silence warning about unused variable
 			assert(e==NPERR_NO_ERROR);
 			return -1;
 		}
@@ -724,7 +752,7 @@ void PluginEngineData::stopMainDownload()
 		instance->mainDownloader->stop();
 }
 
-NativeWindow PluginEngineData::getWindowForGnash()
+GdkNativeWindow PluginEngineData::getWindowForGnash()
 {
 	return instance->mWindow;
 }

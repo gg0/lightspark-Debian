@@ -17,8 +17,8 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
-#ifndef TAGS_H
-#define TAGS_H
+#ifndef PARSING_TAGS_H
+#define PARSING_TAGS_H 1
 
 #include "compat.h"
 #include <vector>
@@ -514,6 +514,7 @@ private:
 	UI16_SWF FrameCount;
 public:
 	DefineSpriteTag(RECORDHEADER h, std::istream& in, RootMovieClip* root);
+	~DefineSpriteTag();
 	virtual int getId() const { return SpriteID; }
 	virtual ASObject* instance(Class_base* c=NULL) const;
 };
@@ -731,4 +732,4 @@ public:
 
 };
 
-#endif
+#endif /* PARSING_TAGS_H */

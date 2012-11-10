@@ -17,15 +17,12 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
-#include "Math.h"
-#include "class.h"
-#include "argconv.h"
+#include "scripting/toplevel/Math.h"
+#include "scripting/class.h"
+#include "scripting/argconv.h"
 
 using namespace std;
 using namespace lightspark;
-
-SET_NAMESPACE("");
-REGISTER_CLASS_NAME(Math);
 
 void Math::sinit(Class_base* c)
 {

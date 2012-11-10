@@ -25,13 +25,13 @@
 #include <algorithm>
 #include <sstream>
 #include "scripting/abc.h"
-#include "tags.h"
+#include "parsing/tags.h"
 #include "backends/geometry.h"
 #include "backends/security.h"
 #include "swftypes.h"
 #include "logger.h"
 #include "compat.h"
-#include "streams.h"
+#include "parsing/streams.h"
 #include "scripting/flash/display/BitmapData.h"
 
 #undef RGB
@@ -48,9 +48,9 @@ Tag* TagFactory::readTag(RootMovieClip* root)
 	{
 		f >> h;
 	}
-	catch (ifstream::failure e) {
+	catch (ifstream::failure& e) {
 		if(!f.eof()) //Only handle eof
-			throw e;
+			throw;
 		f.clear();
 		LOG(LOG_INFO,"Simulating EndTag at EOF @ " << f.tellg());
 		return new EndTag(h,f);
@@ -289,7 +289,7 @@ DefineEditTextTag::DefineEditTextTag(RECORDHEADER h, std::istream& in, RootMovie
 		if(HasFontClass)
 			in >> FontClass;
 		in >> FontHeight;
-		textData.fontSize = FontHeight;
+		textData.fontSize = twipsToPixels(FontHeight);
 	}
 	if(HasTextColor)
 		in >> TextColor;
@@ -323,7 +323,7 @@ DefineSpriteTag::DefineSpriteTag(RECORDHEADER h, std::istream& in, RootMovieClip
 {
 	in >> SpriteID >> FrameCount;
 
-	LOG(LOG_TRACE,_("DefineSprite ID: ") << SpriteID);
+	LOG(LOG_TRACE,"DefineSprite ID: " << SpriteID);
 	//Create a non top level TagFactory
 	TagFactory factory(in, false);
 	Tag* tag;
@@ -338,6 +338,7 @@ DefineSpriteTag::DefineSpriteTag(RECORDHEADER h, std::istream& in, RootMovieClip
 		switch(tag->getType())
 		{
 			case DICT_TAG:
+				delete tag;
 				throw ParseException("Dictionary tag inside a sprite. Should not happen.");
 			case DISPLAY_LIST_TAG:
 				addToFrame(static_cast<DisplayListTag*>(tag));
@@ -345,6 +346,7 @@ DefineSpriteTag::DefineSpriteTag(RECORDHEADER h, std::istream& in, RootMovieClip
 				break;
 			case SHOW_TAG:
 			{
+				delete tag;
 				frames.emplace_back(Frame());
 				empty=true;
 				break;
@@ -352,15 +354,19 @@ DefineSpriteTag::DefineSpriteTag(RECORDHEADER h, std::istream& in, RootMovieClip
 			case SYMBOL_CLASS_TAG:
 			case ABC_TAG:
 			case CONTROL_TAG:
+				delete tag;
 				throw ParseException("Control tag inside a sprite. Should not happen.");
 			case FRAMELABEL_TAG:
 				addFrameLabel(frames.size()-1,static_cast<FrameLabelTag*>(tag)->Name);
+				delete tag;
 				empty=false;
 				break;
 			case TAG:
+				delete tag;
 				LOG(LOG_NOT_IMPLEMENTED,_("Unclassified tag inside Sprite?"));
 				break;
 			case END_TAG:
+				delete tag;
 				done=true;
 				if(empty && frames.size()!=FrameCount)
 					frames.pop_back();
@@ -376,8 +382,13 @@ DefineSpriteTag::DefineSpriteTag(RECORDHEADER h, std::istream& in, RootMovieClip
 	}
 
 	setFramesLoaded(frames.size());
+}
 
-	LOG(LOG_TRACE,_("EndDefineSprite ID: ") << SpriteID);
+DefineSpriteTag::~DefineSpriteTag()
+{
+	//This is the actual parsed tag so it also has to clean up the tag in the FrameContainer
+	for(auto it=frames.begin();it!=frames.end();++it)
+		it->destroyTags();
 }
 
 ASObject* DefineSpriteTag::instance(Class_base* c) const
@@ -717,36 +728,35 @@ DefineBitsLosslessTag::DefineBitsLosslessTag(RECORDHEADER h, istream& in, int ve
 	assert(!zfstream.fail() && !zfstream.eof());
 
 	if(version == 1)
-	{	/* for version 1, the alpha field is always zero
-		 * but should not be interpreted. Setting it to
-		 * 0xff (opaque) allows us to handle it as ARGB
-		 */
-		for(size_t i=0;i<size;i+=4)
-			inData[i] = 0xFF;
-	}
-
-	fromRGB(inData, BitmapWidth, BitmapHeight, true);
+		fromRGB(inData, BitmapWidth, BitmapHeight, false);
+	else
+		fromRGB(inData, BitmapWidth, BitmapHeight, true);
 }
 
 ASObject* BitmapTag::instance(Class_base* c) const
 {
-	Class_base* realClass=(c)?c:bindedTo;
 	//Flex imports bitmaps using BitmapAsset as the base class, which is derived from bitmap
 	//Also BitmapData is used in the wild though, so support both cases
-	bool returnBitmap = false;
-	Class_base* classRet = Class<BitmapData>::getClass();
-	if(realClass && realClass->isSubClass(Class<Bitmap>::getClass()))
-		returnBitmap = true;
-	else if(realClass && realClass->isSubClass(Class<BitmapData>::getClass()))
-		classRet = realClass;
 
-	BitmapData* ret=new (classRet->memoryAccount) BitmapData(classRet, *this);
-	if(returnBitmap)
+	Class_base* realClass=(c)?c:bindedTo;
+	Class_base* classRet = Class<BitmapData>::getClass();
+
+	if(!realClass)
+		return new (classRet->memoryAccount) BitmapData(classRet, *this);
+
+	if(realClass->isSubClass(Class<Bitmap>::getClass()))
 	{
+		BitmapData* ret=new (classRet->memoryAccount) BitmapData(classRet, *this);
 		Bitmap* bitmapRet=new (realClass->memoryAccount) Bitmap(realClass,_MR(ret));
 		return bitmapRet;
 	}
-	return ret;
+
+	if(realClass->isSubClass(Class<BitmapData>::getClass()))
+	{
+		classRet = realClass;
+	}
+
+	return new (classRet->memoryAccount) BitmapData(classRet, *this);
 }
 
 DefineTextTag::DefineTextTag(RECORDHEADER h, istream& in, RootMovieClip* root,int v):DictionaryTag(h,root),
@@ -825,7 +835,7 @@ void DefineTextTag::computeCached() const
 		 * And, of course, scale by the TextHeight.
 		 */
 		int scaling = TextRecords[i].TextHeight * curFont->scaling;
-		for(int j=0;j<TextRecords[i].GlyphCount;++j)
+		for(uint32_t j=0;j<TextRecords[i].GlyphEntries.size();++j)
 		{
 			const GLYPHENTRY& ge = TextRecords[i].GlyphEntries[j];
 			const std::vector<SHAPERECORD>& sr = curFont->getGlyphShapes().at(ge.GlyphIndex).ShapeRecords;

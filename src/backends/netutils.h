@@ -18,8 +18,8 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
-#ifndef _NET_UTILS_H
-#define _NET_UTILS_H
+#ifndef BACKENDS_NETUTILS_H
+#define BACKENDS_NETUTILS_H 1
 
 #include "compat.h"
 #include <streambuf>
@@ -59,7 +59,7 @@ public:
 	virtual ~DownloadManager();
 	virtual Downloader* download(const URLInfo& url, bool cached, ILoadable* owner)=0;
 	virtual Downloader* downloadWithData(const URLInfo& url, const std::vector<uint8_t>& data,
-			const char* contentType, ILoadable* owner)=0;
+			const std::list<tiny_string>& headers, ILoadable* owner)=0;
 	virtual void destroy(Downloader* downloader)=0;
 	void stopAll();
 
@@ -74,7 +74,7 @@ public:
 	~StandaloneDownloadManager();
 	Downloader* download(const URLInfo& url, bool cached, ILoadable* owner);
 	Downloader* downloadWithData(const URLInfo& url, const std::vector<uint8_t>& data,
-			const char* contentType, ILoadable* owner);
+			const std::list<tiny_string>& headers, ILoadable* owner);
 	void destroy(Downloader* downloader);
 };
 
@@ -93,20 +93,20 @@ protected:
 	//Abstract base class, can't be constructed
 	Downloader(const tiny_string& _url, bool _cached, ILoadable* o);
 	Downloader(const tiny_string& _url, const std::vector<uint8_t>& data,
-			const char* contentType, ILoadable* o);
+		   const std::list<tiny_string>& headers, ILoadable* o);
 	//-- LOCKING
 	//Provides internal mutual exclusing
 	Mutex mutex;
 	//Signals the cache opening
 	Semaphore cacheOpened;
-	//True if cache has opened
-	bool cacheHasOpened;
 	//Signals new bytes available for reading
 	Semaphore dataAvailable;
 	//Signals termination of the download
 	Semaphore terminated;
 	//True if the download is terminated
 	bool hasTerminated;
+	//True if cache has opened
+	bool cacheHasOpened;
 
 	//-- STATUS
 	//True if the downloader is waiting for the cache to be opened
@@ -144,9 +144,12 @@ protected:
 	//Synchronize stableBuffer and buffer
 	void syncBuffers();
 
+	//-- PROGRESS MONITORING
+	ILoadable* owner;
+	void notifyOwnerAboutBytesTotal() const;
+	void notifyOwnerAboutBytesLoaded() const;
+
 	//-- CACHING
-	//True if the file is cached to disk (default = false)
-	bool cached;	
 	//Cache filename
 	tiny_string cacheFilename;
 	//Cache fstream
@@ -158,24 +161,16 @@ protected:
 	//Maximum size of the cache buffer
 	static const size_t cacheMaxSize = 8192;
 	//True if the cache file doesn't need to be deleted on destruction
-	bool keepCache;
+	bool keepCache:1;
+	//True if the file is cached to disk (default = false)
+	bool cached:1;
 	//Creates & opens a temporary cache file
 	void openCache();
 	//Opens an existing cache file
 	void openExistingCache(tiny_string filename);
 
-	//-- DOWNLOADED DATA
-	//File length (can change in certain cases, resulting in reallocation of the buffer (non-cached))
-	uint32_t length;
-	//Amount of data already received
-	uint32_t receivedLength;
-	//Append data to the internal buffer
-	void append(uint8_t* buffer, uint32_t length);
-	//Set the length of the downloaded file, can be called multiple times to accomodate a growing file
-	void setLength(uint32_t _length);
-
 	//-- HTTP REDIRECTION, STATUS & HEADERS
-	bool redirected;
+	bool redirected:1;
 	void setRedirected(const tiny_string& newURL)
 	{
 		redirected = true;
@@ -186,13 +181,18 @@ protected:
 	void parseHeaders(const char* headers, bool _setLength);
 	void parseHeader(std::string header, bool _setLength);
 	//Data to send to the host
+	const std::list<tiny_string> requestHeaders;
 	const std::vector<uint8_t> data;
-	const char* contentType;
 
-	//-- PROGRESS MONITORING
-	ILoadable* owner;
-	void notifyOwnerAboutBytesTotal() const;
-	void notifyOwnerAboutBytesLoaded() const;
+	//-- DOWNLOADED DATA
+	//File length (can change in certain cases, resulting in reallocation of the buffer (non-cached))
+	uint32_t length;
+	//Amount of data already received
+	uint32_t receivedLength;
+	//Append data to the internal buffer
+	void append(uint8_t* buffer, uint32_t length);
+	//Set the length of the downloaded file, can be called multiple times to accomodate a growing file
+	void setLength(uint32_t _length);
 public:
 	//This class can only get destroyed by DownloadManager derivate classes
 	virtual ~Downloader();
@@ -247,7 +247,7 @@ protected:
 	//Abstract base class, can not be constructed
 	ThreadedDownloader(const tiny_string& url, bool cached, ILoadable* o);
 	ThreadedDownloader(const tiny_string& url, const std::vector<uint8_t>& data,
-			const char* contentType, ILoadable* o);
+			   const std::list<tiny_string>& headers, ILoadable* o);
 //	//This class can only get destroyed by DownloadManager
 //	virtual ~ThreadedDownloader();
 };
@@ -264,7 +264,7 @@ private:
 public:
 	CurlDownloader(const tiny_string& _url, bool _cached, ILoadable* o);
 	CurlDownloader(const tiny_string& _url, const std::vector<uint8_t>& data,
-			const char* contentType, ILoadable* o);
+		       const std::list<tiny_string>& headers, ILoadable* o);
 };
 
 //LocalDownloader can be used as a thread job, standalone or as a streambuf
@@ -303,10 +303,10 @@ private:
 protected:
 	URLInfo url;
 	std::vector<uint8_t> postData;
+	std::list<tiny_string> requestHeaders;
 	Spinlock downloaderLock;
 	Downloader* downloader;
 	bool createDownloader(bool cached,
-			      const char* contentType=NULL,
 			      _NR<EventDispatcher> dispatcher=NullRef,
 			      ILoadable* owner=NULL,
 			      bool checkPolicyFile=true);
@@ -318,4 +318,4 @@ public:
 };
 
 };
-#endif
+#endif /* BACKENDS_NETUTILS_H */

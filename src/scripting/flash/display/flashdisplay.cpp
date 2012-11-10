@@ -19,53 +19,24 @@
 
 #include <list>
 
-#include "abc.h"
-#include "flashdisplay.h"
+#include "scripting/abc.h"
+#include "scripting/flash/display/flashdisplay.h"
 #include "swf.h"
-#include "flash/geom/flashgeom.h"
-#include "flash/system/flashsystem.h"
+#include "scripting/flash/geom/flashgeom.h"
+#include "scripting/flash/system/flashsystem.h"
 #include "parsing/streams.h"
 #include "compat.h"
-#include "class.h"
+#include "scripting/class.h"
 #include "backends/rendering.h"
 #include "backends/geometry.h"
-#include "flash/accessibility/flashaccessibility.h"
-#include "flash/display/BitmapData.h"
-#include "argconv.h"
-#include "toplevel/Vector.h"
+#include "scripting/flash/accessibility/flashaccessibility.h"
+#include "scripting/flash/display/BitmapData.h"
+#include "scripting/argconv.h"
+#include "scripting/toplevel/Vector.h"
 #include "backends/security.h"
 
 using namespace std;
 using namespace lightspark;
-
-SET_NAMESPACE("flash.display");
-
-REGISTER_CLASS_NAME(LoaderInfo);
-REGISTER_CLASS_NAME(MovieClip);
-REGISTER_CLASS_NAME(InteractiveObject);
-REGISTER_CLASS_NAME(DisplayObjectContainer);
-REGISTER_CLASS_NAME(Sprite);
-REGISTER_CLASS_NAME(Loader);
-REGISTER_CLASS_NAME(Shape);
-REGISTER_CLASS_NAME(MorphShape);
-REGISTER_CLASS_NAME(Stage);
-REGISTER_CLASS_NAME(Graphics);
-REGISTER_CLASS_NAME(LineScaleMode);
-REGISTER_CLASS_NAME(StageScaleMode);
-REGISTER_CLASS_NAME(StageAlign);
-REGISTER_CLASS_NAME(StageQuality);
-REGISTER_CLASS_NAME(StageDisplayState);
-REGISTER_CLASS_NAME(GradientType);
-REGISTER_CLASS_NAME(BlendMode);
-REGISTER_CLASS_NAME(SpreadMethod);
-REGISTER_CLASS_NAME(InterpolationMethod);
-REGISTER_CLASS_NAME(IBitmapDrawable);
-REGISTER_CLASS_NAME(Bitmap);
-REGISTER_CLASS_NAME(SimpleButton);
-REGISTER_CLASS_NAME(FrameLabel);
-REGISTER_CLASS_NAME(Scene);
-REGISTER_CLASS_NAME(AVM1Movie);
-REGISTER_CLASS_NAME(Shader);
 
 std::ostream& lightspark::operator<<(std::ostream& s, const DisplayObject& r)
 {
@@ -75,15 +46,17 @@ std::ostream& lightspark::operator<<(std::ostream& s, const DisplayObject& r)
 	return s;
 }
 
-LoaderInfo::LoaderInfo(Class_base* c):EventDispatcher(c),bytesLoaded(0),bytesTotal(0),sharedEvents(NullRef),
-	loader(NullRef),loadStatus(STARTED),actionScriptVersion(3),childAllowsParent(true),
-	contentType("application/x-shockwave-flash"),applicationDomain(NullRef),securityDomain(NullRef)
+LoaderInfo::LoaderInfo(Class_base* c):EventDispatcher(c),applicationDomain(NullRef),securityDomain(NullRef),
+	contentType("application/x-shockwave-flash"),
+	bytesLoaded(0),bytesTotal(0),sharedEvents(NullRef),
+	loader(NullRef),loadStatus(STARTED),actionScriptVersion(3),childAllowsParent(true)
 {
 }
 
-LoaderInfo::LoaderInfo(Class_base* c, _R<Loader> l):EventDispatcher(c),bytesLoaded(0),bytesTotal(0),sharedEvents(NullRef),
-	loader(l),loadStatus(STARTED),actionScriptVersion(3),childAllowsParent(true),
-	contentType("application/x-shockwave-flash"),applicationDomain(NullRef),securityDomain(NullRef)
+LoaderInfo::LoaderInfo(Class_base* c, _R<Loader> l):EventDispatcher(c),applicationDomain(NullRef),securityDomain(NullRef),
+	contentType("application/x-shockwave-flash"),
+	bytesLoaded(0),bytesTotal(0),sharedEvents(NullRef),
+	loader(l),loadStatus(STARTED),actionScriptVersion(3),childAllowsParent(true)
 {
 }
 
@@ -123,6 +96,7 @@ void LoaderInfo::finalize()
 	loader.reset();
 	applicationDomain.reset();
 	securityDomain.reset();
+	waitedObject.reset();
 }
 
 void LoaderInfo::resetState()
@@ -158,7 +132,6 @@ void LoaderInfo::sendInit()
 {
 	this->incRef();
 	getVm()->addEvent(_MR(this),_MR(Class<Event>::getInstanceS("init")));
-	SpinlockLocker l(spinlock);
 	assert(loadStatus==STARTED);
 	loadStatus=INIT_SENT;
 	if(bytesTotal && bytesLoaded==bytesTotal)
@@ -167,6 +140,40 @@ void LoaderInfo::sendInit()
 		this->incRef();
 		getVm()->addEvent(_MR(this),_MR(Class<Event>::getInstanceS("complete")));
 		loadStatus=COMPLETE;
+	}
+}
+
+void LoaderInfo::setWaitedObject(_NR<DisplayObject> w)
+{
+	SpinlockLocker l(spinlock);
+	waitedObject = w;
+}
+
+void LoaderInfo::objectHasLoaded(_R<DisplayObject> obj)
+{
+	SpinlockLocker l(spinlock);
+	if(waitedObject != obj)
+		return;
+	if(!loader.isNull() && obj==waitedObject)
+		loader->setContent(obj);
+	sendInit();
+	waitedObject.reset();
+}
+
+void LoaderInfo::setURL(const tiny_string& _url, bool setParameters)
+{
+	url=_url;
+
+	//Specs says that parameters should be set from the *main* SWF
+	//URL query string, but testing shows that it should be the
+	//loaded URL.
+	//
+	//TODO: the parameters should only be set if the loaded clip
+	//uses AS3. See specs.
+	if (setParameters)
+	{
+		parameters = _MR(Class<ASObject>::getInstanceS());
+		SystemState::parseParametersFromURLIntoObject(url, parameters);
 	}
 }
 
@@ -282,11 +289,10 @@ void LoaderThread::execute()
 {
 	assert(source==URL || source==BYTES);
 
-	streambuf *sbuf;
+	streambuf *sbuf = 0;
 	if(source==URL)
 	{
-		const char contenttype[]="Content-Type: application/x-www-form-urlencoded";
-		if(!createDownloader(false, contenttype, loaderInfo, loaderInfo.getPtr(), false))
+		if(!createDownloader(false, loaderInfo, loaderInfo.getPtr(), false))
 			return;
 
 		downloader->waitForData(); //Wait for some data, making sure our check for failure is working
@@ -332,34 +338,13 @@ void LoaderThread::execute()
 			getVm()->addEvent(loaderInfo,_MR(Class<IOErrorEvent>::getInstanceS()));
 		return;
 	}
-
-	// Wait until the object is constructed before adding
-	// to the Loader. Check threadAborting once per
-	// second.
-	while(!obj->waitUntilConstructed(1000) && !threadAborting)
-		/* do nothing */;
-
-	if(threadAborting)
-		return;
-
-	loader->setContent(obj);
-	loaderInfo->sendInit();
 }
 
 ASFUNCTIONBODY(Loader,_constructor)
 {
 	Loader* th=static_cast<Loader*>(obj);
 	DisplayObjectContainer::_constructor(obj,NULL,0);
-	th->incRef();
-	th->contentLoaderInfo=_MR(Class<LoaderInfo>::getInstanceS(_MR(th)));
-	//TODO: the parameters should only be set if the loaded clip uses AS3. See specs.
-	_NR<ASObject> p=getSys()->getParameters();
-	if(!p.isNull())
-	{
-		p->incRef();
-		th->contentLoaderInfo->setVariableByQName("parameters","",p.getPtr(),DECLARED_TRAIT);
-	}
-	th->contentLoaderInfo->setLoaderURL(getSys()->getOrigin().getParsedURL());
+	th->contentLoaderInfo->setLoaderURL(getSys()->mainClip->getOrigin().getParsedURL());
 	return NULL;
 }
 
@@ -461,21 +446,23 @@ ASFUNCTIONBODY(Loader,loadBytes)
 
 	th->unload();
 
-	//Find the actual ByteArray object
-	assert_and_throw(argslen>=1);
-	assert_and_throw(args[0]->getClass() && 
-			args[0]->getClass()->isSubClass(Class<ByteArray>::getClass()));
+	_NR<ByteArray> bytes;
+	_NR<LoaderContext> context;
+	ARG_UNPACK (bytes)(context, NullRef);
 
-	//TODO: support LoaderContext
 	_NR<ApplicationDomain> parentDomain = ABCVm::getCurrentApplicationDomain(getVm()->currentCallContext);
-	th->contentLoaderInfo->applicationDomain = _MR(Class<ApplicationDomain>::getInstanceS(parentDomain));
+	if(context.isNull() || context->applicationDomain.isNull())
+		th->contentLoaderInfo->applicationDomain = _MR(Class<ApplicationDomain>::getInstanceS(parentDomain));
+	else
+		th->contentLoaderInfo->applicationDomain = context->applicationDomain;
+	//Always loaded in the current security domain
+	_NR<SecurityDomain> curSecDomain=ABCVm::getCurrentSecurityDomain(getVm()->currentCallContext);
+	th->contentLoaderInfo->securityDomain = curSecDomain;
 
-	ByteArray *ba=static_cast<ByteArray*>(args[0]);
-	if(ba->getLength()!=0)
+	if(bytes->getLength()!=0)
 	{
 		th->incRef();
-		ba->incRef();
-		LoaderThread *thread=new LoaderThread(_MR(ba), _MR(th));
+		LoaderThread *thread=new LoaderThread(_MR(bytes), _MR(th));
 		getSys()->addJob(thread);
 		th->job=thread;
 	}
@@ -524,8 +511,10 @@ void Loader::finalize()
 	contentLoaderInfo.reset();
 }
 
-Loader::Loader(Class_base* c):DisplayObjectContainer(c),content(NullRef),job(NULL),loaded(false),contentLoaderInfo(NullRef)
+Loader::Loader(Class_base* c):DisplayObjectContainer(c),content(NullRef),job(NULL),contentLoaderInfo(NullRef),loaded(false)
 {
+	incRef();
+	contentLoaderInfo=_MR(Class<LoaderInfo>::getInstanceS(_MR(this)));
 }
 
 Loader::~Loader()
@@ -701,22 +690,27 @@ void Sprite::requestInvalidation(InvalidateQueue* q)
 	TokenContainer::requestInvalidation(q);
 }
 
-void DisplayObjectContainer::renderImpl(RenderContext& ctxt, bool maskEnabled, number_t t1,number_t t2,number_t t3,number_t t4) const
+void DisplayObjectContainer::renderImpl(RenderContext& ctxt) const
 {
 	Locker l(mutexDisplayList);
 	//Now draw also the display list
 	list<_R<DisplayObject>>::const_iterator it=dynamicDisplayList.begin();
 	for(;it!=dynamicDisplayList.end();++it)
-		(*it)->Render(ctxt, maskEnabled);
+	{
+		//Skip the drawing of masks
+		if((*it)->isMask())
+			continue;
+		(*it)->Render(ctxt);
+	}
 }
 
-void Sprite::renderImpl(RenderContext& ctxt, bool maskEnabled, number_t t1,number_t t2,number_t t3,number_t t4) const
+void Sprite::renderImpl(RenderContext& ctxt) const
 {
 	//Draw the dynamically added graphics, if any
 	if(!tokensEmpty())
-		defaultRender(ctxt, maskEnabled);
+		defaultRender(ctxt);
 
-	DisplayObjectContainer::renderImpl(ctxt, maskEnabled, t1, t2, t3, t4);
+	DisplayObjectContainer::renderImpl(ctxt);
 }
 
 /*
@@ -731,6 +725,10 @@ _NR<InteractiveObject> DisplayObjectContainer::hitTestImpl(_NR<InteractiveObject
 	list<_R<DisplayObject>>::const_reverse_iterator j=dynamicDisplayList.rbegin();
 	for(;j!=dynamicDisplayList.rend();++j)
 	{
+		//Don't check masks
+		if((*j)->isMask())
+			continue;
+
 		if(!(*j)->getMatrix().isInvertible())
 			continue; /* The object is shrunk to zero size */
 
@@ -881,11 +879,28 @@ ASFUNCTIONBODY(Scene,_getNumFrames)
 	return abstract_i(th->numFrames);
 }
 
+void Frame::destroyTags()
+{
+	auto it=blueprint.begin();
+	for(;it!=blueprint.end();++it)
+		delete (*it);
+}
+
 void Frame::execute(_R<DisplayObjectContainer> displayList)
 {
 	auto it=blueprint.begin();
 	for(;it!=blueprint.end();++it)
 		(*it)->execute(displayList.getPtr());
+}
+
+void Frame::bindClasses(RootMovieClip *root)
+{
+	ABCVm *vm = getVm();
+	auto it=classesToBeBound.begin();
+	for(;it!=classesToBeBound.end();++it)
+		vm->buildClassAndBindTag(it->first.raw_buf(), it->second);
+
+	classesToBeBound.clear();
 }
 
 FrameContainer::FrameContainer():framesLoaded(0)
@@ -894,7 +909,7 @@ FrameContainer::FrameContainer():framesLoaded(0)
 	scenes.resize(1);
 }
 
-FrameContainer::FrameContainer(const FrameContainer& f):framesLoaded((int)f.framesLoaded),frames(f.frames),scenes(f.scenes)
+FrameContainer::FrameContainer(const FrameContainer& f):frames(f.frames),scenes(f.scenes),framesLoaded((int)f.framesLoaded)
 {
 }
 
@@ -951,8 +966,10 @@ MovieClip::MovieClip(Class_base* c):Sprite(c),totalFrames_unreliable(1)
 {
 }
 
-MovieClip::MovieClip(Class_base* c, const FrameContainer& f):Sprite(c),FrameContainer(f),totalFrames_unreliable(1)
+MovieClip::MovieClip(Class_base* c, const FrameContainer& f):Sprite(c),FrameContainer(f),totalFrames_unreliable(frames.size())
 {
+	//For sprites totalFrames_unreliable is the actual frame count
+	//For the root movie, it's the frame count from the header
 }
 
 void MovieClip::finalize()
@@ -960,15 +977,6 @@ void MovieClip::finalize()
 	Sprite::finalize();
 	frames.clear();
 	frameScripts.clear();
-}
-
-void MovieClip::setTotalFrames(uint32_t t)
-{
-	//For sprites, this is called after parsing
-	//with the actual frame count
-	//For the root movie, this is called before the parsing
-	//with the frame count from the header
-	totalFrames_unreliable=t;
 }
 
 uint32_t MovieClip::getFrameIdByLabel(const tiny_string& l) const
@@ -1202,8 +1210,8 @@ void MovieClip::addScene(uint32_t sceneNo, uint32_t startframe, const tiny_strin
 	}
 	else
 	{
-		assert(scenes.size() == sceneNo-1);
-		scenes.resize(sceneNo);
+		assert(scenes.size() == sceneNo);
+		scenes.resize(sceneNo+1);
 		scenes[sceneNo].name = name;
 		scenes[sceneNo].startframe = startframe;
 	}
@@ -1287,7 +1295,7 @@ void DisplayObjectContainer::insertLegacyChildAt(uint32_t depth, DisplayObject* 
 		// before the properties are initialized, we need to
 		// initialize the property here to make sure that it
 		// will be a declared property and not a dynamic one.
-		if(hasPropertyByMultiname(objName,true))
+		if(hasPropertyByMultiname(objName,true,false))
 			setVariableByMultiname(objName,obj,ASObject::CONST_NOT_ALLOWED);
 		else
 			setVariableByQName(objName.name_s_id,objName.ns[0],obj,DYNAMIC_TRAIT);
@@ -1400,9 +1408,16 @@ void DisplayObjectContainer::setOnStage(bool staged)
 	{
 		DisplayObject::setOnStage(staged);
 		//Notify childern
-		Locker l(mutexDisplayList);
-		list<_R<DisplayObject>>::const_iterator it=dynamicDisplayList.begin();
-		for(;it!=dynamicDisplayList.end();++it)
+		//Make a copy of display list, and release the mutex
+		//before calling setOnStage
+		list<_R<DisplayObject>> displayListCopy;
+		{
+			Locker l(mutexDisplayList);
+			displayListCopy.assign(dynamicDisplayList.begin(),
+					       dynamicDisplayList.end());
+		}
+		list<_R<DisplayObject>>::const_iterator it=displayListCopy.begin();
+		for(;it!=displayListCopy.end();++it)
 			(*it)->setOnStage(staged);
 	}
 }
@@ -1438,7 +1453,7 @@ void DisplayObjectContainer::requestInvalidation(InvalidateQueue* q)
 	DisplayObject::requestInvalidation(q);
 	Locker l(mutexDisplayList);
 	list<_R<DisplayObject>>::const_iterator it=dynamicDisplayList.begin();
-	for(;it!=dynamicDisplayList.end();it++)
+	for(;it!=dynamicDisplayList.end();++it)
 		(*it)->requestInvalidation(q);
 }
 
@@ -1797,35 +1812,6 @@ void Shape::buildTraits(ASObject* o)
 {
 }
 
-bool Shape::isOpaque(number_t x, number_t y) const
-{
-	return TokenContainer::isOpaqueImpl(x, y);
-}
-
-bool Sprite::isOpaque(number_t x, number_t y) const
-{
-	return (TokenContainer::isOpaqueImpl(x, y)) || (DisplayObjectContainer::isOpaque(x,y));
-}
-
-bool DisplayObjectContainer::isOpaque(number_t x, number_t y) const
-{
-	list<_R<DisplayObject>>::const_iterator it=dynamicDisplayList.begin();
-	number_t lx, ly;
-	for(;it!=dynamicDisplayList.end();++it)
-	{
-		if(!((*it)->getMatrix()).isInvertible())
-			continue; /* The object is shrunk to zero size */
-
-		//x y are local coordinates of the container, should be local coord of *it
-		((*it)->getMatrix()).getInverted().multiply2D(x,y,lx,ly);
-		if(((*it)->isOpaque(lx,ly)))
-		{			
-			return true;		
-		}
-	}
-	return false;
-}
-
 ASFUNCTIONBODY(Shape,_constructor)
 {
 	DisplayObject::_constructor(obj,NULL,0);
@@ -1880,6 +1866,7 @@ void Stage::sinit(Class_base* c)
 	c->setDeclaredMethodByQName("scaleMode","",Class<IFunction>::getFunction(_getScaleMode),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("scaleMode","",Class<IFunction>::getFunction(_setScaleMode),SETTER_METHOD,true);
 	c->setDeclaredMethodByQName("loaderInfo","",Class<IFunction>::getFunction(_getLoaderInfo),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("stageVideos","",Class<IFunction>::getFunction(_getStageVideos),GETTER_METHOD,true);
 	REGISTER_GETTER_SETTER(c,displayState);
 }
 
@@ -1930,7 +1917,7 @@ uint32_t Stage::internalGetWidth() const
 		width=getSys()->getRenderThread()->windowWidth;
 	else
 	{
-		RECT size=getSys()->getFrameSize();
+		RECT size=getSys()->mainClip->getFrameSize();
 		width=size.Xmax/20;
 	}
 	return width;
@@ -1943,7 +1930,7 @@ uint32_t Stage::internalGetHeight() const
 		height=getSys()->getRenderThread()->windowHeight;
 	else
 	{
-		RECT size=getSys()->getFrameSize();
+		RECT size=getSys()->mainClip->getFrameSize();
 		height=size.Ymax/20;
 	}
 	return height;
@@ -1963,7 +1950,7 @@ ASFUNCTIONBODY(Stage,_getStageHeight)
 
 ASFUNCTIONBODY(Stage,_getLoaderInfo)
 {
-	return SystemState::_getLoaderInfo(getSys(),NULL,0);
+	return RootMovieClip::_getLoaderInfo(getSys()->mainClip,NULL,0);
 }
 
 ASFUNCTIONBODY(Stage,_getScaleMode)
@@ -1999,6 +1986,12 @@ ASFUNCTIONBODY(Stage,_setScaleMode)
 	RenderThread* rt=getSys()->getRenderThread();
 	rt->requestResize(rt->windowWidth, rt->windowHeight, true);
 	return NULL;
+}
+
+ASFUNCTIONBODY(Stage,_getStageVideos)
+{
+	LOG(LOG_NOT_IMPLEMENTED, "Accelerated rendering through StageVideo not implemented, SWF should fall back to Video");
+	return Class<Vector>::getInstanceS(Class<StageVideo>::getClass());
 }
 
 void Graphics::sinit(Class_base* c)
@@ -2453,7 +2446,7 @@ ASFUNCTIONBODY(Graphics,lineStyle)
 
 	// TODO: pixel hinting, scaling, caps, miter, joints
 	
-	LINESTYLE2 style(-1);
+	LINESTYLE2 style(0xff);
 	style.Color = RGBA(color, alpha);
 	style.Width = thickness;
 	th->owner->tokens.emplace_back(GeomToken(SET_STROKE, style));
@@ -2466,7 +2459,7 @@ ASFUNCTIONBODY(Graphics,beginGradientFill)
 	assert_and_throw(argslen>=4);
 	th->checkAndSetScaling();
 
-	FILLSTYLE style(-1);
+	FILLSTYLE style(0xff);
 
 	assert_and_throw(args[1]->getObjectType()==T_ARRAY);
 	Array* colors=Class<Array>::cast(args[1]);
@@ -2497,11 +2490,10 @@ ASFUNCTIONBODY(Graphics,beginGradientFill)
 		return NULL;
 
 	// Don't support FOCALGRADIENT for now.
-	GRADIENT grad(-1);
-	grad.NumGradient = NumGradient;
+	GRADIENT grad(0xff);
 	for(int i = 0; i < NumGradient; i ++)
 	{
-		GRADRECORD record(-1);
+		GRADRECORD record(0xff);
 		record.Color = RGBA(colors->at(i)->toUInt(), (int)alphas->at(i)->toNumber()*255);
 		record.Ratio = UI8(ratios->at(i)->toUInt());
 		grad.GradientRecords.push_back(record);
@@ -2528,6 +2520,12 @@ ASFUNCTIONBODY(Graphics,beginGradientFill)
 		else if (spread == "repeat")
 			grad.SpreadMode = 2;
 	}
+	else
+	{
+		//default is pad
+		grad.SpreadMode = 0;
+	}
+
 
 	if(argslen > 6)
 	{
@@ -2536,6 +2534,11 @@ ASFUNCTIONBODY(Graphics,beginGradientFill)
 			grad.InterpolationMode = 0;
 		else if (interp == "linearRGB")
 			grad.InterpolationMode = 1;
+	}
+	else
+	{
+		//default is rgb
+		grad.InterpolationMode = 0;
 	}
 
 	style.Gradient = grad;
@@ -2555,7 +2558,7 @@ ASFUNCTIONBODY(Graphics,beginBitmapFill)
 		return NULL;
 
 	th->checkAndSetScaling();
-	FILLSTYLE style(-1);
+	FILLSTYLE style(0xff);
 	if(repeat && smooth)
 		style.FillStyleType = REPEATING_BITMAP;
 	else if(repeat && !smooth)
@@ -2583,7 +2586,7 @@ ASFUNCTIONBODY(Graphics,beginFill)
 		color=args[0]->toUInt();
 	if(argslen>=2)
 		alpha=(uint8_t(args[1]->toNumber()*0xff));
-	FILLSTYLE style(-1);
+	FILLSTYLE style(0xff);
 	style.FillStyleType = SOLID_FILL;
 	style.Color         = RGBA(color, alpha);
 	th->owner->tokens.emplace_back(GeomToken(SET_FILL, style));
@@ -2638,8 +2641,16 @@ void StageDisplayState::sinit(Class_base* c)
 	c->setVariableByQName("NORMAL","",Class<ASString>::getInstanceS("normal"),DECLARED_TRAIT);
 }
 
-Bitmap::Bitmap(Class_base* c, std::istream *s, FILE_TYPE type) : DisplayObject(c),TokenContainer(this)
+Bitmap::Bitmap(Class_base* c, _NR<LoaderInfo> li, std::istream *s, FILE_TYPE type):
+	DisplayObject(c),TokenContainer(this)
 {
+	if(li)
+	{
+		loaderInfo = li;
+		this->incRef();
+		loaderInfo->setWaitedObject(_MR(this));
+	}
+
 	bitmapData = _MR(Class<BitmapData>::getInstanceS());
 	bitmapData->addUser(this);
 	if(!s)
@@ -2691,6 +2702,7 @@ void Bitmap::finalize()
 	if(!bitmapData.isNull())
 		bitmapData->removeUser(this);
 	bitmapData.reset();
+	DisplayObject::finalize();
 }
 
 void Bitmap::sinit(Class_base* c)
@@ -2743,7 +2755,7 @@ void Bitmap::updatedData()
 	if(bitmapData.isNull())
 		return;
 
-	FILLSTYLE style(-1);
+	FILLSTYLE style(0xff);
 	style.FillStyleType=CLIPPED_BITMAP;
 	style.bitmap=*static_cast<BitmapContainer*>(bitmapData.getPtr());
 	tokens.emplace_back(GeomToken(SET_FILL, style));
@@ -2752,7 +2764,8 @@ void Bitmap::updatedData()
 	tokens.emplace_back(GeomToken(STRAIGHT, Vector2(bitmapData->getWidth(), bitmapData->getHeight())));
 	tokens.emplace_back(GeomToken(STRAIGHT, Vector2(bitmapData->getWidth(), 0)));
 	tokens.emplace_back(GeomToken(STRAIGHT, Vector2(0, 0)));
-	requestInvalidation(getSys());
+	if(onStage)
+		requestInvalidation(getSys());
 }
 bool Bitmap::boundsRect(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const
 {
@@ -2761,6 +2774,12 @@ bool Bitmap::boundsRect(number_t& xmin, number_t& xmax, number_t& ymin, number_t
 
 _NR<InteractiveObject> Bitmap::hitTestImpl(_NR<InteractiveObject> last, number_t x, number_t y, DisplayObject::HIT_TYPE type)
 {
+	//Simple check inside the area, opacity data should not be considered
+	//NOTE: on the X axis the 0th line must be ignored, while the one past the width is valid
+	//NOTE: on the Y asix the 0th line is valid, while the one past the width is not
+	//NOTE: This is tested behaviour!
+	if(!bitmapData.isNull() && x > 0 && x <= bitmapData->getWidth() && y >=0 && y < bitmapData->getHeight())
+		return last;
 	return NullRef;
 }
 
@@ -3141,7 +3160,7 @@ void MovieClip::initFrame()
 void DisplayObjectContainer::advanceFrame()
 {
 	list<_R<DisplayObject>>::const_iterator it=dynamicDisplayList.begin();
-	for(;it!=dynamicDisplayList.end();it++)
+	for(;it!=dynamicDisplayList.end();++it)
 		(*it)->advanceFrame();
 }
 
@@ -3186,7 +3205,7 @@ void MovieClip::advanceFrame()
 
 void MovieClip::constructionComplete()
 {
-	ASObject::constructionComplete();
+	DisplayObject::constructionComplete();
 
 	/* If this object was 'new'ed from AS code, the first
 	 * frame has not been initalized yet, so init the frame

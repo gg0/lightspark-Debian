@@ -17,11 +17,13 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
-#ifndef _ABCTYPES_H
-#define _ABCTYPES_H
+#ifndef SCRIPTING_ABCTYPES_H
+#define SCRIPTING_ABCTYPES_H 1
 
 #include "swftypes.h"
 #include "memory_support.h"
+
+class memorystream;
 
 namespace lightspark
 {
@@ -29,6 +31,7 @@ namespace lightspark
 class u8
 {
 friend std::istream& operator>>(std::istream& in, u8& v);
+friend memorystream& operator>>(memorystream& in, u8& v);
 private:
 	uint32_t val;
 public:
@@ -52,6 +55,7 @@ public:
 class s24
 {
 friend std::istream& operator>>(std::istream& in, s24& v);
+friend memorystream& operator>>(memorystream& in, s24& v);
 private:
 	int32_t val;
 public:
@@ -61,6 +65,7 @@ public:
 class u30
 {
 friend std::istream& operator>>(std::istream& in, u30& v);
+friend memorystream& operator>>(memorystream& in, u30& v);
 private:
 	uint32_t val;
 public:
@@ -91,7 +96,6 @@ class string_info
 {
 friend std::istream& operator>>(std::istream& in, string_info& v);
 private:
-	u30 size;
 	tiny_string val;
 public:
 	operator const tiny_string&() const{return val;}
@@ -215,9 +219,9 @@ struct script_info
 
 struct exception_info
 {
-	u30 from;
-	u30 to;
-	u30 target;
+	uint32_t from;
+	uint32_t to;
+	uint32_t target;
 	u30 exc_type;
 	u30 var_name;
 };
@@ -243,18 +247,21 @@ struct method_info_simple
 
 struct method_body_info
 {
+	method_body_info():hit_count(0),codeStatus(ORIGINAL){}
 	u30 method;
 	u30 max_stack;
 	u30 local_count;
 	u30 init_scope_depth;
 	u30 max_scope_depth;
-	u30 code_length;
-	//This is a string to use it in a stringstream
 	std::string code;
-	u30 exception_count;
 	std::vector<exception_info> exceptions;
 	u30 trait_count;
 	std::vector<traits_info> traits;
+	//The hit_count belongs here, since it is used to manipulate the code
+	uint16_t hit_count;
+	//The code status
+	enum CODE_STATUS { ORIGINAL = 0, USED, OPTIMIZED, JITTED };
+	CODE_STATUS codeStatus;
 };
 
 std::istream& operator>>(std::istream& in, u8& v);
@@ -279,4 +286,4 @@ std::istream& operator>>(std::istream& in, class_info& v);
 
 };
 
-#endif
+#endif /* SCRIPTING_ABCTYPES_H */

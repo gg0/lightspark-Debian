@@ -63,7 +63,7 @@ void ThreadPool::forceStop()
 			}
 			//Fence all the non executed jobs
 			std::deque<IThreadJob*>::iterator it=jobs.begin();
-			for(;it!=jobs.end();it++)
+			for(;it!=jobs.end();++it)
 				(*it)->jobFence();
 			jobs.clear();
 		}
@@ -104,6 +104,9 @@ void ThreadPool::job_worker(ThreadPool* th, uint32_t index)
 		chronometer.checkpoint();
 		try
 		{
+			// it's possible that a job was added and will be executed while forcestop() has been called
+			if(th->stopFlag)
+				return;
 			myJob->execute();
 		}
 	        catch(JobTerminationException& ex)

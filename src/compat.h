@@ -18,7 +18,7 @@
 **************************************************************************/
 
 #ifndef COMPAT_H
-#define COMPAT_H
+#define COMPAT_H 1
 
 #include <boost/version.hpp>
 #if BOOST_VERSION >= 104600
@@ -36,6 +36,12 @@
 #ifndef M_PI
 #	define M_PI 3.14159265358979323846
 #endif
+
+#ifdef _WIN32
+	#include <sys/types.h> //for ssize_t
+	#include <io.h> //for close(), unlink()
+#endif
+
 // TODO: This should be reworked to use CMake feature detection where possible
 
 /* gettext support */
@@ -47,19 +53,8 @@
 #include <glib.h>
 #include <cstdlib>
 
-#ifdef _WIN32
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
-#include <io.h>
-#undef DOUBLE_CLICK
-#undef RGB
-#ifndef PATH_MAX
-#define PATH_MAX 260
-#endif
-#ifdef __GNUC__
+
+#if defined(__GNUC__) && defined(_WIN32)
 /* There is a bug in mingw preventing those from being declared */
 extern "C" {
 _CRTIMP int __cdecl __MINGW_NOTHROW	_stricmp (const char*, const char*);
@@ -69,27 +64,9 @@ _CRTIMP void * __cdecl __MINGW_NOTHROW _aligned_malloc (size_t, size_t);
 _CRTIMP void __cdecl __MINGW_NOTHROW _aligned_free (void*);
 _CRTIMP char* __cdecl __MINGW_NOTHROW   _strdup (const char*) __MINGW_ATTRIB_MALLOC;
 }
-#endif
 #define strncasecmp _strnicmp
 #define strcasecmp _stricmp
 #define strdup _strdup
-#endif
-
-#ifdef _MSC_VER
-#undef exception_info // Let's hope MS functions always use _exception_info
-/* those are C++11 but not available in Visual Studio 2010 */
-namespace std
-{
-	inline double copysign(double x, double y) { return _copysign(x, y); }
-	inline bool isnan(double d) { return (bool)_isnan(d); }
-	inline int signbit(double arg) { return (int)copysign(1,arg); }
-	inline bool isfinite(double d) { return (bool)_finite(d); }
-	inline bool isinf(double d) { return !isfinite(d) && !isnan(d); }
-}
-
-// Emulate these functions
-int round(double f);
-long lrint(double f);
 #endif
 
 #ifdef __GNUC__
@@ -120,44 +97,31 @@ long lrint(double f);
 	void aligned_free(void *mem);
 #endif
 
-#ifdef _MSC_VER
-// WINTODO: Hopefully, the MSVC instrinsics are similar enough
-//          to what the standard mandates
-#	define ATOMIC_INT32(x) __declspec(align(4)) volatile long x
-#	define ATOMIC_INCREMENT(x) InterlockedIncrement(&x)
-#	define ATOMIC_DECREMENT(x) InterlockedDecrement(&x)
-#	define ATOMIC_ADD(x, v) (InterlockedExchangeAdd(&x, v)+v)
-#	define ATOMIC_SUB(x, v) (InterlockedExchangeAdd(&x, -v)-v)
-#	define ACQUIRE_RELEASE_FLAG(x) ATOMIC_INT32(x)
-#	define ACQUIRE_READ(x) InterlockedCompareExchange(const_cast<long*>(&x),1,1)
-#	define RELEASE_WRITE(x, v) InterlockedExchange(&x,v)
-#else //GCC
 #ifndef _WIN32
 #	define CALLBACK
 #endif
 
 //Support both atomic header ( gcc >= 4.6 ), and earlier ( stdatomic.h )
-#	ifdef HAVE_ATOMIC
-#		include <atomic>
-#	else
-#		include <cstdatomic>
-#	endif
+#ifdef HAVE_ATOMIC
+#	include <atomic>
+#else
+#	include <cstdatomic>
+#endif
 
-#	define ATOMIC_INT32(x) std::atomic<int32_t> x
-#	define ATOMIC_INCREMENT(x) (x.fetch_add(1)+1)
-#	define ATOMIC_DECREMENT(x) (x.fetch_sub(1)-1)
-#	define ATOMIC_ADD(x, v) (x.fetch_add(v)+v)
-#	define ATOMIC_SUB(x, v) (x.fetch_sub(v)-v)
+#define ATOMIC_INT32(x) std::atomic<int32_t> x
+#define ATOMIC_INCREMENT(x) (x.fetch_add(1)+1)
+#define ATOMIC_DECREMENT(x) (x.fetch_sub(1)-1)
+#define ATOMIC_ADD(x, v) (x.fetch_add(v)+v)
+#define ATOMIC_SUB(x, v) (x.fetch_sub(v)-v)
 
 //Boolean type with acquire release barrier semantics
-#	define ACQUIRE_RELEASE_FLAG(x) std::atomic_bool x
-#	define ACQUIRE_READ(x) x.load(std::memory_order_acquire)
-#	define RELEASE_WRITE(x, v) x.store(v, std::memory_order_release)
-#endif
+#define ACQUIRE_RELEASE_FLAG(x) std::atomic_bool x
+#define ACQUIRE_READ(x) x.load(std::memory_order_acquire)
+#define RELEASE_WRITE(x, v) x.store(v, std::memory_order_release)
 
 
 /* DLL_LOCAL / DLL_PUBLIC */
-/* When building on win32, DLL_PUBLIC is set top __declspec(dllexport)
+/* When building on win32, DLL_PUBLIC is set to __declspec(dllexport)
  * during build of the audio plugins.
  * The browser plugin uses its own definitions from npapi.
  * And the liblightspark.dll is linked directly (without need for dllexport)
@@ -193,8 +157,6 @@ inline T maxTmpl(T a, T b)
 uint64_t compat_msectiming();
 void compat_msleep(unsigned int time);
 uint64_t compat_get_thread_cputime_us();
-
-int kill_child(GPid p);
 
 /* byte order */
 #if G_BYTE_ORDER == G_BIG_ENDIAN
@@ -269,10 +231,14 @@ inline uint32_t BigEndianToUnsignedHost24(uint32_t x)
 }
 #endif // __BYTE_ORDER == __BIG_ENDIAN
 
+/* spawning */
 #ifdef _WIN32
 /* returns the path of the current executable */
 const char* getExectuablePath();
+typedef void* HANDLE;
 HANDLE compat_spawn(char** args, int* stdinfd);
 #endif
 
-#endif
+int kill_child(GPid p);
+
+#endif /* COMPAT_H */

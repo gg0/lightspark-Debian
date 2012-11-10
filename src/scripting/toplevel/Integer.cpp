@@ -18,51 +18,41 @@
 **************************************************************************/
 
 #include "parsing/amf3_generator.h"
-#include "argconv.h"
-#include "Integer.h"
+#include "scripting/argconv.h"
+#include "scripting/toplevel/Integer.h"
 
 using namespace std;
 using namespace lightspark;
-
-REGISTER_CLASS_NAME2(Integer,"int","");
-
 
 ASFUNCTIONBODY(Integer,_toString)
 {
 	Integer* th=static_cast<Integer*>(obj);
 	int radix=10;
-	char buf[20];
 	if(argslen==1)
 		radix=args[0]->toUInt();
-	assert_and_throw(radix==10 || radix==16);
-	if(radix==10)
-		snprintf(buf,20,"%i",th->val);
-	else if(radix==16)
-	{
-		unsigned int v;
-		const char* sign="";
-		if (th->val<0)
-		{
-			v=-th->val;
-			sign="-";
-		}
-		else
-		{
-			v=th->val;
-		}
-		snprintf(buf,20,"%s%x",sign,v);
-	}
 
-	return Class<ASString>::getInstanceS(buf);
+	if(radix==10)
+	{
+		char buf[20];
+		snprintf(buf,20,"%i",th->val);
+		return Class<ASString>::getInstanceS(buf);
+	}
+	else
+	{
+		tiny_string s=Number::toStringRadix((number_t)th->val, radix);
+		return Class<ASString>::getInstanceS(s);
+	}
 }
 
 ASFUNCTIONBODY(Integer,_constructor)
 {
 	Integer* th=static_cast<Integer*>(obj);
-	if(args && argslen==1)
-		th->val=args[0]->toInt();
-	else
-		th->val=0;
+	if(argslen==0)
+	{
+		//The int is already initialized to 0
+		return NULL;
+	}
+	th->val=args[0]->toInt();
 	return NULL;
 }
 
@@ -206,4 +196,40 @@ void Integer::serialize(ByteArray* out, std::map<tiny_string, uint32_t>& stringM
 	if(val>=0x40000000 || val<=(int32_t)0xbfffffff)
 		throw AssertionException("Range exception in Integer::serialize");
 	out->writeU29((uint32_t)val);
+}
+
+bool Integer::fromStringFlashCompatible(const char* cur, int64_t& ret, int radix)
+{
+	//Skip whitespace chars
+	while(g_unichar_isspace(g_utf8_get_char(cur)))
+		cur = g_utf8_next_char(cur);
+
+	int64_t multiplier=1;
+	//Skip and take note of minus sign
+	if(*cur=='-')
+	{
+		multiplier=-1;
+		cur++;
+	}
+	if (radix == 0 && (g_str_has_prefix(cur,"0x") || g_str_has_prefix(cur,"0X")))
+	{
+		radix = 16;
+		cur+=2;
+	}
+	//Skip leading zeroes
+	if (radix == 0)
+	{
+		while(*cur=='0')
+			cur++;
+	}
+	
+	errno=0;
+	char *end;
+	ret=g_ascii_strtoll(cur, &end, radix);
+
+	if(end==cur || errno==ERANGE)
+		return false;
+
+	ret*=multiplier;
+	return true;
 }

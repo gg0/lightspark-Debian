@@ -18,7 +18,7 @@
 **************************************************************************/
 
 #ifndef LOGGER_H
-#define LOGGER_H
+#define LOGGER_H 1
 
 #include "compat.h"
 #include <iostream>
@@ -40,11 +40,11 @@ do {							\
 class Log
 {
 private:
-	LOG_LEVEL cur_level;
-	bool valid;
 	static const char* level_names[];
 	static LOG_LEVEL log_level DLL_PUBLIC;
 	std::stringstream message;
+	LOG_LEVEL cur_level;
+	bool valid;
 public:
 	static void print(const std::string& s);
 	Log(LOG_LEVEL l) DLL_PUBLIC;
@@ -87,4 +87,4 @@ std::ostream& operator<<(std::ostream& os, const std::set<T>& v)
 }
 }
 
-#endif
+#endif /* LOGGER_H */

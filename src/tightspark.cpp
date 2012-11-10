@@ -76,17 +76,13 @@ int main(int argc, char* argv[])
 		LOG(LOG_ERROR, "Usage: " << argv[0] << " [--disable-interpreter|-ni] [--enable-jit|-j] [--log-level|-l 0-4] <file.abc> [<file2.abc>]");
 		exit(-1);
 	}
-
+#ifdef HAVE_G_THREAD_INIT
 	g_thread_init(NULL);
+#endif
 	Log::setLogLevel(log_level);
 	SystemState::staticInit();
 	//NOTE: see SystemState declaration
-#ifdef MEMORY_USAGE_PROFILING
-	MemoryAccount sysAccount("sysAccount");
-	SystemState* sys=new (&sysAccount) SystemState(0, SystemState::FLASH);
-#else
-	SystemState* sys=new ((MemoryAccount*)NULL) SystemState(0, SystemState::FLASH);
-#endif
+	SystemState* sys=new SystemState(0, SystemState::FLASH);
 	setTLSSys(sys);
 
 	//Set a bit of SystemState using parameters
@@ -99,9 +95,9 @@ int main(int argc, char* argv[])
 	sys->useInterpreter=useInterpreter;
 	sys->useJit=useJit;
 
-	sys->setOrigin(string("file://") + fileNames[0]);
+	sys->mainClip->setOrigin(string("file://") + fileNames[0]);
 
-#ifndef WIN32
+#ifndef _WIN32
 	struct rlimit rl;
 	getrlimit(RLIMIT_AS,&rl);
 	rl.rlim_cur=1500000000;
@@ -118,8 +114,8 @@ int main(int argc, char* argv[])
 		ifstream f(fileNames[i]);
 		if(f.is_open())
 		{
-			sys->incRef();
-			ABCContext* context=new ABCContext(_MR(sys), f, vm);
+			sys->mainClip->incRef();
+			ABCContext* context=new ABCContext(_MR(sys->mainClip), f, vm);
 			contexts.push_back(context);
 			f.close();
 			vm->addEvent(NullRef,_MR(new (sys->unaccountedMemory) ABCContextInitEvent(context,false)));
@@ -132,5 +128,6 @@ int main(int argc, char* argv[])
 	vm->start();
 	sys->setShutdownFlag();
 	sys->destroy();
+	delete sys;
 	SystemState::staticDeinit();
 }

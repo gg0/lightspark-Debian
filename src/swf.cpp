@@ -71,20 +71,18 @@ ParseThread* lightspark::getParseThread()
 	return pt;
 }
 
-RootMovieClip::RootMovieClip(LoaderInfo* li, _NR<ApplicationDomain> appDomain, _NR<SecurityDomain> secDomain, Class_base* c):
+RootMovieClip::RootMovieClip(_NR<LoaderInfo> li, _NR<ApplicationDomain> appDomain, _NR<SecurityDomain> secDomain, Class_base* c):
 	MovieClip(c),
 	parsingIsFailed(false),frameRate(0),
-	toBind(false),finishedLoading(false),applicationDomain(appDomain),securityDomain(secDomain)
+	finishedLoading(false),applicationDomain(appDomain),securityDomain(secDomain)
 {
-	if(li)
-		li->incRef();
-	loaderInfo=_MNR(li);
+	loaderInfo=li;
 }
 
 RootMovieClip::~RootMovieClip()
 {
-	for(DictionaryTag* it: dictionary)
-		delete it;
+	for(auto it=dictionary.begin();it!=dictionary.end();++it)
+		delete *it;
 }
 
 void RootMovieClip::parsingFailed()
@@ -93,17 +91,9 @@ void RootMovieClip::parsingFailed()
 	parsingIsFailed=true;
 }
 
-void RootMovieClip::bindToName(const tiny_string& n)
-{
-	assert_and_throw(toBind==false);
-	toBind=true;
-	bindName=n;
-}
-
 void RootMovieClip::setOrigin(const tiny_string& u, const tiny_string& filename)
 {
 	//We can use this origin to implement security measures.
-	//It also allows loading files without specifying a fully qualified path.
 	//Note that for plugins, this url is NOT the page url, but it is the swf file url.
 	origin = URLInfo(u);
 	//If this URL doesn't contain a filename, add the one passed as an argument (used in main.cpp)
@@ -112,9 +102,29 @@ void RootMovieClip::setOrigin(const tiny_string& u, const tiny_string& filename)
 
 	if(!loaderInfo.isNull())
 	{
-		loaderInfo->setURL(origin.getParsedURL());
+		loaderInfo->setURL(origin.getParsedURL(), false);
 		loaderInfo->setLoaderURL(origin.getParsedURL());
 	}
+}
+
+void RootMovieClip::setBaseURL(const tiny_string& url)
+{
+	//Set the URL to be used in resolving relative paths. For the
+	//plugin this is either the value of base attribute in the
+	//OBJECT or EMBED tag or, if the attribute is not provided,
+	//the address of the hosting HTML page.
+	baseURL = URLInfo(url);
+}
+
+const URLInfo& RootMovieClip::getBaseURL()
+{
+	//The plugin uses the address of the HTML page (baseURL) for
+	//resolving relative paths. AIR and the standalone Lightspark
+	//use the SWF location (origin).
+	if(baseURL.isValid())
+		return baseURL;
+	else
+		return origin;
 }
 
 void SystemState::registerFrameListener(_R<DisplayObject> obj)
@@ -130,12 +140,7 @@ void SystemState::unregisterFrameListener(_R<DisplayObject> obj)
 	frameListeners.erase(obj);
 }
 
-void RootMovieClip::setOnStage(bool staged)
-{
-	MovieClip::setOnStage(staged);
-}
-
-RootMovieClip* RootMovieClip::getInstance(LoaderInfo* li, _R<ApplicationDomain> appDomain, _R<SecurityDomain> secDomain)
+RootMovieClip* RootMovieClip::getInstance(_NR<LoaderInfo> li, _R<ApplicationDomain> appDomain, _R<SecurityDomain> secDomain)
 {
 	Class_base* movieClipClass = Class<MovieClip>::getClass();
 	RootMovieClip* ret=new (movieClipClass->memoryAccount) RootMovieClip(li, appDomain, secDomain, movieClipClass);
@@ -169,21 +174,24 @@ void SystemState::staticDeinit()
 //See BUILTIN_STRINGS enum
 static const char* builtinStrings[] = {"", "any", "void", "prototype" };
 
+extern uint32_t asClassCount;
+
 SystemState::SystemState(uint32_t fileSize, FLASH_MODE mode):
-	RootMovieClip(NULL,NullRef,NullRef,NULL),terminated(0),renderRate(0),error(false),shutdown(false),
+	terminated(0),renderRate(0),error(false),shutdown(false),
 	renderThread(NULL),inputThread(NULL),engineData(NULL),mainThread(0),dumpedSWFPathAvailable(0),
 	vmVersion(VMNONE),childPid(0),
 	parameters(NullRef),
 	invalidateQueueHead(NullRef),invalidateQueueTail(NullRef),lastUsedStringId(0),lastUsedNamespaceId(0x7fffffff),
 	showProfilingData(false),flashMode(mode),
-	currentVm(NULL),useInterpreter(true),useJit(false),exitOnError(ERROR_NONE),downloadManager(NULL),
-	extScriptObject(NULL),scaleMode(SHOW_ALL),unaccountedMemory(NULL),tagsMemory(NULL),stringMemory(NULL)
+	currentVm(NULL),builtinClasses(NULL),useInterpreter(true),useFastInterpreter(false),useJit(false),exitOnError(ERROR_NONE),
+	downloadManager(NULL),extScriptObject(NULL),scaleMode(SHOW_ALL),unaccountedMemory(NULL),tagsMemory(NULL),stringMemory(NULL)
 {
 	//Forge the builtin strings
 	for(uint32_t i=0;i<LAST_BUILTIN_STRING;i++)
 	{
 		uint32_t tmp=getUniqueStringId(builtinStrings[i]);
 		assert(tmp==i);
+		(void)tmp; // silence warning about unused variable
 	}
 	//Forge the empty namespace and make sure it gets id 0
 	nsNameAndKindImpl emptyNs("", NAMESPACE);
@@ -204,9 +212,25 @@ SystemState::SystemState(uint32_t fileSize, FLASH_MODE mode):
 
 	null=_MR(new (unaccountedMemory) Null);
 	undefined=_MR(new (unaccountedMemory) Undefined);
+
+	builtinClasses = new Class_base*[asClassCount];
+	memset(builtinClasses,0,asClassCount*sizeof(Class_base*));
+
+	//Untangle the messy relationship between class objects and the Class class
+	Class_object* classObject = Class_object::getClass();
+	//Getting the Object class object will set the classdef to the Class_object
+	//like any other class. This happens inside Class_base constructor
+	_R<Class_base> asobjectClass = Class<ASObject>::getRef();
+	//The only bit remaining is setting the Object class as the super class for Class
+	classObject->setSuper(asobjectClass);
+	classObject->decRef();
+
+	trueRef=_MR(Class<Boolean>::getInstanceS(true));
+	falseRef=_MR(Class<Boolean>::getInstanceS(false));
+
 	systemDomain = _MR(Class<ApplicationDomain>::getInstanceS());
-	applicationDomain=_MR(Class<ApplicationDomain>::getInstanceS(systemDomain));
-	securityDomain = _MR(Class<SecurityDomain>::getInstanceS());
+	_NR<ApplicationDomain> applicationDomain=_MR(Class<ApplicationDomain>::getInstanceS(systemDomain));
+	_NR<SecurityDomain> securityDomain = _MR(Class<SecurityDomain>::getInstanceS());
 
 	threadPool=new ThreadPool(this);
 	timerThread=new TimerThread(this);
@@ -215,22 +239,18 @@ SystemState::SystemState(uint32_t fileSize, FLASH_MODE mode):
 	intervalManager=new IntervalManager();
 	securityManager=new SecurityManager();
 
-	loaderInfo=_MR(Class<LoaderInfo>::getInstanceS());
+	_NR<LoaderInfo> loaderInfo=_MR(Class<LoaderInfo>::getInstanceS());
 	loaderInfo->applicationDomain = applicationDomain;
 	//If the size is not known those will stay at zero
 	loaderInfo->setBytesLoaded(fileSize);
 	loaderInfo->setBytesTotal(fileSize);
+	mainClip=RootMovieClip::getInstance(loaderInfo, applicationDomain, securityDomain);
 	stage=Class<Stage>::getInstanceS();
-	this->incRef();
-	stage->_addChildAt(_MR(this),0);
+	mainClip->incRef();
+	stage->_addChildAt(_MR(mainClip),0);
 	//Get starting time
 	startTime=compat_msectiming();
 	
-	setClass(Class<MovieClip>::getClass());
-
-	//Override getStage as for SystemState that can't be null
-	setDeclaredMethodByQName("stage","",Class<IFunction>::getFunction(_getStage),GETTER_METHOD,false);
-
 	renderThread=new RenderThread(this);
 	inputThread=new InputThread(this);
 }
@@ -268,7 +288,9 @@ void SystemState::parseParametersFromFlashvars(const char* v)
 	//Save a copy of the string
 	rawParameters=v;
 
-	_R<ASObject> params=_MR(Class<ASObject>::getInstanceS());
+	_NR<ASObject> params=getParameters();
+	if(params.isNull())
+		params=_MNR(Class<ASObject>::getInstanceS());
 	//Add arguments to SystemState
 	string vars(v);
 	uint32_t cur=0;
@@ -325,7 +347,7 @@ void SystemState::parseParametersFromFlashvars(const char* v)
 				f << varName << endl << varValue << endl;
 
 			/* That does occur in the wild */
-			if(params->hasPropertyByMultiname(QName(varName,""), true))
+			if(params->hasPropertyByMultiname(QName(varName,""), true, true))
 				LOG(LOG_ERROR,"Flash parameters has duplicate key '" << varName << "' - ignoring");
 			else
 				params->setVariableByQName(varName,"",
@@ -357,10 +379,34 @@ void SystemState::parseParametersFromFile(const char* f)
 	i.close();
 }
 
+void SystemState::parseParametersFromURL(const URLInfo& url)
+{
+	_NR<ASObject> params=getParameters();
+	if(params.isNull())
+		params=_MNR(Class<ASObject>::getInstanceS());
+
+	parseParametersFromURLIntoObject(url, params);
+	setParameters(params);
+}
+
+void SystemState::parseParametersFromURLIntoObject(const URLInfo& url, _R<ASObject> outParams)
+{
+	std::list< std::pair<tiny_string, tiny_string> > queries=url.getQueryKeyValue();
+	std::list< std::pair<tiny_string, tiny_string> >::iterator it;
+	for (it=queries.begin(); it!=queries.end(); ++it)
+	{
+		if(outParams->hasPropertyByMultiname(QName(it->first,""), true, true))
+			LOG(LOG_ERROR,"URL query parameters has duplicate key '" << it->first << "' - ignoring");
+		else
+			outParams->setVariableByQName(it->first,"",
+			   lightspark::Class<lightspark::ASString>::getInstanceS(it->second),DYNAMIC_TRAIT);
+	}
+}
+
 void SystemState::setParameters(_R<ASObject> p)
 {
 	parameters=p;
-	loaderInfo->parameters = p;
+	mainClip->loaderInfo->parameters = p;
 }
 
 _NR<ASObject> SystemState::getParameters() const
@@ -443,20 +489,26 @@ void SystemState::saveMemoryUsageInformation(ofstream& out, int snapshotCount) c
 }
 #endif
 
-void SystemState::finalize()
+void SystemState::systemFinalize()
 {
-	RootMovieClip::finalize();
 	invalidateQueueHead.reset();
 	invalidateQueueTail.reset();
 	parameters.reset();
 	frameListeners.clear();
 	null.reset();
 	undefined.reset();
+	trueRef.reset();
+	falseRef.reset();
 	systemDomain.reset();
+
+	mainClip->decRef();
+	//Free the stage. This should free all objects on the displaylist
+	stage->decRef();
 }
 
 SystemState::~SystemState()
 {
+	delete[] builtinClasses;
 }
 
 void SystemState::destroy()
@@ -470,7 +522,14 @@ void SystemState::destroy()
 	renderThread->wait();
 	inputThread->wait();
 	if(currentVm)
+	{
+		//If the VM exists it MUST be started to flush pending events.
+		//In some cases it will not be started by regular means, if so
+		//we will start it here.
+		if(!currentVm->hasEverStarted())
+			currentVm->start();
 		currentVm->shutdown();
+	}
 
 	l.release();
 
@@ -504,14 +563,7 @@ void SystemState::destroy()
 	delete extScriptObject;
 	delete intervalManager;
 	//Finalize ourselves
-	finalize();
-
-	//We are already being destroyed, make our classdef abandon us
-	setClass(NULL);
-	
-	//Free the stage. This should free all objects on the displaylist
-	stage->decRef();
-	stage = NULL;
+	systemFinalize();
 
 	/*
 	 * 1) call finalize on all objects, this will free all referenced objects and thereby
@@ -521,10 +573,15 @@ void SystemState::destroy()
 	 * 'classes' and 'templates' maps.
 	 */
 
-	for(auto it = builtinClasses.begin(); it != builtinClasses.end(); ++it)
-		it->second->finalize();
+	for(uint32_t i=0;i<asClassCount;i++)
+	{
+		if(builtinClasses[i])
+			builtinClasses[i]->finalize();
+	}
 	for(auto it = customClasses.begin(); it != customClasses.end(); ++it)
 		(*it)->finalize();
+	for(auto it = instantiatedTemplates.begin(); it != instantiatedTemplates.end(); ++it)
+		it->second->finalize();
 	for(auto it = templates.begin(); it != templates.end(); ++it)
 		it->second->finalize();
 
@@ -533,10 +590,17 @@ void SystemState::destroy()
 		currentVm->finalize();
 
 	//Free classes by decRef'ing them
-	for(auto i = builtinClasses.begin(); i != builtinClasses.end(); ++i)
-		i->second->decRef();
+	for(uint32_t i=0;i<asClassCount;i++)
+	{
+		if(builtinClasses[i])
+			builtinClasses[i]->decRef();
+	}
 	for(auto i = customClasses.begin(); i != customClasses.end(); ++i)
 		(*i)->decRef();
+
+	//Free template instantations by decRef'ing them
+	for(auto i = instantiatedTemplates.begin(); i != instantiatedTemplates.end(); ++i)
+		i->second->decRef();
 
 	//Free templates by decRef'ing them
 	for(auto i = templates.begin(); i != templates.end(); ++i)
@@ -560,8 +624,6 @@ void SystemState::destroy()
 
 	for(auto it=profilingData.begin();it!=profilingData.end();it++)
 		delete *it;
-
-	this->decRef(); //free a reference we obtained by 'new SystemState'
 }
 
 bool SystemState::isOnError() const
@@ -643,8 +705,8 @@ void SystemState::delayedCreation()
 {
 	gdk_threads_enter();
 
-	int32_t reqWidth=getFrameSize().Xmax/20;
-	int32_t reqHeight=getFrameSize().Ymax/20;
+	int32_t reqWidth=mainClip->getFrameSize().Xmax/20;
+	int32_t reqHeight=mainClip->getFrameSize().Ymax/20;
 
 	engineData->showWindow(reqWidth, reqHeight);
 
@@ -774,8 +836,8 @@ void SystemState::launchGnash()
 	char bufHeight[32];
 	snprintf(bufXid,32,"%lu",(long unsigned)engineData->getWindowForGnash());
 	/* Use swf dimensions in standalone mode and window dimensions in plugin mode */
-	snprintf(bufWidth,32,"%u",standalone ? getFrameSize().Xmax/20 : engineData->width);
-	snprintf(bufHeight,32,"%u",standalone ? getFrameSize().Ymax/20 : engineData->height);
+	snprintf(bufWidth,32,"%u",standalone ? mainClip->getFrameSize().Xmax/20 : engineData->width);
+	snprintf(bufHeight,32,"%u",standalone ? mainClip->getFrameSize().Ymax/20 : engineData->height);
 	/* renderMode: 0: disable sound and rendering
 	 *             1: enable rendering and disable sound
 	 *             2: enable sound and disable rendering
@@ -798,7 +860,7 @@ void SystemState::launchGnash()
 		strdup("-k"), //Height
 		bufHeight,
 		strdup("-u"), //SWF url
-		strdup(origin.getParsedURL().raw_buf()),
+		strdup(mainClip->getOrigin().getParsedURL().raw_buf()),
 		strdup("-P"), //SWF parameters
 		strdup(params.c_str()),
 		strdup("--render-mode"),
@@ -989,12 +1051,6 @@ void SystemState::flushInvalidationQueue()
 	invalidateQueueTail=NullRef;
 }
 
-_NR<Stage> SystemState::getStage()
-{
-	stage->incRef();
-	return _MR(stage);
-}
-
 #ifdef PROFILING_SUPPORT
 void SystemState::setProfilingOutput(const tiny_string& t)
 {
@@ -1045,7 +1101,7 @@ void ThreadProfile::plot(uint32_t maxTime, cairo_t *cr)
 		return;
 
 	Locker locker(mutex);
-	RECT size=getSys()->getFrameSize();
+	RECT size=getSys()->mainClip->getFrameSize();
 	int width=size.Xmax/20;
 	int height=size.Ymax/20;
 	
@@ -1115,7 +1171,7 @@ void ThreadProfile::plot(uint32_t maxTime, cairo_t *cr)
 
 ParseThread::ParseThread(istream& in, _R<ApplicationDomain> appDomain, _R<SecurityDomain> secDomain, Loader *_loader, tiny_string srcurl)
   : version(0),applicationDomain(appDomain),securityDomain(secDomain),
-    f(in),zlibFilter(NULL),backend(NULL),loader(_loader),
+    f(in),uncompressingFilter(NULL),backend(NULL),loader(_loader),
     parsedObject(NullRef),url(srcurl),fileType(FT_UNKNOWN)
 {
 	f.exceptions ( istream::eofbit | istream::failbit | istream::badbit );
@@ -1123,7 +1179,7 @@ ParseThread::ParseThread(istream& in, _R<ApplicationDomain> appDomain, _R<Securi
 
 ParseThread::ParseThread(std::istream& in, RootMovieClip *root)
   : version(0),applicationDomain(NullRef),securityDomain(NullRef), //The domains are not needed since the system state create them itself
-    f(in),zlibFilter(NULL),backend(NULL),loader(NULL),
+    f(in),uncompressingFilter(NULL),backend(NULL),loader(NULL),
     parsedObject(NullRef),url(),fileType(FT_UNKNOWN)
 {
 	f.exceptions ( istream::eofbit | istream::failbit | istream::badbit );
@@ -1132,11 +1188,11 @@ ParseThread::ParseThread(std::istream& in, RootMovieClip *root)
 
 ParseThread::~ParseThread()
 {
-	if(zlibFilter)
+	if(uncompressingFilter)
 	{
 		//Restore the istream
 		f.rdbuf(backend);
-		delete zlibFilter;
+		delete uncompressingFilter;
 	}
 	parsedObject.reset();
 }
@@ -1147,6 +1203,8 @@ FILE_TYPE ParseThread::recognizeFile(uint8_t c1, uint8_t c2, uint8_t c3, uint8_t
 		return FT_SWF;
 	else if(c1=='C' && c2=='W' && c3=='S')
 		return FT_COMPRESSED_SWF;
+	else if(c1=='Z' && c2=='W' && c3=='S')
+		return FT_LZMA_COMPRESSED_SWF;
 	else if((c1&0x80) && c2=='P' && c3=='N' && c4=='G')
 		return FT_PNG;
 	else if(c1==0xff && c2==0xd8 && c3==0xff)
@@ -1170,13 +1228,26 @@ void ParseThread::parseSWFHeader(RootMovieClip *root, UI8 ver)
 	//Enable decompression if needed
 	if(fileType==FT_SWF)
 		LOG(LOG_INFO, _("Uncompressed SWF file: Version ") << (int)version);
-	else if(fileType==FT_COMPRESSED_SWF)
+	else
 	{
-		LOG(LOG_INFO, _("Compressed SWF file: Version ") << (int)version);
 		//The file is compressed, create a filtering streambuf
 		backend=f.rdbuf();
-		zlibFilter = new zlib_filter(backend);
-		f.rdbuf(zlibFilter);
+		if(fileType==FT_COMPRESSED_SWF)
+		{
+			LOG(LOG_INFO, _("zlib compressed SWF file: Version ") << (int)version);
+			uncompressingFilter = new zlib_filter(backend);
+		}
+		else if(fileType==FT_LZMA_COMPRESSED_SWF)
+		{
+			LOG(LOG_INFO, _("lzma compressed SWF file: Version ") << (int)version);
+			uncompressingFilter = new liblzma_filter(backend);
+		}
+		else
+		{
+			// not reached
+			assert(false);
+		}
+		f.rdbuf(uncompressingFilter);
 	}
 
 	f >> FrameSize >> FrameRate >> FrameCount;
@@ -1213,6 +1284,18 @@ void ParseThread::execute()
 			parseSWF(Signature[3]);
 		}
 	}
+	catch(ParseException& e)
+	{
+		SpinlockLocker l(objectSpinlock);
+		parsedObject = NullRef;
+		// Set system error only for main SWF. Loader classes
+		// handle error for loaded SWFs.
+		if(!loader)
+		{
+			LOG(LOG_ERROR,_("Exception in ParseThread ") << e.cause);
+			getSys()->setError(e.cause, SystemState::ERROR_PARSING);
+		}
+	}
 	catch(LightsparkException& e)
 	{
 		LOG(LOG_ERROR,_("Exception in ParseThread ") << e.cause);
@@ -1230,14 +1313,18 @@ void ParseThread::parseSWF(UI8 ver)
 	RootMovieClip* root=NULL;
 	if(parsedObject.isNull())
 	{
-		LoaderInfo *li=loader?loader->getContentLoaderInfo().getPtr():NULL;
+		_NR<LoaderInfo> li=loader->getContentLoaderInfo();
 		root=RootMovieClip::getInstance(li, applicationDomain, securityDomain);
 		parsedObject=_MNR(root);
+		li->setWaitedObject(parsedObject);
 		if(!url.empty())
 			root->setOrigin(url, "");
 	}
 	else
+	{
 		root=getRootMovie();
+		parsedObject->loaderInfo->setWaitedObject(parsedObject);
+	}
 	objectSpinlock.unlock();
 
 	std::queue<const ControlTag*> symbolClassTags;
@@ -1262,7 +1349,7 @@ void ParseThread::parseSWF(UI8 ver)
 			return;
 		}
 		//Check if this clip is the main clip then honour its FileAttributesTag
-		if(root == getSys())
+		if(root == getSys()->mainClip)
 		{
 			getSys()->needsAVM2(fat->ActionScript3);
 			if(!fat->ActionScript3)
@@ -1274,6 +1361,7 @@ void ParseThread::parseSWF(UI8 ver)
 				LOG(LOG_INFO, _("Switched to local-with-networking sandbox by FileAttributesTag"));
 			}
 		}
+		delete fat;
 
 		bool done=false;
 		bool empty=true;
@@ -1384,8 +1472,10 @@ void ParseThread::parseSWF(UI8 ver)
 
 void ParseThread::parseBitmap()
 {
-	_NR<Bitmap> tmp=_MNR(Class<Bitmap>::getInstanceS(&f, fileType));
+	_NR<LoaderInfo> li;
+	li=loader->getContentLoaderInfo();
 
+	_NR<Bitmap> tmp=_MNR(Class<Bitmap>::getInstanceS(li, &f, fileType));
 	{
 		SpinlockLocker l(objectSpinlock);
 		parsedObject=tmp;
@@ -1463,7 +1553,7 @@ void RootMovieClip::commitFrame(bool another)
 	if(getFramesLoaded()==1 && frameRate!=0)
 	{
 		SystemState* sys = getSys();
-		if(this==sys)
+		if(this==sys->mainClip)
 		{
 			/* now the frameRate is available and all SymbolClass tags have created their classes */
 			sys->addTick(1000/frameRate,sys);
@@ -1590,7 +1680,7 @@ void SystemState::tick()
 		for(;it!=profilingData.end();++it)
 			(*it)->tick();
 	}
-	if(getSys()->currentVm==NULL)
+	if(currentVm==NULL)
 		return;
 	/* See http://www.senocular.com/flash/tutorials/orderofoperations/
 	 * for the description of steps.
@@ -1612,7 +1702,7 @@ void SystemState::tick()
 	/* Step 3: create legacy objects, which are new in this frame (top-down),
 	 * run their constructors (bottom-up)
 	 * and their frameScripts (Step 5) (bottom-up) */
-	getSys()->currentVm->addEvent(NullRef, _MR(new (unaccountedMemory) InitFrameEvent()));
+	currentVm->addEvent(NullRef, _MR(new (unaccountedMemory) InitFrameEvent(mainClip->getStage())));
 
 	/* Step 4: dispatch frameConstructed events */
 	/* (TODO: should be run between step 3 and 5 */
@@ -1641,7 +1731,7 @@ void SystemState::tick()
 
 	/* Step 0: Set current frame number to the next frame */
 	_R<AdvanceFrameEvent> advFrame = _MR(new (unaccountedMemory) AdvanceFrameEvent());
-	if(getSys()->currentVm->addEvent(NullRef, advFrame))
+	if(currentVm->addEvent(NullRef, advFrame))
 		advFrame->done.wait();
 }
 
@@ -1668,6 +1758,20 @@ Null* SystemState::getNullRef() const
 Undefined* SystemState::getUndefinedRef() const
 {
 	Undefined* ret=undefined.getPtr();
+	ret->incRef();
+	return ret;
+}
+
+Boolean* SystemState::getTrueRef() const
+{
+	Boolean* ret=trueRef.getPtr();
+	ret->incRef();
+	return ret;
+}
+
+Boolean* SystemState::getFalseRef() const
+{
+	Boolean* ret=falseRef.getPtr();
 	ret->incRef();
 	return ret;
 }
@@ -1733,6 +1837,17 @@ void RootMovieClip::initFrame()
 	if(getFramesLoaded() == 0)
 		return;
 
+	/* Bind classes between the previous and new frame. */
+	std::list<Frame>::iterator frame=frames.begin();
+	for(unsigned int i=0;i<=state.FP;i++)
+	{
+		if((int)i > state.last_FP)
+		{
+			frame->bindClasses(this);
+		}
+		++frame;
+	}
+
 	MovieClip::initFrame();
 }
 
@@ -1746,16 +1861,16 @@ void RootMovieClip::advanceFrame()
 	MovieClip::advanceFrame();
 }
 
-void RootMovieClip::constructionComplete()
-{
-	MovieClip::constructionComplete();
-	if(this==getSys())
-		loaderInfo->sendInit();
-}
-
 void RootMovieClip::finalize()
 {
 	MovieClip::finalize();
 	applicationDomain.reset();
 	securityDomain.reset();
+}
+
+void RootMovieClip::addBinding(const tiny_string& name, DictionaryTag *tag)
+{
+	// This function will be called only be the parsing thread,
+	// and will only access the last frame, so no locking needed.
+	frames.back().classesToBeBound.push_back(make_pair(name, tag));
 }

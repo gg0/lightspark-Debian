@@ -24,20 +24,21 @@
 #include "logger.h"
 #include <unistd.h>
 
-using namespace std;
-
-#ifdef _MSC_VER
-int round(double f)
-{
-    return ( f < 0.0 ) ? (int) ( f - 0.5 ) : (int) ( f + 0.5 );
-}
-
-long lrint(double f)
-{
-	return (floor(f+(f>0) ? 0.5 : -0.5));
-}
-
+#ifdef _WIN32
+#	ifndef NOMINMAX
+#		define NOMINMAX
+#	endif
+#	define WIN32_LEAN_AND_MEAN
+#	include <windows.h>
+#	undef DOUBLE_CLICK
+#	undef RGB
+#	undef VOID
+#	ifndef PATH_MAX
+#		define PATH_MAX 260
+#	endif
 #endif
+
+using namespace std;
 
 uint64_t compat_msectiming()
 {
@@ -61,7 +62,7 @@ int kill_child(GPid childPid)
 	return 0;
 }
 
-#ifndef WIN32
+#ifndef _WIN32
 #include "timer.h"
 uint64_t timespecToUsecs(timespec t)
 {
@@ -131,7 +132,7 @@ BOOL WINAPI DllMain (HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved)
 {
 	RUNDLLMAIN(gio);
 	RUNDLLMAIN(glib);
-	RUNDLLMAIN(cairo);
+	//RUNDLLMAIN(cairo); //taken care of by patches from mxe
 	RUNDLLMAIN(atk);
 	RUNDLLMAIN(pango);
 	RUNDLLMAIN(gdk);

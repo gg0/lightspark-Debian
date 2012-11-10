@@ -17,8 +17,8 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
-#ifndef _THREADING_H
-#define _THREADING_H
+#ifndef THREADING_H
+#define THREADING_H 1
 
 #include "compat.h"
 #include <cstdlib>
@@ -41,10 +41,12 @@ using Glib::Threads::RecMutex;
 using Glib::Threads::Cond;
 using Glib::Threads::Thread;
 typedef Mutex StaticMutex; // GLib::Threads::Mutex can be static
+typedef RecMutex StaticRecMutex; // GLib::Threads::RecMutex can be static
 #else
 using Glib::Mutex;
 using Glib::RecMutex;
 using Glib::StaticMutex;
+using Glib::StaticRecMutex;
 using Glib::Cond;
 using Glib::Thread;
 #endif
@@ -56,9 +58,9 @@ typedef Mutex::Lock SpinlockLocker;
 class DLL_PUBLIC Semaphore
 {
 private:
-	uint32_t value;
 	Mutex mutex;
 	Cond cond;
+	uint32_t value;
 public:
 	Semaphore(uint32_t init);
 	~Semaphore();
@@ -133,15 +135,15 @@ private:
 	//Counting semaphores for the queue
 	Semaphore freeBuffers;
 	Semaphore usedBuffers;
-	bool empty;
 	uint32_t bufferHead;
 	uint32_t bufferTail;
+	bool empty;
 public:
-	BlockingCircularQueue():freeBuffers(size),usedBuffers(0),empty(true),bufferHead(0),bufferTail(0)
+	BlockingCircularQueue():freeBuffers(size),usedBuffers(0),bufferHead(0),bufferTail(0),empty(true)
 	{
 	}
 	template<class GENERATOR>
-	BlockingCircularQueue(const GENERATOR& g):freeBuffers(size),usedBuffers(0),empty(true),bufferHead(0),bufferTail(0)
+	BlockingCircularQueue(const GENERATOR& g):freeBuffers(size),usedBuffers(0),bufferHead(0),bufferTail(0),empty(true)
 	{
 		for(uint32_t i=0;i<size;i++)
 			g.init(queue[i]);
@@ -217,4 +219,4 @@ public:
 };
 };
 
-#endif
+#endif /* THREADING_H */

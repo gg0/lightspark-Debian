@@ -17,38 +17,15 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
-#include "abc.h"
-#include "flashevents.h"
+#include "scripting/abc.h"
+#include "scripting/flash/events/flashevents.h"
 #include "swf.h"
 #include "compat.h"
-#include "class.h"
-#include "argconv.h"
+#include "scripting/class.h"
+#include "scripting/argconv.h"
 
 using namespace std;
 using namespace lightspark;
-
-SET_NAMESPACE("flash.events");
-
-REGISTER_CLASS_NAME(IEventDispatcher);
-REGISTER_CLASS_NAME(EventDispatcher);
-REGISTER_CLASS_NAME(Event);
-REGISTER_CLASS_NAME(EventPhase);
-REGISTER_CLASS_NAME(MouseEvent);
-REGISTER_CLASS_NAME(TimerEvent);
-REGISTER_CLASS_NAME(ProgressEvent);
-REGISTER_CLASS_NAME(IOErrorEvent);
-REGISTER_CLASS_NAME(FocusEvent);
-REGISTER_CLASS_NAME(NetStatusEvent);
-REGISTER_CLASS_NAME(HTTPStatusEvent);
-REGISTER_CLASS_NAME(FullScreenEvent);
-REGISTER_CLASS_NAME(KeyboardEvent);
-REGISTER_CLASS_NAME(TextEvent);
-REGISTER_CLASS_NAME(ErrorEvent);
-REGISTER_CLASS_NAME(SecurityErrorEvent);
-REGISTER_CLASS_NAME(AsyncErrorEvent);
-REGISTER_CLASS_NAME(StatusEvent);
-REGISTER_CLASS_NAME(DataEvent);
-REGISTER_CLASS_NAME(InvokeEvent);
 
 void IEventDispatcher::linkTraits(Class_base* c)
 {
@@ -59,7 +36,7 @@ void IEventDispatcher::linkTraits(Class_base* c)
 }
 
 Event::Event(Class_base* cb, const tiny_string& t, bool b, bool c):
-	ASObject(cb),type(t),target(),currentTarget(),bubbles(b),cancelable(c),eventPhase(0),defaultPrevented(false)
+	ASObject(cb),bubbles(b),cancelable(c),defaultPrevented(false),eventPhase(0),type(t),target(),currentTarget()
 {
 }
 
@@ -75,29 +52,55 @@ void Event::sinit(Class_base* c)
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
 	c->setSuper(Class<ASObject>::getRef());
 
-	c->setVariableByQName("ENTER_FRAME","",Class<ASString>::getInstanceS("enterFrame"),DECLARED_TRAIT);
-	c->setVariableByQName("RENDER","",Class<ASString>::getInstanceS("render"),DECLARED_TRAIT);
-	c->setVariableByQName("ADDED_TO_STAGE","",Class<ASString>::getInstanceS("addedToStage"),DECLARED_TRAIT);
-	c->setVariableByQName("REMOVED_FROM_STAGE","",Class<ASString>::getInstanceS("removedFromStage"),DECLARED_TRAIT);
-	c->setVariableByQName("INIT","",Class<ASString>::getInstanceS("init"),DECLARED_TRAIT);
-	c->setVariableByQName("OPEN","",Class<ASString>::getInstanceS("open"),DECLARED_TRAIT);
-	c->setVariableByQName("CLOSE","",Class<ASString>::getInstanceS("close"),DECLARED_TRAIT);
-	c->setVariableByQName("CANCEL","",Class<ASString>::getInstanceS("cancel"),DECLARED_TRAIT);
-	c->setVariableByQName("ADDED","",Class<ASString>::getInstanceS("added"),DECLARED_TRAIT);
-	c->setVariableByQName("COMPLETE","",Class<ASString>::getInstanceS("complete"),DECLARED_TRAIT);
-	c->setVariableByQName("REMOVED","",Class<ASString>::getInstanceS("removed"),DECLARED_TRAIT);
-	c->setVariableByQName("UNLOAD","",Class<ASString>::getInstanceS("unload"),DECLARED_TRAIT);
 	c->setVariableByQName("ACTIVATE","",Class<ASString>::getInstanceS("activate"),DECLARED_TRAIT);
-	c->setVariableByQName("DEACTIVATE","",Class<ASString>::getInstanceS("deactivate"),DECLARED_TRAIT);
+	c->setVariableByQName("ADDED","",Class<ASString>::getInstanceS("added"),DECLARED_TRAIT);
+	c->setVariableByQName("ADDED_TO_STAGE","",Class<ASString>::getInstanceS("addedToStage"),DECLARED_TRAIT);
+	c->setVariableByQName("CANCEL","",Class<ASString>::getInstanceS("cancel"),DECLARED_TRAIT);
 	c->setVariableByQName("CHANGE","",Class<ASString>::getInstanceS("change"),DECLARED_TRAIT);
-	c->setVariableByQName("RESIZE","",Class<ASString>::getInstanceS("resize"),DECLARED_TRAIT);
-	c->setVariableByQName("MOUSE_LEAVE","",Class<ASString>::getInstanceS("mouseLeave"),DECLARED_TRAIT);
-	c->setVariableByQName("SELECT","",Class<ASString>::getInstanceS("select"),DECLARED_TRAIT);
-	c->setVariableByQName("SOUND_COMPLETE","",Class<ASString>::getInstanceS("soundComplete"),DECLARED_TRAIT);
+	c->setVariableByQName("CLEAR","",Class<ASString>::getInstanceS("clear"),DECLARED_TRAIT);
+	c->setVariableByQName("CLOSE","",Class<ASString>::getInstanceS("close"),DECLARED_TRAIT);
+	c->setVariableByQName("CLOSING","",Class<ASString>::getInstanceS("closing"),DECLARED_TRAIT);
+	c->setVariableByQName("COMPLETE","",Class<ASString>::getInstanceS("complete"),DECLARED_TRAIT);
+	c->setVariableByQName("CONNECT","",Class<ASString>::getInstanceS("connect"),DECLARED_TRAIT);
+	c->setVariableByQName("CONTEXT3D_CREATE","",Class<ASString>::getInstanceS("context3DCreate"),DECLARED_TRAIT);
+	c->setVariableByQName("COPY","",Class<ASString>::getInstanceS("copy"),DECLARED_TRAIT);
+	c->setVariableByQName("CUT","",Class<ASString>::getInstanceS("cut"),DECLARED_TRAIT);
+	c->setVariableByQName("DEACTIVATE","",Class<ASString>::getInstanceS("deactivate"),DECLARED_TRAIT);
+	c->setVariableByQName("DISPLAYING","",Class<ASString>::getInstanceS("displaying"),DECLARED_TRAIT);
+	c->setVariableByQName("ENTER_FRAME","",Class<ASString>::getInstanceS("enterFrame"),DECLARED_TRAIT);
+	c->setVariableByQName("EXIT_FRAME","",Class<ASString>::getInstanceS("exitFrame"),DECLARED_TRAIT);
+	c->setVariableByQName("EXITING","",Class<ASString>::getInstanceS("exiting"),DECLARED_TRAIT);
+	c->setVariableByQName("FRAME_CONSTRUCTED","",Class<ASString>::getInstanceS("frameConstructed"),DECLARED_TRAIT);
 	c->setVariableByQName("FULLSCREEN","",Class<ASString>::getInstanceS("fullScreen"),DECLARED_TRAIT);
+	c->setVariableByQName("HTML_BOUNDS_CHANGE","",Class<ASString>::getInstanceS("htmlBoundsChange"),DECLARED_TRAIT);
+	c->setVariableByQName("HTML_DOM_INITIALIZE","",Class<ASString>::getInstanceS("htmlDOMInitialize"),DECLARED_TRAIT);
+	c->setVariableByQName("HTML_RENDER","",Class<ASString>::getInstanceS("htmlRender"),DECLARED_TRAIT);
+	c->setVariableByQName("ID3","",Class<ASString>::getInstanceS("id3"),DECLARED_TRAIT);
+	c->setVariableByQName("INIT","",Class<ASString>::getInstanceS("init"),DECLARED_TRAIT);
+	c->setVariableByQName("LOCATION_CHANGE","",Class<ASString>::getInstanceS("locationChange"),DECLARED_TRAIT);
+	c->setVariableByQName("MOUSE_LEAVE","",Class<ASString>::getInstanceS("mouseLeave"),DECLARED_TRAIT);
+	c->setVariableByQName("NETWORK_CHANGE","",Class<ASString>::getInstanceS("networkChange"),DECLARED_TRAIT);
+	c->setVariableByQName("OPEN","",Class<ASString>::getInstanceS("open"),DECLARED_TRAIT);
+	c->setVariableByQName("PASTE","",Class<ASString>::getInstanceS("paste"),DECLARED_TRAIT);
+	c->setVariableByQName("REMOVED","",Class<ASString>::getInstanceS("removed"),DECLARED_TRAIT);
+	c->setVariableByQName("REMOVED_FROM_STAGE","",Class<ASString>::getInstanceS("removedFromStage"),DECLARED_TRAIT);
+	c->setVariableByQName("RENDER","",Class<ASString>::getInstanceS("render"),DECLARED_TRAIT);
+	c->setVariableByQName("RESIZE","",Class<ASString>::getInstanceS("resize"),DECLARED_TRAIT);
+	c->setVariableByQName("SCROLL","",Class<ASString>::getInstanceS("scroll"),DECLARED_TRAIT);
+	c->setVariableByQName("SELECT","",Class<ASString>::getInstanceS("select"),DECLARED_TRAIT);
+	c->setVariableByQName("SELECT_ALL","",Class<ASString>::getInstanceS("selectAll"),DECLARED_TRAIT);
+	c->setVariableByQName("SOUND_COMPLETE","",Class<ASString>::getInstanceS("soundComplete"),DECLARED_TRAIT);
+	c->setVariableByQName("STANDARD_ERROR_CLOSE","",Class<ASString>::getInstanceS("standardErrorClose"),DECLARED_TRAIT);
+	c->setVariableByQName("STANDARD_INPUT_CLOSE","",Class<ASString>::getInstanceS("standardInputClose"),DECLARED_TRAIT);
+	c->setVariableByQName("STANDARD_OUTPUT_CLOSE","",Class<ASString>::getInstanceS("standardOutputClose"),DECLARED_TRAIT);
 	c->setVariableByQName("TAB_CHILDREN_CHANGE","",Class<ASString>::getInstanceS("tabChildrenChange"),DECLARED_TRAIT);
 	c->setVariableByQName("TAB_ENABLED_CHANGE","",Class<ASString>::getInstanceS("tabEnabledChange"),DECLARED_TRAIT);
 	c->setVariableByQName("TAB_INDEX_CHANGE","",Class<ASString>::getInstanceS("tabIndexChange"),DECLARED_TRAIT);
+	c->setVariableByQName("TEXT_INTERACTION_MODE_CHANGE","",Class<ASString>::getInstanceS("textInteractionModeChange"),DECLARED_TRAIT);
+	c->setVariableByQName("TEXTURE_READY","",Class<ASString>::getInstanceS("textureReady"),DECLARED_TRAIT);
+	c->setVariableByQName("UNLOAD","",Class<ASString>::getInstanceS("unload"),DECLARED_TRAIT);
+	c->setVariableByQName("USER_IDLE","",Class<ASString>::getInstanceS("userIdle"),DECLARED_TRAIT);
+	c->setVariableByQName("USER_PRESENT","",Class<ASString>::getInstanceS("userPresent"),DECLARED_TRAIT);
 
 	c->setDeclaredMethodByQName("formatToString","",Class<IFunction>::getFunction(formatToString),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("isDefaultPrevented","",Class<IFunction>::getFunction(_isDefaultPrevented),NORMAL_METHOD,true);
@@ -117,12 +120,12 @@ void Event::buildTraits(ASObject* o)
 
 ASFUNCTIONBODY(Event,_constructor)
 {
+	// Event constructor is called with zero arguments internally
+	if(argslen==0)
+		return NULL;
+
 	Event* th=static_cast<Event*>(obj);
-	if(argslen>=1)
-	{
-		assert_and_throw(args[0]->getObjectType()==T_STRING);
-		th->type=args[0]->toString();
-	}
+	ARG_UNPACK(th->type)(th->bubbles, false)(th->cancelable, false);
 	return NULL;
 }
 
@@ -294,6 +297,7 @@ void MouseEvent::sinit(Class_base* c)
 	c->setVariableByQName("MOUSE_UP","",Class<ASString>::getInstanceS("mouseUp"),DECLARED_TRAIT);
 	c->setVariableByQName("MOUSE_WHEEL","",Class<ASString>::getInstanceS("mouseWheel"),DECLARED_TRAIT);
 	c->setVariableByQName("MOUSE_MOVE","",Class<ASString>::getInstanceS("mouseMove"),DECLARED_TRAIT);
+	c->setVariableByQName("RIGHT_CLICK","",Class<ASString>::getInstanceS("rightClick"),DECLARED_TRAIT);
 	c->setVariableByQName("ROLL_OVER","",Class<ASString>::getInstanceS("rollOver"),DECLARED_TRAIT);
 	c->setVariableByQName("ROLL_OUT","",Class<ASString>::getInstanceS("rollOut"),DECLARED_TRAIT);
 
@@ -639,7 +643,7 @@ bool EventDispatcher::hasEventListener(const tiny_string& eventName)
 		return true;
 }
 
-NetStatusEvent::NetStatusEvent(Class_base* cb, const tiny_string& l, const tiny_string& c):Event(cb, "netStatus"),level(l),code(c)
+NetStatusEvent::NetStatusEvent(Class_base* cb, const tiny_string& level, const tiny_string& code):Event(cb, "netStatus")
 {
 	//The object has been initialized internally
 	ASObject* info=Class<ASObject>::getInstanceS();
@@ -659,17 +663,17 @@ void NetStatusEvent::sinit(Class_base* c)
 ASFUNCTIONBODY(NetStatusEvent,_constructor)
 {
 	NetStatusEvent* th=Class<NetStatusEvent>::cast(obj);
-	if(th->level!="" && th->code!="")
-	{
-		//TODO: purge this away
-		return NULL;
-	}
-	assert_and_throw(argslen>=1 && argslen<=4);
 	//Also call the base class constructor, using only the first arguments
 	uint32_t baseClassArgs=imin(argslen,3);
 	Event::_constructor(obj,args,baseClassArgs);
 	ASObject* info;
-	if(argslen==4)
+	if(argslen==0)
+	{
+		//Called from C++ code, info was set in the C++
+		//constructor
+		return NULL;
+	}
+	else if(argslen==4)
 	{
 		//Building from AS code, use the data
 		args[3]->incRef();
@@ -682,6 +686,27 @@ ASFUNCTIONBODY(NetStatusEvent,_constructor)
 	}
 	obj->setVariableByQName("info","",info,DECLARED_TRAIT);
 	return NULL;
+}
+
+Event* NetStatusEvent::cloneImpl() const
+{
+	NetStatusEvent *clone=Class<NetStatusEvent>::getInstanceS();
+	clone->type = type;
+	clone->bubbles = bubbles;
+	clone->cancelable = cancelable;
+
+	multiname infoName(NULL);
+	infoName.name_type=multiname::NAME_STRING;
+	infoName.name_s_id=getSys()->getUniqueStringId("info");
+	infoName.ns.push_back(nsNameAndKind("",NAMESPACE));
+	infoName.isAttribute = false;
+
+	_NR<ASObject> info = const_cast<NetStatusEvent*>(this)->getVariableByMultiname(infoName);
+	assert(!info.isNull());
+	info->incRef();
+	clone->setVariableByMultiname(infoName, info.getPtr(), CONST_NOT_ALLOWED);
+
+	return clone;
 }
 
 FullScreenEvent::FullScreenEvent(Class_base* c):Event(c, "fullScreenEvent")
@@ -843,10 +868,10 @@ FunctionEvent::~FunctionEvent()
 	delete[] args;
 }
 
-ExternalCallEvent::ExternalCallEvent(_R<IFunction> _f, const ExtVariant** _args,
-	uint32_t _numArgs, ExtVariant** _result, bool* _thrown, tiny_string* _exception):
+ExternalCallEvent::ExternalCallEvent(_R<IFunction> _f, ASObject* const* _args,
+	uint32_t _numArgs, ASObject** _result, bool* _thrown, tiny_string* _exception):
 		WaitableEvent("ExternalCallEvent"),
-		f(_f),args(_args),numArgs(_numArgs),result(_result),thrown(_thrown),exception(_exception)
+		f(_f),args(_args),result(_result),thrown(_thrown),exception(_exception),numArgs(_numArgs)
 {
 }
 
@@ -864,7 +889,7 @@ BindClassEvent::BindClassEvent(DictionaryTag* t, const tiny_string& c)
 {
 }
 
-ParseRPCMessageEvent::ParseRPCMessageEvent(_R<ByteArray> ba, _NR<ASObject> c, _R<Responder> r):
+ParseRPCMessageEvent::ParseRPCMessageEvent(_R<ByteArray> ba, _NR<ASObject> c, _NR<Responder> r):
 	Event(NULL, "ParseRPCMessageEvent"),message(ba),client(c),responder(r)
 {
 }
@@ -889,12 +914,43 @@ void StatusEvent::sinit(Class_base* c)
 void DataEvent::sinit(Class_base* c)
 {
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
-	c->setSuper(Class<Event>::getRef());
+	c->setSuper(Class<TextEvent>::getRef());
 
 	/* TODO: dispatch this event */
 	c->setVariableByQName("DATA","",Class<ASString>::getInstanceS("data"),DECLARED_TRAIT);
 	/* TODO: dispatch this event */
 	c->setVariableByQName("UPLOAD_COMPLETE_DATA","",Class<ASString>::getInstanceS("uploadCompleteData"),DECLARED_TRAIT);
+
+	REGISTER_GETTER_SETTER(c, data);
+}
+
+ASFUNCTIONBODY_GETTER_SETTER(DataEvent, data);
+
+ASFUNCTIONBODY(DataEvent,_constructor)
+{
+	uint32_t baseClassArgs=imin(argslen,3);
+	TextEvent::_constructor(obj,args,baseClassArgs);
+
+	DataEvent* th=static_cast<DataEvent*>(obj);
+	if (argslen >= 4)
+	{
+		th->data = args[3]->toString();
+	}
+
+	return NULL;
+}
+
+Event* DataEvent::cloneImpl() const
+{
+	DataEvent *clone = Class<DataEvent>::getInstanceS();
+	clone->data = data;
+	// TextEvent
+	clone->text = text;
+	// Event
+	clone->type = type;
+	clone->bubbles = bubbles;
+	clone->cancelable = cancelable;
+	return clone;
 }
 
 void InvokeEvent::sinit(Class_base* c)
@@ -911,3 +967,135 @@ ASFUNCTIONBODY(InvokeEvent,_constructor)
 	Event::_constructor(obj,args,baseClassArgs);
 	return NULL;
 }
+
+DRMErrorEvent::DRMErrorEvent(Class_base* c) : ErrorEvent(c, "drmAuthenticate")
+{
+}
+
+void DRMErrorEvent::sinit(Class_base* c)
+{
+	c->setConstructor(Class<IFunction>::getFunction(_constructor));
+	c->setSuper(Class<ErrorEvent>::getRef());
+
+	c->setVariableByQName("DRM_ERROR","",Class<ASString>::getInstanceS("drmError"),DECLARED_TRAIT);
+	c->setVariableByQName("DRM_LOAD_DEVICEID_ERROR","",Class<ASString>::getInstanceS("drmLoadDeviceIdError"),DECLARED_TRAIT);
+}
+
+ASFUNCTIONBODY(DRMErrorEvent,_constructor)
+{
+	uint32_t baseClassArgs=imin(argslen,3);
+	ErrorEvent::_constructor(obj,args,baseClassArgs);
+	if(argslen > 3)
+		LOG(LOG_NOT_IMPLEMENTED, "DRMErrorEvent constructor doesn't support all parameters");
+	return NULL;
+}
+
+DRMStatusEvent::DRMStatusEvent(Class_base* c) : Event(c, "drmAuthenticate")
+{
+}
+
+void DRMStatusEvent::sinit(Class_base* c)
+{
+	c->setConstructor(Class<IFunction>::getFunction(_constructor));
+	c->setSuper(Class<Event>::getRef());
+
+	c->setVariableByQName("DRM_STATUS","",Class<ASString>::getInstanceS("drmStatus"),DECLARED_TRAIT);
+}
+
+ASFUNCTIONBODY(DRMStatusEvent,_constructor)
+{
+	uint32_t baseClassArgs=imin(argslen,3);
+	Event::_constructor(obj,args,baseClassArgs);
+	if(argslen > 3)
+		LOG(LOG_NOT_IMPLEMENTED, "DRMStatusEvent constructor doesn't support all parameters");
+	return NULL;
+}
+
+StageVideoEvent::StageVideoEvent(Class_base* c)
+  : Event(c, "renderState")
+{
+}
+
+void StageVideoEvent::sinit(Class_base* c)
+{
+	c->setConstructor(Class<IFunction>::getFunction(_constructor));
+	c->setSuper(Class<Event>::getRef());
+	
+	c->setVariableByQName("RENDER_STATE","",Class<ASString>::getInstanceS("renderState"),DECLARED_TRAIT);
+
+	REGISTER_GETTER(c,colorSpace);
+	REGISTER_GETTER(c,status);
+}
+
+ASFUNCTIONBODY(StageVideoEvent,_constructor)
+{
+	uint32_t baseClassArgs=imin(argslen,3);
+	Event::_constructor(obj,args,baseClassArgs);
+
+	StageVideoEvent* th=static_cast<StageVideoEvent*>(obj);
+	if(argslen>=4)
+	{
+		th->status=args[3]->toString();
+	}
+	if(argslen>=5)
+	{
+		th->colorSpace=args[4]->toString();
+	}
+
+	return NULL;
+}
+
+Event* StageVideoEvent::cloneImpl() const
+{
+	StageVideoEvent *clone;
+	clone = Class<StageVideoEvent>::getInstanceS();
+	clone->status = status;
+	clone->colorSpace = colorSpace;
+	// Event
+	clone->type = type;
+	clone->bubbles = bubbles;
+	clone->cancelable = cancelable;
+	return clone;
+}
+
+ASFUNCTIONBODY_GETTER(StageVideoEvent,colorSpace);
+ASFUNCTIONBODY_GETTER(StageVideoEvent,status);
+
+StageVideoAvailabilityEvent::StageVideoAvailabilityEvent(Class_base* c)
+  : Event(c, "stageVideoAvailability"), availability("unavailable")
+{
+}
+
+void StageVideoAvailabilityEvent::sinit(Class_base* c)
+{
+	c->setVariableByQName("STAGE_VIDEO_AVAILABILITY","",Class<ASString>::getInstanceS("stageVideoAvailability"),DECLARED_TRAIT);
+	REGISTER_GETTER(c, availability);
+}
+
+ASFUNCTIONBODY(StageVideoAvailabilityEvent, _constructor)
+{
+	uint32_t baseClassArgs=imin(argslen,3);
+	Event::_constructor(obj,args,baseClassArgs);
+
+	StageVideoAvailabilityEvent* th=static_cast<StageVideoAvailabilityEvent*>(obj);
+	if(argslen>=4)
+	{
+		th->availability = args[3]->toString();
+	}
+	
+	return NULL;
+}
+
+Event* StageVideoAvailabilityEvent::cloneImpl() const
+{
+	StageVideoAvailabilityEvent *clone;
+	clone = Class<StageVideoAvailabilityEvent>::getInstanceS();
+	clone->availability = availability;
+	// Event
+	clone->type = type;
+	clone->bubbles = bubbles;
+	clone->cancelable = cancelable;
+	return clone;
+}
+
+ASFUNCTIONBODY_GETTER(StageVideoAvailabilityEvent,availability);

@@ -17,13 +17,17 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
-#ifndef RENDERING_H
-#define RENDERING_H
+#ifndef BACKENDS_RENDERING_H
+#define BACKENDS_RENDERING_H 1
 
-#include "lsopengl.h"
-#include "rendering_context.h"
+#include "backends/lsopengl.h"
+#include "backends/rendering_context.h"
 #include "timer.h"
 #include <glibmm/timeval.h>
+
+#ifdef _WIN32
+#	include <windef.h>
+#endif
 
 namespace lightspark
 {
@@ -47,7 +51,7 @@ private:
 	void commonGLDeinit();
 	GLuint pixelBuffers[2];
 	uint32_t currentPixelBuffer;
-	uint32_t currentPixelBufferOffset;
+	intptr_t currentPixelBufferOffset;
 	uint32_t pixelBufferWidth;
 	uint32_t pixelBufferHeight;
 	void resizePixelBuffers(uint32_t w, uint32_t h);
@@ -67,8 +71,8 @@ private:
 	void handleUpload();
 	Semaphore event;
 	std::string fontPath;
-	uint32_t newWidth;
-	uint32_t newHeight;
+	volatile uint32_t newWidth;
+	volatile uint32_t newHeight;
 	float scaleX;
 	float scaleY;
 	int offsetX;
@@ -156,9 +160,8 @@ public:
 
 	//OpenGL programs
 	int gpu_program;
-	TextureBuffer tempTex;
-	uint32_t windowWidth;
-	uint32_t windowHeight;
+	volatile uint32_t windowWidth;
+	volatile uint32_t windowHeight;
 	bool hasNPOTTextures;
 	GLint fragmentTexScaleUniform;
 	GLint directUniform;
@@ -177,4 +180,4 @@ public:
 RenderThread* getRenderThread();
 
 };
-#endif
+#endif /* BACKENDS_RENDERING_H */

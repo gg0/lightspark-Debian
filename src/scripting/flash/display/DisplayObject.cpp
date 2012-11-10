@@ -20,19 +20,17 @@
 #include "scripting/abc.h"
 #include "compat.h"
 #include "swf.h"
-#include "DisplayObject.h"
+#include "scripting/flash/display/DisplayObject.h"
 #include "backends/rendering.h"
 #include "backends/input.h"
 #include "scripting/argconv.h"
 #include "scripting/flash/geom/flashgeom.h"
 #include "scripting/flash/accessibility/flashaccessibility.h"
+#include "scripting/flash/display/BitmapData.h"
 
 using namespace lightspark;
 using namespace std;
 
-SET_NAMESPACE("flash.display");
-
-REGISTER_CLASS_NAME(DisplayObject);
 ATOMIC_INT32(DisplayObject::instanceCount);
 
 Vector2f DisplayObject::getXY()
@@ -89,50 +87,17 @@ number_t DisplayObject::getNominalHeight()
 	return ret?(ymax-ymin):0;
 }
 
-void DisplayObject::renderPrologue(RenderContext& ctxt) const
+void DisplayObject::Render(RenderContext& ctxt)
 {
-	if(!mask.isNull())
-		ctxt.pushMask(mask.getPtr());
-}
-
-void DisplayObject::renderEpilogue(RenderContext& ctxt) const
-{
-	if(!mask.isNull())
-		ctxt.popMask();
-}
-
-void DisplayObject::Render(RenderContext& ctxt, bool maskEnabled)
-{
-	if(!isConstructed() || skipRender(maskEnabled))
+	if(!isConstructed() || skipRender())
 		return;
 
-	number_t t1,t2,t3,t4;
-	bool notEmpty=boundsRect(t1,t2,t3,t4);
-	if(!notEmpty)
-		return;
-
-	renderPrologue(ctxt);
-
-	renderImpl(ctxt, maskEnabled,t1,t2,t3,t4);
-
-	renderEpilogue(ctxt);
+	renderImpl(ctxt);
 }
 
-void DisplayObject::hitTestPrologue() const
-{
-	if(!mask.isNull())
-		getSys()->getInputThread()->pushMask(mask.getPtr(),mask->getConcatenatedMatrix().getInverted());
-}
-
-void DisplayObject::hitTestEpilogue() const
-{
-	if(!mask.isNull())
-		getSys()->getInputThread()->popMask();
-}
-
-DisplayObject::DisplayObject(Class_base* c):EventDispatcher(c),useLegacyMatrix(true),tx(0),ty(0),rotation(0),
-	sx(1),sy(1),alpha(1.0),maskOf(),parent(),mask(),onStage(false),
-	loaderInfo(),visible(true),invalidateQueueNext()
+DisplayObject::DisplayObject(Class_base* c):EventDispatcher(c),tx(0),ty(0),rotation(0),
+	sx(1),sy(1),alpha(1.0),maskOf(),parent(),constructed(false),useLegacyMatrix(true),onStage(false),
+	visible(true),mask(),invalidateQueueNext(),loaderInfo(),filters(Class<Array>::getInstanceS()),cacheAsBitmap(false)
 {
 	name = tiny_string("instance") + Integer::toString(ATOMIC_INCREMENT(instanceCount));
 }
@@ -184,8 +149,6 @@ void DisplayObject::sinit(Class_base* c)
 	c->setDeclaredMethodByQName("mask","",Class<IFunction>::getFunction(_setMask),SETTER_METHOD,true);
 	c->setDeclaredMethodByQName("alpha","",Class<IFunction>::getFunction(_getAlpha),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("alpha","",Class<IFunction>::getFunction(_setAlpha),SETTER_METHOD,true);
-	c->setDeclaredMethodByQName("cacheAsBitmap","",Class<IFunction>::getFunction(undefinedFunction),GETTER_METHOD,true);
-	c->setDeclaredMethodByQName("cacheAsBitmap","",Class<IFunction>::getFunction(undefinedFunction),SETTER_METHOD,true);
 	c->setDeclaredMethodByQName("opaqueBackground","",Class<IFunction>::getFunction(undefinedFunction),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("opaqueBackground","",Class<IFunction>::getFunction(undefinedFunction),SETTER_METHOD,true);
 	c->setDeclaredMethodByQName("getBounds","",Class<IFunction>::getFunction(_getBounds),NORMAL_METHOD,true);
@@ -196,12 +159,22 @@ void DisplayObject::sinit(Class_base* c)
 	c->setDeclaredMethodByQName("globalToLocal","",Class<IFunction>::getFunction(globalToLocal),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("transform","",Class<IFunction>::getFunction(_getTransform),GETTER_METHOD,true);
 	REGISTER_GETTER_SETTER(c,accessibilityProperties);
+	REGISTER_GETTER_SETTER(c,cacheAsBitmap);
+	REGISTER_GETTER_SETTER(c,filters);
 
 	c->addImplementedInterface(InterfaceClass<IBitmapDrawable>::getClass());
 	IBitmapDrawable::linkTraits(c);
 }
 
 ASFUNCTIONBODY_GETTER_SETTER(DisplayObject,accessibilityProperties);
+//TODO: Use a callback for the cacheAsBitmap getter, since it should use computeCacheAsBitmap
+ASFUNCTIONBODY_GETTER_SETTER(DisplayObject,cacheAsBitmap);
+ASFUNCTIONBODY_GETTER_SETTER(DisplayObject,filters);
+
+bool DisplayObject::computeCacheAsBitmap() const
+{
+	return cacheAsBitmap || (!filters.isNull() && filters->size()!=0);
+}
 
 ASFUNCTIONBODY(DisplayObject,_getTransform)
 {
@@ -318,18 +291,12 @@ void DisplayObject::extractValuesFromMatrix()
 	Matrix.scale(1.0/sx,1.0/sy);
 }
 
-bool DisplayObject::isSimple() const
+bool DisplayObject::skipRender() const
 {
-	//TODO: Check filters
-	return clippedAlpha()==1.0;
+	return visible==false || clippedAlpha()==0.0;
 }
 
-bool DisplayObject::skipRender(bool maskEnabled) const
-{
-	return visible==false || clippedAlpha()==0.0 || (!maskEnabled && !maskOf.isNull());
-}
-
-void DisplayObject::defaultRender(RenderContext& ctxt, bool maskEnabled) const
+void DisplayObject::defaultRender(RenderContext& ctxt) const
 {
 	const CachedSurface& surface=ctxt.getCachedSurface(this);
 	/* surface is only modified from within the render thread
@@ -337,16 +304,10 @@ void DisplayObject::defaultRender(RenderContext& ctxt, bool maskEnabled) const
 	if(!surface.tex.isValid())
 		return;
 
-	bool enableMaskLookup=false;
-	//If the maskEnabled is already set we are the mask!
-	if(!maskEnabled && ctxt.isMaskPresent())
-		enableMaskLookup=true;
-
 	ctxt.lsglLoadIdentity();
 	ctxt.renderTextured(surface.tex, surface.xOffset, surface.yOffset,
 			surface.tex.width, surface.tex.height,
-			surface.alpha, RenderContext::RGB_MODE,
-			(enableMaskLookup)?RenderContext::ENABLE_MASK:RenderContext::NO_MASK);
+			surface.alpha, RenderContext::RGB_MODE);
 }
 
 void DisplayObject::computeBoundsForTransformedRect(number_t xmin, number_t xmax, number_t ymin, number_t ymax,
@@ -425,7 +386,7 @@ void DisplayObject::setOnStage(bool staged)
 		  asynchronous uses of setOnStage are removed the code can be simplified
 		  by removing the !isVmThread case.
 		*/
-		if(onStage==true && isConstructed())
+		if(onStage==true)
 		{
 			this->incRef();
 			_R<Event> e=_MR(Class<Event>::getInstanceS("addedToStage"));
@@ -623,7 +584,7 @@ ASFUNCTIONBODY(DisplayObject,_getBounds)
 	DisplayObject* cur=th;
 	while(cur!=NULL && cur!=target)
 	{
-		m = m.multiplyMatrix(cur->getMatrix());
+		m = cur->getMatrix().multiplyMatrix(m);
 		cur=cur->parent.getPtr();
 	}
 	if(cur==NULL)
@@ -818,7 +779,7 @@ ASFUNCTIONBODY(DisplayObject,_getVisible)
 number_t DisplayObject::computeHeight()
 {
 	number_t x1,x2,y1,y2;
-	bool ret=getBounds(x1,x2,y1,y2,MATRIX());
+	bool ret=getBounds(x1,x2,y1,y2,getMatrix());
 
 	return (ret)?(y2-y1):0;
 }
@@ -826,7 +787,7 @@ number_t DisplayObject::computeHeight()
 number_t DisplayObject::computeWidth()
 {
 	number_t x1,x2,y1,y2;
-	bool ret=getBounds(x1,x2,y1,y2,MATRIX());
+	bool ret=getBounds(x1,x2,y1,y2,getMatrix());
 
 	return (ret)?(x2-x1):0;
 }
@@ -925,9 +886,29 @@ _NR<InteractiveObject> DisplayObject::hitTest(_NR<InteractiveObject> last, numbe
 	if(!visible || !isConstructed())
 		return NullRef;
 
-	hitTestPrologue();
+	//First check if there is any mask on this object, if so the point must be inside the mask to go on
+	if(!mask.isNull())
+	{
+		//First compute the global coordinates from the local ones
+		//TODO: we may also pass the global coordinates to all the calls
+		const MATRIX& thisMatrix = this->getConcatenatedMatrix();
+		number_t globalX, globalY;
+		thisMatrix.multiply2D(x,y,globalX,globalY);
+		//Now compute the coordinates local to the mask
+		const MATRIX& maskMatrix = mask->getConcatenatedMatrix();
+		if(!maskMatrix.isInvertible())
+		{
+			//If the matrix is not invertible the mask as collapsed to zero size
+			//If the mask is zero sized then the object is not visible
+			return NullRef;
+		}
+		number_t maskX, maskY;
+		maskMatrix.getInverted().multiply2D(globalX,globalY,maskX,maskY);
+		if(mask->hitTest(last, maskX, maskY, type)==false)
+			return NullRef;
+	}
+
 	_NR<InteractiveObject> ret = hitTestImpl(last, x,y, type);
-	hitTestEpilogue();
 	return ret;
 }
 
@@ -940,17 +921,118 @@ void DisplayObject::initFrame()
 	{
 		getClass()->handleConstruction(this,NULL,0,true);
 
-		if(!onStage)
-			return;
-
-		/* addChild has already been called for this object,
-		 * but addedToStage is delayed until after construction.
+		/*
+		 * Legacy objects have their display list properties set on creation, but
+		 * the related events must only be sent after the constructor is sent.
 		 * This is from "Order of Operations".
 		 */
-		/* TODO: also dispatch event "added" */
-		/* TODO: should we directly call handleEventPublic? */
-		this->incRef();
-		getVm()->addEvent(_MR(this),_MR(Class<Event>::getInstanceS("addedToStage")));
+		if(!parent.isNull())
+		{
+			this->incRef();
+			_R<Event> e=_MR(Class<Event>::getInstanceS("added"));
+			ABCVm::publicHandleEvent(_MR(this),e);
+		}
+		if(onStage)
+		{
+			this->incRef();
+			_R<Event> e=_MR(Class<Event>::getInstanceS("addedToStage"));
+			ABCVm::publicHandleEvent(_MR(this),e);
+		}
 	}
 }
 
+void DisplayObject::constructionComplete()
+{
+	RELEASE_WRITE(constructed,true);
+	if(!loaderInfo.isNull())
+	{
+		this->incRef();
+		loaderInfo->objectHasLoaded(_MR(this));
+	}
+	if(onStage)
+		requestInvalidation(getSys());
+}
+
+void DisplayObject::gatherMaskIDrawables(std::vector<IDrawable::MaskData>& masks) const
+{
+	if(mask.isNull())
+		return;
+
+	//If the mask is hard we need the drawable for each child
+	//If the mask is soft we need the rendered final result
+	IDrawable::MASK_MODE maskMode = IDrawable::HARD_MASK;
+	//For soft masking to work, both the object and the mask must be
+	//cacheAsBitmap and the mask must be on the stage
+	if(this->computeCacheAsBitmap() && mask->computeCacheAsBitmap() && mask->isOnStage())
+		maskMode = IDrawable::SOFT_MASK;
+
+	if(maskMode == IDrawable::HARD_MASK)
+	{
+		SoftwareInvalidateQueue queue;
+		mask->requestInvalidation(&queue);
+		for(auto it=queue.queue.begin();it!=queue.queue.end();it++)
+		{
+			DisplayObject* target=(*it).getPtr();
+			//Get the drawable from each of the added objects
+			IDrawable* drawable=target->invalidate(NULL, MATRIX());
+			if(drawable==NULL)
+				continue;
+			masks.emplace_back(drawable, maskMode);
+		}
+	}
+	else
+	{
+		IDrawable* drawable=NULL;
+		if(mask->is<DisplayObjectContainer>())
+		{
+			//HACK: use bitmap temporarily
+			number_t xmin,xmax,ymin,ymax;
+			bool ret=mask->getBounds(xmin,xmax,ymin,ymax,mask->getConcatenatedMatrix());
+			if(ret==false)
+				return;
+			_R<BitmapData> data(Class<BitmapData>::getInstanceS(xmax-xmin,ymax-ymin));
+			//Forge a matrix. It must contain the right rotation and scaling while translation
+			//only compensate for the xmin/ymin offset
+			MATRIX m=mask->getConcatenatedMatrix();
+			m.x0 -= xmin;
+			m.y0 -= ymin;
+			data->drawDisplayObject(mask.getPtr(), m);
+			_R<Bitmap> bmp(Class<Bitmap>::getInstanceS(data));
+
+			//The created bitmap is already correctly scaled and rotated
+			//Just apply the needed offset
+			MATRIX m2(1,1,0,0,xmin,ymin);
+			drawable=bmp->invalidate(NULL, m2);
+		}
+		else
+			drawable=mask->invalidate(NULL, MATRIX());
+
+		if(drawable==NULL)
+			return;
+		masks.emplace_back(drawable, maskMode);
+	}
+}
+
+void DisplayObject::computeMasksAndMatrix(DisplayObject* target, std::vector<IDrawable::MaskData>& masks, MATRIX& totalMatrix) const
+{
+	const DisplayObject* cur=this;
+	bool gatherMasks = true;
+	while(cur!=target)
+	{
+		totalMatrix=cur->getMatrix().multiplyMatrix(totalMatrix);
+		//Get an IDrawable for all the hierarchy of each mask.
+		if(gatherMasks)
+		{
+			if(cur->maskOf.isNull())
+				cur->gatherMaskIDrawables(masks);
+			else
+			{
+				//Stop gathering masks if any level of the hierarchy it's a mask
+				masks.clear();
+				masks.shrink_to_fit();
+				gatherMasks=false;
+			}
+		}
+		cur=cur->getParent().getPtr();
+	}
+}

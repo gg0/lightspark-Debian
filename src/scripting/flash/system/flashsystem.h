@@ -17,12 +17,12 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
-#ifndef _FLASH_SYSTEM_H
-#define _FLASH_SYSTEM_H
+#ifndef SCRIPTING_FLASH_SYSTEM_FLASHSYSTEM_H
+#define SCRIPTING_FLASH_SYSTEM_FLASHSYSTEM_H 1
 
 #include "compat.h"
 #include "asobject.h"
-#include "../utils/flashutils.h"
+#include "scripting/flash/utils/flashutils.h"
 
 namespace lightspark
 {
@@ -33,6 +33,7 @@ class Capabilities: public ASObject
 {
 public:
 	DLL_PUBLIC static const char* EMULATED_VERSION;
+	static const char* MANUFACTURER;
 	Capabilities(Class_base* c):ASObject(c){};
 	static void sinit(Class_base* c);
 	ASFUNCTION(_getLanguage);
@@ -41,9 +42,12 @@ public:
 	ASFUNCTION(_getIsDebugger);
 	ASFUNCTION(_getIsEmbeddedInAcrobat);
 	ASFUNCTION(_getLocalFileReadDisable);
+	ASFUNCTION(_getManufacturer);
 	ASFUNCTION(_getOS);
 	ASFUNCTION(_getVersion);
 	ASFUNCTION(_getServerString);
+	ASFUNCTION(_getScreenResolutionX);
+	ASFUNCTION(_getScreenResolutionY);
 };
 
 class ApplicationDomain: public ASObject
@@ -57,7 +61,13 @@ public:
 	static void buildTraits(ASObject* o);
 	void registerGlobalScope(Global* scope);
 	ASObject* getVariableByString(const std::string& name, ASObject*& target);
+	bool findTargetByMultiname(const multiname& name, ASObject*& target);
 	ASObject* getVariableAndTargetByMultiname(const multiname& name, ASObject*& target);
+	/*
+	 * This method is an opportunistic resolution operator used by the optimizer:
+	 * Only returns the value if the variable has been already defined.
+	 */
+	ASObject* getVariableByMultinameOpportunistic(const multiname& name);
 	ASFUNCTION(_constructor);
 	ASFUNCTION(_getCurrentDomain);
 	ASFUNCTION(_getMinDomainMemoryLength);
@@ -126,5 +136,13 @@ public:
 
 ASObject* fscommand(ASObject* obj,ASObject* const* args, const unsigned int argslen);
 
+class System: public ASObject
+{
+public:
+	System(Class_base* c):ASObject(c){}
+	static void sinit(Class_base* c);
+	ASFUNCTION(totalMemory);
 };
-#endif
+
+};
+#endif /* SCRIPTING_FLASH_SYSTEM_FLASHSYSTEM_H */

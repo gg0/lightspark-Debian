@@ -17,7 +17,7 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
-#include "rtmputils.h"
+#include "backends/rtmputils.h"
 #include "logger.h"
 #include "swf.h"
 
@@ -51,7 +51,7 @@ void RTMPDownloader::execute()
 	rtmpUrl+=" playpath=";
 	rtmpUrl+=stream;
 	rtmpUrl+=" swfVfy=";
-	rtmpUrl+=getSys()->getOrigin().getURL();
+	rtmpUrl+=getSys()->mainClip->getOrigin().getURL();
 	rtmpUrl+=" tcUrl=";
 	rtmpUrl+=url;
 	//Setup url needs a char*, not a const char*...

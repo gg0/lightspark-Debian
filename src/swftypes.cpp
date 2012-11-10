@@ -35,7 +35,7 @@
 using namespace std;
 using namespace lightspark;
 
-multiname::multiname(MemoryAccount* m):name_type(NAME_OBJECT),name_o(NULL),ns(reporter_allocator<nsNameAndKind>(m))
+multiname::multiname(MemoryAccount* m):name_o(NULL),ns(reporter_allocator<nsNameAndKind>(m)),name_type(NAME_OBJECT),isAttribute(false)
 {
 }
 
@@ -94,7 +94,11 @@ uint32_t multiname::normalizedNameId() const
 
 void multiname::setName(ASObject* n)
 {
-	assert(name_type!=NAME_OBJECT || name_o==NULL);
+	if (name_type==NAME_OBJECT && name_o!=NULL) {
+		name_o->decRef();
+		name_o = NULL;
+	}
+
 	if(n->is<Integer>())
 	{
 		name_i=n->as<Integer>()->val;
@@ -354,7 +358,7 @@ MATRIX MATRIX::multiplyMatrix(const MATRIX& r) const
 
 bool MATRIX::operator!=(const MATRIX& r) const
 {
-	return xx!=r.xx || yx!=r.yx || xy!=r.xy || yy!=yy ||
+	return xx!=r.xx || yx!=r.yx || xy!=r.xy || yy!=r.yy ||
 		x0!=r.x0 || y0!=r.y0;
 }
 
@@ -406,26 +410,25 @@ std::istream& lightspark::operator>>(std::istream& s, RGBA& v)
 
 void LINESTYLEARRAY::appendStyles(const LINESTYLEARRAY& r)
 {
-	unsigned int count = LineStyleCount + r.LineStyleCount;
-	assert(version!=-1);
+	assert(version!=0xff);
 
 	assert_and_throw(r.version==version);
 	if(version<4)
 		LineStyles.insert(LineStyles.end(),r.LineStyles.begin(),r.LineStyles.end());
 	else
 		LineStyles2.insert(LineStyles2.end(),r.LineStyles2.begin(),r.LineStyles2.end());
-	LineStyleCount = count;
 }
 
 std::istream& lightspark::operator>>(std::istream& s, LINESTYLEARRAY& v)
 {
-	assert(v.version!=-1);
-	s >> v.LineStyleCount;
-	if(v.LineStyleCount==0xff)
+	assert(v.version!=0xff);
+	UI8 LineStyleCount;
+	s >> LineStyleCount;
+	if(LineStyleCount==0xff)
 		LOG(LOG_ERROR,_("Line array extended not supported"));
 	if(v.version<4)
 	{
-		for(int i=0;i<v.LineStyleCount;i++)
+		for(int i=0;i<LineStyleCount;i++)
 		{
 			LINESTYLE tmp(v.version);
 			s >> tmp;
@@ -434,7 +437,7 @@ std::istream& lightspark::operator>>(std::istream& s, LINESTYLEARRAY& v)
 	}
 	else
 	{
-		for(int i=0;i<v.LineStyleCount;i++)
+		for(int i=0;i<LineStyleCount;i++)
 		{
 			LINESTYLE2 tmp(v.version);
 			s >> tmp;
@@ -446,13 +449,14 @@ std::istream& lightspark::operator>>(std::istream& s, LINESTYLEARRAY& v)
 
 std::istream& lightspark::operator>>(std::istream& s, MORPHLINESTYLEARRAY& v)
 {
-	s >> v.LineStyleCount;
-	if(v.LineStyleCount==0xff)
+	UI8 LineStyleCount;
+	s >> LineStyleCount;
+	if(LineStyleCount==0xff)
 		LOG(LOG_ERROR,_("Line array extended not supported"));
 	assert(v.version==1 || v.version==2);
 	if(v.version==1)
 	{
-		for(int i=0;i<v.LineStyleCount;i++)
+		for(int i=0;i<LineStyleCount;i++)
 		{
 			MORPHLINESTYLE t;
 			s >> t;
@@ -461,7 +465,7 @@ std::istream& lightspark::operator>>(std::istream& s, MORPHLINESTYLEARRAY& v)
 	}
 	else
 	{
-		for(int i=0;i<v.LineStyleCount;i++)
+		for(int i=0;i<LineStyleCount;i++)
 		{
 			MORPHLINESTYLE2 t;
 			s >> t;
@@ -473,21 +477,20 @@ std::istream& lightspark::operator>>(std::istream& s, MORPHLINESTYLEARRAY& v)
 
 void FILLSTYLEARRAY::appendStyles(const FILLSTYLEARRAY& r)
 {
-	assert(version!=-1);
-	unsigned int count = FillStyleCount + r.FillStyleCount;
+	assert(version!=0xff);
 
 	FillStyles.insert(FillStyles.end(),r.FillStyles.begin(),r.FillStyles.end());
-	FillStyleCount = count;
 }
 
 std::istream& lightspark::operator>>(std::istream& s, FILLSTYLEARRAY& v)
 {
-	assert(v.version!=-1);
-	s >> v.FillStyleCount;
-	if(v.FillStyleCount==0xff)
+	assert(v.version!=0xff);
+	UI8 FillStyleCount;
+	s >> FillStyleCount;
+	if(FillStyleCount==0xff)
 		LOG(LOG_ERROR,_("Fill array extended not supported"));
 
-	for(int i=0;i<v.FillStyleCount;i++)
+	for(int i=0;i<FillStyleCount;i++)
 	{
 		FILLSTYLE t(v.version);
 		s >> t;
@@ -498,10 +501,11 @@ std::istream& lightspark::operator>>(std::istream& s, FILLSTYLEARRAY& v)
 
 std::istream& lightspark::operator>>(std::istream& s, MORPHFILLSTYLEARRAY& v)
 {
-	s >> v.FillStyleCount;
-	if(v.FillStyleCount==0xff)
+	UI8 FillStyleCount;
+	s >> FillStyleCount;
+	if(FillStyleCount==0xff)
 		LOG(LOG_ERROR,_("Fill array extended not supported"));
-	for(int i=0;i<v.FillStyleCount;i++)
+	for(int i=0;i<FillStyleCount;i++)
 	{
 		MORPHFILLSTYLE t;
 		s >> t;
@@ -553,7 +557,7 @@ istream& lightspark::operator>>(istream& s, LINESTYLE2& v)
 	v.NoHScaleFlag=UB(1,bs);
 	v.NoVScaleFlag=UB(1,bs);
 	v.PixelHintingFlag=UB(1,bs);
-	UB(5,bs);
+	bs.discard(5);
 	v.NoClose=UB(1,bs);
 	v.EndCapStyle=UB(2,bs);
 	if(v.JointStyle==2)
@@ -596,7 +600,7 @@ istream& lightspark::operator>>(istream& s, MORPHLINESTYLE2& v)
 	v.NoHScaleFlag = UB(1,bs);
 	v.NoVScaleFlag = UB(1,bs);
 	v.PixelHintingFlag = UB(1,bs);
-	UB(5,bs);
+	bs.discard(5);
 	v.NoClose = UB(1,bs);
 	v.EndCapStyle = UB(2,bs);
 	if(v.JoinStyle==2)
@@ -646,9 +650,10 @@ std::istream& lightspark::operator>>(std::istream& in, TEXTRECORD& v)
 		in >> v.YOffset;
 	if(v.StyleFlagsHasFont)
 		in >> v.TextHeight;
-	in >> v.GlyphCount;
+	UI8 GlyphCount;
+	in >> GlyphCount;
 	v.GlyphEntries.clear();
-	for(int i=0;i<v.GlyphCount;i++)
+	for(int i=0;i<GlyphCount;i++)
 	{
 		v.GlyphEntries.push_back(GLYPHENTRY(&v,bs));
 	}
@@ -676,9 +681,9 @@ std::istream& lightspark::operator>>(std::istream& s, GRADIENT& v)
 	BitStream bs(s);
 	v.SpreadMode=UB(2,bs);
 	v.InterpolationMode=UB(2,bs);
-	v.NumGradient=UB(4,bs);
+	int NumGradient=UB(4,bs);
 	GRADRECORD gr(v.version);
-	for(int i=0;i<v.NumGradient;i++)
+	for(int i=0;i<NumGradient;i++)
 	{
 		s >> gr;
 		v.GradientRecords.push_back(gr);
@@ -761,13 +766,13 @@ std::istream& lightspark::operator>>(std::istream& s, FILLSTYLE& v)
 			{
 				//Thrown if the bitmapId does not exists in dictionary
 				LOG(LOG_ERROR,"Exception in FillStyle parsing: " << e.what());
-				v.bitmap=NullRef;
+				v.bitmap.reset();
 			}
 		}
 		else
 		{
 			//The bitmap might be invalid, the style should not be used
-			v.bitmap=NullRef;
+			v.bitmap.reset();
 		}
 	}
 	else
@@ -791,10 +796,11 @@ std::istream& lightspark::operator>>(std::istream& s, MORPHFILLSTYLE& v)
 	else if(v.FillStyleType==LINEAR_GRADIENT || v.FillStyleType==RADIAL_GRADIENT)
 	{
 		s >> v.StartGradientMatrix >> v.EndGradientMatrix;
-		s >> v.NumGradients;
+		UI8 NumGradients;
+		s >> NumGradients;
 		UI8 t;
 		RGBA t2;
-		for(int i=0;i<v.NumGradients;i++)
+		for(int i=0;i<NumGradients;i++)
 		{
 			s >> t >> t2;
 			v.StartRatios.push_back(t);
@@ -825,8 +831,7 @@ GLYPHENTRY::GLYPHENTRY(TEXTRECORD* p,BitStream& bs):parent(p)
 	GlyphAdvance = SB(parent->parent->AdvanceBits,bs);
 }
 
-SHAPERECORD::SHAPERECORD(SHAPE* p,BitStream& bs):parent(p),TypeFlag(false),StateNewStyles(false),StateLineStyle(false),StateFillStyle1(false),
-	StateFillStyle0(false),StateMoveTo(false),MoveDeltaX(0),MoveDeltaY(0),DeltaX(0),DeltaY(0)
+SHAPERECORD::SHAPERECORD(SHAPE* p,BitStream& bs):parent(p),MoveDeltaX(0),MoveDeltaY(0),DeltaX(0),DeltaY(0),TypeFlag(false),StateNewStyles(false),StateLineStyle(false),StateFillStyle1(false),StateFillStyle0(false),StateMoveTo(false)
 {
 	TypeFlag = UB(1,bs);
 	if(TypeFlag)
@@ -892,12 +897,12 @@ SHAPERECORD::SHAPERECORD(SHAPE* p,BitStream& bs):parent(p),TypeFlag(false),State
 			bs.pos=0;
 			FILLSTYLEARRAY a(ps->FillStyles.version);
 			bs.f >> a;
-			p->fillOffset=ps->FillStyles.FillStyleCount;
+			p->fillOffset=ps->FillStyles.FillStyles.size();
 			ps->FillStyles.appendStyles(a);
 
 			LINESTYLEARRAY b(ps->LineStyles.version);
 			bs.f >> b;
-			p->lineOffset=ps->LineStyles.LineStyleCount;
+			p->lineOffset=ps->LineStyles.LineStyles.size();
 			ps->LineStyles.appendStyles(b);
 
 			parent->NumFillBits=UB(4,bs);
@@ -957,7 +962,7 @@ std::istream& lightspark::operator>>(std::istream& stream, BUTTONRECORD& v)
 	assert_and_throw(v.buttonVersion==2);
 	BitStream bs(stream);
 
-	UB(2,bs);
+	bs.discard(2);
 	v.ButtonHasBlendMode=UB(1,bs);
 	v.ButtonHasFilterList=UB(1,bs);
 	v.ButtonStateHitTest=UB(1,bs);
@@ -981,10 +986,11 @@ std::istream& lightspark::operator>>(std::istream& stream, BUTTONRECORD& v)
 
 std::istream& lightspark::operator>>(std::istream& stream, FILTERLIST& v)
 {
-	stream >> v.NumberOfFilters;
-	v.Filters.resize(v.NumberOfFilters);
+	UI8 NumberOfFilters;
+	stream >> NumberOfFilters;
+	v.Filters.resize(NumberOfFilters);
 
-	for(int i=0;i<v.NumberOfFilters;i++)
+	for(int i=0;i<NumberOfFilters;i++)
 		stream >> v.Filters[i];
 	
 	return stream;
@@ -992,8 +998,9 @@ std::istream& lightspark::operator>>(std::istream& stream, FILTERLIST& v)
 
 std::istream& lightspark::operator>>(std::istream& stream, FILTER& v)
 {
-	stream >> v.FilterID;
-	switch(v.FilterID)
+	UI8 FilterID;
+	stream >> FilterID;
+	switch(FilterID)
 	{
 		case 0:
 			stream >> v.DropShadowFilter;
@@ -1020,7 +1027,7 @@ std::istream& lightspark::operator>>(std::istream& stream, FILTER& v)
 			stream >> v.GradientBevelFilter;
 			break;
 		default:
-			LOG(LOG_ERROR,_("Unsupported Filter Id ") << (int)v.FilterID);
+			LOG(LOG_ERROR,_("Unsupported Filter Id ") << (int)FilterID);
 			throw ParseException("Unsupported Filter Id");
 	}
 	return stream;
@@ -1036,7 +1043,7 @@ std::istream& lightspark::operator>>(std::istream& stream, GLOWFILTER& v)
 	v.InnerGlow = UB(1,bs);
 	v.Knockout = UB(1,bs);
 	v.CompositeSource = UB(1,bs);
-	UB(5,bs);
+	bs.discard(5);
 
 	return stream;
 }
@@ -1053,7 +1060,7 @@ std::istream& lightspark::operator>>(std::istream& stream, DROPSHADOWFILTER& v)
 	v.InnerShadow = UB(1,bs);
 	v.Knockout = UB(1,bs);
 	v.CompositeSource = UB(1,bs);
-	UB(5,bs);
+	bs.discard(5);
 
 	return stream;
 }
@@ -1064,7 +1071,7 @@ std::istream& lightspark::operator>>(std::istream& stream, BLURFILTER& v)
 	stream >> v.BlurY;
 	BitStream bs(stream);
 	v.Passes = UB(5,bs);
-	UB(3,bs);
+	bs.discard(3);
 
 	return stream;
 }
@@ -1083,21 +1090,22 @@ std::istream& lightspark::operator>>(std::istream& stream, BEVELFILTER& v)
 	v.Knockout = UB(1,bs);
 	v.CompositeSource = UB(1,bs);
 	v.OnTop = UB(1,bs);
-	UB(4,bs);
+	bs.discard(4);
 
 	return stream;
 }
 
 std::istream& lightspark::operator>>(std::istream& stream, GRADIENTGLOWFILTER& v)
 {
-	stream >> v.NumColors;
-	for(int i = 0; i < v.NumColors; i++)
+	UI8 NumColors;
+	stream >> NumColors;
+	for(int i = 0; i < NumColors; i++)
 	{
 		RGBA color;
 		stream >> color;
 		v.GradientColors.push_back(color);
 	}
-	for(int i = 0; i < v.NumColors; i++)
+	for(int i = 0; i < NumColors; i++)
 	{
 		UI8 ratio;
 		stream >> ratio;
@@ -1110,7 +1118,7 @@ std::istream& lightspark::operator>>(std::istream& stream, GRADIENTGLOWFILTER& v
 	v.InnerGlow = UB(1,bs);
 	v.Knockout = UB(1,bs);
 	v.CompositeSource = UB(1,bs);
-	UB(5,bs);
+	bs.discard(5);
 
 	return stream;
 }
@@ -1131,7 +1139,7 @@ std::istream& lightspark::operator>>(std::istream& stream, CONVOLUTIONFILTER& v)
 	BitStream bs(stream);
 	v.Clamp = UB(1,bs);
 	v.PreserveAlpha = UB(1,bs);
-	UB(6,bs);
+	bs.discard(6);
 
 	return stream;
 }
@@ -1146,14 +1154,15 @@ std::istream& lightspark::operator>>(std::istream& stream, COLORMATRIXFILTER& v)
 
 std::istream& lightspark::operator>>(std::istream& stream, GRADIENTBEVELFILTER& v)
 {
-	stream >> v.NumColors;
-	for(int i = 0; i < v.NumColors; i++)
+	UI8 NumColors;
+	stream >> NumColors;
+	for(int i = 0; i < NumColors; i++)
 	{
 		RGBA color;
 		stream >> color;
 		v.GradientColors.push_back(color);
 	}
-	for(int i = 0; i < v.NumColors; i++)
+	for(int i = 0; i < NumColors; i++)
 	{
 		UI8 ratio;
 		stream >> ratio;
@@ -1169,7 +1178,7 @@ std::istream& lightspark::operator>>(std::istream& stream, GRADIENTBEVELFILTER& 
 	v.Knockout = UB(1,bs);
 	v.CompositeSource = UB(1,bs);
 	v.OnTop = UB(1,bs);
-	UB(4,bs);
+	bs.discard(4);
 
 	return stream;
 }
@@ -1209,7 +1218,8 @@ bool CLIPACTIONRECORD::isLast()
 
 std::istream& lightspark::operator>>(std::istream& s, CLIPACTIONS& v)
 {
-	s >> v.Reserved >> v.AllEventFlags;
+	UI16_SWF Reserved;
+	s >> Reserved >> v.AllEventFlags;
 	while(1)
 	{
 		CLIPACTIONRECORD t;
@@ -1223,22 +1233,19 @@ std::istream& lightspark::operator>>(std::istream& s, CLIPACTIONS& v)
 
 ASObject* lightspark::abstract_d(number_t i)
 {
-	Number* ret=getVm()->number_manager->get<Number>();
-	ret->val=i;
+	Number* ret=Class<Number>::getInstanceS(i);
 	return ret;
 }
 
 ASObject* lightspark::abstract_i(int32_t i)
 {
-	Integer* ret=getVm()->int_manager->get<Integer>();
-	ret->val=i;
+	Integer* ret=Class<Integer>::getInstanceS(i);
 	return ret;
 }
 
 ASObject* lightspark::abstract_ui(uint32_t i)
 {
-	UInteger* ret=getVm()->uint_manager->get<UInteger>();
-	ret->val=i;
+	UInteger* ret=Class<UInteger>::getInstanceS(i);
 	return ret;
 }
 
@@ -1296,12 +1303,12 @@ QName::operator multiname() const
 	return ret;
 }
 
-FILLSTYLE::FILLSTYLE(int v):version(v),Gradient(v),bitmap(getSys()->unaccountedMemory)
+FILLSTYLE::FILLSTYLE(uint8_t v):Gradient(v),bitmap(getSys()->unaccountedMemory),version(v)
 {
 }
 
-FILLSTYLE::FILLSTYLE(const FILLSTYLE& r):version(r.version),FillStyleType(r.FillStyleType),Color(r.Color),
-	Matrix(r.Matrix),Gradient(r.Gradient),FocalGradient(r.FocalGradient),bitmap(r.bitmap)
+FILLSTYLE::FILLSTYLE(const FILLSTYLE& r):Matrix(r.Matrix),Gradient(r.Gradient),FocalGradient(r.FocalGradient),
+	bitmap(r.bitmap),Color(r.Color),FillStyleType(r.FillStyleType),version(r.version)
 {
 }
 

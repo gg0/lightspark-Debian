@@ -17,13 +17,13 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
-#ifndef _TOKEN_CONTAINER_H
-#define _TOKEN_CONTAINER_H
+#ifndef SCRIPTING_FLASH_DISPLAY_TOKENCONTAINER_H
+#define SCRIPTING_FLASH_DISPLAY_TOKENCONTAINER_H 1
 
 #include <vector>
 #include "backends/geometry.h"
 #include "backends/graphics.h"
-#include "DisplayObject.h"
+#include "scripting/flash/display/DisplayObject.h"
 
 namespace lightspark
 {
@@ -45,12 +45,12 @@ public:
 	 * the tokens are cleared and scaling is set
 	 * to 1.0f.
 	 */
-	float scaling;
 	std::vector<GeomToken> tokens;
 	static void FromShaperecordListToShapeVector(const std::vector<SHAPERECORD>& shapeRecords,
 					 tokensVector& tokens, const std::list<FILLSTYLE>& fillStyles,
 					 const Vector2& offset = Vector2(), int scaling = 1);
 	void getTextureSize(int *width, int *height) const;
+	float scaling;
 protected:
 	TokenContainer(DisplayObject* _o);
 	TokenContainer(DisplayObject* _o, const tokensVector& _tokens, float _scaling);
@@ -58,10 +58,9 @@ protected:
 	void requestInvalidation(InvalidateQueue* q);
 	bool boundsRect(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const;
 	_NR<InteractiveObject> hitTestImpl(_NR<InteractiveObject> last, number_t x, number_t y, DisplayObject::HIT_TYPE type) const;
-	void renderImpl(RenderContext& ctxt, bool maskEnabled, number_t t1, number_t t2, number_t t3, number_t t4) const;
+	void renderImpl(RenderContext& ctxt) const;
 	bool tokensEmpty() const { return tokens.empty(); }
-	bool isOpaqueImpl(number_t x, number_t y) const;
 };
 
 };
-#endif
+#endif /* SCRIPTING_FLASH_DISPLAY_TOKENCONTAINER_H */

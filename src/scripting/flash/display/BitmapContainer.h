@@ -17,8 +17,8 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
-#ifndef _BITMAP_CONTAINER_H
-#define _BITMAP_CONTAINER_H
+#ifndef SCRIPTING_FLASH_DISPLAY_BITMAPCONTAINER_H
+#define SCRIPTING_FLASH_DISPLAY_BITMAPCONTAINER_H 1
 
 #include "compat.h"
 #include "memory_support.h"
@@ -45,7 +45,8 @@ public:
 	bool fromPNG(std::istream& s);
 	int getWidth() const { return width; }
 	int getHeight() const { return height; }
+	void reset();
 };
 
 };
-#endif
+#endif /* SCRIPTING_FLASH_DISPLAY_BITMAPCONTAINER_H */

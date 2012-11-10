@@ -34,6 +34,14 @@ tiny_string::tiny_string(const Glib::ustring& r):buf(_buf_static),stringSize(r.b
 	memcpy(buf,r.c_str(),stringSize);
 }
 
+tiny_string::tiny_string(std::istream& in, int len):buf(_buf_static),stringSize(len+1),type(STATIC)
+{
+	if(stringSize > STATIC_SIZE)
+		createBuffer(stringSize);
+	in.read(buf,len);
+	buf[len]='\0';
+}
+
 tiny_string& tiny_string::operator=(const Glib::ustring& r)
 {
 	resetToStatic();
@@ -167,6 +175,31 @@ tiny_string tiny_string::substr(uint32_t start, const CharIterator& end) const
 	uint32_t bytestart = g_utf8_offset_to_pointer(buf,start) - buf;
 	uint32_t byteend = end.buf_ptr - buf;
 	return substr_bytes(bytestart, byteend-bytestart);
+}
+
+std::list<tiny_string> tiny_string::split(uint32_t delimiter) const
+{
+	std::list<tiny_string> res;
+	uint32_t pos, end;
+	tiny_string delimiterstring = tiny_string::fromChar(delimiter);
+
+	pos = 0;
+	while (pos < numChars())
+	{
+		end = find(delimiterstring, pos);
+		if (end == tiny_string::npos)
+		{
+			res.push_back(substr(pos, numChars()-pos));
+			break;
+		}
+		else
+		{
+			res.push_back(substr(pos, end-pos));
+			pos = end+1;
+		}
+	}
+
+	return res;
 }
 
 #ifdef MEMORY_USAGE_PROFILING

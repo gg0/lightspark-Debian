@@ -17,19 +17,16 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
-#include "Array.h"
-#include "abc.h"
-#include "argconv.h"
+#include "scripting/toplevel/Array.h"
+#include "scripting/abc.h"
+#include "scripting/argconv.h"
 #include "parsing/amf3_generator.h"
-#include "Vector.h"
-#include "RegExp.h"
-#include "flash/utils/flashutils.h"
+#include "scripting/toplevel/Vector.h"
+#include "scripting/toplevel/RegExp.h"
+#include "scripting/flash/utils/flashutils.h"
 
 using namespace std;
 using namespace lightspark;
-
-SET_NAMESPACE("");
-REGISTER_CLASS_NAME(Array);
 
 Array::Array(Class_base* c):ASObject(c),
 	data(std::less<arrayType::key_type>(), reporter_allocator<arrayType::value_type>(c->memoryAccount))
@@ -70,7 +67,7 @@ void Array::sinit(Class_base* c)
 	c->setDeclaredMethodByQName("slice",AS3,Class<IFunction>::getFunction(slice,2),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("some",AS3,Class<IFunction>::getFunction(some),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("sort",AS3,Class<IFunction>::getFunction(_sort),NORMAL_METHOD,true);
-	//c->setDeclaredMethodByQName("sortOn",AS3,Class<IFunction>::getFunction(sortOn),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("sortOn",AS3,Class<IFunction>::getFunction(sortOn),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("splice",AS3,Class<IFunction>::getFunction(splice,2),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("toLocaleString",AS3,Class<IFunction>::getFunction(_toString),NORMAL_METHOD,true);
 	c->prototype->setVariableByQName("toString","",Class<IFunction>::getFunction(_toString),DYNAMIC_TRAIT);
@@ -158,25 +155,27 @@ ASFUNCTIONBODY(Array,_concat)
 		if(ret->data[it->first].type==DATA_OBJECT && ret->data[it->first].data)
 			ret->data[it->first].data->incRef();
 	}
-	
-	if(argslen==1 && args[0]->getObjectType()==T_ARRAY)
+
+	for(unsigned int i=0;i<argslen;i++)
 	{
-		Array* tmp=Class<Array>::cast(args[0]);
-		std::map<uint32_t, data_slot>::iterator ittmp=tmp->data.begin();
-		for(;ittmp != tmp->data.end();++ittmp)
+		if (args[i]->is<Array>())
 		{
-			uint32_t newIndex=ret->size()+ittmp->first;
-			ret->data[newIndex]=ittmp->second;
-			if(ret->data[newIndex].type==DATA_OBJECT && ret->data[newIndex].data)
-				ret->data[newIndex].data->incRef();
+			// Insert the contents of the array argument
+			uint64_t oldSize=ret->size();
+			Array* otherArray=args[i]->as<Array>();
+			std::map<uint32_t, data_slot>::iterator itother=otherArray->data.begin();
+			for(;itother!=otherArray->data.end(); ++itother)
+			{
+				uint32_t newIndex=ret->size()+itother->first;
+				ret->data[newIndex]=itother->second;
+				if(ret->data[newIndex].type==DATA_OBJECT && ret->data[newIndex].data)
+					ret->data[newIndex].data->incRef();
+			}
+			ret->resize(oldSize+otherArray->size());
 		}
-		ret->resize(th->size()+tmp->size());
-	}
-	else
-	{
-		//Insert the arguments in the array
-		for(unsigned int i=0;i<argslen;i++)
+		else
 		{
+			//Insert the argument
 			args[i]->incRef();
 			ret->push(_MR(args[i]));
 		}
@@ -411,7 +410,7 @@ ASFUNCTIONBODY(Array,lastIndexOf)
 		    continue;
 		DATA_TYPE dtype = th->data[i].type;
 		assert_and_throw(dtype==DATA_OBJECT || dtype==DATA_INT);
-		if((dtype == DATA_OBJECT && ABCVm::strictEqualImpl(th->data[i].data,arg0)) ||
+		if((dtype == DATA_OBJECT && th->data[i].data->isEqualStrict(arg0)) ||
 			(dtype == DATA_INT && arg0->toInt() == th->data[i].data_i))
 		{
 			ret=i;
@@ -460,7 +459,7 @@ ASFUNCTIONBODY(Array,shift)
 	}
 	std::map<uint32_t,data_slot> tmp;
 	std::map<uint32_t,data_slot>::iterator it;
-	for ( it=th->data.begin(); it != th->data.end(); it++ )
+	for ( it=th->data.begin(); it != th->data.end(); ++it )
 	{
 		if(it->first)
 		{
@@ -619,14 +618,14 @@ ASFUNCTIONBODY(Array,indexOf)
 
 	DATA_TYPE dtype;
 	std::map<uint32_t,data_slot>::iterator it;
-	for ( it=th->data.begin() ; it != th->data.end(); it++ )
+	for ( it=th->data.begin() ; it != th->data.end(); ++it )
 	{
 		if (it->first < (uint32_t)index)
 			continue;
 		data_slot sl = it->second;
 		dtype = sl.type;
 		assert_and_throw(dtype==DATA_OBJECT || dtype==DATA_INT);
-		if((dtype == DATA_OBJECT && ABCVm::strictEqualImpl(sl.data,arg0)) ||
+		if((dtype == DATA_OBJECT && sl.data->isEqualStrict(arg0)) ||
 			(dtype == DATA_INT && arg0->toInt() == sl.data_i))
 		{
 			ret=it->first;
@@ -820,12 +819,145 @@ ASFUNCTIONBODY(Array,_sort)
 	return obj;
 }
 
+bool Array::sortOnComparator::operator()(const data_slot& d1, const data_slot& d2)
+{
+	std::vector<sorton_field>::iterator it=fields.begin();
+	for(;it != fields.end();++it)
+	{
+		assert_and_throw(d1.type == DATA_OBJECT && d1.type == DATA_OBJECT);
+
+		_NR<ASObject> obj1 = d1.data->getVariableByMultiname(it->fieldname);
+		_NR<ASObject> obj2 = d2.data->getVariableByMultiname(it->fieldname);
+		if(it->isNumeric)
+		{
+			number_t a=numeric_limits<double>::quiet_NaN();
+			number_t b=numeric_limits<double>::quiet_NaN();
+			a=obj1->toNumber();
+			
+			b=obj2->toNumber();
+			
+			if(std::isnan(a) || std::isnan(b))
+				throw RunTimeException("Cannot sort non number with Array.NUMERIC option");
+			if (b != a)
+			{
+				if(it->isDescending)
+					return b>a;
+				else
+					return a<b;
+			}
+		}
+		else
+		{
+			//Comparison is always in lexicographic order
+			tiny_string s1;
+			tiny_string s2;
+			s1=obj1->toString();
+			s2=obj2->toString();
+			if (s1 != s2)
+			{
+				if(it->isDescending)
+				{
+					if(it->isCaseInsensitive)
+						return s1.strcasecmp(s2)>0;
+					else
+						return s1>s2;
+				}
+				else
+				{
+					if(it->isCaseInsensitive)
+						return s1.strcasecmp(s2)<0;
+					else
+						return s1<s2;
+				}
+			}
+		}
+	}
+	return false;
+}
+
 ASFUNCTIONBODY(Array,sortOn)
 {
-//	Array* th=static_cast<Array*>(obj);
-/*	if(th->data.size()>1)
-		throw UnsupportedException("Array::sort not completely implemented");
-	LOG(LOG_NOT_IMPLEMENTED,_("Array::sort not really implemented"));*/
+	Array* th=static_cast<Array*>(obj);
+	assert_and_throw(argslen==1 || argslen==2);
+	std::vector<sorton_field> sortfields;
+	if(args[0]->is<Array>())
+	{
+		Array* obj=static_cast<Array*>(args[0]);
+		int n = 0;
+		std::map<uint32_t, data_slot>::iterator it=obj->data.begin();
+		for(;it != obj->data.end();++it)
+		{
+			multiname sortfieldname(NULL);
+			sortfieldname.ns.push_back(nsNameAndKind("",NAMESPACE));
+			if (it->second.type == DATA_OBJECT)
+			{
+				sortfieldname.setName(it->second.data);
+			}
+			sorton_field sf(sortfieldname);
+			sortfields.push_back(sf);
+		}
+		if (argslen == 2 && args[1]->is<Array>())
+		{
+			Array* opts=static_cast<Array*>(args[1]);
+			std::map<uint32_t, data_slot>::iterator itopt=opts->data.begin();
+			int nopt = 0;
+			for(;itopt != opts->data.end() && nopt < n;++itopt)
+			{
+				uint32_t options=0;
+				if (itopt->second.type == DATA_OBJECT)
+					options = itopt->second.data->toInt();
+				else
+					options = itopt->second.data_i;
+				if(options&NUMERIC)
+					sortfields[nopt].isNumeric=true;
+				if(options&CASEINSENSITIVE)
+					sortfields[nopt].isCaseInsensitive=true;
+				if(options&DESCENDING)
+					sortfields[nopt].isDescending=true;
+				if(options&(~(NUMERIC|CASEINSENSITIVE|DESCENDING)))
+					throw UnsupportedException("Array::sort not completely implemented");
+				nopt++;
+			}
+		}
+	}
+	else
+	{
+		multiname sortfieldname(NULL);
+		sortfieldname.setName(args[0]);
+		sortfieldname.ns.push_back(nsNameAndKind("",NAMESPACE));
+		sorton_field sf(sortfieldname);
+		if (argslen == 2)
+		{
+			uint32_t options = args[1]->toInt();
+			if(options&NUMERIC)
+				sf.isNumeric=true;
+			if(options&CASEINSENSITIVE)
+				sf.isCaseInsensitive=true;
+			if(options&DESCENDING)
+				sf.isDescending=true;
+			if(options&(~(NUMERIC|CASEINSENSITIVE|DESCENDING)))
+				throw UnsupportedException("Array::sort not completely implemented");
+		}
+		sortfields.push_back(sf);
+	}
+	
+	std::vector<data_slot> tmp = vector<data_slot>(th->data.size());
+	std::map<uint32_t, data_slot>::iterator it=th->data.begin();
+	int i = 0;
+	for(;it != th->data.end();++it)
+	{
+		tmp[i++]= it->second;
+	}
+	
+	sort(tmp.begin(),tmp.end(),sortOnComparator(sortfields));
+
+	th->data.clear();
+	std::vector<data_slot>::iterator ittmp=tmp.begin();
+	i = 0;
+	for(;ittmp != tmp.end();++ittmp)
+	{
+		th->data[i++]= *ittmp;
+	}
 	obj->incRef();
 	return obj;
 }
@@ -857,14 +989,14 @@ ASFUNCTIONBODY(Array,unshift)
 		th->resize(th->size()+argslen);
 		std::map<uint32_t,data_slot> tmp;
 		std::map<uint32_t,data_slot>::reverse_iterator it;
-		for ( it=th->data.rbegin(); it != th->data.rend(); it++ )
+		for ( it=th->data.rbegin(); it != th->data.rend(); ++it )
 		{
 			tmp[it->first+argslen]=it->second;
 		}
 		
 		for(uint32_t i=0;i<argslen;i++)
 		{
-			tmp[i] = data_slot(args[i],DATA_OBJECT);
+			tmp[i] = data_slot(args[i]);
 			args[i]->incRef();
 		}
 		th->data.clear();
@@ -989,7 +1121,7 @@ ASFUNCTIONBODY(Array,_map)
 
 ASFUNCTIONBODY(Array,_toString)
 {
-	if(Class<Number>::getClass()->prototype == obj)
+	if(Class<Number>::getClass()->prototype->getObj() == obj)
 		return Class<ASString>::getInstanceS("");
 	if(!obj->is<Array>())
 	{
@@ -1102,14 +1234,14 @@ void Array::setVariableByMultiname_i(const multiname& name, int32_t value)
 }
 
 
-bool Array::hasPropertyByMultiname(const multiname& name, bool considerDynamic)
+bool Array::hasPropertyByMultiname(const multiname& name, bool considerDynamic, bool considerPrototype)
 {
 	if(considerDynamic==false)
-		return ASObject::hasPropertyByMultiname(name, considerDynamic);
+		return ASObject::hasPropertyByMultiname(name, considerDynamic, considerPrototype);
 
 	uint32_t index=0;
 	if(!isValidMultiname(name,index))
-		return ASObject::hasPropertyByMultiname(name, considerDynamic);
+		return ASObject::hasPropertyByMultiname(name, considerDynamic, considerPrototype);
 
 	return (index<size()) && (data.count(index));
 }
@@ -1329,7 +1461,7 @@ void Array::resize(uint64_t n)
 {
 	std::map<uint32_t,data_slot>::reverse_iterator it;
 	std::map<uint32_t,data_slot>::iterator itstart = n ? data.end() : data.begin();
-	for ( it=data.rbegin() ; it != data.rend(); it++ )
+	for ( it=data.rbegin() ; it != data.rend(); ++it )
 	{
 		if (it->first < n)
 		{
@@ -1391,7 +1523,7 @@ void Array::finalize()
 {
 	ASObject::finalize();
 	std::map<uint32_t,data_slot>::iterator it;
-	for ( it=data.begin() ; it != data.end(); it++ )
+	for ( it=data.begin() ; it != data.end(); ++it)
 	{
 		if(it->second.type==DATA_OBJECT && it->second.data)
 			it->second.data->decRef();

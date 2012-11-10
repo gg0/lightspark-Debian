@@ -17,8 +17,8 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
-#ifndef _FLASH_MEDIA_H
-#define _FLASH_MEDIA_H
+#ifndef SCRIPTING_FLASH_MEDIA_FLASHMEDIA_H
+#define SCRIPTING_FLASH_MEDIA_FLASHMEDIA_H 1
 
 #include "compat.h"
 #include "asobject.h"
@@ -59,6 +59,7 @@ public:
 	ASFUNCTION(_constructor);
 	ASFUNCTION(load);
 	ASFUNCTION(play);
+	ASFUNCTION(close);
 
 	//IThreadJob interface
 	void execute();
@@ -108,7 +109,7 @@ public:
 	ASFUNCTION(_getHeight);
 	ASFUNCTION(_setHeight);
 	ASFUNCTION(attachNetStream);
-	void renderImpl(RenderContext& ctxt, bool maskEnabled, number_t t1,number_t t2,number_t t3,number_t t4) const;
+	void renderImpl(RenderContext& ctxt) const;
 	bool boundsRect(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const;
 	_NR<InteractiveObject> hitTestImpl(_NR<InteractiveObject> last, number_t x, number_t y, DisplayObject::HIT_TYPE type);
 };
@@ -124,6 +125,28 @@ public:
 	ASFUNCTION(_constructor);
 };
 
+class StageVideo : public EventDispatcher
+{
+public:
+	StageVideo(Class_base* c):EventDispatcher(c){}
+	static void sinit(Class_base*);
+	ASFUNCTION(_constructor);
 };
 
-#endif
+class StageVideoAvailability : public ASObject
+{
+public:
+	StageVideoAvailability(Class_base* c):ASObject(c){}
+	static void sinit(Class_base*);
+};
+
+class VideoStatus : public ASObject
+{
+public:
+	VideoStatus(Class_base* c):ASObject(c){}
+	static void sinit(Class_base*);
+};
+
+};
+
+#endif /* SCRIPTING_FLASH_MEDIA_FLASHMEDIA_H */

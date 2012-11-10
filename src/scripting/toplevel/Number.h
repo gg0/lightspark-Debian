@@ -17,8 +17,9 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
-#ifndef NUMBER_H
-#define NUMBER_H
+#ifndef SCRIPTING_TOPLEVEL_NUMBER_H
+#define SCRIPTING_TOPLEVEL_NUMBER_H 1
+
 #include <cmath>
 #include "compat.h"
 #include "asobject.h"
@@ -34,7 +35,7 @@ friend class ABCVm;
 private:
 	static void purgeTrailingZeroes(char* buf);
 public:
-	Number(Class_base* c, double v=0):ASObject(c),val(v){type=T_NUMBER;}
+	Number(Class_base* c, double v=NaN):ASObject(c),val(v){type=T_NUMBER;}
 	static const number_t NaN;
 	double val;
 	ASFUNCTION(_constructor);
@@ -42,6 +43,7 @@ public:
 	ASFUNCTION(toFixed);
 	tiny_string toString();
 	static tiny_string toString(number_t val);
+	static tiny_string toStringRadix(number_t val, int radix);
 	static bool isInteger(number_t val)
 	{
 		return floor(val) == val;
@@ -88,4 +90,4 @@ public:
 
 };
 
-#endif // NUMBER_H
+#endif /* SCRIPTING_TOPLEVEL_NUMBER_H */

@@ -19,7 +19,7 @@
 **************************************************************************/
 
 #include "swf.h"
-#include "urlutils.h"
+#include "backends/urlutils.h"
 #include "compat.h"
 #include "scripting/toplevel/Integer.h"
 #include <string>
@@ -239,6 +239,18 @@ const URLInfo URLInfo::goToURL(const tiny_string& u) const
 		return URLInfo(s);
 	}
 
+	//No protocol or hostname but has port, add protocol and hostname
+	if(str.size() >= 2 && str[0] == ':' && str[1] >= '0' && str[1] <= '9')
+	{
+		tiny_string qualified;
+
+		qualified = getProtocol();
+		qualified += "://";
+		qualified += getHostname();
+		qualified += str;
+		return URLInfo(qualified);
+	}
+
 	//No protocol, treat this as an unqualified URL
 	if(str.find("://") == std::string::npos)
 	{
@@ -309,6 +321,13 @@ bool URLInfo::matchesDomain(const tiny_string& expression, const tiny_string& su
 
 	//No positive matches found, so return false
 	return false;
+}
+
+bool URLInfo::sameHost(const URLInfo& other) const
+{
+	return protocol == other.protocol && 
+		hostname == other.hostname &&
+		port == other.port;
 }
 
 tiny_string URLInfo::encode(const tiny_string& u, ENCODING type)
@@ -451,4 +470,23 @@ bool URLInfo::isRTMP() const
 {
 	return protocol == "rtmp" || protocol == "rtmpe" || protocol == "rtmps" ||
 	       protocol == "rtmpt" || protocol == "rtmpte" || protocol == "rtmpts";
+}
+
+std::list< std::pair<tiny_string, tiny_string> > URLInfo::getQueryKeyValue() const
+{
+	std::list< std::pair<tiny_string, tiny_string> > keyvalues;
+	std::list<tiny_string> queries = query.split('&');
+	std::list<tiny_string>::iterator it;
+	for(it=queries.begin(); it!=queries.end(); ++it)
+	{
+		uint32_t eqpos = it->find("=");
+		if(eqpos!=tiny_string::npos && (eqpos+1<it->numChars()))
+		{
+			tiny_string key=decode(it->substr(0, eqpos), ENCODE_ESCAPE);
+			tiny_string value=decode(it->substr(eqpos+1, it->numChars()-eqpos-1), ENCODE_ESCAPE);
+			keyvalues.push_back(std::make_pair(key, value));
+		}
+	}
+
+	return keyvalues;
 }

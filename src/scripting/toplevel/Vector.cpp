@@ -17,17 +17,14 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
-#include "Vector.h"
-#include "abc.h"
-#include "class.h"
+#include "scripting/toplevel/Vector.h"
+#include "scripting/abc.h"
+#include "scripting/class.h"
 #include "parsing/amf3_generator.h"
-#include "argconv.h"
+#include "scripting/argconv.h"
 
 using namespace std;
 using namespace lightspark;
-
-SET_NAMESPACE("__AS3__.vec");
-REGISTER_CLASS_NAME(Vector);
 
 void Vector::sinit(Class_base* c)
 {
@@ -80,7 +77,7 @@ void Vector::sinit(Class_base* c)
 	c->prototype->setVariableByQName("unshift",AS3,Class<IFunction>::getFunction(unshift),DYNAMIC_TRAIT);
 }
 
-Vector::Vector(Class_base* c):ASObject(c),vec_type(NULL),vec(reporter_allocator<ASObject*>(c->memoryAccount))
+Vector::Vector(Class_base* c, Type *vtype):ASObject(c),vec_type(vtype),fixed(false),vec(reporter_allocator<ASObject*>(c->memoryAccount))
 {
 }
 
@@ -97,6 +94,7 @@ void Vector::finalize()
 			vec[i]->decRef();
 	}
 	vec.clear();
+	ASObject::finalize();
 }
 
 void Vector::setTypes(const std::vector<Type*>& types)
@@ -504,7 +502,7 @@ ASFUNCTIONBODY(Vector,lastIndexOf)
 	{
 		if (!th->vec[i])
 		    continue;
-		if (ABCVm::strictEqualImpl(th->vec[i],arg0))
+		if (th->vec[i]->isEqualStrict(arg0))
 		{
 			ret=i;
 			break;
@@ -691,7 +689,7 @@ ASFUNCTIONBODY(Vector,indexOf)
 	{
 		if (!th->vec[i])
 			continue;
-		if(ABCVm::strictEqualImpl(th->vec[i],arg0))
+		if(th->vec[i]->isEqualStrict(arg0))
 		{
 			ret=i;
 			break;
@@ -811,17 +809,17 @@ ASFUNCTIONBODY(Vector,_toString)
 	}
 	return Class<ASString>::getInstanceS(ret);
 }
-bool Vector::hasPropertyByMultiname(const multiname& name, bool considerDynamic)
+bool Vector::hasPropertyByMultiname(const multiname& name, bool considerDynamic, bool considerPrototype)
 {
 	if(!considerDynamic)
-		return ASObject::hasPropertyByMultiname(name, considerDynamic);
+		return ASObject::hasPropertyByMultiname(name, considerDynamic, considerPrototype);
 
 	if(!name.ns[0].hasEmptyName())
-		return ASObject::hasPropertyByMultiname(name, considerDynamic);
+		return ASObject::hasPropertyByMultiname(name, considerDynamic, considerPrototype);
 
 	unsigned int index=0;
 	if(!Vector::isValidMultiname(name,index))
-		return ASObject::hasPropertyByMultiname(name, considerDynamic);
+		return ASObject::hasPropertyByMultiname(name, considerDynamic, considerPrototype);
 
 	if(index < vec.size())
 		return true;

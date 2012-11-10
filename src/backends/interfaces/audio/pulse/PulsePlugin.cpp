@@ -19,9 +19,9 @@
 **************************************************************************/
 
 #include <iostream>
-#include "PulsePlugin.h"
-#include "../../../../compat.h"
-#include "../../../decoder.h"
+#include "backends/interfaces/audio/pulse/PulsePlugin.h"
+#include "compat.h"
+#include "backends/decoder.h"
 
 #include <clocale>
 #include <libintl.h>
@@ -348,6 +348,7 @@ void PulseAudioStream::fillStream(size_t toSend)
 		uint32_t totalWritten = 0;
 		size_t frameSize = toSend;
 		int ret = pa_stream_begin_write ( stream, ( void** ) &dest, &frameSize );
+		(void)ret; // silence warning about unused variable
 		assert(!ret);
 		toSend -= frameSize;
 		if (frameSize == 0)

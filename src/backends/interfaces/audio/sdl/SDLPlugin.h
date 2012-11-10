@@ -18,12 +18,12 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
-#ifndef SDLPLUGIN_H
-#define SDLPLUGIN_H
+#ifndef BACKENDS_INTERFACES_AUDIO_SDL_SDLPLUGIN_H
+#define BACKENDS_INTERFACES_AUDIO_SDL_SDLPLUGIN_H 1
 
-#include "../IAudioPlugin.h"
-#include "../../../decoder.h"
-#include "../../../../compat.h"
+#include "backends/interfaces/audio/IAudioPlugin.h"
+#include "backends/decoder.h"
+#include "compat.h"
 #include <sys/time.h>
 
 using lightspark::AudioDecoder;
@@ -74,4 +74,4 @@ public:
 	void setVolume(double volume);
 	~SDLAudioStream();
 };
-#endif
+#endif /* BACKENDS_INTERFACES_AUDIO_SDL_SDLPLUGIN_H */

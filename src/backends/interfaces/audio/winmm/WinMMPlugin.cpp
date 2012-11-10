@@ -19,9 +19,9 @@
 **************************************************************************/
 
 #include <iostream>
-#include "WinMMPlugin.h"
-#include "../../../../compat.h"
-#include "../../../decoder.h"
+#include "backends/interfaces/audio/winmm/WinMMPlugin.h"
+#include "compat.h"
+#include "backends/decoder.h"
 
 using namespace lightspark;
 using namespace std;
@@ -81,8 +81,11 @@ WinMMStream::WinMMStream( AudioDecoder* d, WinMMPlugin* m )  :
 		aligned_malloc((void**)&buffer[i].lpData, wfx.nBlockAlign, bufferSize);
 		buffer[i].dwBufferLength = bufferSize;
 	}
-
+#ifdef HAVE_NEW_GLIBMM_THREAD_API
+	workerThread = Thread::create(sigc::mem_fun(this,&WinMMStream::worker));
+#else
 	workerThread = Thread::create(sigc::mem_fun(this,&WinMMStream::worker), true);
+#endif
 }
 
 WinMMStream::~WinMMStream()

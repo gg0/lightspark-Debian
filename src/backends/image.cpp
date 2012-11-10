@@ -22,12 +22,12 @@
 #include "logger.h"
 
 extern "C" {
-#include "jpeglib.h"
-#include "jerror.h"
+#include <jpeglib.h>
+#include <jerror.h>
 }
 
 #include <csetjmp>
-#include "image.h"
+#include "backends/image.h"
 
 namespace lightspark
 {
@@ -48,7 +48,7 @@ struct istream_source_mgr : public jpeg_source_mgr
 };
 
 static void init_source(j_decompress_ptr cinfo) {
-	source_mgr*  src = (source_mgr*)cinfo->src;
+	source_mgr*  src = static_cast<source_mgr*>(cinfo->src);
 	src->next_input_byte = (const JOCTET*)src->data;
 	src->bytes_in_buffer = src->len;
 }
@@ -58,7 +58,7 @@ static boolean fill_input_buffer(j_decompress_ptr cinfo) {
 }
 
 static void skip_input_data(j_decompress_ptr cinfo, long num_bytes) {
-	source_mgr*  src = (source_mgr*)cinfo->src;
+	source_mgr*  src = static_cast<source_mgr*>(cinfo->src);
 	src->next_input_byte = (const JOCTET*)((const char*)src->next_input_byte + num_bytes);
 	src->bytes_in_buffer -= num_bytes;
 }
@@ -70,19 +70,19 @@ static boolean resync_to_restart(j_decompress_ptr cinfo, int desired) {
 static void term_source(j_decompress_ptr /*cinfo*/) {}
 
 static void init_source_istream(j_decompress_ptr cinfo) {
-	istream_source_mgr* src = (istream_source_mgr*)cinfo->src;
+	istream_source_mgr* src = static_cast<istream_source_mgr*>(cinfo->src);
 	src->bytes_in_buffer=0;
 }
 
 static boolean fill_input_buffer_istream(j_decompress_ptr cinfo) {
-	istream_source_mgr* src = (istream_source_mgr*)cinfo->src;
+	istream_source_mgr* src = static_cast<istream_source_mgr*>(cinfo->src);
 
 	src->next_input_byte=(const JOCTET*)src->data;
 	try
 	{
 		src->input.read(src->data, src->capacity);
 	}
-	catch(std::ios_base::failure exc)
+	catch(std::ios_base::failure& exc)
 	{
 		if(!src->input.eof())
 			throw;
@@ -92,8 +92,8 @@ static boolean fill_input_buffer_istream(j_decompress_ptr cinfo) {
 	if(src->bytes_in_buffer==0)
 	{
 		// EOI marker
-		src->data[0]=0xff;
-		src->data[1]=0xd9;
+		src->data[0]=(char)0xff;
+		src->data[1]=(char)0xd9;
 		src->bytes_in_buffer=2;
 	}
 
@@ -101,7 +101,7 @@ static boolean fill_input_buffer_istream(j_decompress_ptr cinfo) {
 }
 
 static void skip_input_data_istream(j_decompress_ptr cinfo, long num_bytes) {
-	istream_source_mgr* src = (istream_source_mgr*)cinfo->src;
+	istream_source_mgr* src = static_cast<istream_source_mgr*>(cinfo->src);
 
 	if(num_bytes<=0)
 		return;
@@ -117,7 +117,7 @@ static void skip_input_data_istream(j_decompress_ptr cinfo, long num_bytes) {
 		{
 			src->input.seekg(num_bytes-src->bytes_in_buffer, std::ios_base::cur);
 		}
-		catch(std::ios_base::failure exc)
+		catch(std::ios_base::failure& exc)
 		{
 			if(!src->input.eof())
 				throw;
@@ -131,14 +131,14 @@ struct error_mgr : jpeg_error_mgr {
 };
 
 void error_exit(j_common_ptr cinfo) {
-	error_mgr* error = (error_mgr*)cinfo->err;
+	error_mgr* error = static_cast<error_mgr*>(cinfo->err);
 	(*error->output_message) (cinfo);
 	/* Let the memory manager delete any temp files before we die */
 	jpeg_destroy(cinfo);
 	longjmp(error->jmpBuf, -1);
 }
 
-uint8_t* ImageDecoder::decodeJPEG(uint8_t* inData, int len, uint32_t* width, uint32_t* height)
+uint8_t* ImageDecoder::decodeJPEG(uint8_t* inData, int len, uint32_t* width, uint32_t* height, bool* hasAlpha)
 {
 	struct source_mgr src(inData,len);
 
@@ -148,10 +148,10 @@ uint8_t* ImageDecoder::decodeJPEG(uint8_t* inData, int len, uint32_t* width, uin
 	src.resync_to_restart = resync_to_restart;
 	src.term_source = term_source;
 
-	return decodeJPEGImpl(src, width, height);
+	return decodeJPEGImpl(src, width, height, hasAlpha);
 }
 
-uint8_t* ImageDecoder::decodeJPEG(std::istream& str, uint32_t* width, uint32_t* height)
+uint8_t* ImageDecoder::decodeJPEG(std::istream& str, uint32_t* width, uint32_t* height, bool* hasAlpha)
 {
 	struct istream_source_mgr src(str);
 
@@ -163,13 +163,13 @@ uint8_t* ImageDecoder::decodeJPEG(std::istream& str, uint32_t* width, uint32_t* 
 	src.resync_to_restart = jpeg_resync_to_restart;
 	src.term_source = term_source;
 
-	uint8_t* res=decodeJPEGImpl(src, width, height);
+	uint8_t* res=decodeJPEGImpl(src, width, height, hasAlpha);
 
 	delete[] src.data;
 	return res;
 }
 
-uint8_t* ImageDecoder::decodeJPEGImpl(jpeg_source_mgr& src, uint32_t* width, uint32_t* height)
+uint8_t* ImageDecoder::decodeJPEGImpl(jpeg_source_mgr& src, uint32_t* width, uint32_t* height, bool* hasAlpha)
 {
 	struct jpeg_decompress_struct cinfo;
 	struct error_mgr err;
@@ -184,6 +184,12 @@ uint8_t* ImageDecoder::decodeJPEGImpl(jpeg_source_mgr& src, uint32_t* width, uin
 	jpeg_create_decompress(&cinfo);
 	cinfo.src = &src;
 	jpeg_read_header(&cinfo, TRUE);
+#ifdef JCS_EXTENSIONS
+	//JCS_EXT_XRGB is a fast decoder that outputs alpha channel,
+	//but is only available on libjpeg-turbo
+	cinfo.out_color_space = JCS_EXT_XRGB;
+	cinfo.output_components = 4;
+#endif
 	jpeg_start_decompress(&cinfo);
 
 	*width = cinfo.output_width;
@@ -196,6 +202,9 @@ uint8_t* ImageDecoder::decodeJPEGImpl(jpeg_source_mgr& src, uint32_t* width, uin
 		jpeg_destroy_decompress(&cinfo);
 		return NULL;
 	}
+	assert(cinfo.output_components == 3 || cinfo.output_components == 4);
+
+	*hasAlpha = (cinfo.output_components == 4);
 
 	int rowstride = cinfo.output_width * cinfo.output_components;
 	JSAMPARRAY buffer = (*cinfo.mem->alloc_sarray)((j_common_ptr) &cinfo, JPOOL_IMAGE, rowstride, 1);
@@ -231,7 +240,7 @@ static void ReadPNGDataFromStream(png_structp pngPtr, png_bytep data, png_size_t
 }
 static void ReadPNGDataFromBuffer(png_structp pngPtr, png_bytep data, png_size_t length)
 {
-	png_image_buffer* a = (png_image_buffer*)png_get_io_ptr(pngPtr);
+	png_image_buffer* a = reinterpret_cast<png_image_buffer*>(png_get_io_ptr(pngPtr));
 
 	memcpy(data,(void*)(a->data+a->curpos),length);
 	a->curpos+= length;
@@ -278,7 +287,7 @@ uint8_t* ImageDecoder::decodePNGImpl(png_structp pngPtr, uint32_t* width, uint32
 	{
 		png_destroy_read_struct(&pngPtr, &infoPtr,(png_infopp)0);
 		if (rowPtrs != NULL) delete [] rowPtrs;
-		if (outData != NULL) delete outData;
+		if (outData != NULL) delete [] outData;
 
 		LOG(LOG_ERROR,"error during reading of the png file");
 
@@ -297,32 +306,64 @@ uint8_t* ImageDecoder::decodePNGImpl(png_structp pngPtr, uint32_t* width, uint32
 	//Color type. (RGB, RGBA, Luminance, luminance alpha... palette... etc)
 	png_uint_32 color_type = png_get_color_type(pngPtr, infoPtr);
 
+	// Transform everything into 24 bit RGB
 	switch (color_type)
 	{
 		case PNG_COLOR_TYPE_PALETTE:
 			png_set_palette_to_rgb(pngPtr);
-			channels = 3;
+			// png_set_palette_to_rgb wil convert into 32
+			// bit, but we don't want the alpha
+			png_set_strip_alpha(pngPtr);
 			break;
 		case PNG_COLOR_TYPE_GRAY:
 			if (bitdepth < 8)
 				png_set_gray_to_rgb(pngPtr);
-			bitdepth = 8;
 			break;
 	}
 
+	if (bitdepth == 16)
+	{
+		png_set_strip_16(pngPtr);
+	}
+
+	if (channels > 3)
+	{
+		LOG(LOG_NOT_IMPLEMENTED, "Alpha channel not supported in PNG");
+		png_set_strip_alpha(pngPtr);
+	}
+
+	// Update the infoPtr to reflect the transformations set
+	// above. Read new values by calling png_get_* again.
+	png_read_update_info(pngPtr, infoPtr);
+
+	//bitdepth = png_get_bit_depth(pngPtr, infoPtr);
+	//color_type = png_get_color_type(pngPtr, infoPtr);
+
+	channels = png_get_channels(pngPtr, infoPtr);
+	if (channels != 3)
+	{
+		// Should never get here because of the
+		// transformations
+		LOG(LOG_NOT_IMPLEMENTED, "Unexpected number of channels in PNG!");
+
+		png_destroy_read_struct(&pngPtr, &infoPtr,(png_infopp)0);
+
+		return NULL;
+	}
+
+	const unsigned int stride = png_get_rowbytes(pngPtr, infoPtr);
+
+	outData = new uint8_t[(*height) * stride];
 	rowPtrs = new png_bytep[(*height)];
-
-	outData = new uint8_t[(*width) * (*height) * bitdepth * channels / 8];
-	const unsigned int stride = (*width) * bitdepth * channels / 8;
-
 	for (size_t i = 0; i < (*height); i++)
 	{
 		rowPtrs[i] = (png_bytep)outData + i* stride;
 	}
 
 	png_read_image(pngPtr, rowPtrs);
-	delete[] (png_bytep)rowPtrs;
+	png_read_end(pngPtr, NULL);
 	png_destroy_read_struct(&pngPtr, &infoPtr,(png_infopp)0);
+	delete[] (png_bytep)rowPtrs;
 
 	return outData;
 }

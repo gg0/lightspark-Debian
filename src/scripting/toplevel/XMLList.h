@@ -17,10 +17,10 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
-#ifndef XMLLIST_H
-#define XMLLIST_H
+#ifndef SCRIPTING_TOPLEVEL_XMLLIST_H
+#define SCRIPTING_TOPLEVEL_XMLLIST_H 1
 #include "asobject.h"
-#include "XML.h"
+#include "scripting/toplevel/XML.h"
 #include <libxml/tree.h>
 #include <libxml++/parsers/domparser.h>
 
@@ -47,20 +47,36 @@ public:
 	static void sinit(Class_base* c);
 	ASFUNCTION(_constructor);
 	ASFUNCTION(_getLength);
+	ASFUNCTION(attribute);
+	ASFUNCTION(attributes);
 	ASFUNCTION(appendChild);
 	ASFUNCTION(child);
 	ASFUNCTION(children);
+	ASFUNCTION(childIndex);
+	ASFUNCTION(contains);
+	ASFUNCTION(copy);
 	ASFUNCTION(_hasSimpleContent);
 	ASFUNCTION(_hasComplexContent);
 	ASFUNCTION(_toString);
 	ASFUNCTION(toXMLString);
 	ASFUNCTION(generator);
 	ASFUNCTION(descendants);
+	ASFUNCTION(elements);
+	ASFUNCTION(parent);
 	ASFUNCTION(valueOf);
 	ASFUNCTION(text);
+	ASFUNCTION(_namespace);
+	ASFUNCTION(name);
+	ASFUNCTION(nodeKind);
+	ASFUNCTION(localName);
+	ASFUNCTION(inScopeNamespaces);
+	ASFUNCTION(addNamespace);
+	ASFUNCTION(_setLocalName);
+	ASFUNCTION(_setName);
+	ASFUNCTION(_setNamespace);
 	_NR<ASObject> getVariableByMultiname(const multiname& name, GET_VARIABLE_OPTION opt);
 	void setVariableByMultiname(const multiname& name, ASObject* o, CONST_ALLOWED_FLAG allowConst);
-	bool hasPropertyByMultiname(const multiname& name, bool considerDynamic);
+	bool hasPropertyByMultiname(const multiname& name, bool considerDynamic, bool considerPrototype);
 	void getDescendantsByQName(const tiny_string& name, const tiny_string& ns, XML::XMLVector& ret);
 	_NR<XML> convertToXML() const;
 	bool hasSimpleContent() const;
@@ -73,6 +89,7 @@ public:
 	_R<ASObject> nextName(uint32_t index);
 	_R<ASObject> nextValue(uint32_t index);
 	_R<XML> reduceToXML() const;
+	void appendNodesTo(XML *dest) const;
 };
 }
-#endif
+#endif /* SCRIPTING_TOPLEVEL_XMLLIST_H */

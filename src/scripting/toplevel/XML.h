@@ -17,8 +17,8 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
-#ifndef XML_H
-#define XML_H
+#ifndef SCRIPTING_TOPLEVEL_XML_H
+#define SCRIPTING_TOPLEVEL_XML_H 1
 #include "asobject.h"
 #include "backends/xml_support.h"
 
@@ -40,8 +40,11 @@ private:
 	tiny_string toString_priv();
 	bool constructed;
 	bool nodesEqual(xmlpp::Node *a, xmlpp::Node *b) const;
+	XMLVector getAttributes(const tiny_string& name="*",
+				const tiny_string& namespace_uri="*");
 	XMLList* getAllAttributes();
 	void getText(XMLVector& ret);
+	_NR<XML> getRootNode();
 	bool ignoreComments;
 	bool ignoreProcessingInstructions;
 	bool ignoreWhitespace;
@@ -53,6 +56,9 @@ private:
 	 */
 	void childrenImpl(XMLVector& ret, const tiny_string& name);
 	void childrenImpl(XMLVector& ret, uint32_t index);
+	tiny_string getNamespacePrefixByURI(const tiny_string& uri, bool create=false);
+        void setLocalName(const tiny_string& localname);
+        void setNamespace(const tiny_string& ns_uri, const tiny_string& ns_prefix="");
 public:
 	XML(Class_base* c);
 	XML(Class_base* c,const std::string& str);
@@ -65,12 +71,16 @@ public:
 	ASFUNCTION(nodeKind);
 	ASFUNCTION(child);
 	ASFUNCTION(children);
+	ASFUNCTION(childIndex);
+	ASFUNCTION(contains);
+	ASFUNCTION(_copy);
 	ASFUNCTION(attributes);
 	ASFUNCTION(attribute);
 	ASFUNCTION(appendChild);
 	ASFUNCTION(length);
 	ASFUNCTION(localName);
 	ASFUNCTION(name);
+	ASFUNCTION(_namespace);
 	ASFUNCTION(descendants);
 	ASFUNCTION(generator);
 	ASFUNCTION(_hasSimpleContent);
@@ -78,17 +88,26 @@ public:
 	ASFUNCTION(valueOf);
 	ASFUNCTION(text);
 	ASFUNCTION(elements);
+	ASFUNCTION(parent);
+	ASFUNCTION(inScopeNamespaces);
+	ASFUNCTION(addNamespace);
+	ASFUNCTION(_setLocalName);
+	ASFUNCTION(_setName);
+	ASFUNCTION(_setNamespace);
 	static void buildTraits(ASObject* o){};
 	static void sinit(Class_base* c);
 	void getDescendantsByQName(const tiny_string& name, const tiny_string& ns, XMLVector& ret);
+	void getElementNodes(const tiny_string& name, XMLVector& foundElements);
 	_NR<ASObject> getVariableByMultiname(const multiname& name, GET_VARIABLE_OPTION opt);
-	bool hasPropertyByMultiname(const multiname& name, bool considerDynamic);
+	bool hasPropertyByMultiname(const multiname& name, bool considerDynamic, bool considerPrototype);
 	void setVariableByMultiname(const multiname& name, ASObject* o, CONST_ALLOWED_FLAG allowConst);
 	tiny_string toString();
 	void toXMLString_priv(xmlBufferPtr buf);
 	bool hasSimpleContent() const;
 	bool hasComplexContent() const;
         xmlElementType getNodeKind() const;
+	ASObject *getParentNode();
+	XML *copy() const;
 	bool isEqual(ASObject* r);
 	uint32_t nextNameIndex(uint32_t cur_index);
 	_R<ASObject> nextName(uint32_t index);
@@ -99,4 +118,4 @@ public:
 				std::map<const Class_base*, uint32_t>& traitsMap);
 };
 }
-#endif
+#endif /* SCRIPTING_TOPLEVEL_XML_H */

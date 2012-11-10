@@ -18,17 +18,19 @@
 **************************************************************************/
 
 #ifndef TINY_STRING_H
-#define TINY_STRING_H
+#define TINY_STRING_H 1
 
 #include <cstring>
 #include <cstdint>
 #include <ostream>
+#include <list>
 /* for utf8 handling */
 #include <glib.h>
 #include "compat.h"
 
 /* forward declare for tiny_string conversion */
 namespace Glib { class ustring; }
+typedef unsigned char xmlChar;
 
 namespace lightspark
 {
@@ -135,14 +137,14 @@ private:
 			delete[] buf;
 		}
 		stringSize=1;
+		_buf_static[0] = '\0';
 		buf=_buf_static;
-		buf[0] = '\0';
 		type=STATIC;
 	}
 public:
 	static const uint32_t npos = (uint32_t)(-1);
 
-	tiny_string():buf(_buf_static),stringSize(1),type(STATIC){buf[0]=0;}
+	tiny_string():_buf_static(),buf(_buf_static),stringSize(1),type(STATIC){buf[0]=0;}
 	/* construct from utf character */
 	static tiny_string fromChar(uint32_t c)
 	{
@@ -153,7 +155,7 @@ public:
 		ret.buf[ret.stringSize-1] = '\0';
 		return ret;
 	}
-	tiny_string(const char* s,bool copy=false):buf(_buf_static),type(READONLY)
+	tiny_string(const char* s,bool copy=false):_buf_static(),buf(_buf_static),type(READONLY)
 	{
 		if(copy)
 			makePrivateCopy(s);
@@ -163,7 +165,7 @@ public:
 			buf=(char*)s; //This is an unsafe conversion, we have to take care of the RO data
 		}
 	}
-	tiny_string(const tiny_string& r):buf(_buf_static),stringSize(r.stringSize),type(STATIC)
+	tiny_string(const tiny_string& r):_buf_static(),buf(_buf_static),stringSize(r.stringSize),type(STATIC)
 	{
 		//Fast path for static read-only strings
 		if(r.type==READONLY)
@@ -176,13 +178,14 @@ public:
 			createBuffer(stringSize);
 		memcpy(buf,r.buf,stringSize);
 	}
-	tiny_string(const std::string& r):buf(_buf_static),stringSize(r.size()+1),type(STATIC)
+	tiny_string(const std::string& r):_buf_static(),buf(_buf_static),stringSize(r.size()+1),type(STATIC)
 	{
 		if(stringSize > STATIC_SIZE)
 			createBuffer(stringSize);
 		memcpy(buf,r.c_str(),stringSize);
 	}
 	tiny_string(const Glib::ustring& r);
+	tiny_string(std::istream& in, int len);
 	~tiny_string()
 	{
 		resetToStatic();
@@ -282,6 +285,10 @@ public:
 	bool operator==(const char* r) const
 	{
 		return strcmp(buf,r)==0;
+	}
+	bool operator==(const xmlChar* r) const
+	{
+		return strcmp(buf,reinterpret_cast<const char*>(r))==0;
 	}
 	bool operator!=(const char* r) const
 	{
@@ -403,6 +410,8 @@ public:
 		g_free(str2);
 		return ret;
 	}
+	/* split string at each occurrence of delimiter character */
+	std::list<tiny_string> split(uint32_t delimiter) const;
 	/* iterate over utf8 characters */
 	CharIterator begin()
 	{
@@ -425,4 +434,4 @@ public:
 };
 
 };
-#endif
+#endif /* TINY_STRING_H */

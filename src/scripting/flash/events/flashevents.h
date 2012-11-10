@@ -17,12 +17,12 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
-#ifndef _FLASH_EVENTS_H
-#define _FLASH_EVENTS_H
+#ifndef SCRIPTING_FLASH_EVENTS_FLASHEVENTS_H
+#define SCRIPTING_FLASH_EVENTS_FLASHEVENTS_H 1
 
 #include "compat.h"
 #include "asobject.h"
-#include "toplevel/toplevel.h"
+#include "scripting/toplevel/toplevel.h"
 #include "backends/extscriptobject.h"
 #include <string>
 
@@ -39,16 +39,11 @@ class ABCContext;
 class DictionaryTag;
 class InteractiveObject;
 class PlaceObject2Tag;
-class MovieClip;
+class DisplayObject;
 class Responder;
 
 class Event: public ASObject
 {
-private:
-	/*
-	 * To be implemented by each derived class to allow redispatching
-	 */
-	virtual Event* cloneImpl() const;
 public:
 	Event(Class_base* cb, const tiny_string& t = "Event", bool b=false, bool c=false);
 	void finalize();
@@ -61,15 +56,20 @@ public:
 	ASFUNCTION(formatToString);
 	ASFUNCTION(clone);
 	virtual EVENT_TYPE getEventType() const {return EVENT;}
-	//Altough events may be recycled and sent to more than a handler, the target property is set before sending
-	//and the handling is serialized
-	ASPROPERTY_GETTER(tiny_string,type);
-	ASPROPERTY_GETTER(_NR<ASObject>,target);
-	ASPROPERTY_GETTER(_NR<ASObject>,currentTarget);
 	ASPROPERTY_GETTER(bool,bubbles);
 	ASPROPERTY_GETTER(bool,cancelable);
-	ASPROPERTY_GETTER(uint32_t,eventPhase);
 	bool defaultPrevented;
+	ASPROPERTY_GETTER(uint32_t,eventPhase);
+	ASPROPERTY_GETTER(tiny_string,type);
+	//Altough events may be recycled and sent to more than a handler, the target property is set before sending
+	//and the handling is serialized
+	ASPROPERTY_GETTER(_NR<ASObject>,target);
+	ASPROPERTY_GETTER(_NR<ASObject>,currentTarget);
+private:
+	/*
+	 * To be implemented by each derived class to allow redispatching
+	 */
+	virtual Event* cloneImpl() const;
 };
 
 /* Base class for all events that the one can wait on */
@@ -131,8 +131,7 @@ public:
 class NetStatusEvent: public Event
 {
 private:
-	tiny_string level;
-	tiny_string code;
+	virtual Event* cloneImpl() const;
 public:
 	NetStatusEvent(Class_base* c):Event(c, "netStatus"){}
 	NetStatusEvent(Class_base* cb, const tiny_string& l, const tiny_string& c);
@@ -331,12 +330,16 @@ public:
 	static void buildTraits(ASObject* o) {}
 };
 
-class DataEvent: public Event
+class DataEvent: public TextEvent
 {
+private:
+	Event* cloneImpl() const;
 public:
-	DataEvent(Class_base* c) : Event(c, "DataEvent") {}
+	DataEvent(Class_base* c, const tiny_string& _data="") : TextEvent(c, "data"), data(_data) {}
 	static void sinit(Class_base*);
 	static void buildTraits(ASObject* o) {}
+	ASFUNCTION(_constructor);
+	ASPROPERTY_GETTER_SETTER(tiny_string, data);
 };
 
 class RootMovieClip;
@@ -384,14 +387,14 @@ class ExternalCallEvent: public WaitableEvent
 friend class ABCVm;
 private:
 	_R<IFunction> f;
-	ExtVariant const ** args;
-	unsigned int numArgs;
-	ExtVariant** result;
+	ASObject* const* args;
+	ASObject** result;
 	bool* thrown;
 	tiny_string* exception;
+	unsigned int numArgs;
 public:
-	ExternalCallEvent(_R<IFunction> _f, const ExtVariant** _args, uint32_t _numArgs,
-			ExtVariant** _result, bool* _thrown, tiny_string* _exception);
+	ExternalCallEvent(_R<IFunction> _f, ASObject* const* _args, uint32_t _numArgs,
+			  ASObject** _result, bool* _thrown, tiny_string* _exception);
 	~ExternalCallEvent();
 	static void sinit(Class_base*);
 	EVENT_TYPE getEventType() const { return EXTERNAL_CALL; }
@@ -416,9 +419,9 @@ class InitFrameEvent: public Event
 {
 friend class ABCVm;
 private:
-	_NR<MovieClip> clip;
+	_NR<DisplayObject> clip;
 public:
-	InitFrameEvent(_NR<MovieClip> m=NullRef) : Event(NULL, "InitFrameEvent"),clip(m) {}
+	InitFrameEvent(_NR<DisplayObject> m) : Event(NULL, "InitFrameEvent"),clip(m) {}
 	EVENT_TYPE getEventType() const { return INIT_FRAME; }
 };
 
@@ -443,10 +446,55 @@ public:
 	_NR<ByteArray> message;
 	_NR<ASObject> client;
 	_NR<Responder> responder;
-	ParseRPCMessageEvent(_R<ByteArray> ba, _NR<ASObject> client, _R<Responder> responder);
+	ParseRPCMessageEvent(_R<ByteArray> ba, _NR<ASObject> client, _NR<Responder> responder);
 	EVENT_TYPE getEventType() const { return PARSE_RPC_MESSAGE; };
 	void finalize();
 };
 
+class DRMErrorEvent: public ErrorEvent
+{
+public:
+	DRMErrorEvent(Class_base* c);
+	static void sinit(Class_base*);
+	static void buildTraits(ASObject* o)
+	{
+	}
+	ASFUNCTION(_constructor);
 };
-#endif
+
+class DRMStatusEvent: public Event
+{
+public:
+	DRMStatusEvent(Class_base* c);
+	static void sinit(Class_base*);
+	static void buildTraits(ASObject* o)
+	{
+	}
+	ASFUNCTION(_constructor);
+};
+
+class StageVideoEvent: public Event
+{
+private:
+	Event* cloneImpl() const;
+public:
+	StageVideoEvent(Class_base* c);
+	static void sinit(Class_base*);
+	ASFUNCTION(_constructor);
+	ASPROPERTY_GETTER(tiny_string,colorSpace);
+	ASPROPERTY_GETTER(tiny_string,status);
+};
+
+class StageVideoAvailabilityEvent: public Event
+{
+private:
+	Event* cloneImpl() const;
+public:
+	StageVideoAvailabilityEvent(Class_base* c);
+	static void sinit(Class_base*);
+	ASFUNCTION(_constructor);
+	ASPROPERTY_GETTER(tiny_string,availability);
+};
+
+};
+#endif /* SCRIPTING_FLASH_EVENTS_FLASHEVENTS_H */

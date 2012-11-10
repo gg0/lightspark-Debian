@@ -17,11 +17,11 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
-#ifndef _DISPLAY_OBJECT_H
-#define _DISPLAY_OBJECT_H
+#ifndef SCRIPTING_FLASH_DISPLAY_DISPLAYOBJECT_H
+#define SCRIPTING_FLASH_DISPLAY_DISPLAYOBJECT_H 1
 
 #include "smartrefs.h"
-#include "IBitmapDrawable.h"
+#include "scripting/flash/display/IBitmapDrawable.h"
 #include "asobject.h"
 #include "scripting/flash/events/flashevents.h"
 
@@ -41,6 +41,7 @@ friend class TokenContainer;
 friend class GLRenderContext;
 friend class AsyncDrawJob;
 friend class Transform;
+friend class ParseThread;
 friend std::ostream& operator<<(std::ostream& s, const DisplayObject& r);
 public:
 	enum HIT_TYPE { GENERIC_HIT, DOUBLE_CLICK };
@@ -48,11 +49,14 @@ private:
 	ASPROPERTY_GETTER_SETTER(_NR<AccessibilityProperties>,accessibilityProperties);
 	static ATOMIC_INT32(instanceCount);
 	MATRIX Matrix;
-	bool useLegacyMatrix;
 	number_t tx,ty;
 	number_t rotation;
 	number_t sx,sy;
 	float alpha;
+public:
+	UI16_SWF Ratio;
+	UI16_SWF ClipDepth;
+private:
 	/**
 	  	The object we are masking, if any
 	*/
@@ -69,7 +73,12 @@ private:
 	 * Also used by Transform
 	 */
 	void setMatrix(const MATRIX& m);
+	ACQUIRE_RELEASE_FLAG(constructed);
+	bool useLegacyMatrix;
+	void gatherMaskIDrawables(std::vector<IDrawable::MaskData>& masks) const;
 protected:
+	bool onStage;
+	bool visible;
 	~DisplayObject();
 	/**
 	  	The object that masks us, if any
@@ -83,25 +92,17 @@ protected:
 	 * Assume the lock is held and the matrix will not change
 	 */
 	void extractValuesFromMatrix();
-	bool onStage;
-	_NR<LoaderInfo> loaderInfo;
 	number_t computeWidth();
 	number_t computeHeight();
-	bool isSimple() const;
-	bool skipRender(bool maskEnabled) const;
+	bool skipRender() const;
 	float clippedAlpha() const;
-	bool visible;
 
-	void defaultRender(RenderContext& ctxt, bool maskEnabled) const;
-	void renderPrologue(RenderContext& ctxt) const;
-	void renderEpilogue(RenderContext& ctxt) const;
-	void hitTestPrologue() const;
-	void hitTestEpilogue() const;
+	void defaultRender(RenderContext& ctxt) const;
 	virtual bool boundsRect(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const
 	{
 		throw RunTimeException("DisplayObject::boundsRect: Derived class must implement this!");
 	}
-	virtual void renderImpl(RenderContext& ctxt, bool maskEnabled, number_t t1,number_t t2,number_t t3,number_t t4) const
+	virtual void renderImpl(RenderContext& ctxt) const
 	{
 		throw RunTimeException("DisplayObject::renderImpl: Derived class must implement this!");
 	}
@@ -109,22 +110,29 @@ protected:
 	{
 		throw RunTimeException("DisplayObject::hitTestImpl: Derived class must implement this!");
 	}
+
+	void constructionComplete();
 public:
 	tiny_string name;
-	UI16_SWF CharacterId;
+	_NR<DisplayObject> invalidateQueueNext;
+	_NR<LoaderInfo> loaderInfo;
+	ASPROPERTY_GETTER_SETTER(_NR<Array>,filters);
 	CXFORMWITHALPHA ColorTransform;
-	UI16_SWF Ratio;
-	UI16_SWF ClipDepth;
-	CLIPACTIONS ClipActions;
+	/**
+	 * cacheAsBitmap is true also if any filter is used
+	 */
+	bool computeCacheAsBitmap() const;
+	void computeMasksAndMatrix(DisplayObject* target, std::vector<IDrawable::MaskData>& masks,MATRIX& totalMatrix) const;
+	ASPROPERTY_GETTER_SETTER(bool,cacheAsBitmap);
 	_NR<DisplayObjectContainer> getParent() const { return parent; }
 	void setParent(_NR<DisplayObjectContainer> p);
 	/*
 	   Used to link DisplayObjects the invalidation queue
 	*/
-	_NR<DisplayObject> invalidateQueueNext;
 	DisplayObject(Class_base* c);
 	void finalize();
 	MATRIX getMatrix() const;
+	bool isConstructed() const { return ACQUIRE_READ(constructed); }
 	/**
 	 * Generate a new IDrawable instance for this object
 	 * @param target The topmost object in the hierarchy that is being drawn. Such object
@@ -141,16 +149,12 @@ public:
 	{
 		throw RunTimeException("DisplayObject::getScaleFactor");
 	}
-	void Render(RenderContext& ctxt, bool maskEnabled);
+	void Render(RenderContext& ctxt);
 	bool getBounds(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax, const MATRIX& m) const;
 	_NR<InteractiveObject> hitTest(_NR<InteractiveObject> last, number_t x, number_t y, HIT_TYPE type);
-	//API to handle mask support in hit testing
-	virtual bool isOpaque(number_t x, number_t y) const
-	{
-		throw RunTimeException("DisplayObject::isOpaque");
-	}
 	virtual void setOnStage(bool staged);
 	bool isOnStage() const { return onStage; }
+	bool isMask() const { return !maskOf.isNull(); }
 	virtual _NR<RootMovieClip> getRoot();
 	virtual _NR<Stage> getStage();
 	void setLegacyMatrix(const MATRIX& m);
@@ -204,4 +208,4 @@ public:
 	ASFUNCTION(globalToLocal);
 };
 };
-#endif
+#endif /* SCRIPTING_FLASH_DISPLAY_DISPLAYOBJECT_H */

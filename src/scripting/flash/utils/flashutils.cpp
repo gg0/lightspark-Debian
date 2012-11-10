@@ -17,31 +17,20 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
-#include "abc.h"
-#include "flashutils.h"
+#include "scripting/abc.h"
+#include "scripting/flash/utils/flashutils.h"
 #include "asobject.h"
-#include "class.h"
+#include "scripting/class.h"
 #include "compat.h"
 #include "parsing/amf3_generator.h"
-#include "argconv.h"
-#include "flash/errors/flasherrors.h"
+#include "scripting/argconv.h"
+#include "scripting/flash/errors/flasherrors.h"
 #include <sstream>
 #include <zlib.h>
 #include <glib.h>
 
 using namespace std;
 using namespace lightspark;
-
-SET_NAMESPACE("flash.utils");
-
-REGISTER_CLASS_NAME(IExternalizable);
-REGISTER_CLASS_NAME(Endian);
-REGISTER_CLASS_NAME(IDataInput);
-REGISTER_CLASS_NAME(IDataOutput);
-REGISTER_CLASS_NAME(ByteArray);
-REGISTER_CLASS_NAME(Timer);
-REGISTER_CLASS_NAME(Dictionary);
-REGISTER_CLASS_NAME(Proxy);
 
 #define BA_CHUNK_SIZE 4096
 
@@ -100,8 +89,8 @@ void IDataOutput::linkTraits(Class_base* c)
 	lookupAndLink(c,"writeUTFBytes","flash.utils:IDataOutput");
 }
 
-ByteArray::ByteArray(Class_base* c, uint8_t* b, uint32_t l):ASObject(c),bytes(b),real_len(l),len(l),position(0),
-	littleEndian(false),objectEncoding(ObjectEncoding::AMF3)
+ByteArray::ByteArray(Class_base* c, uint8_t* b, uint32_t l):ASObject(c),littleEndian(false),objectEncoding(ObjectEncoding::AMF3),
+	position(0),bytes(b),real_len(l),len(l)
 {
 #ifdef MEMORY_USAGE_PROFILING
 	c->memoryAccount->addBytes(l);
@@ -204,7 +193,9 @@ uint8_t* ByteArray::getBuffer(unsigned int size, bool enableResize)
 	}
 	else if(real_len<size) // && enableResize==true
 	{
+#ifdef MEMORY_USAGE_PROFILING
 		uint32_t prev_real_len = real_len;
+#endif
 		while(real_len < size)
 			real_len += BA_CHUNK_SIZE;
 		// Reallocate the buffer, in chunks of BA_CHUNK_SIZE bytes
@@ -731,7 +722,7 @@ bool ByteArray::readU29(uint32_t& ret)
 			return false;
 
 		uint8_t tmp=bytes[position++];
-		ret <<= i*7;
+		ret <<= 7;
 		if(i<3)
 		{
 			ret |= tmp&0x7f;
@@ -948,14 +939,14 @@ ASFUNCTIONBODY(ByteArray,_toString)
 	return Class<ASString>::getInstanceS((char*)th->bytes,th->len);
 }
 
-bool ByteArray::hasPropertyByMultiname(const multiname& name, bool considerDynamic)
+bool ByteArray::hasPropertyByMultiname(const multiname& name, bool considerDynamic, bool considerPrototype)
 {
 	if(considerDynamic==false)
-		return ASObject::hasPropertyByMultiname(name, considerDynamic);
+		return ASObject::hasPropertyByMultiname(name, considerDynamic, considerPrototype);
 
 	unsigned int index=0;
 	if(!Array::isValidMultiname(name,index))
-		return ASObject::hasPropertyByMultiname(name, considerDynamic);
+		return ASObject::hasPropertyByMultiname(name, considerDynamic, considerPrototype);
 
 	return index<len;
 }
@@ -1060,6 +1051,8 @@ void ByteArray::writeU29(uint32_t val)
 void ByteArray::writeStringVR(map<tiny_string, uint32_t>& stringMap, const tiny_string& s)
 {
 	const uint32_t len=s.numBytes();
+	if(len >= 1<<28)
+		throw Class<RangeError>::getInstanceS("Error #2006: The supplied index is out of bounds.");
 
 	//Check if the string is already in the map
 	auto it=stringMap.find(s);
@@ -1083,6 +1076,35 @@ void ByteArray::writeStringVR(map<tiny_string, uint32_t>& stringMap, const tiny_
 		getBuffer(position+len,true);
 		memcpy(bytes+position,s.raw_buf(),len);
 		position+=len;
+	}
+}
+
+void ByteArray::writeXMLString(std::map<const ASObject*, uint32_t>& objMap,
+			       ASObject *xml,
+			       const tiny_string& xmlstr)
+{
+	if(xmlstr.numBytes() >= 1<<28)
+		throw Class<RangeError>::getInstanceS("Error #2006: The supplied index is out of bounds.");
+
+	//Check if the XML object has been already serialized
+	auto it=objMap.find(xml);
+	if(it!=objMap.end())
+	{
+		//The least significant bit is 0 to signal a reference
+		writeU29(it->second << 1);
+	}
+	else
+	{
+		//Add the XML object to the map
+		objMap.insert(make_pair(xml, objMap.size()));
+
+		//The first bit must be 1, the next 29 bits
+		//store the number of bytes of the string
+		writeU29((xmlstr.numBytes()<<1) | 1);
+
+		getBuffer(position+xmlstr.numBytes(),true);
+		memcpy(bytes+position,xmlstr.raw_buf(),xmlstr.numBytes());
+		position+=xmlstr.numBytes();
 	}
 }
 
@@ -1388,11 +1410,11 @@ ASFUNCTIONBODY(Timer,reset)
 		getSys()->removeJob(th);
 		//NOTE: although no new events will be sent now there might be old events in the queue.
 		//Is this behaviour right?
-		th->currentCount=0;
 		//This is not anymore used by the timer, so it can die
 		th->decRef();
 		th->running=false;
 	}
+	th->currentCount=0;
 	return NULL;
 }
 
@@ -1522,6 +1544,18 @@ ASFUNCTIONBODY(Dictionary,_constructor)
 	return NULL;
 }
 
+Dictionary::dictType::iterator Dictionary::findKey(ASObject *o)
+{
+	Dictionary::dictType::iterator it = data.begin();
+	for(; it!=data.end(); ++it)
+	{
+		if (it->first->isEqualStrict(o))
+			return it;
+	}
+
+	return data.end();
+}
+
 void Dictionary::setVariableByMultiname_i(const multiname& name, int32_t value)
 {
 	assert_and_throw(implEnable);
@@ -1536,7 +1570,7 @@ void Dictionary::setVariableByMultiname(const multiname& name, ASObject* o, CONS
 		name.name_o->incRef();
 		_R<ASObject> name_o(name.name_o);
 
-		map<_R<ASObject>, _R<ASObject> >::iterator it=data.find(name_o);
+		Dictionary::dictType::iterator it=findKey(name_o.getPtr());
 		if(it!=data.end())
 			it->second=_MR(o);
 		else
@@ -1562,7 +1596,7 @@ bool Dictionary::deleteVariableByMultiname(const multiname& name)
 		name.name_o->incRef();
 		_R<ASObject> name_o(name.name_o);
 
-		map<_R<ASObject>, _R<ASObject> >::iterator it=data.find(name_o);
+		Dictionary::dictType::iterator it=findKey(name_o.getPtr());
 		if(it != data.end())
 		{
 			data.erase(it);
@@ -1590,7 +1624,7 @@ _NR<ASObject> Dictionary::getVariableByMultiname(const multiname& name, GET_VARI
 			name.name_o->incRef();
 			_R<ASObject> name_o(name.name_o);
 
-			map<_R<ASObject>, _R<ASObject> >::iterator it=data.find(name_o);
+			Dictionary::dictType::iterator it=findKey(name_o.getPtr());
 			if(it != data.end())
 				return it->second;
 			else
@@ -1610,17 +1644,17 @@ _NR<ASObject> Dictionary::getVariableByMultiname(const multiname& name, GET_VARI
 	return ASObject::getVariableByMultiname(name, opt);
 }
 
-bool Dictionary::hasPropertyByMultiname(const multiname& name, bool considerDynamic)
+bool Dictionary::hasPropertyByMultiname(const multiname& name, bool considerDynamic, bool considerPrototype)
 {
 	if(considerDynamic==false)
-		return ASObject::hasPropertyByMultiname(name, considerDynamic);
+		return ASObject::hasPropertyByMultiname(name, considerDynamic, considerPrototype);
 
 	if(name.name_type==multiname::NAME_OBJECT)
 	{
 		name.name_o->incRef();
 		_R<ASObject> name_o(name.name_o);
 
-		map<_R<ASObject>, _R<ASObject> >::iterator it=data.find(name_o);
+		Dictionary::dictType::iterator it=findKey(name_o.getPtr());
 		return it != data.end();
 	}
 	else
@@ -1630,7 +1664,7 @@ bool Dictionary::hasPropertyByMultiname(const multiname& name, bool considerDyna
 		assert(name.name_type==multiname::NAME_STRING ||
 			name.name_type==multiname::NAME_INT ||
 			name.name_type==multiname::NAME_NUMBER);
-		return ASObject::hasPropertyByMultiname(name, considerDynamic);
+		return ASObject::hasPropertyByMultiname(name, considerDynamic, considerPrototype);
 	}
 }
 
@@ -1717,7 +1751,7 @@ void Proxy::buildTraits(ASObject* o)
 void Proxy::setVariableByMultiname(const multiname& name, ASObject* o, CONST_ALLOWED_FLAG allowConst)
 {
 	//If a variable named like this already exist, use that
-	if(ASObject::hasPropertyByMultiname(name, true) || !implEnable)
+	if(ASObject::hasPropertyByMultiname(name, true, false) || !implEnable)
 	{
 		ASObject::setVariableByMultiname(name,o,allowConst);
 		return;
@@ -1757,7 +1791,7 @@ _NR<ASObject> Proxy::getVariableByMultiname(const multiname& name, GET_VARIABLE_
 {
 	//It seems that various kind of implementation works only with the empty namespace
 	assert_and_throw(name.ns.size()>0);
-	if(!name.ns[0].hasEmptyName() || ASObject::hasPropertyByMultiname(name, true) || !implEnable || (opt & ASObject::SKIP_IMPL)!=0)
+	if(!name.ns[0].hasEmptyName() || ASObject::hasPropertyByMultiname(name, true, true) || !implEnable || (opt & ASObject::SKIP_IMPL)!=0)
 		return ASObject::getVariableByMultiname(name,opt);
 
 	//Check if there is a custom getter defined, skipping implementation to avoid recursive calls
@@ -1785,10 +1819,10 @@ _NR<ASObject> Proxy::getVariableByMultiname(const multiname& name, GET_VARIABLE_
 	return ret;
 }
 
-bool Proxy::hasPropertyByMultiname(const multiname& name, bool considerDynamic)
+bool Proxy::hasPropertyByMultiname(const multiname& name, bool considerDynamic, bool considerPrototype)
 {
 	//If a variable named like this already exist, use that
-	bool asobject_has_property=ASObject::hasPropertyByMultiname(name, considerDynamic);
+	bool asobject_has_property=ASObject::hasPropertyByMultiname(name, considerDynamic, considerPrototype);
 	if(asobject_has_property || !implEnable)
 		return asobject_has_property;
 
@@ -1822,7 +1856,7 @@ bool Proxy::hasPropertyByMultiname(const multiname& name, bool considerDynamic)
 bool Proxy::deleteVariableByMultiname(const multiname& name)
 {
 	//If a variable named like this already exist, use that
-	if(ASObject::hasPropertyByMultiname(name, true) || !implEnable)
+	if(ASObject::hasPropertyByMultiname(name, true, false) || !implEnable)
 	{
 		return ASObject::deleteVariableByMultiname(name);
 	}
@@ -1971,7 +2005,7 @@ ASFUNCTIONBODY(lightspark,clearTimeout)
 
 IntervalRunner::IntervalRunner(IntervalRunner::INTERVALTYPE _type, uint32_t _id, _R<IFunction> _callback, ASObject** _args,
 		const unsigned int _argslen, _R<ASObject> _obj, uint32_t _interval):
-	EventDispatcher(NULL),type(_type), id(_id), callback(_callback),argslen(_argslen),obj(_obj),interval(_interval)
+	EventDispatcher(NULL),type(_type), id(_id), callback(_callback),obj(_obj),argslen(_argslen),interval(_interval)
 {
 	args = new ASObject*[argslen];
 	for(uint32_t i=0; i<argslen; i++)

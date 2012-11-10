@@ -17,10 +17,10 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
-#ifndef _BITMAP_DATA_H
-#define _BITMAP_DATA_H
+#ifndef SCRIPTING_FLASH_DISPLAY_BITMAPDATA_H
+#define SCRIPTING_FLASH_DISPLAY_BITMAPDATA_H 1
 
-#include "IBitmapDrawable.h"
+#include "scripting/flash/display/IBitmapDrawable.h"
 #include "asobject.h"
 #include "scripting/flash/display/BitmapContainer.h"
 
@@ -28,13 +28,13 @@ namespace lightspark
 {
 
 class Bitmap;
+class DisplayObject;
 
 class BitmapData: public ASObject, public BitmapContainer, public IBitmapDrawable
 {
 	bool disposed;
 	uint32_t getPixelPriv(uint32_t x, uint32_t y);
 	void setPixelPriv(uint32_t x, uint32_t y, uint32_t color, bool setAlpha);
-	void copyFrom(BitmapData *source);
 	//Avoid cycles by not using automatic references
 	//Bitmap will take care of removing itself when needed
 	std::set<Bitmap*> users;
@@ -42,6 +42,7 @@ class BitmapData: public ASObject, public BitmapContainer, public IBitmapDrawabl
 public:
 	BitmapData(Class_base* c);
 	BitmapData(Class_base* c, const BitmapContainer& b);
+	BitmapData(Class_base* c, uint32_t width, uint32_t height);
 	static void sinit(Class_base* c);
 	~BitmapData();
 	/* the bitmaps data in premultiplied, native-endian 32 bit
@@ -50,6 +51,10 @@ public:
 	 * data (=stride*height) */
 	void addUser(Bitmap* b);
 	void removeUser(Bitmap* b);
+	/*
+	 * Utility method to draw a DisplayObject on the surface
+	 */
+	void drawDisplayObject(DisplayObject* d, const MATRIX& initialMatrix);
 	ASPROPERTY_GETTER(bool, transparent);
 	ASFUNCTION(_constructor);
 	ASFUNCTION(dispose);
@@ -62,9 +67,10 @@ public:
 	ASFUNCTION(copyPixels);
 	ASFUNCTION(fillRect);
 	ASFUNCTION(generateFilterRect);
+	ASFUNCTION(hitTest);
 	ASFUNCTION(_getter_width);
 	ASFUNCTION(_getter_height);
 };
 
 };
-#endif
+#endif /* SCRIPTING_FLASH_DISPLAY_BITMAPDATA_H */

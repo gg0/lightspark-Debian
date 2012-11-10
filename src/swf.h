@@ -18,7 +18,7 @@
 **************************************************************************/
 
 #ifndef SWF_H
-#define SWF_H
+#define SWF_H 1
 
 #include "compat.h"
 #include <fstream>
@@ -33,6 +33,8 @@
 #include "timer.h"
 #include "memory_support.h"
 #include "platforms/engineutils.h"
+
+class uncompressing_filter;
 
 namespace lightspark
 {
@@ -58,7 +60,6 @@ class RootMovieClip: public MovieClip
 {
 friend class ParseThread;
 protected:
-	Mutex rootMutex;
 	URLInfo origin;
 private:
 	bool parsingIsFailed;
@@ -68,18 +69,15 @@ private:
 	//frameSize and frameRate are valid only after the header has been parsed
 	RECT frameSize;
 	float frameRate;
-	bool toBind;
-	tiny_string bindName;
-	void constructionComplete();
-	/* those are private because you shouldn't call sys->*,
-	 * but sys->getStage()->* instead.
+	URLInfo baseURL;
+	/* those are private because you shouldn't call mainClip->*,
+	 * but mainClip->getStage()->* instead.
 	 */
 	void initFrame();
 	void advanceFrame();
-	void setOnStage(bool staged);
 	ACQUIRE_RELEASE_FLAG(finishedLoading);
 public:
-	RootMovieClip(LoaderInfo* li, _NR<ApplicationDomain> appDomain, _NR<SecurityDomain> secDomain, Class_base* c);
+	RootMovieClip(_NR<LoaderInfo> li, _NR<ApplicationDomain> appDomain, _NR<SecurityDomain> secDomain, Class_base* c);
 	~RootMovieClip();
 	void finalize();
 	bool hasFinishedLoading() { return ACQUIRE_READ(finishedLoading); }
@@ -98,14 +96,15 @@ public:
 	void revertFrame();
 	void parsingFailed();
 	bool boundsRect(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const;
-	void bindToName(const tiny_string& n);
 	void DLL_PUBLIC setOrigin(const tiny_string& u, const tiny_string& filename="");
 	URLInfo& getOrigin() { return origin; };
+	void DLL_PUBLIC setBaseURL(const tiny_string& url);
+	const URLInfo& getBaseURL();
 /*	ASObject* getVariableByQName(const tiny_string& name, const tiny_string& ns);
 	void setVariableByQName(const tiny_string& name, const tiny_string& ns, ASObject* o);
 	void setVariableByMultiname(multiname& name, ASObject* o);
 	void setVariableByString(const std::string& s, ASObject* o);*/
-	static RootMovieClip* getInstance(LoaderInfo* li, _R<ApplicationDomain> appDomain, _R<SecurityDomain> secDomain);
+	static RootMovieClip* getInstance(_NR<LoaderInfo> li, _R<ApplicationDomain> appDomain, _R<SecurityDomain> secDomain);
 	/*
 	 * The application domain for this clip
 	 */
@@ -116,6 +115,7 @@ public:
 	_NR<SecurityDomain> securityDomain;
 	//DisplayObject interface
 	_NR<RootMovieClip> getRoot();
+	void addBinding(const tiny_string& name, DictionaryTag *tag);
 };
 
 class ThreadProfile
@@ -147,7 +147,7 @@ public:
 enum BUILTIN_STRINGS { EMPTY=0, ANY, VOID, PROTOTYPE, LAST_BUILTIN_STRING };
 enum BUILTIN_NAMESPACES { EMPTY_NS=0 };
 
-class SystemState: public RootMovieClip, public ITickJob, public InvalidateQueue
+class SystemState: public ITickJob, public InvalidateQueue
 {
 private:
 	class EngineCreator: public IThreadJob
@@ -169,6 +169,7 @@ private:
 	EngineData* engineData;
 	Thread* mainThread;
 	void startRenderTicks();
+	Mutex rootMutex;
 	/**
 		Create the rendering and input engines
 
@@ -198,9 +199,11 @@ private:
 	GPid childPid;
 #endif
 
-	//shared null and undefined instances
+	//shared null, undefined, true and false instances
 	_NR<Null> null;
 	_NR<Undefined> undefined;
+	_NR<Boolean> trueRef;
+	_NR<Boolean> falseRef;
 
 	//Parameters/FlashVars
 	_NR<ASObject> parameters;
@@ -250,8 +253,7 @@ private:
 	boost::bimap<nsNameAndKindImpl, uint32_t> uniqueNamespaceMap;
 	//This needs to be atomic because it's decremented without the mutex held
 	ATOMIC_INT32(lastUsedNamespaceId);
-protected:
-	~SystemState();
+	void systemFinalize();
 public:
 	void setURL(const tiny_string& url) DLL_PUBLIC;
 
@@ -282,8 +284,6 @@ public:
 	void setParamsAndEngine(EngineData* e, bool s) DLL_PUBLIC;
 	void setDownloadedPath(const tiny_string& p) DLL_PUBLIC;
 	void needsAVM2(bool n);
-	//DisplayObject interface
-	_NR<Stage> getStage();
 
 	/**
 	 * Be careful, SystemState constructor does some global initialization that must be done
@@ -292,7 +292,7 @@ public:
 	 * \param mode FLASH or AIR
 	 */
 	SystemState(uint32_t fileSize, FLASH_MODE mode) DLL_PUBLIC;
-	void finalize();
+	~SystemState();
 	/* Stop engines, threads and free classes and objects.
 	 * This call will decRef this object in the end,
 	 * thus destroy() may cause a 'delete this'.
@@ -305,7 +305,10 @@ public:
 	
 	Null* getNullRef() const;
 	Undefined* getUndefinedRef() const;
+	Boolean* getTrueRef() const;
+	Boolean* getFalseRef() const;
 
+	RootMovieClip* mainClip;
 	Stage* stage;
 	ABCVm* currentVm;
 
@@ -317,17 +320,22 @@ public:
 
 	//Classes set. They own one reference to each class/template
 	std::set<Class_base*> customClasses;
-	std::map<QName, Class_base*> builtinClasses;
+	//This is an array of fixed size, we can avoid using std::vector
+	Class_base** builtinClasses;
 	std::map<QName, Template_base*> templates;
+	std::map<QName, Class_base*> instantiatedTemplates;
 
 	//Flags for command line options
 	bool useInterpreter;
+	bool useFastInterpreter;
 	bool useJit;
 	ERROR_TYPE exitOnError;
 
 	//Parameters/FlashVars
 	void parseParametersFromFile(const char* f) DLL_PUBLIC;
 	void parseParametersFromFlashvars(const char* vars) DLL_PUBLIC;
+	void parseParametersFromURL(const URLInfo& url) DLL_PUBLIC;
+	static void parseParametersFromURLIntoObject(const URLInfo& url, _R<ASObject> outParams);
 	_NR<ASObject> getParameters() const;
 
 	//Cookies management (HTTP downloads and Gnash fallback)
@@ -342,11 +350,6 @@ public:
 
 	void setRenderRate(float rate);
 	float getRenderRate();
-	/*
-	   This is not supposed to be used in the VM, it's only useful to create the Downloader when plugin is being used
-	   So don't create a smart reference
-	*/
-	LoaderInfo* getLoaderInfo() const { return loaderInfo.getPtr(); }
 
 	/*
 	 * The application domain for the system
@@ -444,7 +447,7 @@ public:
 	_NR<SecurityDomain> securityDomain;
 private:
 	std::istream& f;
-	std::streambuf* zlibFilter;
+	uncompressing_filter* uncompressingFilter;
 	std::streambuf* backend;
 	Loader *loader;
 	_NR<DisplayObject> parsedObject;
@@ -467,4 +470,4 @@ void setTLSSys(SystemState* sys) DLL_PUBLIC;
 ParseThread* getParseThread();
 
 };
-#endif
+#endif /* SWF_H */

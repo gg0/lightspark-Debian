@@ -17,25 +17,11 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
-#ifndef _ABC_H
-#define _ABC_H
-
-#ifdef LLVM_28
-#define alignof alignOf
-#define LLVMTYPE const llvm::Type*
-#define LLVMMAKEARRAYREF(T) T
-#else
-#define LLVMTYPE llvm::Type*
-#define LLVMMAKEARRAYREF(T) makeArrayRef(T)
-#endif
+#ifndef SCRIPTING_ABC_H
+#define SCRIPTING_ABC_H 1
 
 #include "compat.h"
 #include <cstddef>
-#include <llvm/Module.h>
-#include <llvm/ExecutionEngine/ExecutionEngine.h>
-#include <llvm/Support/IRBuilder.h>
-#include <llvm/PassManager.h> 
-#include <llvm/LLVMContext.h>
 #include "parsing/tags.h"
 #include "logger.h"
 #include <vector>
@@ -43,43 +29,32 @@
 #include <map>
 #include <set>
 #include "swf.h"
-#include "abcutils.h"
-#include "abctypes.h"
+#include "scripting/abcutils.h"
+#include "scripting/abctypes.h"
 #include "scripting/flash/system/flashsystem.h"
+
+namespace llvm {
+	class ExecutionEngine;
+	class FunctionPassManager;
+	class FunctionType;
+	class Function;
+	class Module;
+	class Type;
+	class Value;
+	class LLVMContext;
+}
 
 namespace lightspark
 {
+struct block_info;
+#ifdef LLVM_28
+typedef const llvm::Type* LLVMTYPE;
+#else
+typedef llvm::Type* LLVMTYPE;
+#endif
 
 bool isVmThread();
 
-struct block_info
-{
-	llvm::BasicBlock* BB;
-	/* current type of locals, changed through interpreting the opcodes in doAnalysis */
-	std::vector<STACK_TYPE> locals;
-	/* types of locals at the start of the block
-	 * This is computed in doAnalysis. It is != STACK_NONE when all preceding blocks end with
-	 * the local having the same type. */
-	std::vector<STACK_TYPE> locals_start;
-	/* if locals_start[i] != STACK_NONE, then locals_start_obj[i] is an Alloca of the given type.
-	 * SyncLocals at the end of one block Store's the current locals to locals_start_obj. (if both have the same type)
-	 * At the beginning of this block, static_locals[i] is initialized by a Load(locals_start_obj[i]). */
-	std::vector<llvm::Value*> locals_start_obj;
-	/* there is no need to transfer the given local to this block by a preceding block
-	 * because this and all successive blocks will not read the local before writing to it.
-	 */
-	std::vector<bool> locals_reset;
-	/* getlocal/setlocal in this block used the given local */
-	std::vector<bool> locals_used;
-	std::set<block_info*> preds; /* preceding blocks */
-	std::set<block_info*> seqs; /* subsequent blocks */
-	std::map<int,STACK_TYPE> push_types;
-
-	//Needed for indexed access
-	block_info():BB(NULL){abort();}
-	block_info(const method_info* mi, const char* blockName);
-	STACK_TYPE checkProactiveCasting(int local_ip,STACK_TYPE type);
-};
 std::ostream& operator<<(std::ostream& o, const block_info& b);
 
 typedef std::pair<llvm::Value*, STACK_TYPE> stack_entry;
@@ -96,12 +71,6 @@ friend class SyntheticFunction;
 private:
 	struct method_info_simple info;
 
-	//Helper functions to sync the static stack and locals to the memory 
-	void syncStacks(llvm::ExecutionEngine* ex, llvm::IRBuilder<>& builder, std::vector<stack_entry>& static_stack, 
-			llvm::Value* dynamic_stack, llvm::Value* dynamic_stack_index);
-	void syncLocals(llvm::ExecutionEngine* ex, llvm::IRBuilder<>& builder,
-			const std::vector<stack_entry>& static_locals,llvm::Value* locals,
-			const std::vector<STACK_TYPE>& expected,const block_info& dest_block);
 	typedef std::vector<std::pair<int, STACK_TYPE> > static_stack_types_vector;
 	//Helper function to sync only part of the static stack to the memory
 	void consumeStackForRTMultiname(static_stack_types_vector& stack, int multinameIndex) const;
@@ -112,8 +81,10 @@ private:
 	llvm::FunctionType* synt_method_prototype(llvm::ExecutionEngine* ex);
 	llvm::Function* llvmf;
 
+	// Wrapper needed because llvm::IRBuilder is a template, cannot forward declare
+	struct BuilderWrapper;
 	//Does analysis on function code to find optimization chances
-	void doAnalysis(std::map<unsigned int,block_info>& blocks, llvm::IRBuilder<>& Builder);
+	void doAnalysis(std::map<unsigned int,block_info>& blocks, BuilderWrapper& builderWrapper);
 
 public:
 #ifdef PROFILING_SUPPORT
@@ -143,11 +114,12 @@ public:
 	const Type* returnType;
 	bool hasExplicitTypes;
 	method_info():
+		llvmf(NULL),
 #ifdef PROFILING_SUPPORT
 		profTime(0),
 		validProfName(false),
 #endif
-		f(NULL),context(NULL),body(NULL),returnType(NULL)
+		f(NULL),context(NULL),body(NULL),returnType(NULL),hasExplicitTypes(false)
 	{
 	}
 };
@@ -230,6 +202,9 @@ public:
 #endif
 };
 
+struct BasicBlock;
+struct InferenceData;
+
 class ABCVm
 {
 friend class ABCContext;
@@ -310,15 +285,15 @@ private:
 	static ASObject* getScopeObject(call_context* th, int n); 
 	static bool deleteProperty(ASObject* obj, multiname* name);
 	static void initProperty(ASObject* obj, ASObject* val, multiname* name);
-	static void newClass(call_context* th, int n); 
+	static void newClass(call_context* th, int n);
 	static void newArray(call_context* th, int n); 
 	static ASObject* findPropStrict(call_context* th, multiname* name);
 	static ASObject* findProperty(call_context* th, multiname* name);
 	static int32_t pushByte(intptr_t n);
 	static int32_t pushShort(intptr_t n);
-	static void pushInt(call_context* th, int n);
-	static void pushUInt(call_context* th, int n);
-	static void pushDouble(call_context* th, int n);
+	static void pushInt(call_context* th, int32_t val);
+	static void pushUInt(call_context* th, uint32_t val);
+	static void pushDouble(call_context* th, double val);
 	static void incLocal_i(call_context* th, int n);
 	static void incLocal(call_context* th, int n);
 	static void decLocal_i(call_context* th, int n);
@@ -417,7 +392,7 @@ private:
 	static void method_reset(method_info* th);
 	static void newClassRecursiveLink(Class_base* target, Class_base* c);
 	static ASObject* constructFunction(call_context* th, IFunction* f, ASObject** args, int argslen);
-	void parseRPCMessage(_R<ByteArray> message, _NR<ASObject> client, _R<Responder> responder);
+	void parseRPCMessage(_R<ByteArray> message, _NR<ASObject> client, _NR<Responder> responder);
 
 	//Opcode tables
 	void register_table(LLVMTYPE ret_type,typed_opcode_handler* table, int table_len);
@@ -440,7 +415,6 @@ private:
 	std::deque<eventType, reporter_allocator<eventType>> events_queue;
 	void handleEvent(std::pair<_NR<EventDispatcher>,_R<Event> > e);
 	void signalEventWaiters();
-	void buildClassAndBindTag(const std::string& s, DictionaryTag* t);
 	void buildClassAndInjectBase(const std::string& s, _R<RootMovieClip> base);
 	Class_inherit* findClassInherit(const std::string& s, RootMovieClip* r);
 
@@ -450,15 +424,12 @@ private:
 	ATOMIC_INT32(nextNamespaceBase);
 public:
 	call_context* currentCallContext;
-	Manager* int_manager;
-	Manager* uint_manager;
-	Manager* number_manager;
 
 	MemoryAccount* vmDataMemory;
 
 	llvm::ExecutionEngine* ex;
 	llvm::FunctionPassManager* FPM;
-	llvm::LLVMContext llvm_context;
+	llvm::LLVMContext& llvm_context();
 
 	ABCVm(SystemState* s, MemoryAccount* m) DLL_PUBLIC;
 	/**
@@ -474,9 +445,27 @@ public:
 	void finalize();
 	static void Run(ABCVm* th);
 	static ASObject* executeFunction(const SyntheticFunction* function, call_context* context);
+	static ASObject* executeFunctionFast(const SyntheticFunction* function, call_context* context);
+	static void optimizeFunction(SyntheticFunction* function);
+	static void verifyBranch(std::set<uint32_t>& pendingBlock,std::map<uint32_t,BasicBlock>& basicBlocks,
+			int oldStart, int here, int offset, int code_len);
+	static void writeBranchAddress(std::map<uint32_t,BasicBlock>& basicBlocks, int here, int offset, std::ostream& out);
+	static void writeInt32(std::ostream& out, int32_t val);
+	static void writeDouble(std::ostream& out, double val);
+	static void writePtr(std::ostream& out, const void* val);
+
+	static InferenceData earlyBindGetLex(std::ostream& out, const SyntheticFunction* f,
+			const std::vector<InferenceData>& scopeStack, const multiname* name, uint32_t name_index);
+	static InferenceData earlyBindFindPropStrict(std::ostream& out, const SyntheticFunction* f,
+			const std::vector<InferenceData>& scopeStack, const multiname* name);
+	static EARLY_BIND_STATUS earlyBindForScopeStack(std::ostream& out, const SyntheticFunction* f,
+			const std::vector<InferenceData>& scopeStack, const multiname* name, InferenceData& inferredData);
+	static const Type* getLocalType(const SyntheticFunction* f, unsigned localIndex);
+
 	bool addEvent(_NR<EventDispatcher>,_R<Event> ) DLL_PUBLIC;
 	int getEventQueueSize();
 	void shutdown();
+	bool hasEverStarted() const { return status!=CREATED; }
 
 	static Global* getGlobalScope(call_context* th);
 	static bool strictEqualImpl(ASObject*, ASObject*);
@@ -497,6 +486,9 @@ public:
 
 	uint32_t getAndIncreaseNamespaceBase(uint32_t nsNum);
 
+	tiny_string getDefaultXMLNamespace();
+
+	void buildClassAndBindTag(const std::string& s, DictionaryTag* t);
 };
 
 class DoABCTag: public ControlTag
@@ -544,4 +536,4 @@ std::istream& operator>>(std::istream& in, method_info& v);
 
 };
 
-#endif
+#endif /* SCRIPTING_ABC_H */

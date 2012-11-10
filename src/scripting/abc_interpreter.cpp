@@ -17,10 +17,11 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
-#include "abc.h"
+#include "scripting/abc.h"
 #include "compat.h"
 #include "exceptions.h"
-#include "abcutils.h"
+#include "scripting/abcutils.h"
+#include "parsing/streams.h"
 #include <string>
 #include <sstream>
 
@@ -39,11 +40,11 @@ ASObject* ABCVm::executeFunction(const SyntheticFunction* function, call_context
 {
 	method_info* mi=function->mi;
 
-	istringstream code(mi->body->code);
+	memorystream code(mi->body->code.data(), mi->body->code.size());
 	//This may be non-zero and point to the position of an exception handler
 	code.seekg(context->exec_pos);
 
-	int code_len=code.str().length();
+	const int code_len=mi->body->code.size();
 
 	u8 opcode;
 
@@ -119,6 +120,7 @@ ASObject* ABCVm::executeFunction(const SyntheticFunction* function, call_context
 				//kill
 				u30 t;
 				code >> t;
+				LOG(LOG_CALLS, "kill " << t);
 				assert_and_throw(context->locals[t]);
 				context->locals[t]->decRef();
 				context->locals[t]=getSys()->getUndefinedRef();
@@ -583,9 +585,10 @@ ASObject* ABCVm::executeFunction(const SyntheticFunction* function, call_context
 				//pushint
 				u30 t;
 				code >> t;
-				pushInt(context, t);
+				s32 val=context->context->constant_pool.integer[t];
+				pushInt(context, val);
 
-				ASObject* i=abstract_i(context->context->constant_pool.integer[t]);
+				ASObject* i=abstract_i(val);
 				context->runtime_stack_push(i);
 				break;
 			}
@@ -594,9 +597,10 @@ ASObject* ABCVm::executeFunction(const SyntheticFunction* function, call_context
 				//pushuint
 				u30 t;
 				code >> t;
-				pushUInt(context, t);
+				u32 val=context->context->constant_pool.uinteger[t];
+				pushUInt(context, val);
 
-				ASObject* i=abstract_i(context->context->constant_pool.uinteger[t]);
+				ASObject* i=abstract_ui(val);
 				context->runtime_stack_push(i);
 				break;
 			}
@@ -605,9 +609,10 @@ ASObject* ABCVm::executeFunction(const SyntheticFunction* function, call_context
 				//pushdouble
 				u30 t;
 				code >> t;
-				pushDouble(context, t);
+				d64 val=context->context->constant_pool.doubles[t];
+				pushDouble(context, val);
 
-				ASObject* d=abstract_d(context->context->constant_pool.doubles[t]);
+				ASObject* d=abstract_d(val);
 				context->runtime_stack_push(d);
 				break;
 			}

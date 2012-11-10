@@ -24,6 +24,7 @@
 #include "platforms/engineutils.h"
 #ifndef _WIN32
 #	include <sys/resource.h>
+#	include <gdk/gdkx.h>
 #endif
 #include "compat.h"
 
@@ -59,7 +60,7 @@ public:
 	}
 	static void StandaloneDestroy(GtkWidget *widget, gpointer data)
 	{
-		StandaloneEngineData* e = (StandaloneEngineData*)data;
+		StandaloneEngineData* e = reinterpret_cast<StandaloneEngineData*>(data);
 		RecMutex::Lock l(e->mutex);
 		/* no need to destroy it - it's already done */
 		e->widget = NULL;
@@ -72,7 +73,7 @@ public:
 		destroyHandlerId = g_signal_connect(window,"destroy",G_CALLBACK(StandaloneDestroy),this);
 		return window;
 	}
-	NativeWindow getWindowForGnash()
+	GdkNativeWindow getWindowForGnash()
 	{
 		/* passing and invalid window id to gnash makes
 		 * it create its own window */
@@ -96,6 +97,7 @@ int main(int argc, char* argv[])
 	char *HTTPcookie=NULL;
 	SecurityManager::SANDBOXTYPE sandboxType=SecurityManager::LOCAL_WITH_FILE;
 	bool useInterpreter=true;
+	bool useFastInterpreter=false;
 	bool useJit=false;
 	SystemState::ERROR_TYPE exitOnError=SystemState::ERROR_PARSING;
 	LOG_LEVEL log_level=LOG_INFO;
@@ -113,7 +115,9 @@ int main(int argc, char* argv[])
 	LOG(LOG_INFO,"Lightspark version " << VERSION << " Copyright 2009-2012 Alessandro Pignotti and others");
 
 	//Make GTK thread enabled
+#ifdef HAVE_G_THREAD_INIT
 	g_thread_init(NULL);
+#endif
 	gdk_threads_init();
 	//Give GTK a chance to parse its own options
 	gtk_init (&argc, &argv);
@@ -136,6 +140,8 @@ int main(int argc, char* argv[])
 			flashMode=SystemState::AIR;
 		else if(strcmp(argv[i],"-ni")==0 || strcmp(argv[i],"--disable-interpreter")==0)
 			useInterpreter=false;
+		else if(strcmp(argv[i],"-fi")==0 || strcmp(argv[i],"--enable-fast-interpreter")==0)
+			useFastInterpreter=true;
 		else if(strcmp(argv[i],"-j")==0 || strcmp(argv[i],"--enable-jit")==0)
 			useJit=true;
 		else if(strcmp(argv[i],"-l")==0 || strcmp(argv[i],"--log-level")==0)
@@ -225,8 +231,8 @@ int main(int argc, char* argv[])
 	if(fileName==NULL)
 	{
 		LOG(LOG_ERROR, "Usage: " << argv[0] << " [--url|-u http://loader.url/file.swf]" <<
-			" [--disable-interpreter|-ni] [--enable-jit|-j] [--log-level|-l 0-4]" <<
-			" [--parameters-file|-p params-file] [--security-sandbox|-s sandbox]" <<
+			" [--disable-interpreter|-ni] [--enable-fast-interpreter|-fi] [--enable-jit|-j]" <<
+			" [--log-level|-l 0-4] [--parameters-file|-p params-file] [--security-sandbox|-s sandbox]" <<
 			" [--exit-on-error] [--HTTP-cookies cookie] [--air]" <<
 #ifdef PROFILING_SUPPORT
 			" [--profiling-output|-o profiling-file]" <<
@@ -260,13 +266,8 @@ int main(int argc, char* argv[])
 	SystemState::staticInit();
 	EngineData::startGTKMain();
 	//NOTE: see SystemState declaration
-#ifdef MEMORY_USAGE_PROFILING
-	MemoryAccount sysAccount("sysAccount");
-	SystemState* sys = new (&sysAccount) SystemState(fileSize, flashMode);
-#else
-	SystemState* sys = new ((MemoryAccount*)NULL) SystemState(fileSize, flashMode);
-#endif
-	ParseThread* pt = new ParseThread(f, sys);
+	SystemState* sys = new SystemState(fileSize, flashMode);
+	ParseThread* pt = new ParseThread(f, sys->mainClip);
 	setTLSSys(sys);
 	sys->setDownloadedPath(fileName);
 
@@ -274,7 +275,8 @@ int main(int argc, char* argv[])
 	//When the URL parameter is set, set the root URL to the given parameter
 	if(url)
 	{
-		sys->setOrigin(url, fileName);
+		sys->mainClip->setOrigin(url, fileName);
+		sys->parseParametersFromURL(sys->mainClip->getOrigin());
 		sandboxType = SecurityManager::REMOTE;
 	}
 #ifndef _WIN32
@@ -285,12 +287,12 @@ int main(int argc, char* argv[])
 		string cwdStr = string("file://") + string(cwd);
 		free(cwd);
 		cwdStr += "/";
-		sys->setOrigin(cwdStr, fileName);
+		sys->mainClip->setOrigin(cwdStr, fileName);
 	}
 #endif
 	else
 	{
-		sys->setOrigin(string("file://") + fileName);
+		sys->mainClip->setOrigin(string("file://") + fileName);
 		LOG(LOG_INFO, _("Warning: running with no origin URL set."));
 	}
 
@@ -301,6 +303,7 @@ int main(int argc, char* argv[])
 		exit(1);
 	}
 	sys->useInterpreter=useInterpreter;
+	sys->useFastInterpreter=useFastInterpreter;
 	sys->useJit=useJit;
 	sys->exitOnError=exitOnError;
 	if(paramsFileName)
@@ -334,6 +337,7 @@ int main(int argc, char* argv[])
 	 */
 	sys->destroy();
 	delete pt;
+	delete sys;
 
 	SystemState::staticDeinit();
 	EngineData::quitGTKMain();

@@ -18,34 +18,23 @@
 **************************************************************************/
 
 #include <map>
-#include "abc.h"
-#include "flashnet.h"
-#include "class.h"
-#include "flash/system/flashsystem.h"
+#include "scripting/abc.h"
+#include "scripting/flash/net/flashnet.h"
+#include "scripting/flash/net/URLRequestHeader.h"
+#include "scripting/class.h"
+#include "scripting/flash/system/flashsystem.h"
 #include "compat.h"
 #include "backends/audio.h"
 #include "backends/builtindecoder.h"
 #include "backends/rendering.h"
 #include "backends/security.h"
-#include "argconv.h"
+#include "scripting/argconv.h"
 
 using namespace std;
 using namespace lightspark;
 
-SET_NAMESPACE("flash.net");
-
-REGISTER_CLASS_NAME(URLLoader);
-REGISTER_CLASS_NAME(URLLoaderDataFormat);
-REGISTER_CLASS_NAME(URLRequest);
-REGISTER_CLASS_NAME(URLRequestMethod);
-REGISTER_CLASS_NAME(URLVariables);
-REGISTER_CLASS_NAME(SharedObject);
-REGISTER_CLASS_NAME(ObjectEncoding);
-REGISTER_CLASS_NAME(NetConnection);
-REGISTER_CLASS_NAME(NetStream);
-REGISTER_CLASS_NAME(Responder);
-
-URLRequest::URLRequest(Class_base* c):ASObject(c),method(GET),contentType("application/x-www-form-urlencoded")
+URLRequest::URLRequest(Class_base* c):ASObject(c),method(GET),contentType("application/x-www-form-urlencoded"),
+	requestHeaders(Class<Array>::getInstanceS())
 {
 }
 
@@ -60,6 +49,7 @@ void URLRequest::sinit(Class_base* c)
 	c->setDeclaredMethodByQName("data","",Class<IFunction>::getFunction(_setData),SETTER_METHOD,true);
 	c->setDeclaredMethodByQName("data","",Class<IFunction>::getFunction(_getData),GETTER_METHOD,true);
 	REGISTER_GETTER_SETTER(c,contentType);
+	REGISTER_GETTER_SETTER(c,requestHeaders);
 }
 
 void URLRequest::buildTraits(ASObject* o)
@@ -68,7 +58,7 @@ void URLRequest::buildTraits(ASObject* o)
 
 URLInfo URLRequest::getRequestURL() const
 {
-	URLInfo ret=getSys()->getOrigin().goToURL(url);
+	URLInfo ret=getSys()->mainClip->getBaseURL().goToURL(url);
 	if(method!=GET)
 		return ret;
 
@@ -104,6 +94,99 @@ tiny_string URLRequest::validatedContentType() const
 	return contentType;
 }
 
+/* Throws ArgumentError if headerName is not an allowed HTTP header
+ * name.
+ */
+void URLRequest::validateHeaderName(const tiny_string& headerName) const
+{
+	const char *illegalHeaders[] = 
+		{"accept-charset", "accept_charset", "accept-encoding",
+		 "accept_encoding", "accept-ranges", "accept_ranges",
+		 "age", "allow", "allowed", "authorization", "charge-to",
+		 "charge_to", "connect", "connection", "content-length",
+		 "content_length", "content-location", "content_location",
+		 "content-range", "content_range", "cookie", "date", "delete",
+		 "etag", "expect", "get", "head", "host", "if-modified-since",
+		 "if_modified-since", "if-modified_since", "if_modified_since",
+		 "keep-alive", "keep_alive", "last-modified", "last_modified",
+		 "location", "max-forwards", "max_forwards", "options",
+		 "origin", "post", "proxy-authenticate", "proxy_authenticate",
+		 "proxy-authorization", "proxy_authorization",
+		 "proxy-connection", "proxy_connection", "public", "put",
+		 "range", "referer", "request-range", "request_range",
+		 "retry-after", "retry_after", "server", "te", "trace",
+		 "trailer", "transfer-encoding", "transfer_encoding",
+		 "upgrade", "uri", "user-agent", "user_agent", "vary", "via",
+		 "warning", "www-authenticate", "www_authenticate",
+		 "x-flash-version", "x_flash-version", "x-flash_version",
+		 "x_flash_version"};
+
+	if ((headerName.strchr('\r') != NULL) ||
+	     headerName.strchr('\n') != NULL)
+		throw Class<ArgumentError>::getInstanceS("Error #2096: The HTTP request header cannot be set via ActionScript");
+
+	for (unsigned i=0; i<(sizeof illegalHeaders)/(sizeof illegalHeaders[0]); i++)
+	{
+		if (headerName.lowercase() == illegalHeaders[i])
+		{
+			tiny_string msg("Error #2096: The HTTP request header ");
+			msg += headerName;
+			msg += " cannot be set via ActionScript";
+			throw Class<ArgumentError>::getInstanceS(msg);
+		}
+	}
+}
+
+/* Validate requestHeaders and return them as list. Throws
+ * ArgumentError if requestHeaders contains illegal headers or the
+ * cumulative length is too long.
+ */
+std::list<tiny_string> URLRequest::getHeaders() const
+{
+	list<tiny_string> headers;
+	int headerTotalLen = 0;
+	for (unsigned i=0; i<requestHeaders->size(); i++)
+	{
+		_R<ASObject> headerObject = requestHeaders->at(i);
+
+		// Validate
+		if (!headerObject->is<URLRequestHeader>())
+			throw Class<TypeError>::getInstanceS("Error #1034: Object is not URLRequestHeader");
+		URLRequestHeader *header = headerObject->as<URLRequestHeader>();
+		tiny_string headerName = header->name;
+		validateHeaderName(headerName);
+		if ((header->value.strchr('\r') != NULL) ||
+		     header->value.strchr('\n') != NULL)
+			throw Class<ArgumentError>::getInstanceS("Illegal HTTP header value");
+		
+		// Should this include the separators?
+		headerTotalLen += header->name.numBytes();
+		headerTotalLen += header->value.numBytes();
+		if (headerTotalLen >= 8192)
+			throw Class<ArgumentError>::getInstanceS("Error #2145: Cumulative length of requestHeaders must be less than 8192 characters.");
+
+		// Append header to results
+		headers.push_back(headerName + ": " + header->value);
+	}
+
+	tiny_string contentType = getContentTypeHeader();
+	if (!contentType.empty())
+		headers.push_back(contentType);
+
+	return headers;
+}
+
+tiny_string URLRequest::getContentTypeHeader() const
+{
+	if(method!=POST)
+		return "";
+
+	if(!data.isNull() && data->getClass()==Class<URLVariables>::getClass())
+		return "Content-type: application/x-www-form-urlencoded";
+	else
+		return tiny_string("Content-Type: ") + validatedContentType();
+}
+
 void URLRequest::getPostData(vector<uint8_t>& outData) const
 {
 	if(method!=POST)
@@ -115,29 +198,8 @@ void URLRequest::getPostData(vector<uint8_t>& outData) const
 	if(data->getClass()==Class<ByteArray>::getClass())
 	{
 		ByteArray *ba=data->as<ByteArray>();
-		tiny_string tmp="Content-type: ";
-		outData.insert(outData.end(),tmp.raw_buf(),tmp.raw_buf()+tmp.numBytes());
-		tmp=validatedContentType();
-		outData.insert(outData.end(),tmp.raw_buf(),tmp.raw_buf()+tmp.numBytes());
-		tmp="\r\nContent-length: ";
-		outData.insert(outData.end(),tmp.raw_buf(),tmp.raw_buf()+tmp.numBytes());
-		char contentlenbuf[20];
-		snprintf(contentlenbuf,20,"%u\r\n\r\n",ba->getLength());
-		outData.insert(outData.end(),contentlenbuf,contentlenbuf+strlen(contentlenbuf));
-
 		const uint8_t *buf=ba->getBuffer(ba->getLength(), false);
 		outData.insert(outData.end(),buf,buf+ba->getLength());
-	}
-	else if(data->getClass()==Class<URLVariables>::getClass())
-	{
-		//Prepend the Content-Type header
-		tiny_string strData="Content-type: application/x-www-form-urlencoded\r\nContent-length: ";
-		const tiny_string& tmpStr=data->toString();
-		char buf[20];
-		snprintf(buf,20,"%u\r\n\r\n",tmpStr.numBytes());
-		strData+=buf;
-		strData+=tmpStr;
-		outData.insert(outData.end(),strData.raw_buf(),strData.raw_buf()+strData.numBytes());
 	}
 	else
 	{
@@ -225,6 +287,7 @@ ASFUNCTIONBODY(URLRequest,_setData)
 }
 
 ASFUNCTIONBODY_GETTER_SETTER(URLRequest,contentType);
+ASFUNCTIONBODY_GETTER_SETTER(URLRequest,requestHeaders);
 
 void URLRequestMethod::sinit(Class_base* c)
 {
@@ -244,8 +307,7 @@ void URLLoaderThread::execute()
 
 	//TODO: support httpStatus, progress events
 
-	const char contenttype[]="Content-Type: application/x-www-form-urlencoded";
-	if(!createDownloader(false, contenttype, loader))
+	if(!createDownloader(false, loader, loader.getPtr()))
 		return;
 
 	_NR<ASObject> data;
@@ -257,9 +319,10 @@ void URLLoaderThread::execute()
 		if(!downloader->hasFailed() && !threadAborting)
 		{
 			istream s(downloader);
-			uint8_t* buf=new uint8_t[downloader->getLength()];
+			uint8_t* buf=new uint8_t[downloader->getLength()+1];
 			//TODO: avoid this useless copy
 			s.read((char*)buf,downloader->getLength());
+			buf[downloader->getLength()] = '\0';
 			//TODO: test binary data format
 			tiny_string dataFormat=loader->getDataFormat();
 			if(dataFormat=="binary")
@@ -278,6 +341,10 @@ void URLLoaderThread::execute()
 			{
 				data=_MR(Class<URLVariables>::getInstanceS((char*)buf));
 				delete[] buf;
+			}
+			else
+			{
+				assert(false && "invalid dataFormat");
 			}
 
 			success=true;
@@ -321,10 +388,16 @@ void URLLoader::sinit(Class_base* c)
 	c->setSuper(Class<EventDispatcher>::getRef());
 	c->setDeclaredMethodByQName("dataFormat","",Class<IFunction>::getFunction(_getDataFormat),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("data","",Class<IFunction>::getFunction(_getData),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("data","",Class<IFunction>::getFunction(_setData),SETTER_METHOD,true);
 	c->setDeclaredMethodByQName("dataFormat","",Class<IFunction>::getFunction(_setDataFormat),SETTER_METHOD,true);
 	c->setDeclaredMethodByQName("load","",Class<IFunction>::getFunction(load),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("close","",Class<IFunction>::getFunction(close),NORMAL_METHOD,true);
+	REGISTER_GETTER_SETTER(c,bytesLoaded);
+	REGISTER_GETTER_SETTER(c,bytesTotal);
 }
+
+ASFUNCTIONBODY_GETTER_SETTER(URLLoader, bytesLoaded);
+ASFUNCTIONBODY_GETTER_SETTER(URLLoader, bytesTotal);
 
 void URLLoader::buildTraits(ASObject* o)
 {
@@ -347,6 +420,16 @@ void URLLoader::setData(_NR<ASObject> newData)
 {
 	SpinlockLocker l(spinlock);
 	data=newData;
+}
+
+void URLLoader::setBytesTotal(uint32_t b)
+{
+	bytesTotal = b;
+}
+
+void URLLoader::setBytesLoaded(uint32_t b)
+{
+	bytesLoaded = b;
 }
 
 ASFUNCTIONBODY(URLLoader,_constructor)
@@ -417,7 +500,7 @@ tiny_string URLLoader::getDataFormat()
 void URLLoader::setDataFormat(const tiny_string& newFormat)
 {
 	SpinlockLocker l(spinlock);
-	dataFormat=newFormat;
+	dataFormat=newFormat.lowercase();
 }
 
 ASFUNCTIONBODY(URLLoader,_getDataFormat)
@@ -435,6 +518,18 @@ ASFUNCTIONBODY(URLLoader,_getData)
 	
 	th->data->incRef();
 	return th->data.getPtr();
+}
+
+ASFUNCTIONBODY(URLLoader,_setData)
+{
+	if(!obj->is<URLLoader>())
+		throw Class<ArgumentError>::getInstanceS("Function applied to wrong object");
+	URLLoader* th = obj->as<URLLoader>();
+	if(argslen != 1)
+		throw Class<ArgumentError>::getInstanceS("Wrong number of arguments in setter");
+	args[0]->incRef();
+	th->setData(_MR(args[0]));
+	return NULL;
 }
 
 ASFUNCTIONBODY(URLLoader,_setDataFormat)
@@ -525,19 +620,21 @@ ASFUNCTIONBODY(NetConnection,call)
 	NetConnection* th=Class<NetConnection>::cast(obj);
 	//Arguments are:
 	//1) A string for the command
-	//2) A Responder instance
+	//2) A Responder instance (optional)
 	//And other arguments to be passed to the server
-	assert_and_throw(argslen>=2 &&
-			args[0]->getObjectType()==T_STRING &&
-			args[1]->is<Responder>())
-	ASString* arg0=static_cast<ASString*>(args[0]);
-	args[1]->incRef();
-	th->responder=_MR(args[1]->as<Responder>());
+	tiny_string command;
+	ARG_UNPACK (command) (th->responder, NullRef);
 
 	th->messageCount++;
 
 	if(!th->uri.isValid())
 		return NULL;
+
+	if(th->uri.isRTMP())
+	{
+		LOG(LOG_NOT_IMPLEMENTED, "RTMP not yet supported in NetConnection.call()");
+		return NULL;
+	}
 
 	//This function is supposed to be passed a array for the rest
 	//of the arguments. Since that is not supported for native methods
@@ -558,7 +655,7 @@ ASFUNCTIONBODY(NetConnection,call)
 	//Number of messages: 1
 	message->writeShort(1);
 	//Write the command
-	message->writeUTF(arg0->data);
+	message->writeUTF(command);
 	//Write a "response URI". Use an increasing index
 	//NOTE: this assumes that the tiny_string is constant and not modified
 	char responseBuf[20];
@@ -587,8 +684,10 @@ void NetConnection::execute()
 {
 	LOG(LOG_CALLS,_("NetConnection async execution ") << uri);
 	assert(!messageData.empty());
+	std::list<tiny_string> headers;
+	headers.push_back("Content-Type: application/x-amf");
 	downloader=getSys()->downloadManager->downloadWithData(uri, messageData,
-			"Content-Type: application/x-amf", NULL);
+			headers, NULL);
 	//Get the whole answer
 	downloader->waitForTermination();
 	if(downloader->hasFailed()) //Check to see if the download failed for some reason
@@ -765,11 +864,12 @@ ASFUNCTIONBODY(NetConnection,_getURI)
 
 ASFUNCTIONBODY_GETTER_SETTER(NetConnection, client);
 
-NetStream::NetStream(Class_base* c):EventDispatcher(c),frameRate(0),tickStarted(false),connection(),downloader(NULL),
-	videoDecoder(NULL),audioDecoder(NULL),audioStream(NULL),streamTime(0),paused(false),
-	closed(true),client(NullRef),checkPolicyFile(false),rawAccessAllowed(false),
-	oldVolume(-1.0)
+NetStream::NetStream(Class_base* c):EventDispatcher(c),tickStarted(false),paused(false),closed(true),
+	streamTime(0),frameRate(0),connection(),downloader(NULL),videoDecoder(NULL),
+	audioDecoder(NULL),audioStream(NULL),
+	client(NullRef),oldVolume(-1.0),checkPolicyFile(false),rawAccessAllowed(false)
 {
+	soundTransform = _MNR(Class<SoundTransform>::getInstanceS());
 }
 
 void NetStream::finalize()
@@ -924,7 +1024,7 @@ ASFUNCTIONBODY(NetStream,play)
 		assert_and_throw(argslen>=1);
 		//args[0] is the url
 		//what is the meaning of the other arguments
-		th->url = getSys()->getOrigin().goToURL(args[0]->toString());
+		th->url = getSys()->mainClip->getOrigin().goToURL(args[0]->toString());
 
 		SecurityManager::EVALUATIONRESULT evaluationResult =
 			getSys()->securityManager->evaluateURLStatic(th->url, ~(SecurityManager::LOCAL_WITH_FILE),
@@ -1444,6 +1544,14 @@ void URLVariables::decode(const tiny_string& s)
 			nameEnd=NULL;
 			valueStart=NULL;
 			valueEnd=NULL;
+			if(name==NULL || value==NULL)
+			{
+				g_free(name);
+				g_free(value);
+				cur++;
+				continue;
+			}
+
 			//Check if the variable already exists
 			multiname propName(NULL);
 			propName.name_type=multiname::NAME_STRING;

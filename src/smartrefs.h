@@ -17,8 +17,8 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
-#ifndef _SMARTREFS_H
-#define _SMARTREFS_H
+#ifndef SMARTREFS_H
+#define SMARTREFS_H 1
 
 #include <stdexcept>
 
@@ -119,15 +119,11 @@ Ref<T> _MR(T* a)
 	return Ref<T>(a);
 }
 
-#if defined(__GNUC__) && (__GNUC__ == 4 && __GNUC_MINOR__ < 6)
-/* Fallback for gcc < 4.6 not supporting nullptr */
-class NullRef_t {};
-extern NullRef_t NullRef;
-#else
-/* This is needed for MSVC and can be used on gcc >= 4.6 */
-typedef std::nullptr_t NullRef_t;
-#define NullRef (nullptr)
-#endif
+class NullRef_t
+{
+};
+
+static NullRef_t NullRef;
 
 template<class T>
 class NullableRef
@@ -191,9 +187,14 @@ public:
 	{
 		return m==r.getPtr();
 	}
-	bool operator==(T* r) const
+	template<class D>
+	bool operator==(const D* r) const
 	{
 		return m==r;
+	}
+	bool operator==(NullRef_t) const
+	{
+		return m==NULL;
 	}
 	template<class D> bool operator!=(const NullableRef<D>& r) const
 	{
@@ -203,9 +204,14 @@ public:
 	{
 		return m!=r.getPtr();
 	}
-	bool operator!=(T* r) const
+	template<class D>
+	bool operator!=(const D* r) const
 	{
 		return m!=r;
+	}
+	bool operator!=(NullRef_t) const
+	{
+		return m!=NULL;
 	}
 	/*explicit*/ operator bool() const
 	{
@@ -283,4 +289,4 @@ template<class T> template<class D> bool Ref<T>::operator==(const NullableRef<D>
 
 };
 
-#endif
+#endif /* SMARTREFS_H */

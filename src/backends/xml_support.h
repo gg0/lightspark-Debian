@@ -17,13 +17,14 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
-#ifndef _XML_SUPPORT_H
-#define _XML_SUPPORT_H
+#ifndef BACKENDS_XML_SUPPORT_H
+#define BACKENDS_XML_SUPPORT_H 1
 
 #include <libxml/tree.h>
 #include <libxml++/parsers/domparser.h>
 #include <libxml++/exceptions/internal_error.h>
-#include <libxml/parserInternals.h>//For xmlCreateFileParserCtxt().
+//For xmlCreateFileParserCtxt().
+#include <libxml/parserInternals.h>
 
 namespace lightspark
 {
@@ -54,7 +55,10 @@ class XMLBase
 protected:
 	//The parser will destroy the document and all the childs on destruction
 	LSDomParser parser;
-	xmlpp::Node* buildFromString(const std::string& str);
+	xmlpp::Node* buildFromString(const std::string& str,
+				     const std::string& default_ns=std::string());
+	void addDefaultNamespace(xmlpp::Element *root, const std::string& default_ns);
+	void addDefaultNamespaceRecursive(xmlNodePtr node, xmlNsPtr ns);
 	// Set the root to be a copy of src. If src is a text node,
 	// create a new element node with the same content.
 	xmlpp::Node* buildCopy(const xmlpp::Node* node);
@@ -65,4 +69,4 @@ protected:
 
 };
 
-#endif
+#endif /* BACKENDS_XML_SUPPORT_H */

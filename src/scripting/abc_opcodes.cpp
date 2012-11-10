@@ -17,16 +17,16 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
-#include "abc.h"
+#include "scripting/abc.h"
 #include <limits>
-#include "class.h"
+#include "scripting/class.h"
 #include "exceptions.h"
 #include "compat.h"
-#include "abcutils.h"
+#include "scripting/abcutils.h"
 #include "scripting/toplevel/ASString.h"
 #include "scripting/toplevel/RegExp.h"
-#include "toplevel/XML.h"
-#include "toplevel/XMLList.h"
+#include "scripting/toplevel/XML.h"
+#include "scripting/toplevel/XMLList.h"
 
 using namespace std;
 using namespace lightspark;
@@ -157,7 +157,7 @@ ASObject* ABCVm::coerce_s(ASObject* o)
 void ABCVm::coerce(call_context* th, int n)
 {
 	multiname* mn = th->context->getMultiname(n,NULL);
-	LOG(LOG_CALLS,_("coerce ") << *mn);
+	LOG(LOG_CALLS,"coerce " << *mn);
 
 	const Type* type = Type::getTypeFromMultiname(mn, th->context);
 
@@ -210,8 +210,6 @@ int32_t ABCVm::pushShort(intptr_t n)
 void ABCVm::setSlot(ASObject* value, ASObject* obj, int n)
 {
 	LOG(LOG_CALLS,"setSlot " << n);
-	if(value==NULL)
-		value=getSys()->getUndefinedRef();
 	obj->setSlot(n,value);
 	obj->decRef();
 }
@@ -587,37 +585,30 @@ void ABCVm::decLocal_i(call_context* th, int n)
 ASObject* ABCVm::constructFunction(call_context* th, IFunction* f, ASObject** args, int argslen)
 {
 	//See ECMA 13.2.2
+	if(f->inClass)
+		throw Class<TypeError>::getInstanceS("Error #1064: Cannot call method as constructor");
+
 	assert(f->is<SyntheticFunction>());
 	SyntheticFunction* sf=f->as<SyntheticFunction>();
-
-	ASObject* ret=Class<ASObject>::getInstanceS();
+	assert(sf->prototype);
+	ASObject* ret=new_functionObject(sf->prototype);
 #ifndef NDEBUG
 	ret->initialized=false;
 #endif
-	if (sf->isConstructed())
+	if (sf->mi->body)
 	{
 		LOG(LOG_CALLS,_("Building method traits"));
-		assert(sf->mi->body);
 		for(unsigned int i=0;i<sf->mi->body->trait_count;i++)
 			th->context->buildTrait(ret,&sf->mi->body->traits[i],false);
 	}
 #ifndef NDEBUG
 	ret->initialized=true;
 #endif
-	//Now add our classdef
-	Class_function *cf=new (getSys()->unaccountedMemory) Class_function();
-	ret->setClass(cf);
-	//setClass created a new reference, we can release the local
-	//reference
-	cf->decRef();
-	ret->getClass()->prototype = sf->prototype;
 
 	sf->incRef();
 	ret->setVariableByQName("constructor","",sf,DYNAMIC_TRAIT);
 
 	ret->incRef();
-	if (sf->closure_this)
-		throw Class<TypeError>::getInstanceS("Error #1064: Cannot call method as constructor");
 
 	sf->incRef();
 	ASObject* ret2=sf->call(ret,args,argslen);
@@ -682,7 +673,6 @@ void ABCVm::construct(call_context* th, int m)
 		default:
 		{
 			throw Class<TypeError>::getInstanceS("Error #1007: Instantiation attempted on a non-constructor");
-			break;
 		}
 	}
 
@@ -871,22 +861,19 @@ number_t ABCVm::subtract(ASObject* val2, ASObject* val1)
 	return num1-num2;
 }
 
-void ABCVm::pushUInt(call_context* th, int n)
+void ABCVm::pushUInt(call_context* th, uint32_t i)
 {
-	u32 i=th->context->constant_pool.uinteger[n];
-	LOG(LOG_CALLS, _("pushUInt [") << dec << n << _("] ") << i);
+	LOG(LOG_CALLS, "pushUInt " << i);
 }
 
-void ABCVm::pushInt(call_context* th, int n)
+void ABCVm::pushInt(call_context* th, int32_t i)
 {
-	s32 i=th->context->constant_pool.integer[n];
-	LOG(LOG_CALLS, _("pushInt [") << dec << n << _("] ") << i);
+	LOG(LOG_CALLS, "pushInt " << i);
 }
 
-void ABCVm::pushDouble(call_context* th, int n)
+void ABCVm::pushDouble(call_context* th, double d)
 {
-	d64 d=th->context->constant_pool.doubles[n];
-	LOG(LOG_CALLS, _("pushDouble [") << dec << n << _("] ") << d);
+	LOG(LOG_CALLS, "pushDouble " << d);
 }
 
 void ABCVm::kill(int n)
@@ -1293,8 +1280,10 @@ void ABCVm::getSuper(call_context* th, int n)
 
 void ABCVm::getLex(call_context* th, int n)
 {
-	multiname* name=th->context->getMultiname(n,th);
-	LOG(LOG_CALLS, _("getLex: ") << *name );
+	//getlex is specified not to allow runtime multinames
+	assert_and_throw(th->context->getMultinameRTData(n)==0);
+	multiname* name=th->context->getMultiname(n,NULL);
+	LOG(LOG_CALLS, "getLex: " << *name );
 	vector<scope_entry>::reverse_iterator it=th->scope_stack.rbegin();
 	// o will be a reference owned by this function (or NULL). At
 	// the end the reference will be handed over to the runtime
@@ -1368,7 +1357,7 @@ ASObject* ABCVm::findProperty(call_context* th, multiname* name)
 	ASObject* ret=NULL;
 	for(;it!=th->scope_stack.rend();++it)
 	{
-		found=it->object->hasPropertyByMultiname(*name, it->considerDynamic);
+		found=it->object->hasPropertyByMultiname(*name, it->considerDynamic, true);
 
 		if(found)
 		{
@@ -1396,7 +1385,7 @@ ASObject* ABCVm::findProperty(call_context* th, multiname* name)
 
 ASObject* ABCVm::findPropStrict(call_context* th, multiname* name)
 {
-	LOG(LOG_CALLS, _("findPropStrict ") << *name );
+	LOG(LOG_CALLS, "findPropStrict " << *name );
 
 	vector<scope_entry>::reverse_iterator it=th->scope_stack.rbegin();
 	bool found=false;
@@ -1404,7 +1393,7 @@ ASObject* ABCVm::findPropStrict(call_context* th, multiname* name)
 
 	for(;it!=th->scope_stack.rend();++it)
 	{
-		found=it->object->hasPropertyByMultiname(*name, it->considerDynamic);
+		found=it->object->hasPropertyByMultiname(*name, it->considerDynamic, true);
 		if(found)
 		{
 			//We have to return the object, not the property
@@ -1563,25 +1552,6 @@ bool ABCVm::isTypelate(ASObject* type, ASObject* obj)
 
 		objc=obj->classdef;
 	}
-	else if(obj->getObjectType()==T_CLASS)
-	{
-		assert_and_throw(type->getObjectType()==T_CLASS);
-
-		//Special case for Class
-		if(c->class_name.ns=="" &&
-			(c->class_name.name=="Class" || c->class_name.name=="Object"))
-		{
-			type->decRef();
-			obj->decRef();
-			return true;
-		}
-		else
-		{
-			type->decRef();
-			obj->decRef();
-			return false;
-		}
-	}
 	else
 	{
 		real_ret=obj->getObjectType()==type->getObjectType();
@@ -1658,19 +1628,6 @@ ASObject* ABCVm::asTypelate(ASObject* type, ASObject* obj)
 	Class_base* objc;
 	if(obj->classdef)
 		objc=obj->classdef;
-	else if(obj->getObjectType()==T_CLASS)
-	{
-		//Special case for Class
-		if(c->class_name.ns=="" &&
-			(c->class_name.name=="Class" || c->class_name.name=="Object"))
-		{
-			type->decRef();
-			return obj;
-		}
-		obj->decRef();
-		type->decRef();
-		return getSys()->getNullRef();
-	}
 	else
 	{
 		obj->decRef();
@@ -1728,7 +1685,7 @@ bool ABCVm::in(ASObject* val2, ASObject* val1)
 	//Acquire the reference
 	name.name_o=val1;
 	name.ns.push_back(nsNameAndKind("",NAMESPACE));
-	bool ret=val2->hasPropertyByMultiname(name, true);
+	bool ret=val2->hasPropertyByMultiname(name, true, true);
 	name.name_o=NULL;
 	val1->decRef();
 	val2->decRef();
@@ -1789,7 +1746,7 @@ void ABCVm::constructProp(call_context* th, int n, int m)
 		//Handle eventual exceptions from the constructor, to fix the stack
 		th->runtime_stack_push(getSys()->getUndefinedRef());
 		obj->decRef();
-		throw exc;
+		throw;
 	}
 
 	th->runtime_stack_push(ret);
@@ -2059,12 +2016,12 @@ void ABCVm::newClass(call_context* th, int n)
 	ret->class_index=n;
 
 	//Add prototype variable
-	ret->prototype = _MNR(new_asobject());
+	ret->prototype = _MNR(new_objectPrototype());
 	//Add the constructor variable to the class prototype
 	ret->incRef();
 	ret->prototype->setVariableByQName("constructor","",ret, DECLARED_TRAIT);
 	if(ret->super)
-		ret->prototype->setprop_prototype(ret->super->prototype);
+		ret->prototype->prevPrototype=ret->super->prototype;
 	ret->addPrototypeGetter();
 
 	//add implemented interfaces
@@ -2110,7 +2067,7 @@ void ABCVm::newClass(call_context* th, int n)
 
 		//Remove the class to the ones being currently defined in this context
 		th->context->classesBeingDefined.erase(mname);
-		throw exc;
+		throw;
 	}
 	assert_and_throw(ret2->is<Undefined>());
 	ret2->decRef();
@@ -2129,7 +2086,7 @@ void ABCVm::swap()
 
 ASObject* ABCVm::newActivation(call_context* th,method_info* info)
 {
-	LOG(LOG_CALLS,_("newActivation"));
+	LOG(LOG_CALLS,"newActivation");
 	//TODO: Should create a real activation object
 	//TODO: Should method traits be added to the activation context?
 	ASObject* act=Class<ASObject>::getInstanceS();
@@ -2195,6 +2152,7 @@ void ABCVm::callImpl(call_context* th, ASObject* f, ASObject* obj, ASObject** ar
 		Class_base* c=f->as<Class_base>();
 		ASObject* ret=c->generator(args,m);
 		assert_and_throw(ret);
+		c->decRef();
 		if(keepReturn)
 			th->runtime_stack_push(ret);
 		else
@@ -2218,10 +2176,15 @@ void ABCVm::callImpl(call_context* th, ASObject* f, ASObject* obj, ASObject** ar
 		if(f->is<Undefined>())
 		{
 			if(keepReturn)
-				th->runtime_stack_push(getSys()->getUndefinedRef());
+				th->runtime_stack_push(f);
+			else
+				f->decRef();
 		}
 		else
+		{
+			f->decRef();
 			throw Class<TypeError>::getInstanceS("Error #1006: Tried to call something that is not a function");
+		}
 	}
 	LOG(LOG_CALLS,_("End of call ") << m << ' ' << f);
 }
@@ -2245,6 +2208,8 @@ ASObject* ABCVm::newFunction(call_context* th, int n)
 
 	//Bind the function to null, as this is not a class method
 	f->bind(NullRef,-1);
+	//Create the prototype object
+	f->prototype = _MR(new_asobject());
 	return f;
 }
 
@@ -2266,7 +2231,7 @@ ASObject* ABCVm::pushString(call_context* th, int n)
 ASObject* ABCVm::newCatch(call_context* th, int n)
 {
 	ASObject* catchScope = Class<ASObject>::getInstanceS();
-	assert_and_throw(n >= 0 && (unsigned int)n < th->mi->body->exception_count);
+	assert_and_throw(n >= 0 && (unsigned int)n < th->mi->body->exceptions.size());
 	multiname* name = th->context->getMultiname(th->mi->body->exceptions[n].var_name, NULL);
 	catchScope->setVariableByMultiname(*name, getSys()->getUndefinedRef(),ASObject::CONST_NOT_ALLOWED);
 	catchScope->initSlot(1, *name);
@@ -2315,12 +2280,15 @@ bool ABCVm::instanceOf(ASObject* value, ASObject* type)
 	if(type->is<IFunction>())
 	{
 		IFunction* t=static_cast<IFunction*>(type);
-		ASObject* proto = value->getClass()->prototype.getPtr();
-		while(proto)
+		ASObject* functionProto=t->prototype.getPtr();
+		//Only Function_object instances may come from functions
+		Function_object* funcObj=dynamic_cast<Function_object*>(value);
+		while(funcObj)
 		{
-			if (proto == t->prototype.getPtr())
+			ASObject* proto=funcObj->functionPrototype.getPtr();
+			if(proto==functionProto)
 				return true;
-			proto = proto->getprop_prototype();
+			funcObj=dynamic_cast<Function_object*>(proto);
 		}
 		return false;
 	}

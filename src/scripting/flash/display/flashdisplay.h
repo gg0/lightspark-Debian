@@ -17,20 +17,20 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
-#ifndef _FLASH_DISPLAY_H
-#define _FLASH_DISPLAY_H
+#ifndef SCRIPTING_FLASH_DISPLAY_FLASHDISPLAY_H
+#define SCRIPTING_FLASH_DISPLAY_FLASHDISPLAY_H 1
 
 #include <boost/bimap.hpp>
 #include "compat.h"
 
 #include "swftypes.h"
-#include "flash/events/flashevents.h"
+#include "scripting/flash/events/flashevents.h"
 #include "thread_pool.h"
-#include "flash/utils/flashutils.h"
+#include "scripting/flash/utils/flashutils.h"
 #include "backends/graphics.h"
 #include "backends/netutils.h"
-#include "DisplayObject.h"
-#include "TokenContainer.h"
+#include "scripting/flash/display/DisplayObject.h"
+#include "scripting/flash/display/TokenContainer.h"
 
 namespace lightspark
 {
@@ -70,9 +70,9 @@ public:
 class DisplayObjectContainer: public InteractiveObject
 {
 private:
+	bool mouseChildren;
 	boost::bimap<uint32_t,DisplayObject*> depthToLegacyChild;
 	bool _contains(_R<DisplayObject> child);
-	bool mouseChildren;
 protected:
 	void requestInvalidation(InvalidateQueue* q);
 	//This is shared between RenderThread and VM
@@ -83,7 +83,7 @@ protected:
 	void setOnStage(bool staged);
 	_NR<InteractiveObject> hitTestImpl(_NR<InteractiveObject> last, number_t x, number_t y, DisplayObject::HIT_TYPE type);
 	bool boundsRect(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const;
-	void renderImpl(RenderContext& ctxt, bool maskEnabled, number_t t1,number_t t2,number_t t3,number_t t4) const;
+	void renderImpl(RenderContext& ctxt) const;
 public:
 	void _addChildAt(_R<DisplayObject> child, unsigned int index);
 	void dumpDisplayList();
@@ -98,7 +98,6 @@ public:
 	void purgeLegacyChildren();
 	void advanceFrame();
 	void initFrame();
-	bool isOpaque(number_t x, number_t y) const;
 	static void sinit(Class_base* c);
 	static void buildTraits(ASObject* o);
 	ASFUNCTION(_constructor);
@@ -131,14 +130,14 @@ private:
 	_NR<DisplayObject> hitTestState;
 	_NR<DisplayObject> overState;
 	_NR<DisplayObject> upState;
-	bool enabled;
-	bool useHandCursor;
 	enum
 	{
 		UP,
 		OVER,
 		DOWN
 	} currentState;
+	bool enabled;
+	bool useHandCursor;
 	void reflectState();
 	_NR<InteractiveObject> hitTestImpl(_NR<InteractiveObject> last, number_t x, number_t y, DisplayObject::HIT_TYPE type);
 	/* This is called by when an event is dispatched */
@@ -186,7 +185,7 @@ private:
 				       double u1, double u2, double u3,
 				       double c[3]);
 public:
-	Graphics(Class_base* c):ASObject(c),owner(NULL)
+	Graphics(Class_base* c):ASObject(c),curX(0),curY(0),owner(NULL)
 	{
 		throw RunTimeException("Cannot instantiate a Graphics object");
 	}
@@ -218,8 +217,8 @@ protected:
 	_NR<Graphics> graphics;
 	bool boundsRect(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const
 		{ return TokenContainer::boundsRect(xmin,xmax,ymin,ymax); }
-	void renderImpl(RenderContext& ctxt, bool maskEnabled, number_t t1, number_t t2, number_t t3, number_t t4) const
-		{ TokenContainer::renderImpl(ctxt, maskEnabled,t1,t2,t3,t4); }
+	void renderImpl(RenderContext& ctxt) const
+		{ TokenContainer::renderImpl(ctxt); }
 	_NR<InteractiveObject> hitTestImpl(_NR<InteractiveObject> last, number_t x, number_t y, DisplayObject::HIT_TYPE type)
 		{ return TokenContainer::hitTestImpl(last,x,y, type); }
 public:
@@ -230,7 +229,6 @@ public:
 	static void buildTraits(ASObject* o);
 	ASFUNCTION(_constructor);
 	ASFUNCTION(_getGraphics);
-	bool isOpaque(number_t x, number_t y) const;
 	void requestInvalidation(InvalidateQueue* q) { TokenContainer::requestInvalidation(q); }
 	IDrawable* invalidate(DisplayObject* target, const MATRIX& initialMatrix)
 	{ return TokenContainer::invalidate(target, initialMatrix); }
@@ -252,6 +250,11 @@ class Loader;
 
 class LoaderInfo: public EventDispatcher, public ILoadable
 {
+public:
+	_NR<ApplicationDomain> applicationDomain;
+	_NR<SecurityDomain> securityDomain;
+	ASPROPERTY_GETTER(_NR<ASObject>,parameters);
+	ASPROPERTY_GETTER(tiny_string, contentType);
 private:
 	uint32_t bytesLoaded;
 	uint32_t bytesTotal;
@@ -259,14 +262,25 @@ private:
 	tiny_string loaderURL;
 	_NR<EventDispatcher> sharedEvents;
 	_NR<Loader> loader;
+	/*
+	 * waitedObject is the object we are supposed to wait,
+	 * it's necessary when multiple loads are invoked on
+	 * the same Loader. Since the construction may complete
+	 * after the second load is used we need to know what is
+	 * the last object that will notify this LoaderInfo about
+	 * completion
+	 */
+	_NR<DisplayObject> waitedObject;
+	Spinlock spinlock;
 	enum LOAD_STATUS { STARTED=0, INIT_SENT, COMPLETE };
 	LOAD_STATUS loadStatus;
-	Spinlock spinlock;
+	/*
+	 * sendInit should be called with the spinlock held
+	 */
+	void sendInit();
 public:
-	ASPROPERTY_GETTER(_NR<ASObject>,parameters);
 	ASPROPERTY_GETTER(uint32_t,actionScriptVersion);
 	ASPROPERTY_GETTER(bool, childAllowsParent);
-	ASPROPERTY_GETTER(tiny_string, contentType);
 	LoaderInfo(Class_base* c);
 	LoaderInfo(Class_base* c, _R<Loader> l);
 	void finalize();
@@ -279,21 +293,20 @@ public:
 	ASFUNCTION(_getBytesLoaded);
 	ASFUNCTION(_getBytesTotal);
 	ASFUNCTION(_getApplicationDomain);
-	_NR<ApplicationDomain> applicationDomain;
-	_NR<SecurityDomain> securityDomain;
 	ASFUNCTION(_getLoader);
 	ASFUNCTION(_getContent);
 	ASFUNCTION(_getSharedEvents);
 	ASFUNCTION(_getWidth);
 	ASFUNCTION(_getHeight);
-	void sendInit();
+	void objectHasLoaded(_R<DisplayObject> obj);
+	void setWaitedObject(_NR<DisplayObject> w);
 	//ILoadable interface
 	void setBytesTotal(uint32_t b)
 	{
 		bytesTotal=b;
 	}
 	void setBytesLoaded(uint32_t b);
-	void setURL(const tiny_string& _url) { url=_url; }
+	void setURL(const tiny_string& _url, bool setParameters=true);
 	void setLoaderURL(const tiny_string& _url) { loaderURL=_url; }
 	void resetState();
 };
@@ -320,10 +333,10 @@ private:
 	mutable Spinlock spinlock;
 	_NR<DisplayObject> content;
 	IThreadJob *job;
-	bool loaded;
 	URLInfo url;
 	_NR<LoaderInfo> contentLoaderInfo;
 	void unload();
+	bool loaded;
 public:
 	Loader(Class_base* c);
 	~Loader();
@@ -354,7 +367,7 @@ private:
 	_NR<Graphics> graphics;
 protected:
 	bool boundsRect(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const;
-	void renderImpl(RenderContext& ctxt, bool maskEnabled, number_t t1,number_t t2,number_t t3,number_t t4) const;
+	void renderImpl(RenderContext& ctxt) const;
 	_NR<InteractiveObject> hitTestImpl(_NR<InteractiveObject> last, number_t x, number_t y, DisplayObject::HIT_TYPE type);
 public:
 	Sprite(Class_base* c);
@@ -372,15 +385,14 @@ public:
 	IDrawable* invalidate(DisplayObject* target, const MATRIX& initialMatrix)
 	{ return TokenContainer::invalidate(target, initialMatrix); }
 	void requestInvalidation(InvalidateQueue* q);
-	bool isOpaque(number_t x, number_t y) const;
 };
 
 struct FrameLabel_data
 {
 	FrameLabel_data() : frame(0) {}
-	FrameLabel_data(uint32_t _frame, tiny_string _name) : frame(_frame), name(_name) {}
-	uint32_t frame;
+	FrameLabel_data(uint32_t _frame, tiny_string _name) : name(_name),frame(_frame){}
 	tiny_string name;
+	uint32_t frame;
 };
 
 class FrameLabel: public ASObject, public FrameLabel_data
@@ -421,14 +433,18 @@ class Frame
 {
 public:
 	std::list<const DisplayListTag*> blueprint;
+	std::list< std::pair<tiny_string, DictionaryTag*> > classesToBeBound;
 	void execute(_R<DisplayObjectContainer> displayList);
+	/**
+	 * destroyTags must be called only by the tag destructor, not by
+	 * the objects that are instance of tags
+	 */
+	void destroyTags();
+	void bindClasses(RootMovieClip *root);
 };
 
 class FrameContainer
 {
-private:
-	//No need for any lock, just make sure accesses are atomic
-	ATOMIC_INT32(framesLoaded);
 protected:
 	/* This list is accessed by both the vm thread and the parsing thread,
 	 * but the parsing thread only accesses frames.back(), while
@@ -451,6 +467,9 @@ protected:
 	void setFramesLoaded(uint32_t fl) { framesLoaded = fl; }
 	FrameContainer();
 	FrameContainer(const FrameContainer& f);
+private:
+	//No need for any lock, just make sure accesses are atomic
+	ATOMIC_INT32(framesLoaded);
 public:
 	void addFrameLabel(uint32_t frame, const tiny_string& label);
 };
@@ -460,12 +479,11 @@ class MovieClip: public Sprite, public FrameContainer
 friend class ParserThread;
 private:
 	uint32_t getCurrentScene();
+	std::map<uint32_t,_NR<IFunction> > frameScripts;
 protected:
 	/* This is read from the SWF header. It's only purpose is for flash.display.MovieClip.totalFrames */
 	uint32_t totalFrames_unreliable;
 	void constructionComplete();
-private:
-	std::map<uint32_t,_NR<IFunction> > frameScripts;
 public:
 	RunState state;
 	MovieClip(Class_base* c);
@@ -499,7 +517,6 @@ public:
 	void advanceFrame();
 	void initFrame();
 	uint32_t getFrameIdByLabel(const tiny_string& l) const;
-	void setTotalFrames(uint32_t t);
 
 	void addScene(uint32_t sceneNo, uint32_t startframe, const tiny_string& name);
 };
@@ -523,6 +540,7 @@ public:
 	ASFUNCTION(_getScaleMode);
 	ASFUNCTION(_setScaleMode);
 	ASFUNCTION(_getLoaderInfo);
+	ASFUNCTION(_getStageVideos);
 	ASPROPERTY_GETTER_SETTER(tiny_string,displayState);
 };
 
@@ -609,13 +627,13 @@ friend class CairoTokenRenderer;
 private:
 	void onBitmapData(_NR<BitmapData>);
 protected:
-	void renderImpl(RenderContext& ctxt, bool maskEnabled, number_t t1, number_t t2, number_t t3, number_t t4) const
-		{ TokenContainer::renderImpl(ctxt, maskEnabled,t1,t2,t3,t4); }
+	void renderImpl(RenderContext& ctxt) const
+		{ TokenContainer::renderImpl(ctxt); }
 public:
 	ASPROPERTY_GETTER_SETTER(_NR<BitmapData>,bitmapData);
 	/* Call this after updating any member of 'data' */
 	void updatedData();
-	Bitmap(Class_base* c, std::istream *s = NULL, FILE_TYPE type=FT_UNKNOWN);
+	Bitmap(Class_base* c, _NR<LoaderInfo> li=NullRef, std::istream *s = NULL, FILE_TYPE type=FT_UNKNOWN);
 	Bitmap(Class_base* c, _R<BitmapData> data);
 	~Bitmap();
 	void finalize();
@@ -648,4 +666,4 @@ public:
 
 };
 
-#endif
+#endif /* SCRIPTING_FLASH_DISPLAY_FLASHDISPLAY_H */

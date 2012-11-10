@@ -19,11 +19,11 @@
 **************************************************************************/
 
 
-#ifndef IPLUGIN_H
-#define IPLUGIN_H
+#ifndef BACKENDS_INTERFACES_IPLUGIN_H
+#define BACKENDS_INTERFACES_IPLUGIN_H 1
 
 #include <iostream>
-#include "../../compat.h"
+#include "compat.h"
 
 enum PLUGIN_TYPES { UNDEFINED = 0, AUDIO, VIDEO, DECODER, ENCODER };
 
@@ -35,9 +35,9 @@ public:
 	virtual const std::string get_backendName();
 	virtual ~IPlugin();
 protected:
-	PLUGIN_TYPES pluginType;	//type of plugin of PLUGIN_TYPES
 	std::string pluginName;		//name of the plugin
 	std::string backendName;		//backend supported by the plugin
+	PLUGIN_TYPES pluginType;	//type of plugin of PLUGIN_TYPES
 	IPlugin ( PLUGIN_TYPES plugin_type, std::string plugin_name, std::string backend_name );
 };
 
@@ -52,4 +52,4 @@ Plugin cleanup function
 extern "C" void release(IPlugin* p_plugin);
 ***************************/
 
-#endif
+#endif /* BACKENDS_INTERFACES_IPLUGIN_H */

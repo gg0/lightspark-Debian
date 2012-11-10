@@ -17,9 +17,9 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
-#include "BitmapData.h"
-#include "class.h"
-#include "argconv.h"
+#include "scripting/flash/display/BitmapData.h"
+#include "scripting/class.h"
+#include "scripting/argconv.h"
 #include "scripting/toplevel/toplevel.h"
 #include "scripting/flash/geom/flashgeom.h"
 #include "backends/rendering_context.h"
@@ -27,16 +27,21 @@
 using namespace lightspark;
 using namespace std;
 
-SET_NAMESPACE("flash.display");
-
-REGISTER_CLASS_NAME(BitmapData);
-
 BitmapData::BitmapData(Class_base* c):ASObject(c),BitmapContainer(c->memoryAccount),disposed(false)
 {
 }
 
 BitmapData::BitmapData(Class_base* c, const BitmapContainer& b):ASObject(c),BitmapContainer(b),disposed(false)
 {
+}
+
+BitmapData::BitmapData(Class_base* c, uint32_t width, uint32_t height):ASObject(c),BitmapContainer(c->memoryAccount),disposed(false)
+{
+	assert(width!=0 && height!=0);
+
+	uint32_t *pixels=new uint32_t[width*height];
+	memset(pixels,0,width*height*sizeof(uint32_t));
+	fromRGB(reinterpret_cast<uint8_t *>(pixels), width, height, true);
 }
 
 BitmapData::~BitmapData()
@@ -59,6 +64,7 @@ void BitmapData::sinit(Class_base* c)
 	c->setDeclaredMethodByQName("copyPixels","",Class<IFunction>::getFunction(copyPixels),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("fillRect","",Class<IFunction>::getFunction(fillRect),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("generateFilterRect","",Class<IFunction>::getFunction(generateFilterRect),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("hitTest","",Class<IFunction>::getFunction(hitTest),NORMAL_METHOD,true);
 	REGISTER_GETTER(c,width);
 	REGISTER_GETTER(c,height);
 	REGISTER_GETTER(c,transparent);
@@ -94,7 +100,8 @@ ASFUNCTIONBODY(BitmapData,_constructor)
 	ARG_UNPACK(width, 0)(height, 0)(transparent, true)(fillColor, 0xFFFFFFFF);
 
 	ASObject::_constructor(obj,NULL,0);
-	if(width==0 || height==0)
+	//If the bitmap is already initialized, just return
+	if(width==0 || height==0 || !th->data.empty())
 		return NULL;
 
 	uint32_t *pixels=new uint32_t[width*height];
@@ -124,7 +131,35 @@ ASFUNCTIONBODY(BitmapData,dispose)
 	th->data.clear();
 	th->data.shrink_to_fit();
 	th->disposed = true;
+	th->notifyUsers();
 	return NULL;
+}
+
+void BitmapData::drawDisplayObject(DisplayObject* d, const MATRIX& initialMatrix)
+{
+	//Create an InvalidateQueue to store all the hierarchy of objects that must be drawn
+	SoftwareInvalidateQueue queue;
+	d->requestInvalidation(&queue);
+	CairoRenderContext ctxt(getData(), width, height);
+	for(auto it=queue.queue.begin();it!=queue.queue.end();it++)
+	{
+		DisplayObject* target=(*it).getPtr();
+		//Get the drawable from each of the added objects
+		IDrawable* drawable=target->invalidate(d, initialMatrix);
+		if(drawable==NULL)
+			continue;
+
+		//Compute the matrix for this object
+		uint8_t* buf=drawable->getPixelBuffer();
+		//Construct a CachedSurface using the data
+		CachedSurface& surface=ctxt.allocateCustomSurface(target,buf);
+		surface.tex.width=drawable->getWidth();
+		surface.tex.height=drawable->getHeight();
+		surface.xOffset=drawable->getXOffset();
+		surface.yOffset=drawable->getYOffset();
+		delete drawable;
+	}
+	d->Render(ctxt);
 }
 
 ASFUNCTIONBODY(BitmapData,draw)
@@ -163,49 +198,18 @@ ASFUNCTIONBODY(BitmapData,draw)
 	}
 	else if(drawable->is<DisplayObject>())
 	{
-		//Create an InvalidateQueue to store all the hierarchy of objects that must be drawn
-		SoftwareInvalidateQueue queue;
 		DisplayObject* d=drawable->as<DisplayObject>();
-		d->requestInvalidation(&queue);
-		CairoRenderContext ctxt(th->getData(), th->width, th->height);
 		//Compute the initial matrix, if any
 		MATRIX initialMatrix;
 		if(!matrix.isNull())
 			initialMatrix=matrix->getMATRIX();
-		for(auto it=queue.queue.begin();it!=queue.queue.end();it++)
-		{
-			DisplayObject* target=(*it).getPtr();
-			//Get the drawable from each of the added objects
-			IDrawable* drawable=target->invalidate(d, initialMatrix);
-			if(drawable==NULL)
-				continue;
-
-			//Compute the matrix for this object
-			uint8_t* buf=drawable->getPixelBuffer();
-			//Construct a CachedSurface using the data
-			CachedSurface& surface=ctxt.allocateCustomSurface(target,buf);
-			surface.tex.width=drawable->getWidth();
-			surface.tex.height=drawable->getHeight();
-			surface.xOffset=drawable->getXOffset();
-			surface.yOffset=drawable->getYOffset();
-			delete drawable;
-		}
-		d->Render(ctxt, false);
+		th->drawDisplayObject(d, initialMatrix);
 	}
 	else
 		LOG(LOG_NOT_IMPLEMENTED,"BitmapData.draw does not support " << drawable->toDebugString());
 
+	th->notifyUsers();
 	return NULL;
-}
-
-void BitmapData::copyFrom(BitmapData *source)
-{
-	data.clear();
-	dataSize = source->dataSize;
-	data = source->data;
-	width = source->width;
-	height = source->height;
-	stride = source->stride;
 }
 
 uint32_t BitmapData::getPixelPriv(uint32_t x, uint32_t y)
@@ -258,6 +262,7 @@ void BitmapData::setPixelPriv(uint32_t x, uint32_t y, uint32_t color, bool setAl
 		*p=color;
 	else
 		*p=(*p & 0xff000000) | (color & 0x00ffffff);
+	notifyUsers();
 }
 
 ASFUNCTIONBODY(BitmapData,setPixel)
@@ -409,4 +414,33 @@ ASFUNCTIONBODY(BitmapData,generateFilterRect)
 	rect->width=th->width;
 	rect->height=th->height;
 	return rect;
+}
+
+ASFUNCTIONBODY(BitmapData,hitTest)
+{
+	BitmapData* th = obj->as<BitmapData>();
+	if(th->disposed)
+		throw Class<ArgumentError>::getInstanceS("Disposed BitmapData");
+
+	_NR<Point> firstPoint;
+	uint32_t firstAlphaThreshold;
+	_NR<ASObject> secondObject;
+	_NR<Point> secondBitmapDataPoint;
+	uint32_t secondAlphaThreshold;
+	ARG_UNPACK (firstPoint) (firstAlphaThreshold) (secondObject) (secondBitmapDataPoint, NullRef)
+					(secondAlphaThreshold,1);
+
+	if(!secondObject->getClass() || !secondObject->getClass()->isSubClass(Class<Point>::getClass()))
+		throw Class<TypeError>::getInstanceS("Error #1034: Wrong type");
+
+	if(!secondBitmapDataPoint.isNull() || secondAlphaThreshold!=1)
+		LOG(LOG_NOT_IMPLEMENTED,"BitmapData.hitTest does not expect some parameters");
+
+	Point* secondPoint = secondObject->as<Point>();
+
+	uint32_t pix=th->getPixelPriv(secondPoint->getX()-firstPoint->getX(), secondPoint->getY()-firstPoint->getY());
+	if((pix>>24)>=firstAlphaThreshold)
+		return abstract_b(true);
+	else
+		return abstract_b(false);
 }

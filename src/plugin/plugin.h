@@ -18,19 +18,19 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
-#ifndef __PLUGIN_H__
-#define __PLUGIN_H__
+#ifndef PLUGIN_PLUGIN_H
+#define PLUGIN_PLUGIN_H 1
 
 #include "swf.h"
 #include <iostream>
 #include <sstream>
 
 #include "compat.h"
-#include "pluginbase.h"
+#include "plugin/include/pluginbase.h"
 #include "parsing/streams.h"
 #include "backends/netutils.h"
 #include "backends/urlutils.h"
-#include "npscriptobject.h"
+#include "plugin/npscriptobject.h"
 
 namespace lightspark
 {
@@ -46,7 +46,7 @@ public:
 	NPDownloadManager(NPP i);
 	lightspark::Downloader* download(const lightspark::URLInfo& url, bool cached, lightspark::ILoadable* owner);
 	lightspark::Downloader* downloadWithData(const lightspark::URLInfo& url, const std::vector<uint8_t>& data, 
-			const char* contentType, lightspark::ILoadable* owner);
+			const std::list<tiny_string>& headers, lightspark::ILoadable* owner);
 	void destroy(lightspark::Downloader* downloader);
 };
 
@@ -65,7 +65,7 @@ public:
 	NPDownloader(const lightspark::tiny_string& _url, lightspark::ILoadable* owner);
 	NPDownloader(const lightspark::tiny_string& _url, bool _cached, NPP _instance, lightspark::ILoadable* owner);
 	NPDownloader(const lightspark::tiny_string& _url, const std::vector<uint8_t>& _data,
-			const char* contentType, NPP _instance, lightspark::ILoadable* owner);
+			const std::list<tiny_string>& headers, NPP _instance, lightspark::ILoadable* owner);
 };
 
 class PluginEngineData:	public EngineData
@@ -85,7 +85,7 @@ public:
 
 	void stopMainDownload();
 	bool isSizable() const { return false; }
-	NativeWindow getWindowForGnash();
+	GdkNativeWindow getWindowForGnash();
 	/* must be called within the gtk_main() thread and within gdk_threads_enter/leave */
 	GtkWidget* createGtkWidget();
 };
@@ -127,7 +127,7 @@ private:
 	 * window we draw into. We create a child of mWindow and
 	 * draw into that.
 	 */
-	NativeWindow mWindow;
+	GdkNativeWindow mWindow;
 	int mX, mY;
 
 	std::istream mainDownloaderStream;
@@ -137,4 +137,4 @@ private:
 };
 
 }
-#endif // __PLUGIN_H__
+#endif /* PLUGIN_PLUGIN_H */

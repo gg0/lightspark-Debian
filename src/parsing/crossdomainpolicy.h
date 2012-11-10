@@ -17,8 +17,8 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
-#ifndef _CROSSDOMAINPOLICY_H
-#define _CROSSDOMAINPOLICY_H
+#ifndef PARSING_CROSSDOMAINPOLICY_H
+#define PARSING_CROSSDOMAINPOLICY_H 1
 
 #include <libxml++/libxml++.h>
 #include <libxml++/parsers/textreader.h>
@@ -67,8 +67,8 @@ namespace lightspark
 		const std::string& getPermittedPolicies() const { return permittedPolicies; }
 		//allow-access-from & allow-http-request-headers-from
 		const std::string& getDomain() const { return domain; }
-		bool getSecure() { return secure; };
-		bool getSecureSpecified() { return secureSpecified; }
+		bool getSecure() const { return secure; };
+		bool getSecureSpecified() const { return secureSpecified; }
 		//allow-access-from
 		const std::string& getToPorts() const { return toPorts; }
 		//allow-http-request-headers-from
@@ -76,4 +76,4 @@ namespace lightspark
 	};
 }
 
-#endif
+#endif /* PARSING_CROSSDOMAINPOLICY_H */

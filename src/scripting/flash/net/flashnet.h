@@ -17,12 +17,12 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
-#ifndef _FLASH_NET_H
-#define _FLASH_NET_H
+#ifndef SCRIPTING_FLASH_NET_FLASHNET_H
+#define SCRIPTING_FLASH_NET_FLASHNET_H 1
 
 #include "compat.h"
 #include "asobject.h"
-#include "flash/events/flashevents.h"
+#include "scripting/flash/events/flashevents.h"
 #include "thread_pool.h"
 #include "backends/netutils.h"
 #include "timer.h"
@@ -35,12 +35,15 @@ namespace lightspark
 class URLRequest: public ASObject
 {
 private:
-	tiny_string url;
-	_NR<ASObject> data;
 	enum METHOD { GET=0, POST };
 	METHOD method;
+	tiny_string url;
+	_NR<ASObject> data;
 	tiny_string validatedContentType() const;
+	tiny_string getContentTypeHeader() const;
+	void validateHeaderName(const tiny_string& headerName) const;
 	ASPROPERTY_GETTER_SETTER(tiny_string,contentType);
+	ASPROPERTY_GETTER_SETTER(_R<Array>,requestHeaders);
 public:
 	URLRequest(Class_base* c);
 	void finalize();
@@ -54,6 +57,7 @@ public:
 	ASFUNCTION(_setData);
 	ASFUNCTION(_getData);
 	URLInfo getRequestURL() const;
+	std::list<tiny_string> getHeaders() const;
 	void getPostData(std::vector<uint8_t>& data) const;
 };
 
@@ -115,7 +119,7 @@ public:
 	URLLoaderThread(_R<URLRequest> _request, _R<URLLoader> _loader);
 };
 
-class URLLoader: public EventDispatcher, public IDownloaderThreadListener
+class URLLoader: public EventDispatcher, public IDownloaderThreadListener, public ILoadable
 {
 private:
 	tiny_string dataFormat;
@@ -131,12 +135,17 @@ public:
 	void setData(_NR<ASObject> data);
 	tiny_string getDataFormat();
 	void setDataFormat(const tiny_string& newFormat);
+	void setBytesTotal(uint32_t b);
+	void setBytesLoaded(uint32_t b);
 	ASFUNCTION(_constructor);
 	ASFUNCTION(load);
 	ASFUNCTION(close);
 	ASFUNCTION(_getDataFormat);
 	ASFUNCTION(_getData);
+	ASFUNCTION(_setData);
 	ASFUNCTION(_setDataFormat);
+	ASPROPERTY_GETTER_SETTER(uint32_t, bytesLoaded);
+	ASPROPERTY_GETTER_SETTER(uint32_t, bytesTotal);
 };
 
 class Responder: public ASObject
@@ -158,8 +167,6 @@ friend class NetStream;
 private:
 	//Indicates whether the application is connected to a server through a persistent RMTP connection/HTTP server with Flash Remoting
 	bool _connected;
-	//The connection is to a flash media server
-	ObjectEncoding::ENCODING objectEncoding;
 	tiny_string protocol;
 	URLInfo uri;
 	//Data for remoting support (NetConnection::call)
@@ -169,6 +176,8 @@ private:
 	Downloader* downloader;
 	_NR<Responder> responder;
 	uint32_t messageCount;
+	//The connection is to a flash media server
+	ObjectEncoding::ENCODING objectEncoding;
 	//IThreadJob interface
 	void execute();
 	void threadAbort();
@@ -195,16 +204,22 @@ class SoundTransform;
 class NetStream: public EventDispatcher, public IThreadJob, public ITickJob
 {
 private:
+	bool tickStarted;
+	//Indicates whether the NetStream is paused
+	bool paused;
+	//Indicates whether the NetStream has been closed/threadAborted. This is reset at every play() call.
+	//We initialize this value to true, so we can check that play() hasn't been called without being closed first.
+	volatile bool closed;
+
+	uint32_t streamTime;
 	URLInfo url;
 	double frameRate;
-	bool tickStarted;
 	//The NetConnection used by this NetStream
 	_NR<NetConnection> connection;
 	Downloader* downloader;
 	VideoDecoder* videoDecoder;
 	AudioDecoder* audioDecoder;
 	AudioStream *audioStream;
-	uint32_t streamTime;
 	Mutex mutex;
 	//IThreadJob interface for long jobs
 	void execute();
@@ -214,21 +229,16 @@ private:
 	void tick();
 	void tickFence();
 	bool isReady() const;
+	_NR<ASObject> client;
 
-	//Indicates whether the NetStream is paused
-	bool paused;
-	//Indicates whether the NetStream has been closed/threadAborted. This is reset at every play() call.
-	//We initialize this value to true, so we can check that play() hasn't been called without being closed first.
-	volatile bool closed;
+	ASPROPERTY_GETTER_SETTER(NullableRef<SoundTransform>,soundTransform);
+	number_t oldVolume;
 
 	enum CONNECTION_TYPE { CONNECT_TO_FMS=0, DIRECT_CONNECTIONS };
 	CONNECTION_TYPE peerID;
 
-	_NR<ASObject> client;
 	bool checkPolicyFile;
 	bool rawAccessAllowed;
-	number_t oldVolume;
-	ASPROPERTY_GETTER_SETTER(NullableRef<SoundTransform>,soundTransform);
 
 	ASObject *createMetaDataObject(StreamDecoder* streamDecoder);
 	ASObject *createPlayStatusObject(const tiny_string& code);
@@ -324,4 +334,4 @@ ASObject* getClassByAlias(ASObject* obj,ASObject* const* args, const unsigned in
 
 };
 
-#endif
+#endif /* SCRIPTING_FLASH_NET_FLASHNET_H */

@@ -18,25 +18,17 @@
 **************************************************************************/
 
 #include "scripting/abc.h"
-#include "flashmedia.h"
-#include "class.h"
+#include "scripting/flash/media/flashmedia.h"
+#include "scripting/class.h"
 #include "compat.h"
 #include <iostream>
 #include "backends/audio.h"
 #include "backends/input.h"
 #include "backends/rendering.h"
-#include "argconv.h"
+#include "scripting/argconv.h"
 
 using namespace lightspark;
 using namespace std;
-
-SET_NAMESPACE("flash.media");
-
-REGISTER_CLASS_NAME(SoundTransform);
-REGISTER_CLASS_NAME(Video);
-REGISTER_CLASS_NAME(Sound);
-REGISTER_CLASS_NAME(SoundLoaderContext);
-REGISTER_CLASS_NAME(SoundChannel);
 
 void SoundTransform::sinit(Class_base* c)
 {
@@ -94,10 +86,10 @@ Video::~Video()
 {
 }
 
-void Video::renderImpl(RenderContext& ctxt, bool maskEnabled, number_t t1,number_t t2,number_t t3,number_t t4) const
+void Video::renderImpl(RenderContext& ctxt) const
 {
 	Mutex::Lock l(mutex);
-	if(skipRender(maskEnabled))
+	if(skipRender())
 		return;
 
 	//Video is especially optimized for GL rendering
@@ -123,8 +115,7 @@ void Video::renderImpl(RenderContext& ctxt, bool maskEnabled, number_t t1,number
 		//Enable YUV to RGB conversion
 		//width and height will not change now (the Video mutex is acquired)
 		ctxt.renderTextured(netStream->getTexture(), 0, 0, width, height,
-			clippedAlpha(), RenderContext::YUV_MODE,
-			RenderContext::NO_MASK);
+			clippedAlpha(), RenderContext::YUV_MODE);
 		
 		netStream->unlock();
 	}
@@ -217,8 +208,7 @@ ASFUNCTIONBODY(Video,attachNetStream)
 
 _NR<InteractiveObject> Video::hitTestImpl(_NR<InteractiveObject> last, number_t x, number_t y, DisplayObject::HIT_TYPE type)
 {
-	assert_and_throw(!getSys()->getInputThread()->isMaskPresent());
-	assert_and_throw(mask.isNull());
+	//TODO: support masks
 	if(x>=0 && x<=width && y>=0 && y<=height)
 		return last;
 	else
@@ -242,6 +232,7 @@ void Sound::sinit(Class_base* c)
 	c->setSuper(Class<EventDispatcher>::getRef());
 	c->setDeclaredMethodByQName("load","",Class<IFunction>::getFunction(load),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("play","",Class<IFunction>::getFunction(play),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("close","",Class<IFunction>::getFunction(close),NORMAL_METHOD,true);
 	REGISTER_GETTER(c,bytesLoaded);
 	REGISTER_GETTER(c,bytesTotal);
 	REGISTER_GETTER(c,length);
@@ -254,6 +245,10 @@ void Sound::buildTraits(ASObject* o)
 ASFUNCTIONBODY(Sound,_constructor)
 {
 	EventDispatcher::_constructor(obj, NULL, 0);
+
+	if (argslen>0)
+		Sound::load(obj, args, argslen);
+
 	return NULL;
 }
 
@@ -285,8 +280,9 @@ ASFUNCTIONBODY(Sound,load)
 	}
 	else
 	{
+		list<tiny_string> headers=urlRequest->getHeaders();
 		th->downloader=getSys()->downloadManager->downloadWithData(th->url, th->postData,
-				"Content-Type: application/x-www-form-urlencoded", th);
+				headers, th);
 		//Clean up the postData for the next load
 		th->postData.clear();
 	}
@@ -315,6 +311,15 @@ ASFUNCTIONBODY(Sound,play)
 	}
 
 	return getSys()->getUndefinedRef();
+}
+
+ASFUNCTIONBODY(Sound,close)
+{
+	Sound* th=Class<Sound>::cast(obj);
+	if(!ACQUIRE_READ(th->stopped))
+		th->threadAbort();
+
+	return NULL;
 }
 
 void Sound::execute()
@@ -464,4 +469,31 @@ void SoundChannel::buildTraits(ASObject* o)
 ASFUNCTIONBODY(SoundChannel, _constructor)
 {
 	return NULL;
+}
+
+void StageVideo::sinit(Class_base *c)
+{
+	c->setConstructor(Class<IFunction>::getFunction(_constructor));
+	c->setSuper(Class<EventDispatcher>::getRef());
+}
+
+ASFUNCTIONBODY(StageVideo,_constructor)
+{
+	EventDispatcher::_constructor(obj, NULL, 0);
+	return NULL;
+}
+
+void StageVideoAvailability::sinit(Class_base* c)
+{
+	c->setConstructor(Class<IFunction>::getFunction(_constructor));
+	c->setVariableByQName("AVAILABLE","",Class<ASString>::getInstanceS("available"),DECLARED_TRAIT);
+	c->setVariableByQName("UNAVAILABLE","",Class<ASString>::getInstanceS("unavailable"),DECLARED_TRAIT);
+}
+
+void VideoStatus::sinit(Class_base* c)
+{
+	c->setConstructor(Class<IFunction>::getFunction(_constructor));
+	c->setVariableByQName("ACCELERATED","",Class<ASString>::getInstanceS("accelerated"),DECLARED_TRAIT);
+	c->setVariableByQName("SOFTWARE","",Class<ASString>::getInstanceS("software"),DECLARED_TRAIT);
+	c->setVariableByQName("UNAVAILABLE","",Class<ASString>::getInstanceS("unavailable"),DECLARED_TRAIT);
 }

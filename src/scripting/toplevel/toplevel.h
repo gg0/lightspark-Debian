@@ -17,8 +17,9 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
-#ifndef TOPLEVEL_H
-#define TOPLEVEL_H
+#ifndef SCRIPTING_TOPLEVEL_TOPLEVEL_H
+#define SCRIPTING_TOPLEVEL_TOPLEVEL_H 1
+
 #include "compat.h"
 #include <vector>
 #include <set>
@@ -26,10 +27,12 @@
 #include "exceptions.h"
 #include "threading.h"
 #include "scripting/abcutils.h"
-#include "Boolean.h"
-#include "Error.h"
-#include "XML.h"
+#include "scripting/toplevel/Boolean.h"
+#include "scripting/toplevel/Error.h"
+//#include "scripting/toplevel/XML.h"
 #include "memory_support.h"
+#include <libxml++/parsers/domparser.h>
+#include <boost/intrusive/list.hpp>
 
 namespace lightspark
 {
@@ -45,6 +48,11 @@ struct traits_info;
 class namespace_info;
 class Any;
 class Void;
+class Class_object;
+
+// Enum used during early binding in abc_optimizer.cpp
+enum EARLY_BIND_STATUS { NOT_BINDED=0, CANNOT_BIND=1, BINDED };
+
 /* This abstract class represents a type, i.e. something that a value can be coerced to.
  * Currently Class_base and Template_base implement this interface.
  * If you let another class implement this interface, change ASObject->is<Type>(), too!
@@ -70,7 +78,7 @@ public:
 	/*
 	 * Checks if the type is already in sys->classes
 	 */
-	static bool isTypeResolvable(const multiname* mn);
+	static Type* getBuiltinType(const multiname* mn);
 	/*
 	 * Converts the given object to an object of this type.
 	 * It consumes one reference of 'o'.
@@ -81,6 +89,12 @@ public:
 
 	/* Return "any" for anyType, "void" for voidType and class_name.name for Class_base */
 	virtual tiny_string getName() const=0;
+
+	/* Returns true if the given multiname is present in the declared traits of the type */
+	virtual EARLY_BIND_STATUS resolveMultinameStatically(const multiname& name) const = 0;
+
+	/* Returns the type multiname for the given slot id */
+	virtual const multiname* resolveSlotTypeName(uint32_t slotId) const = 0;
 };
 template<> inline Type* ASObject::as<Type>() { return dynamic_cast<Type*>(this); }
 template<> inline const Type* ASObject::as<Type>() const { return dynamic_cast<const Type*>(this); }
@@ -91,6 +105,8 @@ public:
 	ASObject* coerce(ASObject* o) const { return o; }
 	virtual ~Any() {};
 	tiny_string getName() const { return "any"; }
+	EARLY_BIND_STATUS resolveMultinameStatically(const multiname& name) const { return CANNOT_BIND; };
+	const multiname* resolveSlotTypeName(uint32_t slotId) const { return NULL; }
 };
 
 class Void: public Type
@@ -99,7 +115,27 @@ public:
 	ASObject* coerce(ASObject* o) const;
 	virtual ~Void() {};
 	tiny_string getName() const { return "void"; }
+	EARLY_BIND_STATUS resolveMultinameStatically(const multiname& name) const { return NOT_BINDED; };
+	const multiname* resolveSlotTypeName(uint32_t slotId) const { return NULL; }
 };
+
+/*
+ * This class is used exclusively to do early binding when a method uses newactivation
+ */
+class ActivationType: public Type
+{
+private:
+	const method_info* mi;
+public:
+	ActivationType(const method_info* m):mi(m){}
+	ASObject* coerce(ASObject* o) const { throw RunTimeException("Coercing to an ActivationType should not happen");};
+	virtual ~ActivationType() {};
+	tiny_string getName() const { return "activation"; }
+	EARLY_BIND_STATUS resolveMultinameStatically(const multiname& name) const;
+	const multiname* resolveSlotTypeName(uint32_t slotId) const;
+};
+
+class Prototype;
 
 class Class_base: public ASObject, public Type
 {
@@ -109,35 +145,43 @@ template<class T> friend class Template;
 private:
 	mutable std::vector<multiname> interfaces;
 	mutable std::vector<Class_base*> interfaces_added;
-	//TODO: move in Class_inherit
-	bool use_protected;
 	nsNameAndKind protected_ns;
 	void initializeProtectedNamespace(const tiny_string& name, const namespace_info& ns);
 	void recursiveBuild(ASObject* target);
 	IFunction* constructor;
 	void describeTraits(xmlpp::Element* root, std::vector<traits_info>& traits) const;
+	void describeMetadata(xmlpp::Element* node, const traits_info& trait) const;
 	//Naive garbage collection until reference cycles are detected
 	Mutex referencedObjectsMutex;
-	std::set<ASObject*, std::less<ASObject*>, reporter_allocator<ASObject*>> referencedObjects;
-	void finalizeObjects() const;
+	boost::intrusive::list<ASObject, boost::intrusive::constant_time_size<false> > referencedObjects;
+	void finalizeObjects();
 protected:
 	void copyBorrowedTraitsFromSuper();
 	ASFUNCTION(_toString);
 public:
-	bool isFinal:1;
-	bool isSealed:1;
-	void addPrototypeGetter();
-	ASPROPERTY_GETTER(_NR<ASObject>,prototype);
+	variables_map borrowedVariables;
+	ASPROPERTY_GETTER(_NR<Prototype>,prototype);
 	_NR<Class_base> super;
 	//We need to know what is the context we are referring to
 	ABCContext* context;
 	const QName class_name;
-	int class_index;
 	//Memory reporter to keep track of used bytes
 	MemoryAccount* memoryAccount;
+	ASPROPERTY_GETTER(int32_t,length);
+	int32_t class_index;
+	bool isFinal:1;
+	bool isSealed:1;
+private:
+	//TODO: move in Class_inherit
+	bool use_protected:1;
+public:
+	void addPrototypeGetter();
+	void addLengthGetter();
 	void handleConstruction(ASObject* target, ASObject* const* args, unsigned int argslen, bool buildAndLink);
 	void setConstructor(IFunction* c);
 	Class_base(const QName& name, MemoryAccount* m);
+	//Special constructor for Class_object
+	Class_base(const Class_object*);
 	~Class_base();
 	void finalize();
 	virtual ASObject* getInstance(bool construct, ASObject* const* args, const unsigned int argslen, Class_base* realClass=NULL)=0;
@@ -174,6 +218,10 @@ public:
 		super = super_;
 		copyBorrowedTraitsFromSuper();
 	}
+	const variable* findBorrowedGettable(const multiname& name) const DLL_LOCAL;
+	variable* findBorrowedSettable(const multiname& name, bool* has_getter=NULL) DLL_LOCAL;
+	EARLY_BIND_STATUS resolveMultinameStatically(const multiname& name) const;
+	const multiname* resolveSlotTypeName(uint32_t slotId) const { /*TODO: implement*/ return NULL; }
 };
 
 class Template_base : public ASObject
@@ -188,7 +236,8 @@ public:
 class Class_object: public Class_base
 {
 private:
-	Class_object():Class_base(QName("Class",""),NULL){}
+	//Invoke the special constructor that will set the super to Object
+	Class_object():Class_base(this){}
 	ASObject* getInstance(bool construct, ASObject* const* args, const unsigned int argslen, Class_base* realClass)
 	{
 		throw RunTimeException("Class_object::getInstance");
@@ -198,58 +247,64 @@ private:
 	{
 		throw RunTimeException("Class_object::buildInstanceTraits");
 	}
+	void finalize();
 public:
 	static Class_object* getClass();
 	static _R<Class_object> getRef();
 };
 
-/* Adaptor from fuction to class, it does not seems to be a good idea to
- * derive IFunction from Class_base, because it's too heavyweight
- * This is the class of an object created by (new f()) where f is a function.
- * Its prototype points to f->prototype which is defined in IFunction.
- *
- * Class_function uses prototype based inheritance only.
- */
-class Class_function: public Class_base
+class Prototype
 {
-private:
-	ASObject* getInstance(bool construct, ASObject* const* args, const unsigned int argslen, Class_base* realClass)
-	{
-		throw RunTimeException("Class_function::getInstance");
-		return NULL;
-	}
-	void buildInstanceTraits(ASObject* o) const
-	{
-		throw RunTimeException("Class_function::buildInstanceTraits");
-	}
 public:
-	//Name is 'Object' because trace(new f()) gives "[object Object]"
-	Class_function() : Class_base(QName("Object",""),NULL) {}
-	_NR<ASObject> getVariableByMultiname(const multiname& name, GET_VARIABLE_OPTION opt=NONE)
+	virtual ~Prototype() {};
+	_NR<Prototype> prevPrototype;
+	virtual void incRef() = 0;
+	virtual void decRef() = 0;
+	virtual ASObject* getObj() = 0;
+	/*
+	 * This method is actually forwarded to the object. It's here as a shorthand.
+	 */
+	void setVariableByQName(const tiny_string& name, const tiny_string& ns, ASObject* o, TRAIT_KIND traitKind)
 	{
-		return NullRef;
-	}
-	int32_t getVariableByMultiname_i(const multiname& name)
-	{
-		throw UnsupportedException("Class_function::getVariableByMultiname_i");
-		return 0;
-	}
-	void setVariableByMultiname_i(const multiname& name, int32_t value)
-	{
-		throw UnsupportedException("Class_function::setVariableByMultiname_i");
-	}
-	void setVariableByMultiname(const multiname& name, ASObject* o, CONST_ALLOWED_FLAG allowConst)
-	{
-		throw UnsupportedException("Class_function::setVariableByMultiname");
-	}
-	bool hasPropertyByMultiname(const multiname& name, bool considerDynamic)
-	{
-		return false;
+		getObj()->setVariableByQName(name,ns,o,traitKind);
 	}
 };
 
+/* Special object used as prototype for classes
+ * It keeps a link to the upper level in the prototype chain
+ */
+class ObjectPrototype: public ASObject, public Prototype
+{
+public:
+	ObjectPrototype(Class_base* c);
+	void finalize();
+	void incRef() { ASObject::incRef(); }
+	void decRef() { ASObject::decRef(); }
+	ASObject* getObj() { return this; }
+	_NR<ASObject> getVariableByMultiname(const multiname& name, GET_VARIABLE_OPTION opt=NONE);
+};
+
+/* Special object returned when new func() syntax is used.
+ * This object looks for properties on the prototype object that is passed in the constructor
+ */
+class Function_object: public ASObject
+{
+public:
+	Function_object(Class_base* c, _R<ASObject> p);
+	_NR<ASObject> functionPrototype;
+	void finalize();
+	_NR<ASObject> getVariableByMultiname(const multiname& name, GET_VARIABLE_OPTION opt=NONE);
+};
+
+/*
+ * The base-class for everything that resambles a function or method.
+ * It is specialized in Function for C-implemented functions
+ * and SyntheticFunction for AS3-implemented functions (from the SWF)
+ */
 class IFunction: public ASObject
 {
+public:
+	ASPROPERTY_GETTER_SETTER(uint32_t,length);
 protected:
 	IFunction(Class_base *c);
 	virtual IFunction* clone()=0;
@@ -259,7 +314,7 @@ public:
 	 * If this is a function, inClass == NULL
 	 */
 	Class_base* inClass;
-	/* returns wether this is this a method of a function */
+	/* returns whether this is this a method of a function */
 	bool isMethod() const { return inClass != NULL; }
 	bool isBound() const { return closure_this; }
 	void finalize();
@@ -267,7 +322,6 @@ public:
 	ASFUNCTION(_call);
 	ASFUNCTION(_toString);
 	ASPROPERTY_GETTER_SETTER(_NR<ASObject>,prototype);
-	ASPROPERTY_GETTER_SETTER(uint32_t,length);
 	/*
 	 * Calls this function with the given object and args.
 	 * One reference of obj and each args[i] is consumed.
@@ -305,12 +359,17 @@ public:
 	virtual ASObject *describeType() const;
 };
 
+/*
+ * Implements the IFunction interface for functions implemented
+ * in c-code.
+ */
 class Function : public IFunction
 {
 friend class Class<IFunction>;
 public:
 	typedef ASObject* (*as_function)(ASObject*, ASObject* const *, const unsigned int);
-private:
+protected:
+	/* Function pointer to the C-function implementation */
 	as_function val;
 	Function(Class_base* c, as_function v=NULL):IFunction(c),val(v){}
 	Function* clone()
@@ -325,10 +384,27 @@ public:
 		Function* f=dynamic_cast<Function*>(r);
 		if(f==NULL)
 			return false;
-		return val==f->val;
+		return (val==f->val) && (closure_this==f->closure_this);
 	}
 };
 
+/* Special object used as prototype for the Function class
+ * It keeps a link to the upper level in the prototype chain
+ */
+class FunctionPrototype: public Function, public Prototype
+{
+public:
+	FunctionPrototype(Class_base* c, _NR<Prototype> p);
+	void finalize();
+	void incRef() { ASObject::incRef(); }
+	void decRef() { ASObject::decRef(); }
+	ASObject* getObj() { return this; }
+	_NR<ASObject> getVariableByMultiname(const multiname& name, GET_VARIABLE_OPTION opt=NONE);
+};
+
+/*
+ * Represents a function implemented in AS3-code
+ */
 class SyntheticFunction : public IFunction
 {
 friend class ABCVm;
@@ -336,8 +412,9 @@ friend class Class<IFunction>;
 public:
 	typedef ASObject* (*synt_function)(call_context* cc);
 private:
-	int hit_count;
+	/* Data structure with information directly loaded from the SWF */
 	method_info* mi;
+	/* Pointer to JIT-compiled function or NULL if not yet compiled */
 	synt_function val;
 	SyntheticFunction(Class_base* c,method_info* m);
 	SyntheticFunction* clone()
@@ -355,7 +432,7 @@ public:
 		SyntheticFunction* sf=dynamic_cast<SyntheticFunction*>(r);
 		if(sf==NULL)
 			return false;
-		return mi==sf->mi;
+		return (mi==sf->mi) && (closure_this==sf->closure_this);
 	}
 	void acquireScope(const std::vector<scope_entry>& scope)
 	{
@@ -368,13 +445,16 @@ public:
 	}
 };
 
-//Specialized class for IFunction
+/*
+ * The Class of a Function
+ */
 template<>
 class Class<IFunction>: public Class_base
 {
 private:
 	Class<IFunction>(MemoryAccount* m):Class_base(QName("Function",""),m){}
 	ASObject* getInstance(bool construct, ASObject* const* args, const unsigned int argslen, Class_base* realClass);
+	IFunction* getNopFunction();
 public:
 	static Class<IFunction>* getClass();
 	static _R<Class<IFunction>> getRef()
@@ -474,7 +554,7 @@ private:
 	tiny_string prefix;
 public:
 	Namespace(Class_base* c);
-	Namespace(Class_base* c, const tiny_string& _uri);
+	Namespace(Class_base* c, const tiny_string& _uri, const tiny_string& _prefix="");
 	static void sinit(Class_base*);
 	static void buildTraits(ASObject* o);
 	ASFUNCTION(_constructor);
@@ -487,19 +567,22 @@ public:
 	ASFUNCTION(_valueOf);
 	ASFUNCTION(_ECMA_valueOf);
 	bool isEqual(ASObject* o);
+	tiny_string getURI() { return uri; }
+	tiny_string getPrefix(bool& is_undefined) { is_undefined=prefix_is_undefined; return prefix; }
 };
 
 
 class Global : public ASObject
 {
 private:
-	ABCContext* context;
 	int scriptId;
+	ABCContext* context;
 public:
 	Global(Class_base* cb, ABCContext* c, int s);
 	static void sinit(Class_base* c);
 	static void buildTraits(ASObject* o) {};
 	_NR<ASObject> getVariableByMultiname(const multiname& name, GET_VARIABLE_OPTION opt=NONE);
+	_NR<ASObject> getVariableByMultinameOpportunistic(const multiname& name);
 	/*
 	 * Utility method to register builtin methods and classes
 	 */
@@ -522,54 +605,6 @@ ASObject* trace(ASObject* obj,ASObject* const* args, const unsigned int argslen)
 bool isXMLName(ASObject* obj);
 ASObject* _isXMLName(ASObject* obj,ASObject* const* args, const unsigned int argslen);
 
-
-inline void Manager::put(ASObject* o)
-{
-	if(available.size()>=maxCache)
-		delete o;
-	else
-	{
-		//The Manager now owns this object
-		if(o->classdef)
-			o->classdef->abandonObject(o);
-		available.push_back(o);
-	}
-}
-
-template<class T>
-T* Manager::get()
-{
-	if(available.size())
-	{
-		T* ret=static_cast<T*>(available.back());
-		available.pop_back();
-		ret->incRef();
-		//Transfer ownership back to the classdef
-		if(ret->getClass())
-			ret->getClass()->acquireObject(ret);
-		//std::cout << "getting[" << name << "] " << ret << std::endl;
-		return ret;
-	}
-	else
-	{
-		T* ret=Class<T>::getInstanceS();
-		ret->manager = this;
-		//std::cout << "newing" << ret << std::endl;
-		return ret;
-	}
-}
-
-inline Manager::~Manager()
-{
-	for(auto i = available.begin(); i != available.end(); ++i)
-	{
-		// ~ASObject will call abandonObject() again
-		if((*i)->classdef)
-			(*i)->classdef->acquireObject(*i);
-		delete *i;
-	}
-}
-
 };
 
-#endif
+#endif /* SCRIPTING_TOPLEVEL_TOPLEVEL_H */

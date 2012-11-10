@@ -18,17 +18,17 @@
 **************************************************************************/
 
 #include "swf.h"
-#include "audio.h"
-#include "config.h"
+#include "backends/audio.h"
+#include "backends/config.h"
 #include <iostream>
-#include "../logger.h"
+#include "logger.h"
 
 //Needed or not with compat.h and compat.cpp?
-#if defined WIN32
-#include <windows.h>
+#ifdef _WIN32
+#	include <windows.h>
 #else
-#include <dlfcn.h>
-#include <sys/types.h>
+#	include <dlfcn.h>
+#	include <sys/types.h>
 #endif
 
 using namespace lightspark;

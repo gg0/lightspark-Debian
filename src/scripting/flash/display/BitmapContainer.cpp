@@ -17,7 +17,7 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
-#include "BitmapContainer.h"
+#include "scripting/flash/display/BitmapContainer.h"
 #include "backends/rendering_context.h"
 #include "backends/image.h"
 
@@ -55,9 +55,10 @@ bool BitmapContainer::fromJPEG(uint8_t *inData, int len)
 	assert(data.empty());
 	/* flash uses signed values for width and height */
 	uint32_t w,h;
-	uint8_t *rgb=ImageDecoder::decodeJPEG(inData, len, &w, &h);
+	bool hasAlpha;
+	uint8_t *rgb=ImageDecoder::decodeJPEG(inData, len, &w, &h, &hasAlpha);
 	assert_and_throw((int32_t)w >= 0 && (int32_t)h >= 0);
-	return fromRGB(rgb, (int32_t)w, (int32_t)h, false);
+	return fromRGB(rgb, (int32_t)w, (int32_t)h, hasAlpha);
 }
 
 bool BitmapContainer::fromJPEG(std::istream &s)
@@ -65,9 +66,10 @@ bool BitmapContainer::fromJPEG(std::istream &s)
 	assert(data.empty());
 	/* flash uses signed values for width and height */
 	uint32_t w,h;
-	uint8_t *rgb=ImageDecoder::decodeJPEG(s, &w, &h);
+	bool hasAlpha;
+	uint8_t *rgb=ImageDecoder::decodeJPEG(s, &w, &h, &hasAlpha);
 	assert_and_throw((int32_t)w >= 0 && (int32_t)h >= 0);
-	return fromRGB(rgb, (int32_t)w, (int32_t)h, false);
+	return fromRGB(rgb, (int32_t)w, (int32_t)h, hasAlpha);
 }
 
 bool BitmapContainer::fromPNG(std::istream &s)
@@ -80,3 +82,12 @@ bool BitmapContainer::fromPNG(std::istream &s)
 	return fromRGB(rgb, (int32_t)w, (int32_t)h, false);
 }
 
+void BitmapContainer::reset()
+{
+	data.clear();
+	data.shrink_to_fit();
+	stride=0;
+	dataSize=0;
+	width=0;
+	height=0;
+}

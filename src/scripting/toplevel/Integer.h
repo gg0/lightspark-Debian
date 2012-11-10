@@ -17,8 +17,8 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
-#ifndef INTEGER_H
-#define INTEGER_H
+#ifndef SCRIPTING_TOPLEVEL_INTEGER_H
+#define SCRIPTING_TOPLEVEL_INTEGER_H 1
 #include "compat.h"
 #include "asobject.h"
 
@@ -53,7 +53,11 @@ public:
 	void serialize(ByteArray* out, std::map<tiny_string, uint32_t>& stringMap,
 				std::map<const ASObject*, uint32_t>& objMap,
 				std::map<const Class_base*, uint32_t>& traitsMap);
+	/*
+	 * This method skips trailing spaces and zeroes
+	 */
+	static bool fromStringFlashCompatible(const char* str, int64_t& ret,int radix);
 };
 
 }
-#endif // INTEGER_H
+#endif /* SCRIPTING_TOPLEVEL_INTEGER_H */

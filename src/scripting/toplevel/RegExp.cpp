@@ -17,14 +17,11 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
-#include "argconv.h"
-#include "RegExp.h"
+#include "scripting/argconv.h"
+#include "scripting/toplevel/RegExp.h"
 
 using namespace std;
 using namespace lightspark;
-
-SET_NAMESPACE("");
-REGISTER_CLASS_NAME(RegExp);
 
 RegExp::RegExp(Class_base* c):ASObject(c),dotall(false),global(false),ignoreCase(false),
 	extended(false),multiline(false),lastIndex(0)
@@ -215,7 +212,7 @@ ASObject *RegExp::match(const tiny_string& str)
 	a->setVariableByQName("index","",abstract_i(index),DYNAMIC_TRAIT);
 	for(int i=0;i<namedGroups;i++)
 	{
-		nameEntry* entry=(nameEntry*)entries;
+		nameEntry* entry=reinterpret_cast<nameEntry*>(entries);
 		uint16_t num=GINT16_FROM_BE(entry->number);
 		ASObject* captured=a->at(num).getPtr();
 		captured->incRef();

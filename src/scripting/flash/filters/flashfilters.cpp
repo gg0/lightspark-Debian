@@ -17,17 +17,11 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
-#include "flashfilters.h"
-#include "class.h"
+#include "scripting/flash/filters/flashfilters.h"
+#include "scripting/class.h"
 
 using namespace std;
 using namespace lightspark;
-
-SET_NAMESPACE("flash.filters");
-
-REGISTER_CLASS_NAME(BitmapFilter);
-REGISTER_CLASS_NAME(GlowFilter);
-REGISTER_CLASS_NAME(DropShadowFilter);
 
 void BitmapFilter::sinit(Class_base* c)
 {

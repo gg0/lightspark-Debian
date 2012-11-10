@@ -20,6 +20,7 @@
 
 # liblightspark.so sources
 SET(LIBSPARK_SOURCES 
+  allclasses.cpp
   asobject.cpp
   compat.cpp
   logger.cpp
@@ -57,7 +58,9 @@ SET(LIBSPARK_SOURCES
   parsing/textfile.cpp
   scripting/abc.cpp
   scripting/abc_codesynt.cpp
+  scripting/abc_fast_interpreter.cpp
   scripting/abc_interpreter.cpp
+  scripting/abc_optimizer.cpp
   scripting/abc_opcodes.cpp
   scripting/abctypes.cpp
   scripting/flash/accessibility/flashaccessibility.cpp
@@ -74,11 +77,14 @@ SET(LIBSPARK_SOURCES
   scripting/flash/geom/flashgeom.cpp
   scripting/flash/media/flashmedia.cpp
   scripting/flash/net/flashnet.cpp
+  scripting/flash/net/URLRequestHeader.cpp
   scripting/flash/net/URLStream.cpp
+  scripting/flash/net/XMLSocket.cpp
   scripting/flash/errors/flasherrors.cpp
   scripting/flash/sensors/flashsensors.cpp
   scripting/flash/system/flashsystem.cpp
   scripting/flash/text/flashtext.cpp
+  scripting/flash/text/flashtextengine.cpp
   scripting/flash/utils/flashutils.cpp
   scripting/flash/xml/flashxml.cpp
   scripting/toplevel/Array.cpp

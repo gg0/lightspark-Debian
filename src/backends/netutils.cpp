@@ -18,13 +18,13 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
-#include "abc.h"
+#include "scripting/abc.h"
 #include "swf.h"
-#include "config.h"
-#include "netutils.h"
-#include "rtmputils.h"
+#include "backends/config.h"
+#include "backends/netutils.h"
+#include "backends/rtmputils.h"
 #include "compat.h"
-#include "security.h"
+#include "backends/security.h"
 #include <string>
 #include <algorithm>
 #include <cctype>
@@ -60,7 +60,7 @@ void DownloadManager::stopAll()
 	Mutex::Lock l(mutex);
 
 	std::list<Downloader*>::iterator it=downloaders.begin();
-	for(;it!=downloaders.end();it++)
+	for(;it!=downloaders.end();++it)
 		(*it)->stop();
 }
 
@@ -197,12 +197,12 @@ Downloader* StandaloneDownloadManager::download(const URLInfo& url, bool cached,
  * Returns a pointer to a newly created \c Downloader for the given URL.
  * \param[in] url The URL (as a \c URLInfo) the \c Downloader is requested for
  * \param[in] data The binary data to send to the host
- * \param[in] contentType The content type in the full form "Content-Type: ..."
+ * \param[in] headers Request headers in the full form, f.e. "Content-Type: ..."
  * \return A pointer to a newly created \c Downloader for the given URL.
  * \see DownloadManager::destroy()
  */
 Downloader* StandaloneDownloadManager::downloadWithData(const URLInfo& url, const std::vector<uint8_t>& data,
-		const char* contentType, ILoadable* owner)
+		const std::list<tiny_string>& headers, ILoadable* owner)
 {
 	LOG(LOG_INFO, _("NET: STANDALONE: DownloadManager::downloadWithData '") << url.getParsedURL());
 	ThreadedDownloader* downloader;
@@ -216,7 +216,7 @@ Downloader* StandaloneDownloadManager::downloadWithData(const URLInfo& url, cons
 	else
 	{
 		LOG(LOG_INFO, _("NET: STANDALONE: DownloadManager: remote file"));
-		downloader=new CurlDownloader(url.getParsedURL(), data, contentType, owner);
+		downloader=new CurlDownloader(url.getParsedURL(), data, headers, owner);
 	}
 	downloader->enableFencingWaiting();
 	addDownloader(downloader);
@@ -232,15 +232,15 @@ Downloader* StandaloneDownloadManager::downloadWithData(const URLInfo& url, cons
  * \param[in] _cached Whether or not to cache this download.
  */
 Downloader::Downloader(const tiny_string& _url, bool _cached, ILoadable* o):
-	cacheOpened(0),cacheHasOpened(false),dataAvailable(0),terminated(0),hasTerminated(false), //LOCKING
+	cacheOpened(0),dataAvailable(0),terminated(0),hasTerminated(false),cacheHasOpened(false), //LOCKING
 	waitingForCache(false),waitingForData(false),waitingForTermination(false), //STATUS
 	forceStop(true),failed(false),finished(false),                //FLAGS
 	url(_url),originalURL(url),                                   //PROPERTIES
 	buffer(NULL),stableBuffer(NULL),                              //BUFFERING
-	cached(_cached),cachePos(0),cacheSize(0),keepCache(false),    //CACHING
-	length(0),receivedLength(0),                                  //DOWNLOADED DATA
-	redirected(false),requestStatus(0),contentType(NULL),         //HTTP REDIR, STATUS & HEADERS
-	owner(o)                                                   //PROGRESS
+	owner(o),                                                     //PROGRESS
+	cachePos(0),cacheSize(0),keepCache(false),cached(_cached),    //CACHING
+	redirected(false),requestStatus(0),                           //HTTP REDIR, STATUS & HEADERS
+	length(0),receivedLength(0)                                   //DOWNLOADED DATA
 {
 	setg(NULL,NULL,NULL);
 }
@@ -252,16 +252,16 @@ Downloader::Downloader(const tiny_string& _url, bool _cached, ILoadable* o):
  * \param[in] _url The URL for the Downloader.
  * \param[in] data Additional data to send to the host
  */
-Downloader::Downloader(const tiny_string& _url, const std::vector<uint8_t>& _data, const char* c, ILoadable* o):
-	cacheOpened(0),cacheHasOpened(false),dataAvailable(0),terminated(0),hasTerminated(false), //LOCKING
+Downloader::Downloader(const tiny_string& _url, const std::vector<uint8_t>& _data, const std::list<tiny_string>& h, ILoadable* o):
+	cacheOpened(0),dataAvailable(0),terminated(0),hasTerminated(false),cacheHasOpened(false), //LOCKING
 	waitingForCache(false),waitingForData(false),waitingForTermination(false), //STATUS
-	forceStop(true),failed(false),finished(false),                //FLAGS
-	url(_url),originalURL(url),                                   //PROPERTIES
-	buffer(NULL),stableBuffer(NULL),                              //BUFFERING
-	cached(false),cachePos(0),cacheSize(0),keepCache(false),      //CACHING
-	length(0),receivedLength(0),                                  //DOWNLOADED DATA
-	redirected(false),requestStatus(0),data(_data),contentType(c),//HTTP REDIR, STATUS & HEADERS
-	owner(o)                                                   //PROGRESS
+	forceStop(true),failed(false),finished(false),                   //FLAGS
+	url(_url),originalURL(url),                                      //PROPERTIES
+	buffer(NULL),stableBuffer(NULL),                                 //BUFFERING
+	owner(o),                                                        //PROGRESS
+	cachePos(0),cacheSize(0),keepCache(false),cached(false),         //CACHING
+	redirected(false),requestStatus(0),requestHeaders(h),data(_data),//HTTP REDIR, STATUS & HEADERS
+	length(0),receivedLength(0)                                      //DOWNLOADED DATA
 {
 	setg(NULL,NULL,NULL);
 }
@@ -1023,8 +1023,8 @@ ThreadedDownloader::ThreadedDownloader(const tiny_string& url, bool cached, ILoa
  * \param[in] data Additional data to send to the host
  */
 ThreadedDownloader::ThreadedDownloader(const tiny_string& url, const std::vector<uint8_t>& data,
-		const char* c, ILoadable* o):
-	Downloader(url, data, c, o),fenceState(false)
+				       const std::list<tiny_string>& headers, ILoadable* o):
+	Downloader(url, data, headers, o),fenceState(false)
 {
 }
 
@@ -1058,7 +1058,8 @@ CurlDownloader::CurlDownloader(const tiny_string& _url, bool _cached, ILoadable*
  * \param[in] data Additional data to send to the host
  */
 CurlDownloader::CurlDownloader(const tiny_string& _url, const std::vector<uint8_t>& _data,
-		const char* c, ILoadable* o):ThreadedDownloader(_url, _data, c, o)
+			       const std::list<tiny_string>& _headers, ILoadable* o):
+	ThreadedDownloader(_url, _data, _headers, o)
 {
 }
 
@@ -1114,10 +1115,22 @@ void CurlDownloader::execute()
 		// renamed to CURLOPT_ACCEPT_ENCODING in newer CURL,
 		// we use the old name to support the old versions.)
 		curl_easy_setopt(curl, CURLOPT_ENCODING, "");
-		if (!getSys()->getCookies().empty())
+		if (URLInfo(url).sameHost(getSys()->mainClip->getOrigin()) &&
+		    !getSys()->getCookies().empty())
 			curl_easy_setopt(curl, CURLOPT_COOKIE, getSys()->getCookies().c_str());
 
-		struct curl_slist *slist=NULL;
+		struct curl_slist *headerList=NULL;
+		bool hasContentType=false;
+		if(!requestHeaders.empty())
+		{
+			std::list<tiny_string>::const_iterator it;
+			for(it=requestHeaders.begin(); it!=requestHeaders.end(); ++it)
+			{
+				headerList=curl_slist_append(headerList, it->raw_buf());
+				hasContentType |= it->lowercase().startsWith("content-type:");
+			}
+		}
+
 		if(!data.empty())
 		{
 			curl_easy_setopt(curl, CURLOPT_POST, 1);
@@ -1126,15 +1139,16 @@ void CurlDownloader::execute()
 			curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, data.size());
 
 			//For POST it's mandatory to set the Content-Type
-			assert(contentType);
-			slist=curl_slist_append(slist, contentType);
-			curl_easy_setopt(curl, CURLOPT_HTTPHEADER, slist);
+			assert(hasContentType);
 		}
+
+		if(headerList)
+			curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headerList);
 
 		//curl_easy_setopt(curl, CURLOPT_VERBOSE, 1);
 		res = curl_easy_perform(curl);
 
-		curl_slist_free_all(slist);
+		curl_slist_free_all(headerList);
 
 		curl_easy_cleanup(curl);
 		if(res!=0)
@@ -1310,12 +1324,12 @@ DownloaderThreadBase::DownloaderThreadBase(_NR<URLRequest> request, IDownloaderT
 	if(!request.isNull())
 	{
 		url=request->getRequestURL();
+		requestHeaders=request->getHeaders();
 		request->getPostData(postData);
 	}
 }
 
 bool DownloaderThreadBase::createDownloader(bool cached,
-					    const char* contentType,
 					    _NR<EventDispatcher> dispatcher,
 					    ILoadable* owner,
 					    bool checkPolicyFile)
@@ -1345,7 +1359,7 @@ bool DownloaderThreadBase::createDownloader(bool cached,
 	}
 	else
 	{
-		downloader=getSys()->downloadManager->downloadWithData(url, postData, contentType, owner);
+		downloader=getSys()->downloadManager->downloadWithData(url, postData, requestHeaders, owner);
 	}
 
 	return true;

@@ -17,7 +17,7 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
-#include "abctypes.h"
+#include "scripting/abctypes.h"
 
 using namespace std;
 using namespace lightspark;
@@ -111,16 +111,9 @@ istream& lightspark::operator>>(istream& in, d64& v)
 
 istream& lightspark::operator>>(istream& in, string_info& v)
 {
-	in >> v.size;
-	uint8_t t;
-	string tmp;
-	tmp.reserve(v.size);
-	for(unsigned int i=0;i<v.size;i++)
-	{
-		in.read((char*)&t,1);
-		tmp.push_back(t);
-	}
-	v.val=tmp;
+	u30 size;
+	in >> size;
+	v.val=tiny_string(in,size);
 	return in;
 }
 
@@ -168,14 +161,15 @@ istream& lightspark::operator>>(istream& in, method_info_simple& v)
 
 istream& lightspark::operator>>(istream& in, method_body_info& v)
 {
-	in >> v.method >> v.max_stack >> v.local_count >> v.init_scope_depth >> v.max_scope_depth >> v.code_length;
-	v.code.resize(v.code_length);
-	for(unsigned int i=0;i<v.code_length;i++)
-		in.read(&v.code[i],1);
+	u30 code_length;
+	in >> v.method >> v.max_stack >> v.local_count >> v.init_scope_depth >> v.max_scope_depth >> code_length;
+	v.code.resize(code_length);
+	in.read(&v.code[0],code_length);
 
-	in >> v.exception_count;
-	v.exceptions.resize(v.exception_count);
-	for(unsigned int i=0;i<v.exception_count;i++)
+	u30 exception_count;
+	in >> exception_count;
+	v.exceptions.resize(exception_count);
+	for(unsigned int i=0;i<exception_count;i++)
 		in >> v.exceptions[i];
 
 	in >> v.trait_count;
@@ -317,7 +311,11 @@ istream& lightspark::operator>>(istream& in, traits_info& v)
 
 istream& lightspark::operator >>(istream& in, exception_info& v)
 {
-	in >> v.from >> v.to >> v.target >> v.exc_type >> v.var_name;
+	u30 from, to, target;
+	in >> from >> to >> target >> v.exc_type >> v.var_name;
+	v.from = from;
+	v.to = to;
+	v.target = target;
 	return in;
 }
 

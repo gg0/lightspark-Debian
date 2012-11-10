@@ -17,13 +17,11 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
-#include "argconv.h"
-#include "UInteger.h"
+#include "scripting/argconv.h"
+#include "scripting/toplevel/UInteger.h"
 
 using namespace std;
 using namespace lightspark;
-
-REGISTER_CLASS_NAME2(UInteger,"uint","");
 
 tiny_string UInteger::toString()
 {
@@ -88,10 +86,12 @@ TRISTATE UInteger::isLess(ASObject* o)
 ASFUNCTIONBODY(UInteger,_constructor)
 {
 	UInteger* th=static_cast<UInteger*>(obj);
-	if(args && argslen==1)
-		th->val=args[0]->toUInt();
-	else
-		th->val=0;
+	if(argslen==0)
+	{
+		//The uint is already initialized to 0
+		return NULL;
+	}
+	th->val=args[0]->toUInt();
 	return NULL;
 }
 
@@ -118,14 +118,17 @@ ASFUNCTIONBODY(UInteger,_toString)
 	uint32_t radix;
 	ARG_UNPACK (radix,10);
 
-	char buf[20];
-	assert_and_throw(radix==10 || radix==16);
-	if(radix==10)
+	if (radix == 10)
+	{
+		char buf[20];
 		snprintf(buf,20,"%u",th->val);
-	else if(radix==16)
-		snprintf(buf,20,"%x",th->val);
-
-	return Class<ASString>::getInstanceS(buf);
+		return Class<ASString>::getInstanceS(buf);
+	}
+	else
+	{
+		tiny_string s=Number::toStringRadix((number_t)th->val, radix);
+		return Class<ASString>::getInstanceS(s);
+	}
 }
 
 bool UInteger::isEqual(ASObject* o)

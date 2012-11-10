@@ -17,8 +17,8 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
-#ifndef TOPLEVEL_DATE_H
-#define TOPLEVEL_DATE_H
+#ifndef SCRIPTING_TOPLEVEL_DATE_H
+#define SCRIPTING_TOPLEVEL_DATE_H 1
 
 #include "asobject.h"
 
@@ -80,6 +80,21 @@ public:
 	ASFUNCTION(setUTCSeconds);
 	ASFUNCTION(setUTCMilliseconds);
 	ASFUNCTION(setTime);
+	ASFUNCTION(fullYearSetter);
+	ASFUNCTION(monthSetter);
+	ASFUNCTION(dateSetter);
+	ASFUNCTION(hoursSetter);
+	ASFUNCTION(minutesSetter);
+	ASFUNCTION(secondsSetter);
+	ASFUNCTION(millisecondsSetter);
+	ASFUNCTION(UTCFullYearSetter);
+	ASFUNCTION(UTCMonthSetter);
+	ASFUNCTION(UTCDateSetter);
+	ASFUNCTION(UTCHoursSetter);
+	ASFUNCTION(UTCMinutesSetter);
+	ASFUNCTION(UTCSecondsSetter);
+	ASFUNCTION(UTCMillisecondsSetter);
+	ASFUNCTION(timeSetter);
 	ASFUNCTION(_toString);
 	ASFUNCTION(_parse);
 	ASFUNCTION(toUTCString);
@@ -95,4 +110,4 @@ public:
 				std::map<const Class_base*, uint32_t>& traitsMap);
 };
 }
-#endif
+#endif /* SCRIPTING_TOPLEVEL_DATE_H */

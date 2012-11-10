@@ -18,11 +18,11 @@
 **************************************************************************/
 
 #include <map>
-#include "abc.h"
-#include "URLStream.h"
-#include "flash/net/flashnet.h"
+#include "scripting/abc.h"
+#include "scripting/flash/net/URLStream.h"
+#include "scripting/flash/net/flashnet.h"
 #include "backends/security.h"
-#include "argconv.h"
+#include "scripting/argconv.h"
 
 /**
  * TODO: This whole class shares a lot of code with URLLoader - unify!
@@ -31,10 +31,6 @@
 
 using namespace std;
 using namespace lightspark;
-
-SET_NAMESPACE("flash.net");
-
-REGISTER_CLASS_NAME(URLStream);
 
 URLStreamThread::URLStreamThread(_R<URLRequest> request, _R<URLStream> ldr, _R<ByteArray> bytes)
   : DownloaderThreadBase(request, ldr.getPtr()), loader(ldr), data(bytes)
@@ -47,8 +43,7 @@ void URLStreamThread::execute()
 
 	//TODO: support httpStatus, progress events
 
-	const char contenttype[]="Content-Type: application/x-www-form-urlencoded";
-	if(!createDownloader(false, contenttype, loader))
+	if(!createDownloader(false, loader))
 		return;
 
 	bool success=false;

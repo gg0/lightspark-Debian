@@ -17,13 +17,13 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
-#ifndef _GRAPHICS_H
-#define _GRAPHICS_H
+#ifndef BACKENDS_GRAPHICS_H
+#define BACKENDS_GRAPHICS_H 1
 
 #define CHUNKSIZE 128
 
 #include "compat.h"
-#include "lsopengl.h"
+#include "backends/lsopengl.h"
 #include <vector>
 #include "swftypes.h"
 #include "threading.h"
@@ -130,11 +130,11 @@ private:
 	 * For CairoRenderContext texId is an arbitrary id for the texture and chunks is
 	 * not used.
 	 */
-	uint32_t texId;
 	uint32_t* chunks;
+	uint32_t texId;
 	TextureChunk(uint32_t w, uint32_t h);
 public:
-	TextureChunk():texId(0),chunks(NULL),width(0),height(0){}
+	TextureChunk():chunks(NULL),texId(0),width(0),height(0){}
 	TextureChunk(const TextureChunk& r);
 	TextureChunk& operator=(const TextureChunk& r);
 	~TextureChunk();
@@ -176,7 +176,19 @@ public:
 
 class IDrawable
 {
+public:
+	enum MASK_MODE { HARD_MASK = 0, SOFT_MASK };
+	struct MaskData
+	{
+		IDrawable* m;
+		MASK_MODE maskMode;
+		MaskData(IDrawable* _m, MASK_MODE _mm):m(_m),maskMode(_mm){}
+	};
 protected:
+	/*
+	 * The masks to be applied
+	 */
+	std::vector<MaskData> masks;
 	int32_t width;
 	int32_t height;
 	/*
@@ -189,10 +201,20 @@ protected:
 	int32_t yOffset;
 	float alpha;
 public:
-	IDrawable(int32_t w, int32_t h, int32_t x, int32_t y, float a):
-		width(w),height(h),xOffset(x),yOffset(y),alpha(a){}
+	IDrawable(int32_t w, int32_t h, int32_t x, int32_t y, float a, const std::vector<MaskData>& m):
+		masks(m),width(w),height(h),xOffset(x),yOffset(y),alpha(a){}
 	virtual ~IDrawable(){}
+	/*
+	 * This method returns a raster buffer of the image
+	 * The various implementation are responsible for applying the
+	 * masks
+	 */
 	virtual uint8_t* getPixelBuffer()=0;
+	/*
+	 * This method creates a cairo path that can be used as a mask for
+	 * another object
+	 */
+	virtual void applyCairoMask(cairo_t* cr, int32_t offsetX, int32_t offsetY) const = 0;
 	int32_t getWidth() const { return width; }
 	int32_t getHeight() const { return height; }
 	int32_t getXOffset() const { return xOffset; }
@@ -238,15 +260,15 @@ public:
 class CairoRenderer: public IDrawable
 {
 protected:
-	/**
-	  The whole transformation matrix that is applied to the rendered object
-	*/
-	MATRIX matrix;
 	/*
 	   The scale to be applied in both the x and y axis.
 	   Useful to adapt points defined in pixels and twips (1/20 of pixel)
 	*/
 	const float scaleFactor;
+	/**
+	  The whole transformation matrix that is applied to the rendered object
+	*/
+	MATRIX matrix;
 	/*
 	 * There are reports (http://lists.freedesktop.org/archives/cairo/2011-September/022247.html)
 	 * that cairo is not threadsafe, and I have encountered some spurious crashes, too.
@@ -254,12 +276,12 @@ protected:
 	 * TODO: CairoRenderes are enqueued as IThreadJobs, therefore this mutex
 	 *       will serialize the thread pool when all thread pool workers are executing CairoRenderers!
 	 */
-	static StaticMutex cairoMutex;
+	static StaticRecMutex cairoMutex;
 	static void cairoClean(cairo_t* cr);
 	cairo_surface_t* allocateSurface(uint8_t*& buf);
 	virtual void executeDraw(cairo_t* cr)=0;
 public:
-	CairoRenderer(const MATRIX& _m, int32_t _x, int32_t _y, int32_t _w, int32_t _h, float _s, float _a);
+	CairoRenderer(const MATRIX& _m, int32_t _x, int32_t _y, int32_t _w, int32_t _h, float _s, float _a, const std::vector<MaskData>& m);
 	//IDrawable interface
 	uint8_t* getPixelBuffer();
 	/*
@@ -288,6 +310,7 @@ private:
 	 * This is run by CairoRenderer::execute()
 	 */
 	void executeDraw(cairo_t* cr);
+	void applyCairoMask(cairo_t* cr, int32_t offsetX, int32_t offsetY) const;
 public:
 	/*
 	   CairoTokenRenderer constructor
@@ -298,10 +321,12 @@ public:
 	   @param _m The whole transformation matrix
 	   @param _s The scale factor to be applied in both the x and y axis
 	   @param _a The alpha factor to be applied
+	   @param _ms The masks that must be applied
 	*/
 	CairoTokenRenderer(const std::vector<GeomToken>& _g, const MATRIX& _m,
-					   int32_t _x, int32_t _y, int32_t _w, int32_t _h, float _s, float _a)
-		: CairoRenderer(_m,_x,_y,_w,_h,_s,_a), tokens(_g) {}
+			int32_t _x, int32_t _y, int32_t _w, int32_t _h,
+		    float _s, float _a, const std::vector<MaskData>& _ms)
+		: CairoRenderer(_m,_x,_y,_w,_h,_s,_a,_ms),tokens(_g){}
 	/*
 	   Hit testing helper. Uses cairo to find if a point in inside the shape
 
@@ -311,40 +336,31 @@ public:
 	   @param y The Y in local coordinates
 	*/
 	static bool hitTest(const std::vector<GeomToken>& tokens, float scaleFactor, number_t x, number_t y);
-	/*
-	   Opacity test helper. Uses cairo to render a single pixel and see if it's opaque or not
-
-	   @param tokens The tokens of the shape being tested
-	   @param scaleFactor The scale factor to be applied
-	   @param x The X in local coordinates
-	   @param y The Y in local coordinates
-	*/
-	static bool isOpaque(const std::vector<GeomToken>& tokens, float scaleFactor, number_t x, number_t y);
 };
 
 class TextData
 {
 public:
 	/* the default values are from the spec for flash.text.TextField and flash.text.TextFormat */
-	TextData() : width(100), height(100), textWidth(0), textHeight(0), background(false), backgroundColor(0xFFFFFF),
+	TextData() : width(100), height(100), textWidth(0), textHeight(0), font("Times New Roman"), background(false), backgroundColor(0xFFFFFF),
 		border(false), borderColor(0x000000), multiline(false), textColor(0x000000),
-		wordWrap(false), autoSize(AS_NONE), fontSize(12), font("Times New Roman") {}
+		autoSize(AS_NONE), fontSize(12), wordWrap(false) {}
 	uint32_t width;
 	uint32_t height;
 	uint32_t textWidth;
 	uint32_t textHeight;
 	tiny_string text;
+	tiny_string font;
 	bool background;
 	RGB backgroundColor;
 	bool border;
 	RGB borderColor;
 	bool multiline;
 	RGB textColor;
-	bool wordWrap;
 	enum AUTO_SIZE {AS_NONE = 0, AS_LEFT, AS_RIGHT, AS_CENTER };
 	AUTO_SIZE autoSize;
 	uint32_t fontSize;
-	tiny_string font;
+	bool wordWrap;
 };
 
 class CairoPangoRenderer : public CairoRenderer
@@ -356,10 +372,11 @@ class CairoPangoRenderer : public CairoRenderer
 	void executeDraw(cairo_t* cr);
 	TextData textData;
 	static void pangoLayoutFromData(PangoLayout* layout, const TextData& tData);
+	void applyCairoMask(cairo_t* cr, int32_t offsetX, int32_t offsetY) const;
 public:
 	CairoPangoRenderer(const TextData& _textData, const MATRIX& _m,
-			int32_t _x, int32_t _y, int32_t _w, int32_t _h, float _s, float _a)
-		: CairoRenderer(_m,_x,_y,_w,_h,_s,_a), textData(_textData) {}
+			int32_t _x, int32_t _y, int32_t _w, int32_t _h, float _s, float _a, const std::vector<MaskData>& _ms)
+		: CairoRenderer(_m,_x,_y,_w,_h,_s,_a,_ms), textData(_textData) {}
 	/**
 		Helper. Uses Pango to find the size of the textdata
 		@param _texttData The textData being tested
@@ -384,4 +401,4 @@ public:
 };
 
 };
-#endif
+#endif /* BACKENDS_GRAPHICS_H */

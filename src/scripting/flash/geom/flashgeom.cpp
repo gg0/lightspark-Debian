@@ -17,21 +17,12 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
-#include "abc.h"
-#include "flashgeom.h"
-#include "argconv.h"
+#include "scripting/abc.h"
+#include "scripting/flash/geom/flashgeom.h"
+#include "scripting/argconv.h"
 
 using namespace lightspark;
 using namespace std;
-
-SET_NAMESPACE("flash.geom");
-
-REGISTER_CLASS_NAME(Transform);
-REGISTER_CLASS_NAME(ColorTransform);
-REGISTER_CLASS_NAME(Point);
-REGISTER_CLASS_NAME(Vector3D);
-REGISTER_CLASS_NAME2(lightspark::Rectangle,"Rectangle","flash.geom");
-REGISTER_CLASS_NAME(Matrix);
 
 void Rectangle::sinit(Class_base* c)
 {
@@ -927,6 +918,7 @@ Transform::Transform(Class_base* c, _R<DisplayObject> o):ASObject(c),owner(o)
 void Transform::finalize()
 {
 	owner.reset();
+	ASObject::finalize();
 }
 
 void Transform::sinit(Class_base* c)

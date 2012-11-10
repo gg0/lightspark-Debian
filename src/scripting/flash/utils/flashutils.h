@@ -17,12 +17,12 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
-#ifndef _FLASH_UTILS_H
-#define _FLASH_UTILS_H
+#ifndef SCRIPTING_FLASH_UTILS_FLASHUTILS_H
+#define SCRIPTING_FLASH_UTILS_FLASHUTILS_H 1
 
 #include "compat.h"
 #include "swftypes.h"
-#include "flash/events/flashevents.h"
+#include "scripting/flash/events/flashevents.h"
 #include "thread_pool.h"
 #include "timer.h"
 
@@ -64,12 +64,12 @@ class ByteArray: public ASObject, public IDataInput, public IDataOutput
 friend class LoaderThread;
 friend class URLLoader;
 protected:
+	bool littleEndian;
+	uint8_t objectEncoding;
+	uint32_t position;
 	uint8_t* bytes;
 	uint32_t real_len;
 	uint32_t len;
-	uint32_t position;
-	bool littleEndian;
-	uint32_t objectEncoding;
 	void compress_zlib();
 	void uncompress_zlib();
 public:
@@ -87,6 +87,7 @@ public:
 	void writeUTF(const tiny_string& str);
 	uint32_t writeObject(ASObject* obj);
 	void writeStringVR(std::map<tiny_string, uint32_t>& stringMap, const tiny_string& s);
+	void writeXMLString(std::map<const ASObject*, uint32_t>& objMap, ASObject *xml, const tiny_string& s);
 	void writeU29(uint32_t val);
 	uint32_t getPosition() const;
 	void setPosition(uint32_t p);
@@ -164,7 +165,7 @@ public:
 	int32_t getVariableByMultiname_i(const multiname& name);
 	void setVariableByMultiname(const multiname& name, ASObject* o, CONST_ALLOWED_FLAG allowConst);
 	void setVariableByMultiname_i(const multiname& name, int32_t value);
-	bool hasPropertyByMultiname(const multiname& name, bool considerDynamic);
+	bool hasPropertyByMultiname(const multiname& name, bool considerDynamic, bool considerPrototype);
 };
 
 class Timer: public EventDispatcher, public ITickJob
@@ -173,12 +174,12 @@ private:
 	void tick();
 	void tickFence();
 protected:
+	bool running;
 	uint32_t delay;
 	uint32_t repeatCount;
 	uint32_t currentCount;
-	bool running;
 public:
-	Timer(Class_base* c):EventDispatcher(c),delay(0),repeatCount(0),currentCount(0),running(false){};
+	Timer(Class_base* c):EventDispatcher(c),running(false),delay(0),repeatCount(0),currentCount(0){};
 	static void sinit(Class_base* c);
 	ASFUNCTION(_constructor);
 	ASFUNCTION(_getCurrentCount);
@@ -199,6 +200,7 @@ private:
 	typedef std::map<_R<ASObject>,_R<ASObject>,std::less<_R<ASObject>>,
 	       reporter_allocator<std::pair<const _R<ASObject>, _R<ASObject>>>> dictType;
 	dictType data;
+	dictType::iterator findKey(ASObject *);
 public:
 	Dictionary(Class_base* c);
 	void finalize();
@@ -214,7 +216,7 @@ public:
 	void setVariableByMultiname(const multiname& name, ASObject* o, CONST_ALLOWED_FLAG allowConst);
 	void setVariableByMultiname_i(const multiname& name, int32_t value);
 	bool deleteVariableByMultiname(const multiname& name);
-	bool hasPropertyByMultiname(const multiname& name, bool considerDynamic);
+	bool hasPropertyByMultiname(const multiname& name, bool considerDynamic, bool considerPrototype);
 	tiny_string toString();
 	uint32_t nextNameIndex(uint32_t cur_index);
 	_R<ASObject> nextName(uint32_t index);
@@ -242,7 +244,7 @@ public:
 	}
 	
 	bool deleteVariableByMultiname(const multiname& name);
-	bool hasPropertyByMultiname(const multiname& name, bool considerDynamic);
+	bool hasPropertyByMultiname(const multiname& name, bool considerDynamic, bool considerPrototype);
 	tiny_string toString()
 	{
 		throw UnsupportedException("Proxy is missing some stuff");
@@ -274,8 +276,8 @@ private:
 	uint32_t id;
 	_R<IFunction> callback;
 	ASObject** args;
-	const unsigned int argslen;
 	_R<ASObject> obj;
+	const unsigned int argslen;
 	uint32_t interval;
 public:
 	IntervalRunner(INTERVALTYPE _type, uint32_t _id, _R<IFunction> _callback, ASObject** _args,
@@ -302,4 +304,4 @@ public:
 
 };
 
-#endif
+#endif /* SCRIPTING_FLASH_UTILS_FLASHUTILS_H */

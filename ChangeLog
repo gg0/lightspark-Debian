@@ -1,5 +1,18 @@
 lightspark: An open source flash player implementation
 
+Version 0.7.0:
+
+	* Support LZMA compressed SWFs [Requires liblzma]
+	* Improved BitmapData support
+	* Improved ActionScript compatibility
+	* Improved virtual machine performance and memory consumption
+	* Improved XML support
+	* Experimental support for bytecode optimization at runtime
+	* Improved ExternalInterface (browser integration) support
+	* Improved performance of JPEG loading
+	* Support for XMLSocket
+	* Completely redesigned and improved masking support
+
 Version 0.6.0:
 
 	* Enable RTMP support by default, requires librtmp

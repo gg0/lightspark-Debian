@@ -17,8 +17,8 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
-#ifndef _TIMER_H
-#define _TIMER_H
+#ifndef TIMER_H
+#define TIMER_H 1
 
 #include "compat.h"
 #include <list>
@@ -45,7 +45,7 @@ public:
 	virtual void tick()=0;
 	ITickJob():stopMe(false){}
 	virtual ~ITickJob(){};
-	//Last method to be called when no more ticks will be sent
+	// This is called after tick() for single-shot jobs (i.e. enqueued with isTick==false)
 	virtual void tickFence() = 0;
 };
 
@@ -56,20 +56,20 @@ private:
 	{
 	public:
 		TimingEvent(ITickJob* _job, bool _isTick, uint32_t _tickTime, uint32_t _waitTime) 
-			: isTick(_isTick),job(_job),wakeUpTime(_isTick ? _tickTime : _waitTime), tickTime(_tickTime) {};
-		bool isTick;
+			: job(_job),wakeUpTime(_isTick ? _tickTime : _waitTime),tickTime(_tickTime),isTick(_isTick) {};
 		ITickJob* job;
 		CondTime wakeUpTime;
 		uint32_t tickTime;
+		bool isTick;
 	};
 	Mutex mutex;
 	Cond newEvent;
 	Thread* t;
 	std::list<TimingEvent*> pendingEvents;
 	SystemState* m_sys;
+	volatile ITickJob* inExecution;
 	volatile bool stopped;
 	bool joined;
-	volatile ITickJob* inExecution;
 	void worker();
 	void insertNewEvent(TimingEvent* e);
 	void insertNewEvent_nolock(TimingEvent* e);
@@ -101,6 +101,6 @@ public:
 	Chronometer();
 	uint32_t checkpoint();
 };
-	
+
 };
-#endif
+#endif /* TIMER_H */

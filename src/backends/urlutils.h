@@ -18,12 +18,14 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
-#ifndef _URL_UTILS_H
-#define _URL_UTILS_H
+#ifndef BACKENDS_URLUTILS_H
+#define BACKENDS_URLUTILS_H 1
 
 #include "compat.h"
 #include <iostream>
 #include <string>
+#include <list>
+#include <utility>
 #include "swftypes.h"
 
 namespace lightspark
@@ -37,20 +39,20 @@ private:
 	tiny_string parsedURL; //The URL normalized and space encoded
 	tiny_string protocol; //Part after
 	tiny_string hostname; //Part after :// after protocol
-	uint16_t port; //Part after first : after hostname
 	tiny_string path; //Part after first / after hostname
 	tiny_string pathDirectory;
 	tiny_string pathFile;
 	tiny_string query; //Part after first ?
 	tiny_string fragment; //Part after first #
 	tiny_string stream; //The requested stream, used for RTMP protocols
-	bool valid;
 public:
-	enum INVALID_REASON { MISSING_PROTOCOL, MISSING_PATH, MISSING_HOSTNAME, INVALID_PORT };
+	enum INVALID_REASON { IS_EMPTY, MISSING_PROTOCOL, MISSING_PATH, MISSING_HOSTNAME, INVALID_PORT };
 private:
 	INVALID_REASON invalidReason;
+	uint16_t port; //Part after first : after hostname
+	bool valid;
 public:
-	URLInfo():valid(false) {};
+	URLInfo():invalidReason(IS_EMPTY),valid(false) {};
 	URLInfo(const tiny_string& u);
 	~URLInfo() {};
 	bool isValid() const { return valid; }
@@ -74,6 +76,8 @@ public:
 	static bool isSubDomainOf(const tiny_string& parent, const tiny_string& child);
 	//Check if a given domain a matches a given domain expression (can be used with wildcard domains)
 	static bool matchesDomain(const tiny_string& expression, const tiny_string& subject);
+	//Check if the given url has same protocol, hostname and port
+	bool sameHost(const URLInfo& other) const;
 
 	bool operator==(const std::string& subject) const
 	{ return getParsedURL() == tiny_string(subject); }
@@ -92,6 +96,7 @@ public:
 	const tiny_string& getPathFile() const { return pathFile; };
 	const tiny_string& getQuery() const { return query; };
 	const tiny_string& getFragment() const { return fragment; };
+	std::list< std::pair<tiny_string, tiny_string> > getQueryKeyValue() const;
 
 	bool isRTMP() const;
 	//Accessors to the RTMP requested stream
@@ -112,4 +117,4 @@ public:
 };
 
 };
-#endif
+#endif /* BACKENDS_URLUTILS_H */

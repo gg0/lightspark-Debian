@@ -17,16 +17,22 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
-#include "abc.h"
+#ifdef LLVM_28
+#define alignof alignOf
+#endif
+
+#include "compat.h"
+
 #include <llvm/Module.h>
 #include <llvm/ExecutionEngine/ExecutionEngine.h>
 #include <llvm/ExecutionEngine/JIT.h>
+#include <llvm/PassManager.h>
 #include <llvm/LLVMContext.h>
 #include <llvm/Target/TargetData.h>
-#ifdef LLVM_28
-#include <llvm/Target/TargetSelect.h>
-#else
+#ifdef HAVE_SUPPORT_TARGETSELECT_H
 #include <llvm/Support/TargetSelect.h>
+#else
+#include <llvm/Target/TargetSelect.h>
 #endif
 #include <llvm/Target/TargetOptions.h>
 #include <llvm/Analysis/Verifier.h>
@@ -37,32 +43,36 @@
 #include <limits>
 #include <cmath>
 #include "swf.h"
-#include "toplevel/ASString.h"
-#include "toplevel/Date.h"
-#include "toplevel/Math.h"
-#include "toplevel/RegExp.h"
-#include "toplevel/Vector.h"
-#include "toplevel/XML.h"
-#include "toplevel/XMLList.h"
-#include "flash/accessibility/flashaccessibility.h"
-#include "flash/desktop/flashdesktop.h"
-#include "flash/display/flashdisplay.h"
-#include "flash/display/BitmapData.h"
-#include "flash/events/flashevents.h"
-#include "flash/filters/flashfilters.h"
-#include "flash/net/flashnet.h"
-#include "flash/net/URLStream.h"
-#include "flash/system/flashsystem.h"
-#include "flash/sensors/flashsensors.h"
-#include "flash/utils/flashutils.h"
-#include "flash/geom/flashgeom.h"
-#include "flash/external/ExternalInterface.h"
-#include "flash/media/flashmedia.h"
-#include "flash/xml/flashxml.h"
-#include "flash/errors/flasherrors.h"
-#include "class.h"
+#include "scripting/toplevel/ASString.h"
+#include "scripting/toplevel/Date.h"
+#include "scripting/toplevel/Math.h"
+#include "scripting/toplevel/RegExp.h"
+#include "scripting/toplevel/Vector.h"
+#include "scripting/toplevel/XML.h"
+#include "scripting/toplevel/XMLList.h"
+#include "scripting/flash/accessibility/flashaccessibility.h"
+#include "scripting/flash/desktop/flashdesktop.h"
+#include "scripting/flash/display/flashdisplay.h"
+#include "scripting/flash/display/BitmapData.h"
+#include "scripting/flash/events/flashevents.h"
+#include "scripting/flash/filters/flashfilters.h"
+#include "scripting/flash/net/flashnet.h"
+#include "scripting/flash/net/URLRequestHeader.h"
+#include "scripting/flash/net/URLStream.h"
+#include "scripting/flash/net/XMLSocket.h"
+#include "scripting/flash/system/flashsystem.h"
+#include "scripting/flash/sensors/flashsensors.h"
+#include "scripting/flash/utils/flashutils.h"
+#include "scripting/flash/geom/flashgeom.h"
+#include "scripting/flash/external/ExternalInterface.h"
+#include "scripting/flash/media/flashmedia.h"
+#include "scripting/flash/xml/flashxml.h"
+#include "scripting/flash/errors/flasherrors.h"
+#include "scripting/flash/text/flashtext.h"
+#include "scripting/flash/text/flashtextengine.h"
+#include "scripting/class.h"
 #include "exceptions.h"
-#include "compat.h"
+#include "scripting/abc.h"
 
 using namespace std;
 using namespace lightspark;
@@ -146,18 +156,13 @@ void SymbolClassTag::execute(RootMovieClip* root) const
 		tiny_string className((const char*)Names[i],true);
 		if(Tags[i]==0)
 		{
-			//We have to bind this root movieclip itself, let's tell it.
-			//This will be done later
-			root->bindToName(className);
 			root->incRef();
 			getVm()->addEvent(NullRef, _MR(new (getSys()->unaccountedMemory) BindClassEvent(_MR(root),className)));
 
 		}
 		else
 		{
-			DictionaryTag* t=root->dictionaryLookup(Tags[i]);
-			_R<BindClassEvent> e(new (getSys()->unaccountedMemory) BindClassEvent(t,className));
-			getVm()->addEvent(NullRef,e);
+			root->addBinding(className, root->dictionaryLookup(Tags[i]));
 		}
 	}
 }
@@ -170,7 +175,7 @@ void ScriptLimitsTag::execute(RootMovieClip* root) const
 
 void ABCVm::registerClasses()
 {
-	Global* builtin=Class<Global>::getInstanceS((ABCContext*)0, 0);
+	Global* builtin=Class<Global>::getInstanceS((ABCContext*)NULL, 0);
 	//Register predefined types, ASObject are enough for not implemented classes
 	builtin->registerBuiltin("Object","",Class<ASObject>::getRef());
 	builtin->registerBuiltin("Class","",Class_object::getRef());
@@ -212,7 +217,7 @@ void ABCVm::registerClasses()
 	builtin->registerBuiltin("eval","",_MR(Class<IFunction>::getFunction(eval)));
 	builtin->registerBuiltin("print","",_MR(Class<IFunction>::getFunction(print)));
 	builtin->registerBuiltin("trace","",_MR(Class<IFunction>::getFunction(trace)));
-	builtin->registerBuiltin("parseInt","",_MR(Class<IFunction>::getFunction(parseInt)));
+	builtin->registerBuiltin("parseInt","",_MR(Class<IFunction>::getFunction(parseInt,2)));
 	builtin->registerBuiltin("parseFloat","",_MR(Class<IFunction>::getFunction(parseFloat)));
 	builtin->registerBuiltin("encodeURI","",_MR(Class<IFunction>::getFunction(encodeURI)));
 	builtin->registerBuiltin("decodeURI","",_MR(Class<IFunction>::getFunction(decodeURI)));
@@ -270,13 +275,26 @@ void ABCVm::registerClasses()
 
 	builtin->registerBuiltin("AntiAliasType","flash.text",Class<AntiAliasType>::getRef());
 	builtin->registerBuiltin("Font","flash.text",Class<ASFont>::getRef());
+	builtin->registerBuiltin("FontStyle","flash.text",Class<FontStyle>::getRef());
+	builtin->registerBuiltin("FontType","flash.text",Class<FontType>::getRef());
+	builtin->registerBuiltin("GridFitType","flash.text",Class<GridFitType>::getRef());
 	builtin->registerBuiltin("StyleSheet","flash.text",Class<StyleSheet>::getRef());
+	builtin->registerBuiltin("TextColorType","flash.text",Class<TextColorType>::getRef());
+	builtin->registerBuiltin("TextDisplayMode","flash.text",Class<TextDisplayMode>::getRef());
 	builtin->registerBuiltin("TextField","flash.text",Class<TextField>::getRef());
 	builtin->registerBuiltin("TextFieldType","flash.text",Class<TextFieldType>::getRef());
 	builtin->registerBuiltin("TextFieldAutoSize","flash.text",Class<TextFieldAutoSize>::getRef());
 	builtin->registerBuiltin("TextFormat","flash.text",Class<TextFormat>::getRef());
 	builtin->registerBuiltin("TextFormatAlign","flash.text",Class<TextFormatAlign>::getRef());
 	builtin->registerBuiltin("StaticText","flash.text",Class<StaticText>::getRef());
+
+	builtin->registerBuiltin("ContentElement","flash.text.engine",Class<ContentElement>::getRef());
+	builtin->registerBuiltin("ElementFormat","flash.text.engine",Class<ElementFormat>::getRef());
+	builtin->registerBuiltin("FontDescription","flash.text.engine",Class<FontDescription>::getRef());
+	builtin->registerBuiltin("FontWeight","flash.text.engine",Class<FontWeight>::getRef());
+	builtin->registerBuiltin("TextBlock","flash.text.engine",Class<TextBlock>::getRef());
+	builtin->registerBuiltin("TextElement","flash.text.engine",Class<TextElement>::getRef());
+	builtin->registerBuiltin("TextLine","flash.text.engine",Class<TextLine>::getRef());
 
 	builtin->registerBuiltin("XMLDocument","flash.xml",Class<XMLDocument>::getRef());
 	builtin->registerBuiltin("XMLNode","flash.xml",Class<XMLNode>::getRef());
@@ -330,6 +348,10 @@ void ABCVm::registerClasses()
 	builtin->registerBuiltin("KeyboardEvent","flash.events",Class<KeyboardEvent>::getRef());
 	builtin->registerBuiltin("StatusEvent","flash.events",Class<StatusEvent>::getRef());
 	builtin->registerBuiltin("DataEvent","flash.events",Class<DataEvent>::getRef());
+	builtin->registerBuiltin("DRMErrorEvent","flash.events",Class<DRMErrorEvent>::getRef());
+	builtin->registerBuiltin("DRMStatusEvent","flash.events",Class<DRMStatusEvent>::getRef());
+	builtin->registerBuiltin("StageVideoEvent","flash.events",Class<StageVideoEvent>::getRef());
+	builtin->registerBuiltin("StageVideoAvailabilityEvent","flash.events",Class<StageVideoAvailabilityEvent>::getRef());
 
 	builtin->registerBuiltin("sendToURL","flash.net",_MR(Class<IFunction>::getFunction(sendToURL)));
 	builtin->registerBuiltin("LocalConnection","flash.net",Class<ASObject>::getStubClass(QName("LocalConnection","flash.net")));
@@ -340,12 +362,14 @@ void ABCVm::registerClasses()
 	builtin->registerBuiltin("URLStream","flash.net",Class<URLStream>::getRef());
 	builtin->registerBuiltin("URLLoaderDataFormat","flash.net",Class<URLLoaderDataFormat>::getRef());
 	builtin->registerBuiltin("URLRequest","flash.net",Class<URLRequest>::getRef());
+	builtin->registerBuiltin("URLRequestHeader","flash.net",Class<URLRequestHeader>::getRef());
 	builtin->registerBuiltin("URLRequestMethod","flash.net",Class<URLRequestMethod>::getRef());
 	builtin->registerBuiltin("URLVariables","flash.net",Class<URLVariables>::getRef());
 	builtin->registerBuiltin("SharedObject","flash.net",Class<SharedObject>::getRef());
 	builtin->registerBuiltin("ObjectEncoding","flash.net",Class<ObjectEncoding>::getRef());
 	builtin->registerBuiltin("Socket","flash.net",Class<ASObject>::getStubClass(QName("Socket","flash.net")));
 	builtin->registerBuiltin("Responder","flash.net",Class<Responder>::getRef());
+	builtin->registerBuiltin("XMLSocket","flash.net",Class<XMLSocket>::getRef());
 	builtin->registerBuiltin("registerClassAlias","flash.net",_MR(Class<IFunction>::getFunction(registerClassAlias)));
 	builtin->registerBuiltin("getClassByAlias","flash.net",_MR(Class<IFunction>::getFunction(getClassByAlias)));
 
@@ -355,11 +379,16 @@ void ABCVm::registerClasses()
 	builtin->registerBuiltin("ApplicationDomain","flash.system",Class<ApplicationDomain>::getRef());
 	builtin->registerBuiltin("SecurityDomain","flash.system",Class<SecurityDomain>::getRef());
 	builtin->registerBuiltin("LoaderContext","flash.system",Class<LoaderContext>::getRef());
+	builtin->registerBuiltin("System","flash.system",Class<System>::getRef());
 
 	builtin->registerBuiltin("SoundTransform","flash.media",Class<SoundTransform>::getRef());
 	builtin->registerBuiltin("Video","flash.media",Class<Video>::getRef());
 	builtin->registerBuiltin("Sound","flash.media",Class<Sound>::getRef());
 	builtin->registerBuiltin("SoundLoaderContext","flash.media",Class<SoundLoaderContext>::getRef());
+	builtin->registerBuiltin("SoundChannel","flash.media",Class<SoundChannel>::getRef());
+	builtin->registerBuiltin("StageVideo","flash.media",Class<StageVideo>::getRef());
+	builtin->registerBuiltin("StageVideoAvailability","flash.media",Class<StageVideoAvailability>::getRef());
+	builtin->registerBuiltin("VideoStatus","flash.media",Class<VideoStatus>::getRef());
 
 	builtin->registerBuiltin("Keyboard","flash.ui",Class<ASObject>::getStubClass(QName("Keyboard","flash.ui")));
 	builtin->registerBuiltin("ContextMenu","flash.ui",Class<ASObject>::getStubClass(QName("ContextMenu","flash.ui")));
@@ -383,6 +412,8 @@ void ABCVm::registerClasses()
 	if(getSys()->flashMode==SystemState::AIR)
 	{
 		builtin->registerBuiltin("NativeApplication","flash.desktop",Class<NativeApplication>::getRef());
+
+		builtin->registerBuiltin("InvokeEvent","flash.events",Class<InvokeEvent>::getRef());
 
 		builtin->registerBuiltin("FileStream","flash.filesystem",
 				Class<ASObject>::getStubClass(QName("FileStream","flash.filestream")));
@@ -838,10 +869,6 @@ ABCVm::ABCVm(SystemState* s, MemoryAccount* m):m_sys(s),status(CREATED),shutting
 	limits.max_recursion = 256;
 	limits.script_timeout = 20;
 	m_sys=s;
-	int_manager=new Manager(15);
-	uint_manager=new Manager(15);
-	number_manager=new Manager(15);
-	vmDataMemory=m_sys->allocateMemoryAccount("VM_Data");
 }
 
 void ABCVm::start()
@@ -882,10 +909,6 @@ ABCVm::~ABCVm()
 {
 	for(size_t i=0;i<contexts.size();++i)
 		delete contexts[i];
-
-	delete int_manager;
-	delete uint_manager;
-	delete number_manager;
 }
 
 int ABCVm::getEventQueueSize()
@@ -1077,19 +1100,9 @@ void ABCVm::handleEvent(std::pair<_NR<EventDispatcher>, _R<Event> > e)
 			case EXTERNAL_CALL:
 			{
 				ExternalCallEvent* ev=static_cast<ExternalCallEvent*>(e.second.getPtr());
-
-				// Convert ExtVariant arguments to ASObjects
-				ASObject** objArgs = g_newa(ASObject*,ev->numArgs);
-				for(uint32_t i = 0; i < ev->numArgs; i++)
-				{
-					objArgs[i] = ev->args[i]->getASObject();
-				}
-
 				try
 				{
-					ASObject* result = ev->f->call(getSys()->getNullRef(),objArgs,ev->numArgs);
-					// We should report the function result
-					*(ev->result) = new ExtVariant(_MR(result));
+					*(ev->result) = ev->f->call(getSys()->getNullRef(),ev->args,ev->numArgs);
 				}
 				catch(ASObject* exception)
 				{
@@ -1116,17 +1129,15 @@ void ABCVm::handleEvent(std::pair<_NR<EventDispatcher>, _R<Event> > e)
 			{
 				InitFrameEvent* ev=static_cast<InitFrameEvent*>(e.second.getPtr());
 				LOG(LOG_CALLS,"INIT_FRAME");
-				if(!ev->clip.isNull())
-					ev->clip->initFrame();
-				else
-					m_sys->getStage()->initFrame();
+				assert(!ev->clip.isNull());
+				ev->clip->initFrame();
 				break;
 			}
 			case ADVANCE_FRAME:
 			{
 				AdvanceFrameEvent* ev=static_cast<AdvanceFrameEvent*>(e.second.getPtr());
 				LOG(LOG_CALLS,"ADVANCE_FRAME");
-				m_sys->getStage()->advanceFrame();
+				m_sys->mainClip->getStage()->advanceFrame();
 				ev->done.signal(); // Won't this signal twice, wrt to the signal() below?
 				break;
 			}
@@ -1302,9 +1313,8 @@ bool ABCContext::isinstance(ASObject* obj, multiname* name)
 
 	ASObject* type=ret;
 	bool real_ret=false;
-	Class_base* objc=NULL;
-	Class_base* c=NULL;
-	c=static_cast<Class_base*>(type);
+	Class_base* objc=obj->classdef;
+	Class_base* c=static_cast<Class_base*>(type);
 	//Special case numeric types
 	if(obj->getObjectType()==T_INTEGER || obj->getObjectType()==T_UINTEGER || obj->getObjectType()==T_NUMBER)
 	{
@@ -1313,29 +1323,14 @@ bool ABCContext::isinstance(ASObject* obj, multiname* name)
 		return real_ret;
 	}
 
-	if(obj->classdef)
-	{
-		assert_and_throw(type->getObjectType()==T_CLASS);
-
-		objc=obj->classdef;
-	}
-	else if(obj->getObjectType()==T_CLASS)
-	{
-		assert_and_throw(type->getObjectType()==T_CLASS);
-
-		//Special case for Class
-		if(c->class_name.name=="Class" && c->class_name.ns=="")
-			return true;
-		else
-			return false;
-	}
-	else
+	if(!objc)
 	{
 		real_ret=obj->getObjectType()==type->getObjectType();
 		LOG(LOG_CALLS,_("isType on non classed object ") << real_ret);
 		return real_ret;
 	}
 
+	assert_and_throw(type->getObjectType()==T_CLASS);
 	real_ret=objc->isSubClass(c);
 	LOG(LOG_CALLS,_("Type ") << objc->class_name << _(" is ") << ((real_ret)?"":_("not ")) 
 			<< "subclass of " << c->class_name);
@@ -1448,7 +1443,7 @@ void ABCVm::Run(ABCVm* th)
 #endif
 #endif
 		llvm::InitializeNativeTarget();
-		th->module=new llvm::Module(llvm::StringRef("abc jit"),th->llvm_context);
+		th->module=new llvm::Module(llvm::StringRef("abc jit"),th->llvm_context());
 		llvm::EngineBuilder eb(th->module);
 		eb.setEngineKind(llvm::EngineKind::JIT);
 #ifdef LLVM_31
@@ -1483,7 +1478,7 @@ void ABCVm::Run(ABCVm* th)
 
 #ifdef MEMORY_USAGE_PROFILING
 	string memoryProfileFile="lightspark.massif.";
-	memoryProfileFile+=th->m_sys->getOrigin().getPathFile().raw_buf();
+	memoryProfileFile+=th->m_sys->mainClip->getOrigin().getPathFile().raw_buf();
 	ofstream memoryProfile(memoryProfileFile, ios_base::out | ios_base::trunc);
 	int snapshotCount = 0;
 	memoryProfile << "desc: (none) \ncmd: lightspark\ntime_unit: i" << endl;
@@ -1570,7 +1565,7 @@ void ABCVm::signalEventWaiters()
 	}
 }
 
-void ABCVm::parseRPCMessage(_R<ByteArray> message, _NR<ASObject> client, _R<Responder> responder)
+void ABCVm::parseRPCMessage(_R<ByteArray> message, _NR<ASObject> client, _NR<Responder> responder)
 {
 	uint16_t version;
 	if(!message->readShort(version))
@@ -1648,17 +1643,20 @@ void ABCVm::parseRPCMessage(_R<ByteArray> message, _NR<ASObject> client, _R<Resp
 	assert_and_throw(marker==0x11);
 	_R<ASObject> ret=_MR(ByteArray::readObject(message.getPtr(), NULL, 0));
 
-	multiname onResultName(NULL);
-	onResultName.name_type=multiname::NAME_STRING;
-	onResultName.name_s_id=getSys()->getUniqueStringId("onResult");
-	onResultName.ns.push_back(nsNameAndKind("",NAMESPACE));
-	_NR<ASObject> callback = responder->getVariableByMultiname(onResultName);
-	if(!callback.isNull() && callback->getObjectType() == T_FUNCTION)
+	if(!responder.isNull())
 	{
-		ret->incRef();
-		ASObject* const callbackArgs[1] {ret.getPtr()};
-		responder->incRef();
-		callback->as<IFunction>()->call(responder.getPtr(), callbackArgs, 1);
+		multiname onResultName(NULL);
+		onResultName.name_type=multiname::NAME_STRING;
+		onResultName.name_s_id=getSys()->getUniqueStringId("onResult");
+		onResultName.ns.push_back(nsNameAndKind("",NAMESPACE));
+		_NR<ASObject> callback = responder->getVariableByMultiname(onResultName);
+		if(!callback.isNull() && callback->getObjectType() == T_FUNCTION)
+		{
+			ret->incRef();
+			ASObject* const callbackArgs[1] {ret.getPtr()};
+			responder->incRef();
+			callback->as<IFunction>()->call(responder.getPtr(), callbackArgs, 1);
+		}
 	}
 }
 
@@ -1675,6 +1673,11 @@ _R<SecurityDomain> ABCVm::getCurrentSecurityDomain(call_context* th)
 uint32_t ABCVm::getAndIncreaseNamespaceBase(uint32_t nsNum)
 {
 	return ATOMIC_ADD(nextNamespaceBase,nsNum)-nsNum;
+}
+
+tiny_string ABCVm::getDefaultXMLNamespace()
+{
+	return currentCallContext->defaultNamespaceUri;
 }
 
 const tiny_string& ABCContext::getString(unsigned int s) const
@@ -1719,7 +1722,7 @@ void ABCContext::linkTrait(Class_base* c, const traits_info* t)
 				throw ParseException("Interface trait has to be a NULL body");
 
 			variable* var=NULL;
-			var = c->Variables.findObjVar(nameId,nsNameAndKind("",NAMESPACE),NO_CREATE_TRAIT,BORROWED_TRAIT);
+			var = c->borrowedVariables.findObjVar(nameId,nsNameAndKind("",NAMESPACE),NO_CREATE_TRAIT,DECLARED_TRAIT);
 			if(var && var->var)
 			{
 				assert_and_throw(var->var && var->var->getObjectType()==T_FUNCTION);
@@ -1744,7 +1747,7 @@ void ABCContext::linkTrait(Class_base* c, const traits_info* t)
 				throw ParseException("Interface trait has to be a NULL body");
 
 			variable* var=NULL;
-			var=c->Variables.findObjVar(nameId,nsNameAndKind("",NAMESPACE),NO_CREATE_TRAIT,BORROWED_TRAIT);
+			var=c->borrowedVariables.findObjVar(nameId,nsNameAndKind("",NAMESPACE),NO_CREATE_TRAIT,DECLARED_TRAIT);
 			if(var && var->getter)
 			{
 				assert_and_throw(var->getter);
@@ -1768,7 +1771,7 @@ void ABCContext::linkTrait(Class_base* c, const traits_info* t)
 				throw ParseException("Interface trait has to be a NULL body");
 
 			variable* var=NULL;
-			var=c->Variables.findObjVar(nameId,nsNameAndKind("",NAMESPACE),NO_CREATE_TRAIT,BORROWED_TRAIT);
+			var=c->borrowedVariables.findObjVar(nameId,nsNameAndKind("",NAMESPACE),NO_CREATE_TRAIT,DECLARED_TRAIT);
 			if(var && var->setter)
 			{
 				assert_and_throw(var->setter);

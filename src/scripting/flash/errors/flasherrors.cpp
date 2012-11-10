@@ -17,21 +17,11 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
-#include "flasherrors.h"
-#include "argconv.h"
-#include "class.h"
+#include "scripting/flash/errors/flasherrors.h"
+#include "scripting/argconv.h"
+#include "scripting/class.h"
 
 using namespace lightspark;
-
-SET_NAMESPACE("flash.errors");
-
-REGISTER_CLASS_NAME(IOError);
-REGISTER_CLASS_NAME(EOFError);
-REGISTER_CLASS_NAME(IllegalOperationError);
-REGISTER_CLASS_NAME(InvalidSWFError);
-REGISTER_CLASS_NAME(MemoryError);
-REGISTER_CLASS_NAME(ScriptTimeoutError);
-REGISTER_CLASS_NAME(StackOverflowError);
 
 ASFUNCTIONBODY(IOError,_constructor)
 {

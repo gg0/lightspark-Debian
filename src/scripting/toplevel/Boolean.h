@@ -17,8 +17,8 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
-#ifndef BOOLEAN_H_
-#define BOOLEAN_H_
+#ifndef SCRIPTING_TOPLEVEL_BOOLEAN_H
+#define SCRIPTING_TOPLEVEL_BOOLEAN_H 1
 
 #include "asobject.h"
 
@@ -35,7 +35,7 @@ bool Boolean_concrete(const ASObject* obj);
 class Boolean: public ASObject
 {
 public:
-	Boolean(Class_base* c):ASObject(c) {type=T_BOOLEAN;}
+	Boolean(Class_base* c, bool v=false):ASObject(c),val(v) {type=T_BOOLEAN;}
 	static void sinit(Class_base*);
 	static void buildTraits(ASObject* o){};
 	bool val;
@@ -56,4 +56,4 @@ public:
 };
 
 }
-#endif /* BOOLEAN_H_ */
+#endif /* SCRIPTING_TOPLEVEL_BOOLEAN_H */

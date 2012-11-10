@@ -19,7 +19,7 @@
 
 #include "scripting/abc.h"
 #include "scripting/toplevel/ASString.h"
-#include "class.h"
+#include "scripting/class.h"
 #include "parsing/tags.h"
 
 using namespace lightspark;
@@ -27,6 +27,25 @@ using namespace lightspark;
 ASObject* lightspark::new_asobject()
 {
 	return Class<ASObject>::getInstanceS();
+}
+
+Prototype* lightspark::new_objectPrototype()
+{
+	//Create a Prototype object, the class should be ASObject
+	Class_base* c=Class<ASObject>::getClass();
+	return new (c->memoryAccount) ObjectPrototype(c);
+}
+
+Prototype* lightspark::new_functionPrototype(Class_base* functionClass, _NR<Prototype> p)
+{
+	//Create a Prototype object, the class should be ASObject
+	return new (functionClass->memoryAccount) FunctionPrototype(functionClass, p);
+}
+
+Function_object* lightspark::new_functionObject(_NR<ASObject> p)
+{
+	Class_base* c=Class<ASObject>::getClass();
+	return new (c->memoryAccount) Function_object(c, p);
 }
 
 Class_inherit::Class_inherit(const QName& name, MemoryAccount* m):Class_base(name, m),tag(NULL),bindedToRoot(false)
@@ -91,7 +110,7 @@ void lightspark::lookupAndLink(Class_base* c, const tiny_string& name, const tin
 	//Find the origin
 	while(cur)
 	{
-		var=cur->Variables.findObjVar(getSys()->getUniqueStringId(name),nsNameAndKind("",NAMESPACE),NO_CREATE_TRAIT,BORROWED_TRAIT);
+		var=cur->borrowedVariables.findObjVar(getSys()->getUniqueStringId(name),nsNameAndKind("",NAMESPACE),NO_CREATE_TRAIT,DECLARED_TRAIT);
 		if(var)
 			break;
 		cur=cur->super.getPtr();

@@ -19,16 +19,14 @@
 
 #include <pcre.h>
 
-#include "ASString.h"
+#include "scripting/toplevel/ASString.h"
 #include "compat.h"
-#include "argconv.h"
+#include "scripting/argconv.h"
 #include "parsing/amf3_generator.h"
-#include "RegExp.h"
+#include "scripting/toplevel/RegExp.h"
 
 using namespace std;
 using namespace lightspark;
-
-REGISTER_CLASS_NAME2(ASString, "String", "");
 
 ASString::ASString(Class_base* c):ASObject(c)
 {
@@ -229,13 +227,10 @@ ASFUNCTIONBODY(ASString,match)
 			resarr->push(match->as<Array>()->at(0));
 		}
 
-		if (resarr->size() == 0)
-		{
-			resarr->decRef();
-			ret = getSys()->getNullRef();
-		}
-		else
-			ret = resarr;
+		// According to ECMA we should return Null if resarr
+		// is empty, but the tested behavior is to return the
+		// empty array.
+		ret = resarr;
 	}
 	else
 	{
@@ -249,7 +244,7 @@ ASFUNCTIONBODY(ASString,match)
 
 ASFUNCTIONBODY(ASString,_toString)
 {
-	if(Class<ASString>::getClass()->prototype == obj)
+	if(Class<ASString>::getClass()->prototype->getObj() == obj)
 		return Class<ASString>::getInstanceS("");
 	if(!obj->is<ASString>())
 		throw Class<TypeError>::getInstanceS("String.toString is not generic");
@@ -490,15 +485,13 @@ int32_t ASString::toInt()
 {
 	assert_and_throw(implEnable);
 	const char* cur=data.raw_buf();
+	int64_t ret;
+	bool valid=Integer::fromStringFlashCompatible(cur,ret,0);
 
-	errno=0;
-	char *end;
-	int64_t val=g_ascii_strtoll(cur, &end, 0);
-
-	if(errno==ERANGE || end > cur)
-		return static_cast<int32_t>(val);
-	else
+	if(valid==false || ret<INT32_MIN || ret>INT32_MAX)
 		return 0;
+	else
+		return static_cast<int32_t>(ret);
 }
 
 uint32_t ASString::toUInt()

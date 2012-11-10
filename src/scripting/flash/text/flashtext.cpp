@@ -17,27 +17,15 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
-#include "flashtext.h"
-#include "class.h"
+#include "scripting/flash/text/flashtext.h"
+#include "scripting/class.h"
 #include "compat.h"
 #include "backends/geometry.h"
 #include "backends/graphics.h"
-#include "argconv.h"
+#include "scripting/argconv.h"
 
 using namespace std;
 using namespace lightspark;
-
-SET_NAMESPACE("flash.text");
-
-REGISTER_CLASS_NAME2(ASFont,"Font","flash.text");
-REGISTER_CLASS_NAME(AntiAliasType);
-REGISTER_CLASS_NAME(TextField);
-REGISTER_CLASS_NAME(TextFieldType);
-REGISTER_CLASS_NAME(TextFieldAutoSize);
-REGISTER_CLASS_NAME(TextFormatAlign);
-REGISTER_CLASS_NAME(TextFormat);
-REGISTER_CLASS_NAME(StyleSheet);
-REGISTER_CLASS_NAME(StaticText);
 
 void lightspark::AntiAliasType::sinit(Class_base* c)
 {
@@ -384,13 +372,10 @@ IDrawable* TextField::invalidate(DisplayObject* target, const MATRIX& initialMat
 		return NULL;
 	}
 
-	MATRIX totalMatrix(initialMatrix);
-	DisplayObject* cur=this;
-	while(cur!=target)
-	{
-		totalMatrix=cur->getMatrix().multiplyMatrix(totalMatrix);
-		cur=cur->getParent().getPtr();
-	}
+	MATRIX totalMatrix;
+	std::vector<IDrawable::MaskData> masks;
+	computeMasksAndMatrix(target, masks, totalMatrix);
+	totalMatrix=initialMatrix.multiplyMatrix(totalMatrix);
 	computeBoundsForTransformedRect(bxmin,bxmax,bymin,bymax,x,y,width,height,totalMatrix);
 	if(width==0 || height==0)
 		return NULL;
@@ -403,12 +388,12 @@ IDrawable* TextField::invalidate(DisplayObject* target, const MATRIX& initialMat
 	*/
 	return new CairoPangoRenderer(*this,
 				totalMatrix, x, y, width, height, 1.0f,
-				getConcatenatedAlpha());
+				getConcatenatedAlpha(), masks);
 }
 
-void TextField::renderImpl(RenderContext& ctxt, bool maskEnabled, number_t t1, number_t t2, number_t t3, number_t t4) const
+void TextField::renderImpl(RenderContext& ctxt) const
 {
-	defaultRender(ctxt, maskEnabled);
+	defaultRender(ctxt);
 }
 
 void TextFieldAutoSize ::sinit(Class_base* c)
@@ -428,9 +413,11 @@ void TextFieldType::sinit(Class_base* c)
 void TextFormatAlign ::sinit(Class_base* c)
 {
 	c->setVariableByQName("CENTER","",Class<ASString>::getInstanceS("center"),DECLARED_TRAIT);
+	c->setVariableByQName("END","",Class<ASString>::getInstanceS("end"),DECLARED_TRAIT);
 	c->setVariableByQName("JUSTIFY","",Class<ASString>::getInstanceS("justify"),DECLARED_TRAIT);
 	c->setVariableByQName("LEFT","",Class<ASString>::getInstanceS("left"),DECLARED_TRAIT);
 	c->setVariableByQName("RIGHT","",Class<ASString>::getInstanceS("right"),DECLARED_TRAIT);
+	c->setVariableByQName("START","",Class<ASString>::getInstanceS("start"),DECLARED_TRAIT);
 }
 
 void TextFormat::sinit(Class_base* c)
@@ -512,7 +499,11 @@ ASFUNCTIONBODY(StyleSheet,getStyle)
 		return it->second.getPtr();
 	}
 	else
-		return getSys()->getNullRef();
+	{
+		// Tested behaviour is to return an empty ASObject
+		// instead of Null as is said in the documentation
+		return Class<ASObject>::getInstanceS();
+	}
 	return NULL;
 }
 
@@ -539,4 +530,49 @@ ASFUNCTIONBODY(StaticText,_getText)
 {
 	LOG(LOG_NOT_IMPLEMENTED,"flash.display.StaticText.text is not implemented");
 	return Class<ASString>::getInstanceS("");
+}
+
+void FontStyle::sinit(Class_base* c)
+{
+	c->setConstructor(NULL);
+	c->setSuper(Class<ASObject>::getRef());
+	c->setVariableByQName("BOLD","",Class<ASString>::getInstanceS("bold"),DECLARED_TRAIT);
+	c->setVariableByQName("BOLD_ITALIC","",Class<ASString>::getInstanceS("boldItalic"),DECLARED_TRAIT);
+	c->setVariableByQName("ITALIC","",Class<ASString>::getInstanceS("italic"),DECLARED_TRAIT);
+	c->setVariableByQName("REGULAR","",Class<ASString>::getInstanceS("regular"),DECLARED_TRAIT);
+}
+
+void FontType::sinit(Class_base* c)
+{
+	c->setConstructor(NULL);
+	c->setSuper(Class<ASObject>::getRef());
+	c->setVariableByQName("DEVICE","",Class<ASString>::getInstanceS("device"),DECLARED_TRAIT);
+	c->setVariableByQName("EMBEDDED","",Class<ASString>::getInstanceS("embedded"),DECLARED_TRAIT);
+	c->setVariableByQName("EMBEDDED_CFF","",Class<ASString>::getInstanceS("embeddedCFF"),DECLARED_TRAIT);
+}
+
+void TextDisplayMode::sinit(Class_base* c)
+{
+	c->setConstructor(NULL);
+	c->setSuper(Class<ASObject>::getRef());
+	c->setVariableByQName("CRT","",Class<ASString>::getInstanceS("crt"),DECLARED_TRAIT);
+	c->setVariableByQName("DEFAULT","",Class<ASString>::getInstanceS("default"),DECLARED_TRAIT);
+	c->setVariableByQName("LCD","",Class<ASString>::getInstanceS("lcd"),DECLARED_TRAIT);
+}
+
+void TextColorType::sinit(Class_base* c)
+{
+	c->setConstructor(NULL);
+	c->setSuper(Class<ASObject>::getRef());
+	c->setVariableByQName("DARK_COLOR","",Class<ASString>::getInstanceS("dark"),DECLARED_TRAIT);
+	c->setVariableByQName("LIGHT_COLOR","",Class<ASString>::getInstanceS("light"),DECLARED_TRAIT);
+}
+
+void GridFitType::sinit(Class_base* c)
+{
+	c->setConstructor(NULL);
+	c->setSuper(Class<ASObject>::getRef());
+	c->setVariableByQName("NONE","",Class<ASString>::getInstanceS("none"),DECLARED_TRAIT);
+	c->setVariableByQName("PIXEL","",Class<ASString>::getInstanceS("pixel"),DECLARED_TRAIT);
+	c->setVariableByQName("SUBPIXEL","",Class<ASString>::getInstanceS("subpixel"),DECLARED_TRAIT);
 }

@@ -18,12 +18,12 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
-#ifndef IAUDIOPLUGIN_H
-#define IAUDIOPLUGIN_H
+#ifndef BACKENDS_INTERFACES_AUDIO_IAUDIOPLUGIN_H
+#define BACKENDS_INTERFACES_AUDIO_IAUDIOPLUGIN_H 1
 
-#include "../../../compat.h"
-#include "../../decoder.h"
-#include "../IPlugin.h"
+#include "compat.h"
+#include "backends/decoder.h"
+#include "backends/interfaces/IPlugin.h"
 #include <iostream>
 
 class AudioStream
@@ -49,16 +49,16 @@ Abstract class for audio plugin implementation
 class IAudioPlugin : public IPlugin
 {
 protected:
+	bool stopped;
+	bool muteAllStreams;
+	volatile bool contextReady;
+	volatile bool noServer;
 	std::string playbackDeviceName;
 	std::string captureDeviceName;
 	std::vector<std::string *> playbackDevicesList;
 	std::vector<std::string *> captureDevicesList;
 	std::list<AudioStream *> streams;
 	typedef std::list<AudioStream *>::iterator stream_iterator;
-	volatile bool contextReady;
-	volatile bool noServer;
-	bool stopped;
-	bool muteAllStreams;
 
 	IAudioPlugin ( std::string plugin_name, std::string backend_name, bool init_stopped = false );
 
@@ -78,5 +78,5 @@ public:
 	virtual ~IAudioPlugin();
 };
 
-#endif
+#endif /* BACKENDS_INTERFACES_AUDIO_IAUDIOPLUGIN */
 

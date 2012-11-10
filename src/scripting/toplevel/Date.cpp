@@ -17,15 +17,13 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
-#include "Date.h"
-#include "class.h"
-#include "argconv.h"
+#include "scripting/toplevel/Date.h"
+#include "scripting/class.h"
+#include "scripting/argconv.h"
+#include "compat.h"
 
 using namespace std;
 using namespace lightspark;
-
-SET_NAMESPACE("");
-REGISTER_CLASS_NAME(Date);
 
 Date::Date(Class_base* c):ASObject(c),extrayears(0), nan(false), datetime(NULL),datetimeUTC(NULL)
 {
@@ -78,9 +76,6 @@ void Date::sinit(Class_base* c)
 	c->setDeclaredMethodByQName("setUTCSeconds",AS3,Class<IFunction>::getFunction(setUTCSeconds,2),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("setUTCMilliseconds",AS3,Class<IFunction>::getFunction(setUTCMilliseconds),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("setTime",AS3,Class<IFunction>::getFunction(setTime,1),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("time","",Class<IFunction>::getFunction(getTime),GETTER_METHOD,true);
-	c->setDeclaredMethodByQName("fullYear","",Class<IFunction>::getFunction(getFullYear),GETTER_METHOD,true);
-	c->setDeclaredMethodByQName("timezoneOffset","",Class<IFunction>::getFunction(getTimezoneOffset),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("UTC","",Class<IFunction>::getFunction(UTC,7),NORMAL_METHOD,false);
 	c->setDeclaredMethodByQName("toString",AS3,Class<IFunction>::getFunction(_toString),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("toJSON",AS3,Class<IFunction>::getFunction(_toString),NORMAL_METHOD,true);
@@ -90,6 +85,40 @@ void Date::sinit(Class_base* c)
 	c->setDeclaredMethodByQName("toLocaleString",AS3,Class<IFunction>::getFunction(toLocaleString),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("toLocaleDateString",AS3,Class<IFunction>::getFunction(toLocaleDateString),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("parse","",Class<IFunction>::getFunction(_parse),NORMAL_METHOD,false);
+
+	c->setDeclaredMethodByQName("date","",Class<IFunction>::getFunction(getDate),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("date","",Class<IFunction>::getFunction(dateSetter),SETTER_METHOD,true);
+	c->setDeclaredMethodByQName("dateUTC","",Class<IFunction>::getFunction(getUTCDate),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("dateUTC","",Class<IFunction>::getFunction(UTCDateSetter),SETTER_METHOD,true);
+	c->setDeclaredMethodByQName("day","",Class<IFunction>::getFunction(getDay),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("dayUTC","",Class<IFunction>::getFunction(getUTCDay),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("fullYear","",Class<IFunction>::getFunction(getFullYear),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("fullYear","",Class<IFunction>::getFunction(fullYearSetter),SETTER_METHOD,true);
+	c->setDeclaredMethodByQName("fullYearUTC","",Class<IFunction>::getFunction(getUTCFullYear),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("fullYearUTC","",Class<IFunction>::getFunction(UTCFullYearSetter),SETTER_METHOD,true);
+	c->setDeclaredMethodByQName("hours","",Class<IFunction>::getFunction(getHours),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("hours","",Class<IFunction>::getFunction(hoursSetter),SETTER_METHOD,true);
+	c->setDeclaredMethodByQName("hoursUTC","",Class<IFunction>::getFunction(getUTCHours),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("hoursUTC","",Class<IFunction>::getFunction(UTCHoursSetter),SETTER_METHOD,true);
+	c->setDeclaredMethodByQName("milliseconds","",Class<IFunction>::getFunction(getMilliseconds),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("milliseconds","",Class<IFunction>::getFunction(millisecondsSetter),SETTER_METHOD,true);
+	c->setDeclaredMethodByQName("millisecondsUTC","",Class<IFunction>::getFunction(getUTCMilliseconds),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("millisecondsUTC","",Class<IFunction>::getFunction(UTCMillisecondsSetter),SETTER_METHOD,true);
+	c->setDeclaredMethodByQName("minutes","",Class<IFunction>::getFunction(getMinutes),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("minutes","",Class<IFunction>::getFunction(minutesSetter),SETTER_METHOD,true);
+	c->setDeclaredMethodByQName("minutesUTC","",Class<IFunction>::getFunction(getUTCMinutes),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("minutesUTC","",Class<IFunction>::getFunction(UTCMinutesSetter),SETTER_METHOD,true);
+	c->setDeclaredMethodByQName("month","",Class<IFunction>::getFunction(getMonth),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("month","",Class<IFunction>::getFunction(monthSetter),SETTER_METHOD,true);
+	c->setDeclaredMethodByQName("monthUTC","",Class<IFunction>::getFunction(getUTCMonth),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("monthUTC","",Class<IFunction>::getFunction(UTCMonthSetter),SETTER_METHOD,true);
+	c->setDeclaredMethodByQName("seconds","",Class<IFunction>::getFunction(getSeconds),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("seconds","",Class<IFunction>::getFunction(secondsSetter),SETTER_METHOD,true);
+	c->setDeclaredMethodByQName("secondsUTC","",Class<IFunction>::getFunction(getUTCSeconds),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("secondsUTC","",Class<IFunction>::getFunction(UTCSecondsSetter),SETTER_METHOD,true);
+	c->setDeclaredMethodByQName("time","",Class<IFunction>::getFunction(getTime),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("time","",Class<IFunction>::getFunction(timeSetter),SETTER_METHOD,true);
+	c->setDeclaredMethodByQName("timezoneOffset","",Class<IFunction>::getFunction(getTimezoneOffset),GETTER_METHOD,true);
 
 	c->prototype->setVariableByQName("getTimezoneOffset","",Class<IFunction>::getFunction(getTimezoneOffset),DYNAMIC_TRAIT);
 	c->prototype->setVariableByQName("valueOf","",Class<IFunction>::getFunction(valueOf),DYNAMIC_TRAIT);
@@ -453,6 +482,14 @@ ASFUNCTIONBODY(Date,setFullYear)
 	return th->msSinceEpoch();
 }
 
+ASFUNCTIONBODY(Date,fullYearSetter)
+{
+	ASObject *o=Date::setFullYear(obj, args, min(argslen, (unsigned)1));
+	if (o)
+		o->decRef();
+	return NULL;
+}
+
 ASFUNCTIONBODY(Date,setMonth)
 {
 	Date* th=static_cast<Date*>(obj);
@@ -467,6 +504,14 @@ ASFUNCTIONBODY(Date,setMonth)
 	return th->msSinceEpoch();
 }
 
+ASFUNCTIONBODY(Date,monthSetter)
+{
+	ASObject *o=Date::setMonth(obj, args, min(argslen, (unsigned)1));
+	if (o)
+		o->decRef();
+	return NULL;
+}
+
 ASFUNCTIONBODY(Date,setDate)
 {
 	Date* th=static_cast<Date*>(obj);
@@ -477,6 +522,14 @@ ASFUNCTIONBODY(Date,setDate)
 		return abstract_d(Number::NaN);
 	th->MakeDate(g_date_time_get_year(th->datetime)+th->extrayears, g_date_time_get_month(th->datetime), d, g_date_time_get_hour(th->datetime),g_date_time_get_minute(th->datetime),g_date_time_get_second(th->datetime),th->milliseconds % 1000,true);
 	return th->msSinceEpoch();
+}
+
+ASFUNCTIONBODY(Date,dateSetter)
+{
+	ASObject *o=Date::setDate(obj, args, argslen);
+	if (o)
+		o->decRef();
+	return NULL;
 }
 
 ASFUNCTIONBODY(Date,setHours)
@@ -494,6 +547,14 @@ ASFUNCTIONBODY(Date,setHours)
 	return th->msSinceEpoch();
 }
 
+ASFUNCTIONBODY(Date,hoursSetter)
+{
+	ASObject *o=Date::setHours(obj, args, min(argslen, (unsigned)1));
+	if (o)
+		o->decRef();
+	return NULL;
+}
+
 ASFUNCTIONBODY(Date,setMinutes)
 {
 	Date* th=static_cast<Date*>(obj);
@@ -506,6 +567,14 @@ ASFUNCTIONBODY(Date,setMinutes)
 	if (!ms) ms = th->milliseconds % 1000;
 	th->MakeDate(g_date_time_get_year(th->datetime)+th->extrayears, g_date_time_get_month(th->datetime), g_date_time_get_day_of_month(th->datetime),  g_date_time_get_hour(th->datetime), min, sec, ms,true);
 	return th->msSinceEpoch();
+}
+
+ASFUNCTIONBODY(Date,minutesSetter)
+{
+	ASObject *o=Date::setMinutes(obj, args, argslen);
+	if(o)
+		o->decRef();
+	return NULL;
 }
 
 ASFUNCTIONBODY(Date,setSeconds)
@@ -522,6 +591,14 @@ ASFUNCTIONBODY(Date,setSeconds)
 	return th->msSinceEpoch();
 }
 
+ASFUNCTIONBODY(Date,secondsSetter)
+{
+	ASObject *o=Date::setSeconds(obj, args, min(argslen, (unsigned)1));
+	if (o)
+		o->decRef();
+	return NULL;
+}
+
 ASFUNCTIONBODY(Date,setMilliseconds)
 {
 	Date* th=static_cast<Date*>(obj);
@@ -532,6 +609,14 @@ ASFUNCTIONBODY(Date,setMilliseconds)
 		return abstract_d(Number::NaN);
 	th->MakeDate(g_date_time_get_year(th->datetime)+th->extrayears, g_date_time_get_month(th->datetime), g_date_time_get_day_of_month(th->datetime),  g_date_time_get_hour(th->datetime), g_date_time_get_minute(th->datetime), g_date_time_get_second(th->datetime), ms,true);
 	return th->msSinceEpoch();
+}
+
+ASFUNCTIONBODY(Date,millisecondsSetter)
+{
+	ASObject *o=Date::setMilliseconds(obj, args, argslen);
+	if (o)
+		o->decRef();
+	return NULL;
 }
 
 ASFUNCTIONBODY(Date,setUTCFullYear)
@@ -550,6 +635,14 @@ ASFUNCTIONBODY(Date,setUTCFullYear)
 	return th->msSinceEpoch();
 }
 
+ASFUNCTIONBODY(Date,UTCFullYearSetter)
+{
+	ASObject *o=Date::setUTCFullYear(obj, args, min(argslen, (unsigned)1));
+	if (o)
+		o->decRef();
+	return NULL;
+}
+
 ASFUNCTIONBODY(Date,setUTCMonth)
 {
 	Date* th=static_cast<Date*>(obj);
@@ -564,6 +657,14 @@ ASFUNCTIONBODY(Date,setUTCMonth)
 	return th->msSinceEpoch();
 }
 
+ASFUNCTIONBODY(Date,UTCMonthSetter)
+{
+	ASObject *o=Date::setUTCMonth(obj, args, min(argslen, (unsigned)1));
+	if (o)
+		o->decRef();
+	return NULL;
+}
+
 ASFUNCTIONBODY(Date,setUTCDate)
 {
 	Date* th=static_cast<Date*>(obj);
@@ -574,6 +675,14 @@ ASFUNCTIONBODY(Date,setUTCDate)
 		return abstract_d(Number::NaN);
 	th->MakeDate(g_date_time_get_year(th->datetimeUTC)+th->extrayears, g_date_time_get_month(th->datetimeUTC), d, g_date_time_get_hour(th->datetimeUTC),g_date_time_get_minute(th->datetimeUTC),g_date_time_get_second(th->datetimeUTC),th->milliseconds % 1000,false);
 	return th->msSinceEpoch();
+}
+
+ASFUNCTIONBODY(Date,UTCDateSetter)
+{
+	ASObject *o=Date::setUTCDate(obj, args, argslen);
+	if (o)
+		o->decRef();
+	return NULL;
 }
 
 ASFUNCTIONBODY(Date,setUTCHours)
@@ -591,6 +700,14 @@ ASFUNCTIONBODY(Date,setUTCHours)
 	return th->msSinceEpoch();
 }
 
+ASFUNCTIONBODY(Date,UTCHoursSetter)
+{
+	ASObject *o=Date::setUTCHours(obj, args, min(argslen, (unsigned)1));
+	if (o)
+		o->decRef();
+	return NULL;
+}
+
 ASFUNCTIONBODY(Date,setUTCMinutes)
 {
 	Date* th=static_cast<Date*>(obj);
@@ -603,6 +720,14 @@ ASFUNCTIONBODY(Date,setUTCMinutes)
 	if (!ms) ms = th->milliseconds % 1000;
 	th->MakeDate(g_date_time_get_year(th->datetimeUTC)+th->extrayears, g_date_time_get_month(th->datetimeUTC), g_date_time_get_day_of_month(th->datetimeUTC),  g_date_time_get_hour(th->datetimeUTC), min, sec, ms,false);
 	return th->msSinceEpoch();
+}
+
+ASFUNCTIONBODY(Date,UTCMinutesSetter)
+{
+	ASObject *o=Date::setUTCMinutes(obj, args, argslen==0?0:1);
+	if (o)
+		o->decRef();
+	return NULL;
 }
 
 ASFUNCTIONBODY(Date,setUTCSeconds)
@@ -619,6 +744,14 @@ ASFUNCTIONBODY(Date,setUTCSeconds)
 	return th->msSinceEpoch();
 }
 
+ASFUNCTIONBODY(Date,UTCSecondsSetter)
+{
+	ASObject *o=Date::setUTCSeconds(obj, args, min(argslen, (unsigned)1));
+	if (o)
+		o->decRef();
+	return NULL;
+}
+
 ASFUNCTIONBODY(Date,setUTCMilliseconds)
 {
 	Date* th=static_cast<Date*>(obj);
@@ -629,6 +762,14 @@ ASFUNCTIONBODY(Date,setUTCMilliseconds)
 		return abstract_d(Number::NaN);
 	th->MakeDate(g_date_time_get_year(th->datetimeUTC)+th->extrayears, g_date_time_get_month(th->datetimeUTC), g_date_time_get_day_of_month(th->datetimeUTC),  g_date_time_get_hour(th->datetimeUTC), g_date_time_get_minute(th->datetimeUTC), g_date_time_get_second(th->datetimeUTC), ms,false);
 	return th->msSinceEpoch();
+}
+
+ASFUNCTIONBODY(Date,UTCMillisecondsSetter)
+{
+	ASObject *o=Date::setUTCMilliseconds(obj, args, argslen);
+	if(o)
+		o->decRef();
+	return NULL;
 }
 
 ASFUNCTIONBODY(Date,setTime)
@@ -657,6 +798,14 @@ ASFUNCTIONBODY(Date,setTime)
 	th->MakeDateFromMilliseconds(int64_t(ms));
 
 	return th->msSinceEpoch();
+}
+
+ASFUNCTIONBODY(Date,timeSetter)
+{
+	ASObject *o=Date::setTime(obj, args, argslen);
+	if (o)
+		o->decRef();
+	return NULL;
 }
 
 ASFUNCTIONBODY(Date,valueOf)
@@ -755,14 +904,14 @@ number_t Date::parse(tiny_string str)
 	tzd[0] = 0;
 
 	// Day Mon DD YYYY HH:MM:SS TZD
-	c = sscanf(str.raw_buf(), "%*3s %3s %2d %4d %2d:%2d:%2d %s",mo, &d,&y, &h,&m,&s,tzd);
+	c = sscanf(str.raw_buf(), "%*3s %3s %2d %4d %2d:%2d:%2d %19s",mo, &d,&y, &h,&m,&s,tzd);
 	bvalid = (c == 7);
 	if (!bvalid)
 	{
 		// Day Mon DD HH:MM:SS TZD YYYY
 		d=0;h=0;m=0;s=0;y=0;mon=-1;
 		tzd[0] = 0;
-		c = sscanf(str.raw_buf(), "%*3s %3s %2d %2d:%2d:%2d %s %4d",mo, &d, &h,&m,&s,tzd,&y);
+		c = sscanf(str.raw_buf(), "%*3s %3s %2d %2d:%2d:%2d %19s %4d",mo, &d, &h,&m,&s,tzd,&y);
 		bvalid = (c == 7);
 	}
 	if (!bvalid)
@@ -771,7 +920,7 @@ number_t Date::parse(tiny_string str)
 		// YYYY DD Mon HH:MM:SS TZD
 		d=0;h=0;m=0;s=0;y=0;mon=-1;
 		tzd[0] = 0;
-		c = sscanf(str.raw_buf(), "%4d %4d %3s %2d:%2d:%2d %s", &d,&y, mo ,&h,&m,&s,tzd);
+		c = sscanf(str.raw_buf(), "%4d %4d %3s %2d:%2d:%2d %19s", &d,&y, mo ,&h,&m,&s,tzd);
 		bvalid = (c >= 3);
 		if (bvalid && d > y)
 		{
@@ -786,7 +935,7 @@ number_t Date::parse(tiny_string str)
 		// MM/DD/YYYY HH:MM TZD
 		d=0;h=0;m=0;s=0;y=0;mon=-1;
 		tzd[0] = 0;
-		c = sscanf(str.raw_buf(), "%4d/%4d/%4d %2d:%2d %s",&y,&mon, &d,&h,&m,tzd);
+		c = sscanf(str.raw_buf(), "%4d/%4d/%4d %2d:%2d %19s",&y,&mon, &d,&h,&m,tzd);
 		bvalid = (c >= 3);
 		if (bvalid)
 		{
@@ -805,7 +954,7 @@ number_t Date::parse(tiny_string str)
 		// YYYY/MM/DD HH:MM:SS TZD
 		d=0;h=0;m=0;s=0;y=0;mon=-1;
 		tzd[0] = 0;
-		c = sscanf(str.raw_buf(), "%4d/%4d/%4d %2d:%2d:%2d %s",&mon, &d, &y,&h,&m,&s,tzd);
+		c = sscanf(str.raw_buf(), "%4d/%4d/%4d %2d:%2d:%2d %19s",&mon, &d, &y,&h,&m,&s,tzd);
 		bvalid = (c >= 3);
 		if (bvalid)
 		{
@@ -823,7 +972,7 @@ number_t Date::parse(tiny_string str)
 		// HH:MM:SS TZD Day Mon/DD/YYYY 
 		d=0;h=0;m=0;s=0;y=0;mon=-1;
 		tzd[0] = 0;
-		c = sscanf(str.raw_buf(), "%2d:%2d:%2d %s %*3s %3s/%2d/%4d",&h,&m,&s,tzd,mo,&d,&y);
+		c = sscanf(str.raw_buf(), "%2d:%2d:%2d %19s %*3s %3s/%2d/%4d",&h,&m,&s,tzd,mo,&d,&y);
 		bvalid = (c == 7);
 	}
 	if (!bvalid)
@@ -831,7 +980,7 @@ number_t Date::parse(tiny_string str)
 		// Mon YYYY DD HH:MM:SS TZD
 		d=0;h=0;m=0;s=0;y=0;mon=-1;
 		tzd[0] = 0;
-		c = sscanf(str.raw_buf(), "%3s %4d %2d %2d:%2d:%2d %s",mo, &y,&d, &h,&m,&s,tzd);
+		c = sscanf(str.raw_buf(), "%3s %4d %2d %2d:%2d:%2d %19s",mo, &y,&d, &h,&m,&s,tzd);
 		bvalid = (c >= 3);
 	}
 	if (!bvalid)
@@ -839,7 +988,7 @@ number_t Date::parse(tiny_string str)
 		// Mon DD YYYY HH:MM:SS TZD
 		d=0;h=0;m=0;s=0;y=0;mon=-1;
 		tzd[0] = 0;
-		c = sscanf(str.raw_buf(), "%3s %2d %4d %2d:%2d:%2d %s",mo, &d, &y,&h,&m,&s,tzd);
+		c = sscanf(str.raw_buf(), "%3s %2d %4d %2d:%2d:%2d %19s",mo, &d, &y,&h,&m,&s,tzd);
 		bvalid = (c >= 3);
 	}
 	if (!bvalid)
@@ -847,7 +996,7 @@ number_t Date::parse(tiny_string str)
 		// Day Mon DD HH:MM:SS TZD YYYY
 		d=0;h=0;m=0;s=0;y=0;mon=-1;
 		tzd[0] = 0;
-		c = sscanf(str.raw_buf(), "%*3s %3s %2d %2d:%2d:%2d %s %4d",mo,&d,&h,&m,&s,tzd,&y);
+		c = sscanf(str.raw_buf(), "%*3s %3s %2d %2d:%2d:%2d %19s %4d",mo,&d,&h,&m,&s,tzd,&y);
 		bvalid = (c == 7);
 	}
 	if (!bvalid)
@@ -855,7 +1004,7 @@ number_t Date::parse(tiny_string str)
 		// Day DD Mon HH:MM:SS TZD YYYY
 		d=0;h=0;m=0;s=0;y=0;mon=-1;
 		tzd[0] = 0;
-		c = sscanf(str.raw_buf(), "%*3s %2d %3s %2d:%2d:%2d %s %4d",&d,mo,&h,&m,&s,tzd,&y);
+		c = sscanf(str.raw_buf(), "%*3s %2d %3s %2d:%2d:%2d %19s %4d",&d,mo,&h,&m,&s,tzd,&y);
 		bvalid = (c == 7);
 	}
 	if (!bvalid)
@@ -863,7 +1012,7 @@ number_t Date::parse(tiny_string str)
 		// YYYY/MM/DD HH:MM:SS TZD
 		d=0;h=0;m=0;s=0;y=0;mon=-1;
 		tzd[0] = 0;
-		c = sscanf(str.raw_buf(), "%4d/%2d/%2d %2d:%2d:%2d %s", &y, &mon,&d,&h,&m,&s,tzd);
+		c = sscanf(str.raw_buf(), "%4d/%2d/%2d %2d:%2d:%2d %19s", &y, &mon,&d,&h,&m,&s,tzd);
 		bvalid = (c >= 3);
 	}
 	if (!bvalid)
@@ -927,7 +1076,7 @@ number_t Date::parse(tiny_string str)
 				p++;
 			int tz = 0;
 			if (*p)
-				sscanf(p, "%d",&tz);
+				sscanf(p, "%19d",&tz);
 				
 			if (y >=70 && y<100)
 				y += 1900;

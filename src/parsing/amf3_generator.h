@@ -18,7 +18,8 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
-#ifndef _AMF3_GENERATOR_H
+#ifndef PARSING_AMF3_GENERATOR_H
+#define PARSING_AMF3_GENERATOR_H 1
 
 #include <string>
 #include <vector>
@@ -74,10 +75,11 @@ private:
 			std::vector<TraitsRef>& traitsMap) const;
 	_R<ASObject> parseInteger() const;
 	_R<ASObject> parseDouble() const;
+	_R<ASObject> parseXML(std::vector<ASObject*>& objMap, bool legacyXML) const;
 public:
 	Amf3Deserializer(ByteArray* i):input(i) {}
 	_R<ASObject> readObject() const;
 };
 
 };
-#endif
+#endif /* PARSING_AMF3_GENERATOR_H */

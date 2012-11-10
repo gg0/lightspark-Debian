@@ -18,7 +18,7 @@
 **************************************************************************/
 
 #ifndef MEMORY_SUPPORT_H
-#define MEMORY_SUPPORT_H
+#define MEMORY_SUPPORT_H 1
 
 #include "compat.h"
 #include "tiny_string.h"
@@ -72,7 +72,7 @@ public:
 		//Prepend some internal data.
 		//Adding the data to the object itself would not work
 		//since it can be reset by the constructors
-		objData* ret=(objData*)malloc(size+sizeof(objData));
+		objData* ret=reinterpret_cast<objData*>(malloc(size+sizeof(objData)));
 		m->addBytes(size);
 		ret->objSize = size;
 		ret->memoryAccount = m;
@@ -81,7 +81,7 @@ public:
 	inline void operator delete( void* obj )
 	{
 		//Get back the metadata
-		objData* th=((objData*)obj-1);
+		objData* th=reinterpret_cast<objData*>(obj)-1;
 		th->memoryAccount->removeBytes(th->objSize);
 		free(th);
 	}
@@ -104,6 +104,7 @@ private:
 public:
 	typedef typename std::allocator<T>::size_type size_type;
 	typedef typename std::allocator<T>::value_type value_type;
+	typedef typename std::allocator<T>::difference_type difference_type;
 	typedef typename std::allocator<T>::pointer pointer;
 	typedef typename std::allocator<T>::const_pointer const_pointer;
 	typedef typename std::allocator<T>::reference reference;
@@ -139,7 +140,7 @@ public:
 	}
 	void destroy(pointer p)
 	{
-		((T*)p)->~T();
+		(reinterpret_cast<T*>(p))->~T();
 	}
 	size_type max_size() const
 	{
@@ -208,4 +209,4 @@ public:
 #endif //MEMORY_USAGE_PROFILING
 
 };
-#endif
+#endif /* MEMORY_SUPPORT_H */

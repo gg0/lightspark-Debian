@@ -20,7 +20,6 @@
 #include <cairo.h>
 #include "scripting/flash/display/TokenContainer.h"
 #include "swf.h"
-#include "backends/input.h"
 #include "scripting/flash/display/BitmapData.h"
 
 using namespace lightspark;
@@ -148,7 +147,7 @@ IDrawable* TokenContainer::invalidate(DisplayObject* target, const MATRIX& initi
 				owner->getConcatenatedAlpha(), masks);
 }
 
-_NR<InteractiveObject> TokenContainer::hitTestImpl(_NR<InteractiveObject> last, number_t x, number_t y, DisplayObject::HIT_TYPE type) const
+_NR<DisplayObject> TokenContainer::hitTestImpl(_NR<DisplayObject> last, number_t x, number_t y, DisplayObject::HIT_TYPE type) const
 {
 	//Masks have been already checked along the way
 

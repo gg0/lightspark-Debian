@@ -36,8 +36,16 @@
 
 #undef RGB
 
+// BitmapFormat values in DefineBitsLossless(2) tag
+#define LOSSLESS_BITMAP_PALETTE 3
+#define LOSSLESS_BITMAP_RGB15 4
+#define LOSSLESS_BITMAP_RGB24 5
+
 using namespace std;
 using namespace lightspark;
+
+uint8_t* JPEGTablesTag::JPEGTables = NULL;
+int JPEGTablesTag::tableSize = 0;
 
 Tag* TagFactory::readTag(RootMovieClip* root)
 {
@@ -75,6 +83,9 @@ Tag* TagFactory::readTag(RootMovieClip* root)
 	//		ret=new PlaceObjectTag(h,f);
 		case 6:
 			ret=new DefineBitsTag(h,f,root);
+			break;
+		case 8:
+			ret=new JPEGTablesTag(h,f);
 			break;
 		case 9:
 			ret=new SetBackgroundColorTag(h,f);
@@ -401,7 +412,7 @@ ASObject* DefineSpriteTag::instance(Class_base* c) const
 	else
 		retClass=Class<MovieClip>::getClass();
 
-	return new (retClass->memoryAccount) MovieClip(retClass, *this);
+	return new (retClass->memoryAccount) MovieClip(retClass, *this, true);
 }
 
 void lightspark::ignore(istream& i, int count)
@@ -698,21 +709,14 @@ BitmapTag::BitmapTag(RECORDHEADER h,RootMovieClip* root):DictionaryTag(h,root),B
 {
 }
 
-DefineBitsLosslessTag::DefineBitsLosslessTag(RECORDHEADER h, istream& in, int version, RootMovieClip* root):BitmapTag(h,root)
+DefineBitsLosslessTag::DefineBitsLosslessTag(RECORDHEADER h, istream& in, int version, RootMovieClip* root):BitmapTag(h,root),BitmapColorTableSize(0)
 {
 	int dest=in.tellg();
 	dest+=h.getLength();
 	in >> CharacterId >> BitmapFormat >> BitmapWidth >> BitmapHeight;
 
-	if(BitmapFormat==3)
+	if(BitmapFormat==LOSSLESS_BITMAP_PALETTE)
 		in >> BitmapColorTableSize;
-
-	if(BitmapFormat != 5)
-	{
-		LOG(LOG_NOT_IMPLEMENTED,"DefineBitsLossless(2)Tag with unsupported BitmapFormat");
-		ignore(in,dest-in.tellg());
-		return;
-	}
 
 	string cData;
 	size_t cSize = dest-in.tellg(); //rest of this tag
@@ -722,15 +726,42 @@ DefineBitsLosslessTag::DefineBitsLosslessTag(RECORDHEADER h, istream& in, int ve
 	zlib_filter zf(cDataStream.rdbuf());
 	istream zfstream(&zf);
 
-	size_t size = BitmapWidth * BitmapHeight * 4;
-	uint8_t* inData=new(nothrow) uint8_t[size];
-	zfstream.read((char*)inData,size);
-	assert(!zfstream.fail() && !zfstream.eof());
+	if (BitmapFormat == LOSSLESS_BITMAP_RGB15 ||
+	    BitmapFormat == LOSSLESS_BITMAP_RGB24)
+	{
+		size_t size = BitmapWidth * BitmapHeight * 4;
+		uint8_t* inData=new(nothrow) uint8_t[size];
+		zfstream.read((char*)inData,size);
+		assert(!zfstream.fail() && !zfstream.eof());
 
-	if(version == 1)
-		fromRGB(inData, BitmapWidth, BitmapHeight, false);
+		BitmapContainer::BITMAP_FORMAT format;
+		if (BitmapFormat == LOSSLESS_BITMAP_RGB15)
+			format = RGB15;
+		else if (version == 1)
+			format = RGB24;
+		else
+			format = ARGB32;
+
+		fromRGB(inData, BitmapWidth, BitmapHeight, format);
+	}
+	else if (BitmapFormat == LOSSLESS_BITMAP_PALETTE)
+	{
+		unsigned numColors = BitmapColorTableSize+1;
+		
+		size_t size = 3*numColors + BitmapWidth*BitmapHeight;
+		uint8_t* inData=new(nothrow) uint8_t[size];
+		zfstream.read((char*)inData,size);
+		assert(!zfstream.fail() && !zfstream.eof());
+
+		uint8_t *palette = inData;
+		uint8_t *pixelData = inData + 3*numColors;
+		fromPalette(pixelData, BitmapWidth, BitmapHeight, palette, numColors);
+		delete[] inData;
+	}
 	else
-		fromRGB(inData, BitmapWidth, BitmapHeight, true);
+	{
+		LOG(LOG_NOT_IMPLEMENTED,"DefineBitsLossless(2)Tag with unsupported BitmapFormat " << BitmapFormat);
+	}
 }
 
 ASObject* BitmapTag::instance(Class_base* c) const
@@ -1483,19 +1514,47 @@ MetadataTag::MetadataTag(RECORDHEADER h, std::istream& in):Tag(h)
 	}
 }
 
+JPEGTablesTag::JPEGTablesTag(RECORDHEADER h, std::istream& in):Tag(h)
+{
+	if (JPEGTables == NULL)
+	{
+		tableSize=Header.getLength();
+		JPEGTables=new(nothrow) uint8_t[tableSize];
+		in.read((char*)JPEGTables, tableSize);
+	}
+	else
+	{
+		LOG(LOG_ERROR, "Malformed SWF file: duplicated JPEGTables tag");
+		skip(in);
+	}
+}
+
+const uint8_t* JPEGTablesTag::getJPEGTables()
+{
+	return JPEGTables;
+}
+
+int JPEGTablesTag::getJPEGTableSize()
+{
+	return tableSize;
+}
+
 DefineBitsTag::DefineBitsTag(RECORDHEADER h, std::istream& in,RootMovieClip* root):BitmapTag(h,root)
 {
 	LOG(LOG_TRACE,_("DefineBitsTag Tag"));
+	if (JPEGTablesTag::getJPEGTables() == NULL)
+	{
+		LOG(LOG_ERROR, "Malformed SWF file: JPEGTable was expected before DefineBits");
+		// try to continue anyway
+	}
+
 	in >> CharacterId;
 	//Read image data
 	int dataSize=Header.getLength()-2;
-	data=new(nothrow) uint8_t[dataSize];
-	in.read((char*)data,dataSize);
-}
-
-DefineBitsTag::~DefineBitsTag()
-{
-	delete[] data;
+	uint8_t *inData=new(nothrow) uint8_t[dataSize];
+	in.read((char*)inData,dataSize);
+	fromJPEG(inData,dataSize,JPEGTablesTag::getJPEGTables(),JPEGTablesTag::getJPEGTableSize());
+	delete[] inData;
 }
 
 DefineBitsJPEG2Tag::DefineBitsJPEG2Tag(RECORDHEADER h, std::istream& in, RootMovieClip* root):BitmapTag(h,root)

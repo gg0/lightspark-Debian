@@ -157,6 +157,8 @@ void DisplayObject::sinit(Class_base* c)
 	c->setDeclaredMethodByQName("mouseY","",Class<IFunction>::getFunction(_getMouseY),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("localToGlobal","",Class<IFunction>::getFunction(localToGlobal),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("globalToLocal","",Class<IFunction>::getFunction(globalToLocal),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("hitTestObject","",Class<IFunction>::getFunction(hitTestObject),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("hitTestPoint","",Class<IFunction>::getFunction(hitTestPoint),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("transform","",Class<IFunction>::getFunction(_getTransform),GETTER_METHOD,true);
 	REGISTER_GETTER_SETTER(c,accessibilityProperties);
 	REGISTER_GETTER_SETTER(c,cacheAsBitmap);
@@ -252,7 +254,8 @@ MATRIX DisplayObject::getConcatenatedMatrix() const
  * necessary bounded.) */
 float DisplayObject::clippedAlpha() const
 {
-	return dmin(dmax(alpha, 0.), 1.);
+	float a = ColorTransform.transformedAlpha(alpha);
+	return dmin(dmax(a, 0.), 1.);
 }
 
 float DisplayObject::getConcatenatedAlpha() const
@@ -881,9 +884,9 @@ ASFUNCTIONBODY(DisplayObject,_getMouseY)
 	return abstract_d(th->getLocalMousePos().y);
 }
 
-_NR<InteractiveObject> DisplayObject::hitTest(_NR<InteractiveObject> last, number_t x, number_t y, HIT_TYPE type)
+_NR<DisplayObject> DisplayObject::hitTest(_NR<DisplayObject> last, number_t x, number_t y, HIT_TYPE type)
 {
-	if(!visible || !isConstructed())
+	if(!(visible || type == GENERIC_HIT_INVISIBLE) || !isConstructed())
 		return NullRef;
 
 	//First check if there is any mask on this object, if so the point must be inside the mask to go on
@@ -908,8 +911,7 @@ _NR<InteractiveObject> DisplayObject::hitTest(_NR<InteractiveObject> last, numbe
 			return NullRef;
 	}
 
-	_NR<InteractiveObject> ret = hitTestImpl(last, x,y, type);
-	return ret;
+	return hitTestImpl(last, x,y, type);
 }
 
 /* Display objects have no children in general,
@@ -1034,5 +1036,86 @@ void DisplayObject::computeMasksAndMatrix(DisplayObject* target, std::vector<IDr
 			}
 		}
 		cur=cur->getParent().getPtr();
+	}
+}
+
+// Compute the minimal, axis aligned bounding box in global
+// coordinates
+bool DisplayObject::boundsRectGlobal(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const
+{
+	number_t x1, x2, y1, y2;
+	if (!boundsRect(x1, x2, y1, y2))
+		return abstract_b(false);
+
+	localToGlobal(x1, y1, x1, y1);
+	localToGlobal(x2, y2, x2, y2);
+
+	// Mapping to global may swap min and max values (for example,
+	// rotation by 180 degrees)
+	xmin = dmin(x1, x2);
+	xmax = dmax(x1, x2);
+	ymin = dmin(y1, y2);
+	ymax = dmax(y1, y2);
+
+	return true;
+}
+
+ASFUNCTIONBODY(DisplayObject,hitTestObject)
+{
+	DisplayObject* th=static_cast<DisplayObject*>(obj);
+	_NR<DisplayObject> another;
+	ARG_UNPACK(another);
+
+	number_t xmin, xmax, ymin, ymax;
+	if (!th->boundsRectGlobal(xmin, xmax, ymin, ymax))
+		return abstract_b(false);
+
+	number_t xmin2, xmax2, ymin2, ymax2;
+	if (!another->boundsRectGlobal(xmin2, xmax2, ymin2, ymax2))
+		return abstract_b(false);
+
+	number_t intersect_xmax = dmin(xmax, xmax2);
+	number_t intersect_xmin = dmax(xmin, xmin2);
+	number_t intersect_ymax = dmin(ymax, ymax2);
+	number_t intersect_ymin = dmax(ymin, ymin2);
+
+	return abstract_b((intersect_xmax > intersect_xmin) && 
+			  (intersect_ymax > intersect_ymin));
+}
+
+ASFUNCTIONBODY(DisplayObject,hitTestPoint)
+{
+	DisplayObject* th=static_cast<DisplayObject*>(obj);
+	number_t x;
+	number_t y;
+	bool shapeFlag;
+	ARG_UNPACK (x) (y) (shapeFlag, false);
+
+	number_t xmin, xmax, ymin, ymax;
+	if (!th->boundsRectGlobal(xmin, xmax, ymin, ymax))
+		return abstract_b(false);
+
+	bool insideBoundingBox = (xmin <= x) && (x < xmax) && (ymin <= y) && (y < ymax);
+
+	if (!shapeFlag)
+	{
+		return abstract_b(insideBoundingBox);
+	}
+	else
+	{
+		if (!insideBoundingBox)
+			return abstract_b(false);
+
+		number_t localX;
+		number_t localY;
+		th->globalToLocal(x, y, localX, localY);
+
+		// Hmm, hitTest will also check the mask, is this the
+		// right thing to do?
+		th->incRef();
+		_NR<DisplayObject> hit = th->hitTest(_MR(th), localX, localY,
+						     HIT_TYPE::GENERIC_HIT_INVISIBLE);
+
+		return abstract_b(hit.getPtr() == th);
 	}
 }

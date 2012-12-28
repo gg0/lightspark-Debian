@@ -93,7 +93,11 @@ void ASString::sinit(Class_base* c)
 	c->setDeclaredMethodByQName("toLocaleUpperCase",AS3,Class<IFunction>::getFunction(toUpperCase),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("toLowerCase",AS3,Class<IFunction>::getFunction(toLowerCase),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("toUpperCase",AS3,Class<IFunction>::getFunction(toUpperCase),NORMAL_METHOD,true);
+	// According to specs fromCharCode belongs to AS3 namespace,
+	// but also empty namespace is seen in the wild and should be
+	// supported.
 	c->setDeclaredMethodByQName("fromCharCode",AS3,Class<IFunction>::getFunction(fromCharCode),NORMAL_METHOD,false);
+	c->setDeclaredMethodByQName("fromCharCode","",Class<IFunction>::getFunction(fromCharCode),NORMAL_METHOD,false);
 	c->setDeclaredMethodByQName("length","",Class<IFunction>::getFunction(_getLength),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("toString",AS3,Class<IFunction>::getFunction(_toString),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("valueOf",AS3,Class<IFunction>::getFunction(_toString),NORMAL_METHOD,true);
@@ -484,14 +488,7 @@ double ASString::toNumber() const
 int32_t ASString::toInt()
 {
 	assert_and_throw(implEnable);
-	const char* cur=data.raw_buf();
-	int64_t ret;
-	bool valid=Integer::fromStringFlashCompatible(cur,ret,0);
-
-	if(valid==false || ret<INT32_MIN || ret>INT32_MAX)
-		return 0;
-	else
-		return static_cast<int32_t>(ret);
+	return Integer::stringToASInteger(data.raw_buf(), 0);
 }
 
 uint32_t ASString::toUInt()
@@ -614,6 +611,7 @@ ASFUNCTIONBODY(ASString,indexOf)
 	int startIndex=0;
 	if(argslen>1)
 		startIndex=args[1]->toInt();
+	startIndex = imin(imax(startIndex, 0), data.numChars());
 
 	size_t pos = data.find(arg0.raw_buf(), startIndex);
 	if(pos == data.npos)
@@ -635,6 +633,8 @@ ASFUNCTIONBODY(ASString,lastIndexOf)
 			return abstract_i(-1);
 		startIndex = i;
 	}
+
+	startIndex = imin(startIndex, data.numChars());
 
 	size_t pos=data.rfind(val.raw_buf(), startIndex);
 	if(pos==data.npos)
@@ -781,6 +781,8 @@ ASFUNCTIONBODY(ASString,replace)
 			prevsubstring += ret->data.substr_bytes(ovector[0],ovector[1]-ovector[0]);
 			ret->data.replace_bytes(ovector[0],ovector[1]-ovector[0],replaceWithTmp);
 			offset=ovector[0]+replaceWithTmp.numBytes();
+			if (ovector[0] == ovector[1])
+				offset+=1;
 			retDiff+=replaceWithTmp.numBytes()-(ovector[1]-ovector[0]);
 		}
 		while(re->global);

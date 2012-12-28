@@ -19,6 +19,7 @@
 
 #include <list>
 
+#include "backends/security.h"
 #include "scripting/abc.h"
 #include "scripting/flash/display/flashdisplay.h"
 #include "swf.h"
@@ -29,11 +30,11 @@
 #include "scripting/class.h"
 #include "backends/rendering.h"
 #include "backends/geometry.h"
+#include "backends/input.h"
 #include "scripting/flash/accessibility/flashaccessibility.h"
 #include "scripting/flash/display/BitmapData.h"
 #include "scripting/argconv.h"
 #include "scripting/toplevel/Vector.h"
-#include "backends/security.h"
 
 using namespace std;
 using namespace lightspark;
@@ -717,9 +718,9 @@ void Sprite::renderImpl(RenderContext& ctxt) const
 Subclasses of DisplayObjectContainer must still check
 isHittable() to see if they should send out events.
 */
-_NR<InteractiveObject> DisplayObjectContainer::hitTestImpl(_NR<InteractiveObject> last, number_t x, number_t y, DisplayObject::HIT_TYPE type)
+_NR<DisplayObject> DisplayObjectContainer::hitTestImpl(_NR<DisplayObject> last, number_t x, number_t y, DisplayObject::HIT_TYPE type)
 {
-	_NR<InteractiveObject> ret = NullRef;
+	_NR<DisplayObject> ret = NullRef;
 	//Test objects added at runtime, in reverse order
 	Locker l(mutexDisplayList);
 	list<_R<DisplayObject>>::const_reverse_iterator j=dynamicDisplayList.rbegin();
@@ -748,9 +749,9 @@ _NR<InteractiveObject> DisplayObjectContainer::hitTestImpl(_NR<InteractiveObject
 	return ret;
 }
 
-_NR<InteractiveObject> Sprite::hitTestImpl(_NR<InteractiveObject>, number_t x, number_t y, DisplayObject::HIT_TYPE type)
+_NR<DisplayObject> Sprite::hitTestImpl(_NR<DisplayObject>, number_t x, number_t y, DisplayObject::HIT_TYPE type)
 {
-	_NR<InteractiveObject> ret = NullRef;
+	_NR<DisplayObject> ret = NullRef;
 	this->incRef();
 	ret = DisplayObjectContainer::hitTestImpl(_MR(this),x,y, type);
 	if(!ret && isHittable(type))
@@ -952,6 +953,7 @@ void MovieClip::sinit(Class_base* c)
 	c->setDeclaredMethodByQName("scenes","",Class<IFunction>::getFunction(_getScenes),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("currentScene","",Class<IFunction>::getFunction(_getCurrentScene),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("stop","",Class<IFunction>::getFunction(stop),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("play","",Class<IFunction>::getFunction(play),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("gotoAndStop","",Class<IFunction>::getFunction(gotoAndStop),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("gotoAndPlay","",Class<IFunction>::getFunction(gotoAndPlay),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("nextFrame","",Class<IFunction>::getFunction(nextFrame),NORMAL_METHOD,true);
@@ -962,11 +964,11 @@ void MovieClip::buildTraits(ASObject* o)
 {
 }
 
-MovieClip::MovieClip(Class_base* c):Sprite(c),totalFrames_unreliable(1)
+MovieClip::MovieClip(Class_base* c):Sprite(c),fromDefineSpriteTag(false),totalFrames_unreliable(1)
 {
 }
 
-MovieClip::MovieClip(Class_base* c, const FrameContainer& f):Sprite(c),FrameContainer(f),totalFrames_unreliable(frames.size())
+MovieClip::MovieClip(Class_base* c, const FrameContainer& f, bool defineSpriteTag):Sprite(c),FrameContainer(f),fromDefineSpriteTag(defineSpriteTag),totalFrames_unreliable(frames.size())
 {
 	//For sprites totalFrames_unreliable is the actual frame count
 	//For the root movie, it's the frame count from the header
@@ -1022,6 +1024,14 @@ ASFUNCTIONBODY(MovieClip,stop)
 {
 	MovieClip* th=static_cast<MovieClip*>(obj);
 	th->state.stop_FP=true;
+	th->state.next_FP=th->state.FP;
+	return NULL;
+}
+
+ASFUNCTIONBODY(MovieClip,play)
+{
+	MovieClip* th=static_cast<MovieClip*>(obj);
+	th->state.stop_FP=false;
 	return NULL;
 }
 
@@ -1693,6 +1703,13 @@ ASFUNCTIONBODY(DisplayObjectContainer,swapChildren)
 	assert_and_throw(args[1] && args[1]->getClass() && 
 		args[1]->getClass()->isSubClass(Class<DisplayObject>::getClass()));
 
+	if (args[0] == args[1])
+	{
+		// Must return, otherwise crashes trying to erase the
+		// same object twice
+		return NULL;
+	}
+
 	//Cast to object
 	args[0]->incRef();
 	_R<DisplayObject> child1=_MR(Class<DisplayObject>::cast(args[0]));
@@ -1850,7 +1867,7 @@ bool MorphShape::boundsRect(number_t& xmin, number_t& xmax, number_t& ymin, numb
 	return false;
 }
 
-_NR<InteractiveObject> MorphShape::hitTestImpl(_NR<InteractiveObject> last, number_t x, number_t y, HIT_TYPE type)
+_NR<DisplayObject> MorphShape::hitTestImpl(_NR<DisplayObject> last, number_t x, number_t y, HIT_TYPE type)
 {
 	return NullRef;
 }
@@ -1860,13 +1877,17 @@ void Stage::sinit(Class_base* c)
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
 	c->setSuper(Class<DisplayObjectContainer>::getRef());
 	c->setDeclaredMethodByQName("stageWidth","",Class<IFunction>::getFunction(_getStageWidth),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("stageWidth","",Class<IFunction>::getFunction(undefinedFunction),SETTER_METHOD,true);
 	c->setDeclaredMethodByQName("stageHeight","",Class<IFunction>::getFunction(_getStageHeight),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("stageHeight","",Class<IFunction>::getFunction(undefinedFunction),SETTER_METHOD,true);
 	c->setDeclaredMethodByQName("width","",Class<IFunction>::getFunction(_getStageWidth),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("height","",Class<IFunction>::getFunction(_getStageHeight),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("scaleMode","",Class<IFunction>::getFunction(_getScaleMode),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("scaleMode","",Class<IFunction>::getFunction(_setScaleMode),SETTER_METHOD,true);
 	c->setDeclaredMethodByQName("loaderInfo","",Class<IFunction>::getFunction(_getLoaderInfo),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("stageVideos","",Class<IFunction>::getFunction(_getStageVideos),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("focus","",Class<IFunction>::getFunction(_getFocus),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("focus","",Class<IFunction>::getFunction(_setFocus),SETTER_METHOD,true);
 	REGISTER_GETTER_SETTER(c,displayState);
 }
 
@@ -1897,9 +1918,9 @@ ASFUNCTIONBODY(Stage,_constructor)
 	return NULL;
 }
 
-_NR<InteractiveObject> Stage::hitTestImpl(_NR<InteractiveObject> last, number_t x, number_t y, DisplayObject::HIT_TYPE type)
+_NR<DisplayObject> Stage::hitTestImpl(_NR<DisplayObject> last, number_t x, number_t y, DisplayObject::HIT_TYPE type)
 {
-	_NR<InteractiveObject> ret;
+	_NR<DisplayObject> ret;
 	ret = DisplayObjectContainer::hitTestImpl(last, x, y, type);
 	if(!ret)
 	{
@@ -1994,10 +2015,55 @@ ASFUNCTIONBODY(Stage,_getStageVideos)
 	return Class<Vector>::getInstanceS(Class<StageVideo>::getClass());
 }
 
+_NR<InteractiveObject> Stage::getFocusTarget()
+{
+	SpinlockLocker l(focusSpinlock);
+	if (focus.isNull())
+	{
+		incRef();
+		return _MNR(this);
+	}
+	else
+	{
+		return focus;
+	}
+}
+
+void Stage::setFocusTarget(_NR<InteractiveObject> f)
+{
+	SpinlockLocker l(focusSpinlock);
+	focus = f;
+}
+
+ASFUNCTIONBODY(Stage,_getFocus)
+{
+	Stage* th=static_cast<Stage*>(obj);
+	_NR<InteractiveObject> focus = th->getFocusTarget();
+	if (focus.isNull())
+	{
+		return NULL;
+	}
+	else
+	{
+		focus->incRef();
+		return focus.getPtr();
+	}
+}
+
+ASFUNCTIONBODY(Stage,_setFocus)
+{
+	Stage* th=static_cast<Stage*>(obj);
+	_NR<InteractiveObject> focus;
+	ARG_UNPACK(focus);
+	th->setFocusTarget(focus);
+	return NULL;
+}
+
 void Graphics::sinit(Class_base* c)
 {
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
 	c->setDeclaredMethodByQName("clear","",Class<IFunction>::getFunction(clear),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("copyFrom","",Class<IFunction>::getFunction(copyFrom),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("drawRect","",Class<IFunction>::getFunction(drawRect),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("drawRoundRect","",Class<IFunction>::getFunction(drawRoundRect),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("drawCircle","",Class<IFunction>::getFunction(drawCircle),NORMAL_METHOD,true);
@@ -2601,6 +2667,19 @@ ASFUNCTIONBODY(Graphics,endFill)
 	return NULL;
 }
 
+ASFUNCTIONBODY(Graphics,copyFrom)
+{
+	Graphics* th=static_cast<Graphics*>(obj);
+	_NR<Graphics> source;
+	ARG_UNPACK(source);
+	if (source.isNull())
+		return NULL;
+
+	th->owner->tokens.assign(source->owner->tokens.begin(),
+				 source->owner->tokens.end());
+	return NULL;
+}
+
 void LineScaleMode::sinit(Class_base* c)
 {
 	c->setConstructor(NULL);
@@ -2772,7 +2851,7 @@ bool Bitmap::boundsRect(number_t& xmin, number_t& xmax, number_t& ymin, number_t
 	return TokenContainer::boundsRect(xmin,xmax,ymin,ymax);
 }
 
-_NR<InteractiveObject> Bitmap::hitTestImpl(_NR<InteractiveObject> last, number_t x, number_t y, DisplayObject::HIT_TYPE type)
+_NR<DisplayObject> Bitmap::hitTestImpl(_NR<DisplayObject> last, number_t x, number_t y, DisplayObject::HIT_TYPE type)
 {
 	//Simple check inside the area, opacity data should not be considered
 	//NOTE: on the X axis the 0th line must be ignored, while the one past the width is valid
@@ -2811,9 +2890,9 @@ void SimpleButton::buildTraits(ASObject* o)
 {
 }
 
-_NR<InteractiveObject> SimpleButton::hitTestImpl(_NR<InteractiveObject> last, number_t x, number_t y, DisplayObject::HIT_TYPE type)
+_NR<DisplayObject> SimpleButton::hitTestImpl(_NR<DisplayObject> last, number_t x, number_t y, DisplayObject::HIT_TYPE type)
 {
-	_NR<InteractiveObject> ret = NullRef;
+	_NR<DisplayObject> ret = NullRef;
 	if(hitTestState)
 	{
 		if(hitTestState->getMatrix().isInvertible())
@@ -3178,8 +3257,8 @@ void MovieClip::advanceFrame()
 	 * 1b. or it is a DefineSpriteTag
 	 * 2. and is exported as a subclass of MovieClip (see bindedTo)
 	 */
-	if((!dynamic_cast<RootMovieClip*>(this) && !dynamic_cast<DefineSpriteTag*>(this))
-		|| !getClass()->isSubClass(Class<MovieClip>::getClass()))
+	if((!dynamic_cast<RootMovieClip*>(this) && !fromDefineSpriteTag)
+	   || !getClass()->isSubClass(Class<MovieClip>::getClass()))
 		return;
 
 	//If we have not yet loaded enough frames delay advancement

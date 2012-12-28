@@ -18,6 +18,7 @@
 **************************************************************************/
 
 #include <map>
+#include "backends/security.h"
 #include "scripting/abc.h"
 #include "scripting/flash/net/flashnet.h"
 #include "scripting/flash/net/URLRequestHeader.h"
@@ -27,7 +28,6 @@
 #include "backends/audio.h"
 #include "backends/builtindecoder.h"
 #include "backends/rendering.h"
-#include "backends/security.h"
 #include "scripting/argconv.h"
 
 using namespace std;
@@ -217,18 +217,14 @@ void URLRequest::finalize()
 ASFUNCTIONBODY(URLRequest,_constructor)
 {
 	URLRequest* th=static_cast<URLRequest*>(obj);
-	if(argslen==1 && args[0]->getObjectType()==T_STRING)
-	{
-		th->url=args[0]->toString();
-	}
+	ARG_UNPACK(th->url, "");
 	return NULL;
 }
 
 ASFUNCTIONBODY(URLRequest,_setURL)
 {
 	URLRequest* th=static_cast<URLRequest*>(obj);
-	assert_and_throw(argslen==1);
-	th->url=args[0]->toString();
+	ARG_UNPACK(th->url);
 	return NULL;
 }
 

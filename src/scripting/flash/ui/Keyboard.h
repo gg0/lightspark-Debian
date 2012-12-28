@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2011-2012  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2009-2012  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -17,31 +17,40 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
-#include <map>
-#include "backends/security.h"
-#include "scripting/abc.h"
-#include "scripting/flash/sensors/flashsensors.h"
-#include "scripting/class.h"
-#include "scripting/flash/system/flashsystem.h"
-#include "compat.h"
-#include "backends/audio.h"
+#ifndef SCRIPTING_FLASH_UI_KEYBOARD_H
+#define SCRIPTING_FLASH_UI_KEYBOARD_H 1
 
-using namespace std;
-using namespace lightspark;
+#include "asobject.h"
 
-Accelerometer::Accelerometer(Class_base* c):ASObject(c) {}
-
-void Accelerometer::sinit(Class_base* c)
+namespace lightspark
 {
-	// properties
-	c->setDeclaredMethodByQName("isSupported", "", Class<IFunction>::getFunction(_isSupported),GETTER_METHOD,false);
-}
 
-void Accelerometer::buildTraits(ASObject *o)
+class Keyboard : public ASObject
 {
-}
+public:
+	Keyboard(Class_base* c):ASObject(c){}
+	static void sinit(Class_base* c);
+	ASFUNCTION(capsLock);
+	ASFUNCTION(hasVirtualKeyboard);
+	ASFUNCTION(numLock);
+	ASFUNCTION(physicalKeyboardType);
+	ASFUNCTION(isAccessible);
+};
 
-ASFUNCTIONBODY(Accelerometer,_isSupported)
+class KeyboardType : public ASObject
 {
-	return abstract_b(false);
-}
+public:
+	KeyboardType(Class_base* c):ASObject(c){}
+	static void sinit(Class_base* c);
+};
+
+class KeyLocation : public ASObject
+{
+public:
+	KeyLocation(Class_base* c):ASObject(c){}
+	static void sinit(Class_base* c);
+};
+
+};
+
+#endif /* SCRIPTING_FLASH_UI_KEYBOARD_H */

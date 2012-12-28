@@ -71,6 +71,7 @@ public:
 	ASFUNCTION(localName);
 	ASFUNCTION(inScopeNamespaces);
 	ASFUNCTION(addNamespace);
+	ASFUNCTION(_setChildren);
 	ASFUNCTION(_setLocalName);
 	ASFUNCTION(_setName);
 	ASFUNCTION(_setNamespace);
@@ -84,6 +85,7 @@ public:
 	void append(_R<XML> x);
 	void append(_R<XMLList> x);
 	tiny_string toString();
+	int32_t toInt();
 	bool isEqual(ASObject* r);
 	uint32_t nextNameIndex(uint32_t cur_index);
 	_R<ASObject> nextName(uint32_t index);

@@ -34,17 +34,23 @@ namespace lightspark
 class ImageDecoder
 {
 private:
-	static uint8_t* decodeJPEGImpl(jpeg_source_mgr& src, uint32_t* width, uint32_t* height, bool* hasAlpha);
+	static uint8_t* decodeJPEGImpl(jpeg_source_mgr *src, jpeg_source_mgr* headerTables, uint32_t* width, uint32_t* height, bool* hasAlpha);
 	static uint8_t* decodePNGImpl(png_structp pngPtr, uint32_t* width, uint32_t* height);
 public:
 	/*
 	 * Returns a new[]'ed array of decompressed data and sets width, height and format
 	 * Return NULL on error
 	 */
-	static uint8_t* decodeJPEG(uint8_t* inData, int len, uint32_t* width, uint32_t* height, bool* hasAlpha);
+	static uint8_t* decodeJPEG(uint8_t* inData, int len, const uint8_t* tablesData, int tablesLen,
+				   uint32_t* width, uint32_t* height, bool* hasAlpha);
 	static uint8_t* decodeJPEG(std::istream& str, uint32_t* width, uint32_t* height, bool* hasAlpha);
 	static uint8_t* decodePNG(uint8_t* inData, int len, uint32_t* width, uint32_t* height);
 	static uint8_t* decodePNG(std::istream& str, uint32_t* width, uint32_t* height);
+	/* Convert paletted image into new[]'ed 24bit RGB image.
+	 * pixels array contains indexes to the palette, 1 byte per
+	 * index. Palette has numColors RGB values, 3 bytes per color.
+	 */
+	static uint8_t* decodePalette(uint8_t* pixels, uint32_t width, uint32_t height, uint8_t* palette, unsigned int numColors);
 };
 
 }

@@ -39,6 +39,11 @@ class InteractiveObject;
 class Sprite;
 class MouseEvent;
 
+struct KeyNameCodePair {
+	const char *keyname;
+	unsigned int keycode;
+};
+
 class InputThread
 {
 private:
@@ -53,6 +58,8 @@ private:
 	Mutex mutexListeners;
 	Mutex mutexDragged;
 
+	std::vector<KeyNameCodePair> keyNamesAndCodes;
+
 	_NR<Sprite> curDragged;
 	_NR<InteractiveObject> currentMouseOver;
 	_NR<InteractiveObject> lastMouseDownTarget;
@@ -66,10 +73,15 @@ private:
 		MaskData(DisplayObject* _d, const MATRIX& _m):d(_d),m(_m){}
 	};
 	_NR<InteractiveObject> getMouseTarget(uint32_t x, uint32_t y, DisplayObject::HIT_TYPE type);
-	void handleMouseDown(uint32_t x, uint32_t y);
-	void handleMouseDoubleClick(uint32_t x, uint32_t y);
-	void handleMouseUp(uint32_t x, uint32_t y);
-	void handleMouseMove(uint32_t x, uint32_t y);
+	void handleMouseDown(uint32_t x, uint32_t y, unsigned int buttonState);
+	void handleMouseDoubleClick(uint32_t x, uint32_t y, unsigned int buttonState);
+	void handleMouseUp(uint32_t x, uint32_t y, unsigned int buttonState);
+	void handleMouseMove(uint32_t x, uint32_t y, unsigned int buttonState);
+	void handleScrollEvent(uint32_t x, uint32_t y, GdkScrollDirection direction, unsigned int buttonState);
+
+	void initKeyTable();
+	bool handleKeyboardShortcuts(const GdkEventKey *keyevent);
+	void sendKeyEvent(const GdkEventKey *keyevent);
 
 	Spinlock inputDataSpinlock;
 	Vector2 mousePos;
@@ -82,6 +94,7 @@ public:
 	void removeListener(InteractiveObject* ob);
 	void startDrag(_R<Sprite> s, const RECT* limit, Vector2f dragOffset);
 	void stopDrag(Sprite* s);
+	const std::vector<KeyNameCodePair>& getKeyNamesAndCodes();
 
 	Vector2 getMousePos()
 	{

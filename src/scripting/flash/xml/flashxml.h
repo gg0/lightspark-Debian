@@ -37,6 +37,7 @@ protected:
 	_NR<XMLDocument> root;
 	xmlpp::Node* node;
 	tiny_string toString_priv(xmlpp::Node *outputNode);
+	xmlpp::Node *getParentNode();
 public:
 	XMLNode(Class_base* c):ASObject(c),root(NullRef),node(NULL){}
 	XMLNode(Class_base* c, _R<XMLDocument> _r, xmlpp::Node* _n);
@@ -46,11 +47,15 @@ public:
 	tiny_string toString();
 	ASFUNCTION(_constructor);
 	ASFUNCTION(firstChild);
+	ASFUNCTION(lastChild);
 	ASFUNCTION(childNodes);
 	ASFUNCTION(attributes);
 	ASFUNCTION(_getNodeType);
 	ASFUNCTION(_getNodeName);
 	ASFUNCTION(_getNodeValue);
+	ASFUNCTION(nextSibling);
+	ASFUNCTION(parentNode);
+	ASFUNCTION(previousSibling);
 	ASFUNCTION(_toString);
 };
 
@@ -65,6 +70,7 @@ public:
 	static void sinit(Class_base*);
 	static void buildTraits(ASObject* o);
 	tiny_string toString();
+	ASPROPERTY_GETTER_SETTER(bool, ignoreWhite);
 	ASFUNCTION(_constructor);
 	ASFUNCTION(parseXML);
 	ASFUNCTION(firstChild);

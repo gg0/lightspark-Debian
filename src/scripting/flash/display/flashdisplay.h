@@ -51,9 +51,12 @@ protected:
 	bool doubleClickEnabled;
 	bool isHittable(DisplayObject::HIT_TYPE type)
 	{
-		if(type == DisplayObject::DOUBLE_CLICK)
+		if(type == DisplayObject::MOUSE_CLICK)
+			return mouseEnabled;
+		else if(type == DisplayObject::DOUBLE_CLICK)
 			return doubleClickEnabled && mouseEnabled;
-		return mouseEnabled;
+		else
+			return true;
 	}
 	~InteractiveObject();
 public:
@@ -81,7 +84,7 @@ protected:
 	//As the RenderThread only reads, it's safe to read without the lock
 	mutable Mutex mutexDisplayList;
 	void setOnStage(bool staged);
-	_NR<InteractiveObject> hitTestImpl(_NR<InteractiveObject> last, number_t x, number_t y, DisplayObject::HIT_TYPE type);
+	_NR<DisplayObject> hitTestImpl(_NR<DisplayObject> last, number_t x, number_t y, DisplayObject::HIT_TYPE type);
 	bool boundsRect(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const;
 	void renderImpl(RenderContext& ctxt) const;
 public:
@@ -139,7 +142,7 @@ private:
 	bool enabled;
 	bool useHandCursor;
 	void reflectState();
-	_NR<InteractiveObject> hitTestImpl(_NR<InteractiveObject> last, number_t x, number_t y, DisplayObject::HIT_TYPE type);
+	_NR<DisplayObject> hitTestImpl(_NR<DisplayObject> last, number_t x, number_t y, DisplayObject::HIT_TYPE type);
 	/* This is called by when an event is dispatched */
 	void defaultEventBehavior(_R<Event> e);
 public:
@@ -208,6 +211,7 @@ public:
 	ASFUNCTION(curveTo);
 	ASFUNCTION(cubicCurveTo);
 	ASFUNCTION(clear);
+	ASFUNCTION(copyFrom);
 };
 
 
@@ -219,7 +223,7 @@ protected:
 		{ return TokenContainer::boundsRect(xmin,xmax,ymin,ymax); }
 	void renderImpl(RenderContext& ctxt) const
 		{ TokenContainer::renderImpl(ctxt); }
-	_NR<InteractiveObject> hitTestImpl(_NR<InteractiveObject> last, number_t x, number_t y, DisplayObject::HIT_TYPE type)
+	_NR<DisplayObject> hitTestImpl(_NR<DisplayObject> last, number_t x, number_t y, DisplayObject::HIT_TYPE type)
 		{ return TokenContainer::hitTestImpl(last,x,y, type); }
 public:
 	Shape(Class_base* c);
@@ -238,7 +242,8 @@ class MorphShape: public DisplayObject
 {
 protected:
 	bool boundsRect(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const;
-	virtual _NR<InteractiveObject> hitTestImpl(_NR<InteractiveObject> last, number_t x, number_t y, HIT_TYPE type);
+	virtual _NR<DisplayObject> hitTestImpl(_NR<DisplayObject> last, number_t x, number_t y, HIT_TYPE type);
+	virtual void renderImpl(RenderContext& ctxt) const {}
 public:
 	MorphShape(Class_base* c):DisplayObject(c){}
 	static void sinit(Class_base* c);
@@ -368,7 +373,7 @@ private:
 protected:
 	bool boundsRect(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const;
 	void renderImpl(RenderContext& ctxt) const;
-	_NR<InteractiveObject> hitTestImpl(_NR<InteractiveObject> last, number_t x, number_t y, DisplayObject::HIT_TYPE type);
+	_NR<DisplayObject> hitTestImpl(_NR<DisplayObject> last, number_t x, number_t y, DisplayObject::HIT_TYPE type);
 public:
 	Sprite(Class_base* c);
 	void finalize();
@@ -480,6 +485,7 @@ friend class ParserThread;
 private:
 	uint32_t getCurrentScene();
 	std::map<uint32_t,_NR<IFunction> > frameScripts;
+	bool fromDefineSpriteTag;
 protected:
 	/* This is read from the SWF header. It's only purpose is for flash.display.MovieClip.totalFrames */
 	uint32_t totalFrames_unreliable;
@@ -487,7 +493,7 @@ protected:
 public:
 	RunState state;
 	MovieClip(Class_base* c);
-	MovieClip(Class_base* c, const FrameContainer& f);
+	MovieClip(Class_base* c, const FrameContainer& f, bool defineSpriteTag);
 	void finalize();
 	ASObject* gotoAnd(ASObject* const* args, const unsigned int argslen, bool stop);
 	static void sinit(Class_base* c);
@@ -502,6 +508,7 @@ public:
 	ASFUNCTION(swapDepths);
 	ASFUNCTION(addFrameScript);
 	ASFUNCTION(stop);
+	ASFUNCTION(play);
 	ASFUNCTION(gotoAndStop);
 	ASFUNCTION(gotoAndPlay);
 	ASFUNCTION(nextFrame);
@@ -527,13 +534,19 @@ private:
 	uint32_t internalGetHeight() const;
 	uint32_t internalGetWidth() const;
 	void onDisplayState(const tiny_string&);
+	// Keyboard focus object is accessed from the VM thread (AS
+	// code) and the input thread and is protected focusSpinlock
+	Spinlock focusSpinlock;
+	_NR<InteractiveObject> focus;
 public:
-	_NR<InteractiveObject> hitTestImpl(_NR<InteractiveObject> last, number_t x, number_t y, DisplayObject::HIT_TYPE type);
+	_NR<DisplayObject> hitTestImpl(_NR<DisplayObject> last, number_t x, number_t y, DisplayObject::HIT_TYPE type);
 	void setOnStage(bool staged) { assert(false); /* we are the stage */}
 	Stage(Class_base* c);
 	static void sinit(Class_base* c);
 	static void buildTraits(ASObject* o);
 	_NR<Stage> getStage();
+	_NR<InteractiveObject> getFocusTarget();
+	void setFocusTarget(_NR<InteractiveObject> focus);
 	ASFUNCTION(_constructor);
 	ASFUNCTION(_getStageWidth);
 	ASFUNCTION(_getStageHeight);
@@ -541,6 +554,8 @@ public:
 	ASFUNCTION(_setScaleMode);
 	ASFUNCTION(_getLoaderInfo);
 	ASFUNCTION(_getStageVideos);
+	ASFUNCTION(_getFocus);
+	ASFUNCTION(_setFocus);
 	ASPROPERTY_GETTER_SETTER(tiny_string,displayState);
 };
 
@@ -640,7 +655,7 @@ public:
 	static void sinit(Class_base* c);
 	ASFUNCTION(_constructor);
 	bool boundsRect(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const;
-	_NR<InteractiveObject> hitTestImpl(_NR<InteractiveObject> last, number_t x, number_t y, DisplayObject::HIT_TYPE type);
+	_NR<DisplayObject> hitTestImpl(_NR<DisplayObject> last, number_t x, number_t y, DisplayObject::HIT_TYPE type);
 	virtual IntSize getBitmapSize() const;
 	void requestInvalidation(InvalidateQueue* q) { TokenContainer::requestInvalidation(q); }
 	IDrawable* invalidate(DisplayObject* target, const MATRIX& initialMatrix)

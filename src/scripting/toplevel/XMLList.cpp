@@ -111,7 +111,7 @@ void XMLList::sinit(Class_base* c)
 	//REGISTER_XML_DELEGATE(prependChild);
 	//REGISTER_XML_DELEGATE(removeNamespace);
 	//REGISTER_XML_DELEGATE(replace);
-	//REGISTER_XML_DELEGATE(setChildren);
+	REGISTER_XML_DELEGATE(_setChildren);
 	REGISTER_XML_DELEGATE2(setLocalName,_setLocalName);
 	REGISTER_XML_DELEGATE2(setName,_setName);
 	REGISTER_XML_DELEGATE2(setNamespace,_setNamespace);
@@ -131,7 +131,7 @@ ASFUNCTIONBODY_XML_DELEGATE(nodeKind);
 //ASFUNCTIONBODY_XML_DELEGATE(prependChild);
 //ASFUNCTIONBODY_XML_DELEGATE(removeNamespace);
 //ASFUNCTIONBODY_XML_DELEGATE(replace);
-//ASFUNCTIONBODY_XML_DELEGATE(setChildren);
+ASFUNCTIONBODY_XML_DELEGATE(_setChildren);
 ASFUNCTIONBODY_XML_DELEGATE(_setLocalName);
 ASFUNCTIONBODY_XML_DELEGATE(_setName);
 ASFUNCTIONBODY_XML_DELEGATE(_setNamespace);
@@ -611,6 +611,15 @@ tiny_string XMLList::toString_priv() const
 tiny_string XMLList::toString()
 {
 	return toString_priv();
+}
+
+int32_t XMLList::toInt()
+{
+	if (!hasSimpleContent())
+		return 0;
+
+	tiny_string str = toString();
+	return Integer::stringToASInteger(str.raw_buf(), 0);
 }
 
 ASFUNCTIONBODY(XMLList,_toString)

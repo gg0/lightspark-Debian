@@ -18,9 +18,9 @@
 **************************************************************************/
 
 #include "version.h"
+#include "backends/security.h"
 #include "swf.h"
 #include "logger.h"
-#include "backends/security.h"
 #include "platforms/engineutils.h"
 #ifndef _WIN32
 #	include <sys/resource.h>
@@ -83,6 +83,11 @@ public:
 	bool isSizable() const
 	{
 		return true;
+	}
+        void grabFocus()
+	{
+		/* Nothing to do because the standalone main window is
+		 * always focused */
 	}
 };
 

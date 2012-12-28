@@ -38,7 +38,7 @@ XML::XML(Class_base* c):ASObject(c),node(NULL),constructed(false),ignoreComments
 
 XML::XML(Class_base* c,const string& str):ASObject(c),node(NULL),constructed(true)
 {
-	node=buildFromString(str);
+	node=buildFromString(str, false);
 }
 
 XML::XML(Class_base* c,_R<XML> _r, xmlpp::Node* _n):ASObject(c),root(_r),node(_n),constructed(true)
@@ -92,6 +92,7 @@ void XML::sinit(Class_base* c)
 	c->setDeclaredMethodByQName("setName",AS3,Class<IFunction>::getFunction(_setName),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("setNamespace",AS3,Class<IFunction>::getFunction(_setNamespace),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("copy",AS3,Class<IFunction>::getFunction(_copy),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("setChildren",AS3,Class<IFunction>::getFunction(_setChildren),NORMAL_METHOD,true);
 }
 
 ASFUNCTIONBODY(XML,generator)
@@ -144,7 +145,7 @@ ASFUNCTIONBODY(XML,_constructor)
 	   args[0]->is<Null>() || 
 	   args[0]->is<Undefined>())
 	{
-		th->node=th->buildFromString("");
+		th->node=th->buildFromString("", false);
 	}
 	else if(args[0]->getClass()->isSubClass(Class<ByteArray>::getClass()))
 	{
@@ -153,7 +154,7 @@ ASFUNCTIONBODY(XML,_constructor)
 		ByteArray* ba=Class<ByteArray>::cast(args[0]);
 		uint32_t len=ba->getLength();
 		const uint8_t* str=ba->getBuffer(len, false);
-		th->node=th->buildFromString(std::string((const char*)str,len),
+		th->node=th->buildFromString(std::string((const char*)str,len), false,
 					     getVm()->getDefaultXMLNamespace());
 	}
 	else if(args[0]->is<ASString>() ||
@@ -164,7 +165,7 @@ ASFUNCTIONBODY(XML,_constructor)
 	{
 		//By specs, XML constructor will only convert to string Numbers or Booleans
 		//ints are not explicitly mentioned, but they seem to work
-		th->node=th->buildFromString(args[0]->toString(),
+		th->node=th->buildFromString(args[0]->toString(), false,
 					     getVm()->getDefaultXMLNamespace());
 	}
 	else if(args[0]->is<XML>())
@@ -179,7 +180,7 @@ ASFUNCTIONBODY(XML,_constructor)
 	}
 	else
 	{
-		th->node=th->buildFromString(args[0]->toString(),
+		th->node=th->buildFromString(args[0]->toString(), false,
 					     getVm()->getDefaultXMLNamespace());
 	}
 	return NULL;
@@ -876,6 +877,43 @@ XML *XML::copy() const
 	return Class<XML>::getInstanceS(node);
 }
 
+ASFUNCTIONBODY(XML,_setChildren)
+{
+	XML* th=obj->as<XML>();
+	_NR<ASObject> newChildren;
+	ARG_UNPACK(newChildren);
+
+	th->removeAllChildren();
+
+	if (newChildren->is<XML>())
+	{
+		XML *newChildrenXML=newChildren->as<XML>();
+		th->node->import_node(newChildrenXML->node);
+	}
+	else if (newChildren->is<XMLList>())
+	{
+		XMLList *list=newChildren->as<XMLList>();
+		list->appendNodesTo(th);
+	}
+	else
+	{
+		LOG(LOG_NOT_IMPLEMENTED, "XML::setChildren supports only XMLs and XMLLists");
+	}
+
+	th->incRef();
+	return th;
+}
+
+void XML::removeAllChildren()
+{
+	xmlpp::Node::NodeList children=node->get_children();
+	xmlpp::Node::NodeList::const_iterator it=children.begin();
+	for(;it!=children.end();++it)
+	{
+		node->remove_child(*it);
+	}
+}
+
 bool XML::hasSimpleContent() const
 {
 	xmlElementType nodetype=node->cobj()->type;
@@ -914,8 +952,8 @@ xmlElementType XML::getNodeKind() const
 void XML::recursiveGetDescendantsByQName(_R<XML> root, xmlpp::Node* node, const tiny_string& name, const tiny_string& ns,
 		XMLVector& ret)
 {
-	//Check if this node is being requested. The "*" string means all
-	if(name=="*" || name == node->get_name())
+	//Check if this node is being requested. Both "" and "*" strings mean all
+	if(name=="" || name=="*" || name == node->get_name())
 		ret.push_back(_MR(Class<XML>::getInstanceS(root, node)));
 	//NOTE: Creating a temporary list is quite a large overhead, but there is no way in libxml++ to access the first child
 	const xmlpp::Node::NodeList& list=node->get_children();
@@ -1087,7 +1125,16 @@ void XML::setVariableByMultiname(const multiname& name, ASObject* o, CONST_ALLOW
 			return;
 		}
 
-		xmlpp::Element* child=node->add_child(getSys()->getStringFromUniqueId(name.name_s_id), ns_prefix);
+		xmlpp::Element* child = NULL;
+		try
+		{
+			child=node->add_child(getSys()->getStringFromUniqueId(name.name_s_id), ns_prefix);
+		}
+		catch (xmlpp::exception& e)
+		{
+			LOG(LOG_NOT_IMPLEMENTED, "Adding child node failed: " << e.what());
+			return;
+		}
 
 		child->add_child_text(o->toString());
 
@@ -1233,6 +1280,15 @@ tiny_string XML::toString_priv()
 tiny_string XML::toString()
 {
 	return toString_priv();
+}
+
+int32_t XML::toInt()
+{
+	if (!hasSimpleContent())
+		return 0;
+
+	tiny_string str = toString();
+	return Integer::stringToASInteger(str.raw_buf(), 0);
 }
 
 bool XML::nodesEqual(xmlpp::Node *a, xmlpp::Node *b) const

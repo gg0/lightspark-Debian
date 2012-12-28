@@ -19,6 +19,7 @@
 **************************************************************************/
 
 #include "version.h"
+#include "backends/security.h"
 #include "plugin/plugin.h"
 #include "logger.h"
 #include "compat.h"
@@ -28,7 +29,6 @@
 #	include <gdk/gdkwin32.h>
 #endif
 #include "backends/urlutils.h"
-#include "backends/security.h"
 
 #include "plugin/npscriptobject.h"
 
@@ -481,6 +481,14 @@ GtkWidget* PluginEngineData::createGtkWidget()
 	return gtk_plug_new(instance->mWindow);
 }
 #endif
+
+void PluginEngineData::grabFocus()
+{
+	if (!widget)
+		return;
+
+	gtk_widget_grab_focus(widget);
+}
 
 NPError nsPluginInstance::SetWindow(NPWindow* aWindow)
 {

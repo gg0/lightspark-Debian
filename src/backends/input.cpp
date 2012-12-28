@@ -22,6 +22,7 @@
 #include "backends/input.h"
 #include "backends/rendering.h"
 #include "compat.h"
+#include "scripting/flash/ui/keycodes.h"
 
 #if GTK_CHECK_VERSION (2,21,8)
 #include <gdk/gdkkeysyms-compat.h> 
@@ -41,6 +42,7 @@ InputThread::InputThread(SystemState* s):m_sys(s),engineData(NULL),terminated(fa
 
 void InputThread::start(EngineData* e)
 {
+	initKeyTable();
 	engineData = e;
 	engineData->setInputHandler(sigc::mem_fun(this, &InputThread::worker));
 }
@@ -71,43 +73,15 @@ bool InputThread::worker(GdkEvent *event)
 	{
 		case GDK_KEY_PRESS:
 		{
-			//LOG(LOG_INFO, "key press");
-			switch(event->key.keyval)
-			{
-				case GDK_q:
-					if(m_sys->standalone)
-						m_sys->setShutdownFlag();
-					break;
-				case GDK_p:
-					m_sys->showProfilingData=!m_sys->showProfilingData;
-					break;
-				case GDK_m:
-					if (!m_sys->audioManager->pluginLoaded())
-						break;
-					m_sys->audioManager->toggleMuteAll();
-					if(m_sys->audioManager->allMuted())
-						LOG(LOG_INFO, "All sounds muted");
-					else
-						LOG(LOG_INFO, "All sounds unmuted");
-					break;
-				case GDK_c:
-					if(m_sys->hasError())
-					{
-						GtkClipboard *clipboard;
-						clipboard = gtk_clipboard_get(GDK_SELECTION_CLIPBOARD);
-						gtk_clipboard_set_text(clipboard, m_sys->getErrorCause().c_str(),
-								m_sys->getErrorCause().size());
-						clipboard = gtk_clipboard_get(GDK_SELECTION_PRIMARY);
-						gtk_clipboard_set_text(clipboard, m_sys->getErrorCause().c_str(),
-								m_sys->getErrorCause().size());
-						LOG(LOG_INFO, "Copied error to clipboard");
-					}
-					else
-						LOG(LOG_INFO, "No error to be coppied to clipboard");
-					break;
-				default:
-					break;
-			}
+			bool handled = handleKeyboardShortcuts(&event->key);
+			if (!handled)
+				sendKeyEvent(&event->key);
+			ret=TRUE;
+			break;
+		}
+		case GDK_KEY_RELEASE:
+		{
+			sendKeyEvent(&event->key);
 			ret=TRUE;
 			break;
 		}
@@ -120,28 +94,50 @@ bool InputThread::worker(GdkEvent *event)
 		}
 		case GDK_BUTTON_PRESS:
 		{
-			//Grab focus, to receive keypresses
 			if(event->button.button == 1)
-				handleMouseDown(event->button.x,event->button.y);
+			{
+				//Grab focus, to receive keypresses
+				engineData->grabFocus();
+
+				int stageX, stageY;
+				m_sys->windowToStageCoordinates(event->button.x,event->button.y,stageX,stageY);
+				handleMouseDown(stageX,stageY,event->button.state);
+			}
 			ret=TRUE;
 			break;
 		}
 		case GDK_2BUTTON_PRESS:
 		{
 			if(event->button.button == 1)
-				handleMouseDoubleClick(event->button.x,event->button.y);
+			{
+				int stageX, stageY;
+				m_sys->windowToStageCoordinates(event->button.x,event->button.y,stageX,stageY);
+				handleMouseDoubleClick(stageX,stageY,event->button.state);
+			}
 			ret=TRUE;
 			break;
 		}
 		case GDK_BUTTON_RELEASE:
 		{
-			handleMouseUp(event->button.x,event->button.y);
+			int stageX, stageY;
+			m_sys->windowToStageCoordinates(event->button.x,event->button.y,stageX,stageY);
+			handleMouseUp(stageX,stageY,event->button.state);
 			ret=TRUE;
 			break;
 		}
 		case GDK_MOTION_NOTIFY:
 		{
-			handleMouseMove(event->motion.x,event->motion.y);
+			int stageX, stageY;
+			m_sys->windowToStageCoordinates(event->motion.x,event->motion.y,stageX,stageY);
+			handleMouseMove(stageX,stageY,event->button.state);
+			ret=TRUE;
+			break;
+		}
+		case GDK_SCROLL:
+		{
+			int stageX, stageY;
+			m_sys->windowToStageCoordinates(event->scroll.x,event->scroll.y,stageX,stageY);
+			handleScrollEvent(stageX,stageY,event->scroll.direction,event->scroll.state);
 			ret=TRUE;
 			break;
 		}
@@ -159,7 +155,12 @@ _NR<InteractiveObject> InputThread::getMouseTarget(uint32_t x, uint32_t y, Displ
 	_NR<InteractiveObject> selected = NullRef;
 	try
 	{
-		selected=m_sys->mainClip->getStage()->hitTest(NullRef,x,y, type);
+		_NR<DisplayObject> dispobj=m_sys->mainClip->getStage()->hitTest(NullRef,x,y, type);
+		if(!dispobj.isNull() && dispobj->is<InteractiveObject>())
+		{
+			dispobj->incRef();
+			selected=_MNR(dispobj->as<InteractiveObject>());
+		}
 	}
 	catch(LightsparkException& e)
 	{
@@ -172,20 +173,20 @@ _NR<InteractiveObject> InputThread::getMouseTarget(uint32_t x, uint32_t y, Displ
 	return selected;
 }
 
-void InputThread::handleMouseDown(uint32_t x, uint32_t y)
+void InputThread::handleMouseDown(uint32_t x, uint32_t y, unsigned int buttonState)
 {
 	if(m_sys->currentVm == NULL)
 		return;
 	Locker locker(mutexListeners);
-	_NR<InteractiveObject> selected = getMouseTarget(x, y, DisplayObject::GENERIC_HIT);
+	_NR<InteractiveObject> selected = getMouseTarget(x, y, DisplayObject::MOUSE_CLICK);
 	number_t localX, localY;
 	selected->globalToLocal(x,y,localX,localY);
 	m_sys->currentVm->addEvent(selected,
-		_MR(Class<MouseEvent>::getInstanceS("mouseDown",localX,localY,true)));
+		_MR(Class<MouseEvent>::getInstanceS("mouseDown",localX,localY,true,buttonState)));
 	lastMouseDownTarget=selected;
 }
 
-void InputThread::handleMouseDoubleClick(uint32_t x, uint32_t y)
+void InputThread::handleMouseDoubleClick(uint32_t x, uint32_t y, unsigned int buttonState)
 {
 	if(m_sys->currentVm == NULL)
 		return;
@@ -194,29 +195,29 @@ void InputThread::handleMouseDoubleClick(uint32_t x, uint32_t y)
 	number_t localX, localY;
 	selected->globalToLocal(x,y,localX,localY);
 	m_sys->currentVm->addEvent(selected,
-		_MR(Class<MouseEvent>::getInstanceS("doubleClick",localX,localY,true)));
+		_MR(Class<MouseEvent>::getInstanceS("doubleClick",localX,localY,true,buttonState)));
 }
 
-void InputThread::handleMouseUp(uint32_t x, uint32_t y)
+void InputThread::handleMouseUp(uint32_t x, uint32_t y, unsigned int buttonState)
 {
 	if(m_sys->currentVm == NULL)
 		return;
 	Locker locker(mutexListeners);
-	_NR<InteractiveObject> selected = getMouseTarget(x, y, DisplayObject::GENERIC_HIT);
+	_NR<InteractiveObject> selected = getMouseTarget(x, y, DisplayObject::MOUSE_CLICK);
 	number_t localX, localY;
 	selected->globalToLocal(x,y,localX,localY);
 	m_sys->currentVm->addEvent(selected,
-		_MR(Class<MouseEvent>::getInstanceS("mouseUp",localX,localY,true)));
+		_MR(Class<MouseEvent>::getInstanceS("mouseUp",localX,localY,true,buttonState)));
 	if(lastMouseDownTarget==selected)
 	{
 		//Also send the click event
 		m_sys->currentVm->addEvent(selected,
-			_MR(Class<MouseEvent>::getInstanceS("click",localX,localY,true)));
+			_MR(Class<MouseEvent>::getInstanceS("click",localX,localY,true,buttonState)));
 	}
 	lastMouseDownTarget=NullRef;
 }
 
-void InputThread::handleMouseMove(uint32_t x, uint32_t y)
+void InputThread::handleMouseMove(uint32_t x, uint32_t y, unsigned int buttonState)
 {
 	if(m_sys->currentVm == NULL)
 		return;
@@ -244,12 +245,12 @@ void InputThread::handleMouseMove(uint32_t x, uint32_t y)
 	// Handle non-drag mouse movement
 	else
 	{
-		_NR<InteractiveObject> selected = getMouseTarget(x, y, DisplayObject::GENERIC_HIT);
+		_NR<InteractiveObject> selected = getMouseTarget(x, y, DisplayObject::MOUSE_CLICK);
 		number_t localX, localY;
 		selected->globalToLocal(x,y,localX,localY);
 		if(currentMouseOver == selected)
 			m_sys->currentVm->addEvent(selected,
-				_MR(Class<MouseEvent>::getInstanceS("mouseMove",localX,localY,true)));
+				_MR(Class<MouseEvent>::getInstanceS("mouseMove",localX,localY,true,buttonState)));
 		else
 		{
 			if(!currentMouseOver.isNull())
@@ -257,17 +258,150 @@ void InputThread::handleMouseMove(uint32_t x, uint32_t y)
 				number_t clocalX, clocalY;
 				currentMouseOver->globalToLocal(x,y,clocalX,clocalY);
 				m_sys->currentVm->addEvent(currentMouseOver,
-					_MR(Class<MouseEvent>::getInstanceS("mouseOut",clocalX,clocalY,true,selected)));
+					_MR(Class<MouseEvent>::getInstanceS("mouseOut",clocalX,clocalY,true,buttonState,selected)));
 				m_sys->currentVm->addEvent(currentMouseOver,
-					_MR(Class<MouseEvent>::getInstanceS("rollOut",clocalX,clocalY,true,selected)));
+					_MR(Class<MouseEvent>::getInstanceS("rollOut",clocalX,clocalY,true,buttonState,selected)));
 			}
 			m_sys->currentVm->addEvent(selected,
-				_MR(Class<MouseEvent>::getInstanceS("mouseOver",localX,localY,true,currentMouseOver)));
+				_MR(Class<MouseEvent>::getInstanceS("mouseOver",localX,localY,true,buttonState,currentMouseOver)));
 			m_sys->currentVm->addEvent(selected,
-				_MR(Class<MouseEvent>::getInstanceS("rollOver",localX,localY,true,currentMouseOver)));
+				_MR(Class<MouseEvent>::getInstanceS("rollOver",localX,localY,true,buttonState,currentMouseOver)));
 			currentMouseOver = selected;
 		}
 	}
+}
+
+void InputThread::handleScrollEvent(uint32_t x, uint32_t y, GdkScrollDirection direction, unsigned int buttonState)
+{
+	if(m_sys->currentVm == NULL)
+		return;
+
+	int delta;
+	if(direction==GDK_SCROLL_UP)
+		delta = 1;
+	else if(direction==GDK_SCROLL_DOWN)
+		delta = -1;
+	else
+		return;
+
+	Locker locker(mutexListeners);
+	_NR<InteractiveObject> selected = getMouseTarget(x, y, DisplayObject::MOUSE_CLICK);
+	number_t localX, localY;
+	selected->globalToLocal(x,y,localX,localY);
+	m_sys->currentVm->addEvent(selected,
+		_MR(Class<MouseEvent>::getInstanceS("mouseWheel",localX,localY,true,buttonState,NullRef,delta)));
+}
+
+void InputThread::initKeyTable()
+{
+	int i = 0;
+	while (hardwareKeycodes[i].keyname)
+	{
+		// Map GDK keyvals to hardware keycodes.
+		//
+		// NOTE: The keycodes returned by GDK are different
+		// from the keycodes in the Flash documentation.
+		// Should add mapping from GDK codes to Flash codes
+		// for AS files that use raw numerical values instead
+		// of Keyboard.* constants.
+		GdkKeymapKey *keys;
+		int keys_len;
+		const char *keyname = hardwareKeycodes[i].keyname;
+		unsigned keyval = hardwareKeycodes[i].gdkKeyval;
+		if (gdk_keymap_get_entries_for_keyval(NULL, keyval, &keys, &keys_len))
+		{
+			KeyNameCodePair key;
+			key.keyname = keyname;
+			key.keycode = keys[0].keycode;
+			keyNamesAndCodes.push_back(key);
+			g_free(keys);
+		}
+
+		i++;
+	}
+}
+
+const std::vector<KeyNameCodePair>& InputThread::getKeyNamesAndCodes()
+{
+	// No locking needed, because keyNamesAndCodes is not modified
+	// after being initialized
+	return keyNamesAndCodes;
+}
+
+bool InputThread::handleKeyboardShortcuts(const GdkEventKey *keyevent)
+{
+	bool handled = false;
+
+	if ((keyevent->state & GDK_MODIFIER_MASK) != GDK_CONTROL_MASK)
+		return handled;
+
+	switch(keyevent->keyval)
+	{
+		case GDK_q:
+			handled = true;
+			if(m_sys->standalone)
+				m_sys->setShutdownFlag();
+			break;
+		case GDK_p:
+			handled = true;
+			m_sys->showProfilingData=!m_sys->showProfilingData;
+			break;
+		case GDK_m:
+			handled = true;
+			if (!m_sys->audioManager->pluginLoaded())
+				break;
+			m_sys->audioManager->toggleMuteAll();
+			if(m_sys->audioManager->allMuted())
+				LOG(LOG_INFO, "All sounds muted");
+			else
+				LOG(LOG_INFO, "All sounds unmuted");
+			break;
+		case GDK_c:
+			handled = true;
+			if(m_sys->hasError())
+			{
+				GtkClipboard *clipboard;
+				clipboard = gtk_clipboard_get(GDK_SELECTION_CLIPBOARD);
+				gtk_clipboard_set_text(clipboard, m_sys->getErrorCause().c_str(),
+						       m_sys->getErrorCause().size());
+				clipboard = gtk_clipboard_get(GDK_SELECTION_PRIMARY);
+				gtk_clipboard_set_text(clipboard, m_sys->getErrorCause().c_str(),
+						       m_sys->getErrorCause().size());
+				LOG(LOG_INFO, "Copied error to clipboard");
+			}
+			else
+				LOG(LOG_INFO, "No error to be copied to clipboard");
+			break;
+		default:
+			break;
+	}
+
+	return handled;
+}
+
+void InputThread::sendKeyEvent(const GdkEventKey *keyevent)
+{
+	if(m_sys->currentVm == NULL)
+		return;
+
+	Locker locker(mutexListeners);
+
+	_NR<DisplayObject> target = m_sys->mainClip->getStage()->getFocusTarget();
+	if (target.isNull())
+		return;
+
+	tiny_string type;
+	if (keyevent->type == GDK_KEY_PRESS)
+		type = "keyDown";
+	else
+		type = "keyUp";
+
+	uint32_t charcode = keyevent->keyval;
+	if (keyevent->is_modifier)
+		charcode = 0;
+
+	m_sys->currentVm->addEvent(target,
+	    _MR(Class<KeyboardEvent>::getInstanceS(type, charcode, keyevent->hardware_keycode, keyevent->state)));
 }
 
 void InputThread::addListener(InteractiveObject* ob)

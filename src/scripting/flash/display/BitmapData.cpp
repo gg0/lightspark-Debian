@@ -37,11 +37,12 @@ BitmapData::BitmapData(Class_base* c, const BitmapContainer& b):ASObject(c),Bitm
 
 BitmapData::BitmapData(Class_base* c, uint32_t width, uint32_t height):ASObject(c),BitmapContainer(c->memoryAccount),disposed(false)
 {
-	assert(width!=0 && height!=0);
-
 	uint32_t *pixels=new uint32_t[width*height];
-	memset(pixels,0,width*height*sizeof(uint32_t));
-	fromRGB(reinterpret_cast<uint8_t *>(pixels), width, height, true);
+	if (width!=0 && height!=0)
+	{
+		memset(pixels,0,width*height*sizeof(uint32_t));
+		fromRGB(reinterpret_cast<uint8_t *>(pixels), width, height, ARGB32);
+	}
 }
 
 BitmapData::~BitmapData()
@@ -65,6 +66,8 @@ void BitmapData::sinit(Class_base* c)
 	c->setDeclaredMethodByQName("fillRect","",Class<IFunction>::getFunction(fillRect),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("generateFilterRect","",Class<IFunction>::getFunction(generateFilterRect),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("hitTest","",Class<IFunction>::getFunction(hitTest),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("scroll","",Class<IFunction>::getFunction(scroll),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("clone","",Class<IFunction>::getFunction(clone),NORMAL_METHOD,true);
 	REGISTER_GETTER(c,width);
 	REGISTER_GETTER(c,height);
 	REGISTER_GETTER(c,transparent);
@@ -113,7 +116,7 @@ ASFUNCTIONBODY(BitmapData,_constructor)
 	}
 	for(uint32_t i=0; i<width*height; i++)
 		pixels[i]=c;
-	th->fromRGB(reinterpret_cast<uint8_t *>(pixels), width, height, true);
+	th->fromRGB(reinterpret_cast<uint8_t *>(pixels), width, height, ARGB32);
 	th->transparent=transparent;
 
 	return NULL;
@@ -212,9 +215,9 @@ ASFUNCTIONBODY(BitmapData,draw)
 	return NULL;
 }
 
-uint32_t BitmapData::getPixelPriv(uint32_t x, uint32_t y)
+uint32_t BitmapData::getPixelPriv(int32_t x, int32_t y)
 {
-	if ((int)x >= width || (int)y >= height)
+	if (x < 0 || x >= width || y < 0 || y >= height)
 		return 0;
 
 	uint32_t *p=reinterpret_cast<uint32_t *>(&data[y*stride + 4*x]);
@@ -230,8 +233,6 @@ ASFUNCTIONBODY(BitmapData,getPixel)
 	int32_t x;
 	int32_t y;
 	ARG_UNPACK(x)(y);
-	if(x<0 || x>th->width || y<0 || y>th->width)
-		return abstract_ui(0);
 
 	uint32_t pix=th->getPixelPriv(x, y);
 	return abstract_ui(pix & 0xffffff);
@@ -245,16 +246,14 @@ ASFUNCTIONBODY(BitmapData,getPixel32)
 	int32_t x;
 	int32_t y;
 	ARG_UNPACK(x)(y);
-	if(x<0 || x>th->width || y<0 || y>th->width)
-		return abstract_ui(0);
 
 	uint32_t pix=th->getPixelPriv(x, y);
 	return abstract_ui(pix);
 }
 
-void BitmapData::setPixelPriv(uint32_t x, uint32_t y, uint32_t color, bool setAlpha)
+void BitmapData::setPixelPriv(int32_t x, int32_t y, uint32_t color, bool setAlpha)
 {
-	if ((int)x >= width || (int)y >= height)
+	if (x<0 || x >= width || y<0 || y >= height)
 		return;
 
 	uint32_t *p=reinterpret_cast<uint32_t *>(&data[y*stride + 4*x]);
@@ -270,10 +269,11 @@ ASFUNCTIONBODY(BitmapData,setPixel)
 	BitmapData* th = obj->as<BitmapData>();
 	if(th->disposed)
 		throw Class<ArgumentError>::getInstanceS("Disposed BitmapData");
-	uint32_t x;
-	uint32_t y;
+	int32_t x;
+	int32_t y;
 	uint32_t color;
 	ARG_UNPACK(x)(y)(color);
+
 	th->setPixelPriv(x, y, color, false);
 	return NULL;
 }
@@ -283,10 +283,11 @@ ASFUNCTIONBODY(BitmapData,setPixel32)
 	BitmapData* th = obj->as<BitmapData>();
 	if(th->disposed)
 		throw Class<ArgumentError>::getInstanceS("Disposed BitmapData");
-	uint32_t x;
-	uint32_t y;
+	int32_t x;
+	int32_t y;
 	uint32_t color;
 	ARG_UNPACK(x)(y)(color);
+
 	th->setPixelPriv(x, y, color, th->transparent);
 	return NULL;
 }
@@ -443,4 +444,55 @@ ASFUNCTIONBODY(BitmapData,hitTest)
 		return abstract_b(true);
 	else
 		return abstract_b(false);
+}
+
+ASFUNCTIONBODY(BitmapData,scroll)
+{
+	BitmapData* th = obj->as<BitmapData>();
+	if(th->disposed)
+		throw Class<ArgumentError>::getInstanceS("Disposed BitmapData");
+
+	int x;
+	int y;
+	ARG_UNPACK (x) (y);
+
+	int sourceX = imax(-x, 0);
+	int sourceY = imax(-y, 0);
+
+	int destX = imax(x, 0);
+	int destY = imax(y, 0);
+
+	int copyWidth = imax(th->width - abs(x), 0);
+	int copyHeight = imax(th->height - abs(y), 0);
+
+	if (copyWidth > 0 && copyHeight > 0)
+	{
+		for(int i=0; i<copyHeight; i++)
+		{
+			//Set the copy direction so that we don't
+			//overwrite the destination region
+			int row;
+			if (y > 0)
+				row = copyHeight - i - 1;
+			else
+				row = i;
+
+			memmove(th->getData() + (destY+row)*th->stride + 4*destX,
+				th->getData() + (sourceY+row)*th->stride + 4*sourceX,
+				4*copyWidth);
+		}
+
+		th->notifyUsers();
+	}
+
+	return NULL;
+}
+
+ASFUNCTIONBODY(BitmapData,clone)
+{
+	BitmapData* th = obj->as<BitmapData>();
+	if(th->disposed)
+		throw Class<ArgumentError>::getInstanceS("Disposed BitmapData");
+
+	return Class<BitmapData>::getInstanceS(*th);
 }

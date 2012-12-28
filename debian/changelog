@@ -1,3 +1,20 @@
+lightspark (0.7.1-1) experimental; urgency=low
+
+  * New 0.7.1 upstream version
+    - Fixes for YouTube
+    - Support keyboard press and release events
+    - Support mouse wheel events and other mouse event improvements
+    - Support LLVM 3.2
+    - Implemented hit testing of DisplayObjects
+    - Parse JPEG images embedded in DefineBits tags
+    - Parse RGB15 and paletted images in DefineBitsLossless tags
+    - Improved XML support
+
+  * Bump Standards-Version to 3.9.4 without changes needed.
+  * Update homepage to GitHub
+
+ -- Didier Raboud <odyx@debian.org>  Fri, 28 Dec 2012 10:49:31 +0100
+
 lightspark (0.7.0-1) experimental; urgency=low
 
   * New 0.7.0 upstream version.

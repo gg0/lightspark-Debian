@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2011-2012  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2011-2013  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -21,9 +21,45 @@
 #define SMARTREFS_H 1
 
 #include <stdexcept>
+#include "compat.h"
 
 namespace lightspark
 {
+
+class RefCountable {
+private:
+	ATOMIC_INT32(ref_count);
+
+protected:
+	RefCountable() : ref_count(1) {}
+
+public:
+	virtual ~RefCountable() {}
+
+#ifndef NDEBUG
+	int getRefCount() const { return ref_count; }
+#endif
+	void incRef()
+	{
+		ATOMIC_INCREMENT(ref_count);
+		assert(ref_count>0);
+	}
+	void decRef()
+	{
+		assert(ref_count>0);
+		uint32_t t=ATOMIC_DECREMENT(ref_count);
+		if(t==0)
+		{
+			//Let's make refcount very invalid
+			ref_count=-1024;
+			delete this;
+		}
+	}
+	void fake_decRef()
+	{
+		ATOMIC_DECREMENT(ref_count);
+	}
+};
 
 /*
    NOTE: _Always_ define both copy constructor and assignment operator in non templated way.
@@ -58,9 +94,13 @@ public:
 		//incRef before decRef to make sure this works even if the pointer is the same
 		r.m->incRef();
 
-		m->decRef();
-
+		T* old=m;
 		m=r.m;
+
+		//decRef as the very last function call, because it
+		//may cause this Ref to be deleted (if old owns this Ref)
+		old->decRef();
+
 		return *this;
 	}
 	template<class D> Ref<T>& operator=(const Ref<D>& r)
@@ -68,9 +108,11 @@ public:
 		//incRef before decRef to make sure this works even if the pointer is the same
 		r.m->incRef();
 
-		m->decRef();
-
+		T* old=m;
 		m=r.m;
+
+		old->decRef();
+
 		return *this;
 	}
 	template<class D> bool operator==(const Ref<D>& r) const
@@ -155,9 +197,10 @@ public:
 		if(r.m)
 			r.m->incRef();
 
-		if(m)
-			m->decRef();
+		T* old=m;
 		m=r.m;
+		if(old)
+			old->decRef();
 		return *this;
 	}
 	template<class D> NullableRef<T>& operator=(const NullableRef<D>& r)
@@ -165,18 +208,20 @@ public:
 		if(r.getPtr())
 			r->incRef();
 
-		if(m)
-			m->decRef();
+		T* old=m;
 		m=r.getPtr();
+		if(old)
+			old->decRef();
 		return *this;
 	}
 	template<class D> NullableRef<T>& operator=(const Ref<D>& r)
 	{
 		r.getPtr()->incRef();
 
-		if(m)
-			m->decRef();
+		T* old=m;
 		m=r.getPtr();
+		if(old)
+			old->decRef();
 		return *this;
 	}
 	template<class D> bool operator==(const NullableRef<D>& r) const
@@ -233,9 +278,10 @@ public:
 	bool isNull() const { return m==NULL; }
 	void reset()
 	{
-		if(m)
-			m->decRef();
+		T* old=m;
 		m=NULL;
+		if(old)
+			old->decRef();
 	}
 	void fakeRelease()
 	{

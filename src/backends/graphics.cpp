@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2010-2012  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2010-2013  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -343,11 +343,16 @@ cairo_pattern_t* CairoTokenRenderer::FILLSTYLEToCairo(const FILLSTYLE& style, do
 		case REPEATING_BITMAP:
 		case CLIPPED_BITMAP:
 		{
-			//bitmap is always present, it may be empty though
+			_NR<BitmapContainer> bm(style.bitmap);
+			if(bm.isNull())
+				return NULL;
+
 			//Do an explicit cast, the data will not be modified
-			cairo_surface_t* surface = cairo_image_surface_create_for_data ((uint8_t*)style.bitmap.getData(),
-								CAIRO_FORMAT_ARGB32, style.bitmap.getWidth(), style.bitmap.getHeight(),
-								cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, style.bitmap.getWidth()));
+			cairo_surface_t* surface = cairo_image_surface_create_for_data ((uint8_t*)bm->getData(),
+								CAIRO_FORMAT_ARGB32,
+								bm->getWidth(),
+								bm->getHeight(),
+								cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, bm->getWidth()));
 
 			pattern = cairo_pattern_create_for_surface(surface);
 			cairo_surface_destroy(surface);
@@ -475,7 +480,15 @@ bool CairoTokenRenderer::cairoPathFromTokens(cairo_t* cr, const std::vector<Geom
 					cairo_set_miter_limit(stroke_cr, style.MiterLimitFactor);
 				}
 
-				cairo_set_line_width(stroke_cr, (double)(style.Width / 20.0));
+				//Width == 0 should be a hairline, but
+				//cairo does not support hairlines.
+				//Line width 1 is not a perfect
+				//substitute, because it is affected
+				//by transformations.
+				if (style.Width == 0)
+					cairo_set_line_width(stroke_cr, 1);
+				else
+					cairo_set_line_width(stroke_cr, (double)(style.Width / 20.0));
 				break;
 			}
 
@@ -853,13 +866,21 @@ void CairoPangoRenderer::executeDraw(cairo_t* cr)
 
 	if(textData.background)
 	{
-		cairo_set_source_rgb (cr, textData.backgroundColor.Red, textData.backgroundColor.Green, textData.backgroundColor.Blue);
+		cairo_set_source_rgb (cr, textData.backgroundColor.Red/255., textData.backgroundColor.Green/255., textData.backgroundColor.Blue/255.);
 		cairo_paint(cr);
 	}
-	cairo_set_source_rgb (cr, textData.textColor.Red, textData.textColor.Green, textData.textColor.Blue);
 
 	/* draw the text */
+	cairo_set_source_rgb (cr, textData.textColor.Red/255., textData.textColor.Green/255., textData.textColor.Blue/255.);
 	pango_cairo_show_layout(cr, layout);
+
+	if(textData.border)
+	{
+		cairo_set_source_rgb(cr, textData.borderColor.Red/255., textData.borderColor.Green/255., textData.borderColor.Blue/255.);
+		cairo_set_line_width(cr, 1);
+		cairo_rectangle(cr, 0, 0, textData.width, textData.height);
+		cairo_stroke_preserve(cr);
+	}
 
 	g_object_unref(layout);
 }

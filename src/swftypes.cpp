@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2008-2012  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2008-2013  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -26,6 +26,8 @@
 #include <stdlib.h>
 #include <cmath>
 #include <cairo.h>
+#include <glib.h>
+#include <iomanip> 
 
 #include "exceptions.h"
 #include "compat.h"
@@ -143,7 +145,7 @@ void multiname::resetNameIfObject()
 	}
 }
 
-bool multiname::toUInt(uint32_t& index) const
+bool multiname::toUInt(uint32_t& index, bool acceptStringFractions) const
 {
 	switch(name_type)
 	{
@@ -162,7 +164,20 @@ bool multiname::toUInt(uint32_t& index) const
 			index=0;
 			for(auto i=str.begin(); i!=str.end(); ++i)
 			{
-				if(!i.isdigit())
+				if (*i == '.' && acceptStringFractions)
+				{
+					if (i==str.begin())
+						return false;
+					
+					// Accept fractional part if it
+					// is all zeros, e.g. "2.00"
+					++i;
+					for (; i!=str.end(); ++i)
+						if (*i != '0')
+							return false;
+					return true;
+				}
+				else if(!i.isdigit())
 					return false;
 
 				index*=10;
@@ -207,26 +222,31 @@ std::ostream& lightspark::operator<<(std::ostream& s, const nsNameAndKind& r)
 	const char* prefix;
 	switch(r.getImpl().kind)
 	{
-		case 0x08:
+		case NAMESPACE:
 			prefix="ns:";
 			break;
-		case 0x16:
+		case PACKAGE_NAMESPACE:
 			prefix="pakns:";
 			break;
-		case 0x17:
+		case PACKAGE_INTERNAL_NAMESPACE:
 			prefix="pakintns:";
 			break;
-		case 0x18:
+		case PROTECTED_NAMESPACE:
 			prefix="protns:";
 			break;
-		case 0x19:
+		case EXPLICIT_NAMESPACE:
 			prefix="explns:";
 			break;
-		case 0x1a:
+		case STATIC_PROTECTED_NAMESPACE:
 			prefix="staticprotns:";
 			break;
-		case 0x05:
+		case PRIVATE_NAMESPACE:
 			prefix="privns:";
+			break;
+		default:
+			//Not reached
+			assert("Unexpected namespace kind" && false);
+			prefix="";
 			break;
 	}
 	s << prefix << r.getImpl().name;
@@ -339,6 +359,14 @@ Vector2f MATRIX::multiply2D(const Vector2f& in) const
 	Vector2f out;
 	multiply2D(in.x,in.y,out.x,out.y);
 	return out;
+}
+
+Vector2 MATRIX::multiply2D(const Vector2& in) const
+{
+	number_t xout;
+	number_t yout;
+	multiply2D(in.x,in.y,xout,yout);
+	return Vector2(xout,yout);
 }
 
 void MATRIX::multiply2D(number_t xin, number_t yin, number_t& xout, number_t& yout) const
@@ -760,7 +788,7 @@ std::istream& lightspark::operator>>(std::istream& s, FILLSTYLE& v)
 					LOG(LOG_ERROR,"Invalid bitmap ID " << bitmapId);
 					throw ParseException("Invalid ID for bitmap");
 				}
-				v.bitmap = *b;
+				v.bitmap = b->getBitmap();
 			}
 			catch(RunTimeException& e)
 			{
@@ -831,7 +859,7 @@ GLYPHENTRY::GLYPHENTRY(TEXTRECORD* p,BitStream& bs):parent(p)
 	GlyphAdvance = SB(parent->parent->AdvanceBits,bs);
 }
 
-SHAPERECORD::SHAPERECORD(SHAPE* p,BitStream& bs):parent(p),MoveDeltaX(0),MoveDeltaY(0),DeltaX(0),DeltaY(0),TypeFlag(false),StateNewStyles(false),StateLineStyle(false),StateFillStyle1(false),StateFillStyle0(false),StateMoveTo(false)
+SHAPERECORD::SHAPERECORD(SHAPE* p,BitStream& bs):parent(p),MoveBits(0),MoveDeltaX(0),MoveDeltaY(0),FillStyle1(0),FillStyle0(0),LineStyle(0),NumBits(0),DeltaX(0),DeltaY(0),ControlDeltaX(0),ControlDeltaY(0),AnchorDeltaX(0),AnchorDeltaY(0),TypeFlag(false),StateNewStyles(false),StateLineStyle(false),StateFillStyle1(false),StateFillStyle0(false),StateMoveTo(false),StraightFlag(false),GeneralLineFlag(false),VertLineFlag(false)
 {
 	TypeFlag = UB(1,bs);
 	if(TypeFlag)
@@ -889,7 +917,7 @@ SHAPERECORD::SHAPERECORD(SHAPE* p,BitStream& bs):parent(p),MoveDeltaX(0),MoveDel
 		{
 			LineStyle=UB(parent->NumLineBits,bs)+p->lineOffset;
 		}
-		if(StateNewStyles)
+		if(StateNewStyles && parent->version >= 2)
 		{
 			SHAPEWITHSTYLE* ps=dynamic_cast<SHAPEWITHSTYLE*>(parent);
 			if(ps==NULL)
@@ -1009,7 +1037,6 @@ std::istream& lightspark::operator>>(std::istream& stream, MATRIX& v)
 
 std::istream& lightspark::operator>>(std::istream& stream, BUTTONRECORD& v)
 {
-	assert_and_throw(v.buttonVersion==2);
 	BitStream bs(stream);
 
 	bs.discard(2);
@@ -1023,13 +1050,18 @@ std::istream& lightspark::operator>>(std::istream& stream, BUTTONRECORD& v)
 	if(v.isNull())
 		return stream;
 
-	stream >> v.CharacterID >> v.PlaceDepth >> v.PlaceMatrix >> v.ColorTransform;
+	stream >> v.CharacterID >> v.PlaceDepth >> v.PlaceMatrix;
 
-	if(v.ButtonHasFilterList)
+	if (v.buttonVersion==2)
+		stream >> v.ColorTransform;
+
+	if(v.ButtonHasFilterList && v.buttonVersion==2)
 		stream >> v.FilterList;
 
-	if(v.ButtonHasBlendMode)
+	if(v.ButtonHasBlendMode && v.buttonVersion==2)
 		stream >> v.BlendMode;
+	else
+		v.BlendMode = 0;
 
 	return stream;
 }
@@ -1353,7 +1385,7 @@ QName::operator multiname() const
 	return ret;
 }
 
-FILLSTYLE::FILLSTYLE(uint8_t v):Gradient(v),bitmap(getSys()->unaccountedMemory),version(v)
+FILLSTYLE::FILLSTYLE(uint8_t v):Gradient(v),version(v)
 {
 }
 
@@ -1407,4 +1439,68 @@ nsNameAndKind::nsNameAndKind(ABCContext* c, uint32_t nsContextIndex)
 const nsNameAndKindImpl& nsNameAndKind::getImpl() const
 {
 	return getSys()->getNamespaceFromUniqueId(nsRealId);
+}
+
+nsNameAndKindImpl::nsNameAndKindImpl(const tiny_string& _name, NS_KIND _kind, uint32_t b)
+  : name(_name),kind(_kind),baseId(b)
+{
+	if (kind != NAMESPACE &&
+	    kind != PACKAGE_NAMESPACE &&
+	    kind != PACKAGE_INTERNAL_NAMESPACE &&
+	    kind != PROTECTED_NAMESPACE &&
+	    kind != EXPLICIT_NAMESPACE &&
+	    kind != STATIC_PROTECTED_NAMESPACE &&
+	    kind != PRIVATE_NAMESPACE)
+	{
+		//I have seen empty namespace with kind 0. For other
+		//namespaces we should not get here.
+		if (!name.empty())
+			LOG(LOG_ERROR, "Invalid namespace kind, converting to public namespace");
+		kind = NAMESPACE;
+	}
+}
+
+nsNameAndKindImpl::nsNameAndKindImpl(const char* _name, NS_KIND _kind, uint32_t b)
+ : name(_name),kind(_kind),baseId(b)
+{
+	if (kind != NAMESPACE &&
+	    kind != PACKAGE_NAMESPACE &&
+	    kind != PACKAGE_INTERNAL_NAMESPACE &&
+	    kind != PROTECTED_NAMESPACE &&
+	    kind != EXPLICIT_NAMESPACE &&
+	    kind != STATIC_PROTECTED_NAMESPACE &&
+	    kind != PRIVATE_NAMESPACE)
+	{
+		//I have seen empty namespace with kind 0. For other
+		//namespaces we should not get here.
+		if (!name.empty())
+			LOG(LOG_ERROR, "Invalid namespace kind, converting to public namespace");
+		kind = NAMESPACE;
+	}
+}
+
+RGB::RGB(const tiny_string& colorstr):Red(0),Green(0),Blue(0)
+{
+	if (colorstr.empty())
+		return;
+
+	const char *s = colorstr.raw_buf();
+	if (s[0] == '#')
+		s++;
+
+	gint64 color = g_ascii_strtoll(s, NULL, 16);
+	Red = (color >> 16) & 0xFF;
+	Green = (color >> 8) & 0xFF;
+	Blue = color & 0xFF;
+}
+
+tiny_string RGB::toString() const
+{
+	ostringstream ss;
+	ss << "#" << std::hex << std::setfill('0') << 
+		std::setw(2) << (int)Red << 
+		std::setw(2) << (int)Green << 
+		std::setw(2) << (int)Blue;
+
+	return ss.str();
 }

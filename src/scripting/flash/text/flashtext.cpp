@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2009-2012  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2009-2013  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -17,6 +17,10 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
+#include <libxml++/nodes/element.h>
+#include <libxml++/parsers/domparser.h>
+#include <libxml++/exceptions/exception.h>
+#include <libxml/tree.h>
 #include "scripting/flash/text/flashtext.h"
 #include "scripting/class.h"
 #include "compat.h"
@@ -88,6 +92,17 @@ ASFUNCTIONBODY(ASFont,registerFont)
 	return NULL;
 }
 
+TextField::TextField(Class_base* c, const TextData& textData, bool _selectable, bool readOnly)
+	: InteractiveObject(c), TextData(textData), type(READ_ONLY), 
+	  mouseWheelEnabled(true), selectable(_selectable)
+{
+	if (!readOnly)
+	{
+		type = EDITABLE;
+		tabEnabled = true;
+	}
+}
+
 void TextField::sinit(Class_base* c)
 {
 	c->setConstructor(NULL);
@@ -96,6 +111,8 @@ void TextField::sinit(Class_base* c)
 	c->setDeclaredMethodByQName("width","",Class<IFunction>::getFunction(TextField::_setWidth),SETTER_METHOD,true);
 	c->setDeclaredMethodByQName("height","",Class<IFunction>::getFunction(TextField::_getHeight),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("height","",Class<IFunction>::getFunction(TextField::_setHeight),SETTER_METHOD,true);
+	c->setDeclaredMethodByQName("htmlText","",Class<IFunction>::getFunction(TextField::_getHtmlText),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("htmlText","",Class<IFunction>::getFunction(TextField::_setHtmlText),SETTER_METHOD,true);
 	c->setDeclaredMethodByQName("textHeight","",Class<IFunction>::getFunction(TextField::_getTextHeight),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("textWidth","",Class<IFunction>::getFunction(TextField::_getTextWidth),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("text","",Class<IFunction>::getFunction(TextField::_getText),GETTER_METHOD,true);
@@ -107,13 +124,29 @@ void TextField::sinit(Class_base* c)
 	c->setDeclaredMethodByQName("appendText","",Class<IFunction>::getFunction(TextField:: appendText),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("getTextFormat","",Class<IFunction>::getFunction(_getTextFormat),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("setTextFormat","",Class<IFunction>::getFunction(_setTextFormat),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("getLineMetrics","",Class<IFunction>::getFunction(_getLineMetrics),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("defaultTextFormat","",Class<IFunction>::getFunction(TextField::_getDefaultTextFormat),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("defaultTextFormat","",Class<IFunction>::getFunction(TextField::_setDefaultTextFormat),SETTER_METHOD,true);
 
-	REGISTER_GETTER_SETTER(c,textColor);
+	REGISTER_GETTER_SETTER(c, background);
+	REGISTER_GETTER_SETTER(c, backgroundColor);
+	REGISTER_GETTER_SETTER(c, border);
+	REGISTER_GETTER_SETTER(c, borderColor);
+	REGISTER_GETTER_SETTER(c, multiline);
+	REGISTER_GETTER_SETTER(c, mouseWheelEnabled);
+	REGISTER_GETTER_SETTER(c, selectable);
+	REGISTER_GETTER_SETTER(c, textColor);
+	REGISTER_GETTER_SETTER(c, type);
 }
 
-ASFUNCTIONBODY_GETTER_SETTER(TextField,textColor);
+ASFUNCTIONBODY_GETTER_SETTER(TextField, background);
+ASFUNCTIONBODY_GETTER_SETTER(TextField, backgroundColor);
+ASFUNCTIONBODY_GETTER_SETTER(TextField, border);
+ASFUNCTIONBODY_GETTER_SETTER(TextField, borderColor);
+ASFUNCTIONBODY_GETTER_SETTER(TextField, multiline);
+ASFUNCTIONBODY_GETTER_SETTER(TextField, mouseWheelEnabled);
+ASFUNCTIONBODY_GETTER_SETTER(TextField, selectable);
+ASFUNCTIONBODY_GETTER_SETTER(TextField, textColor);
 
 void TextField::buildTraits(ASObject* o)
 {
@@ -248,6 +281,21 @@ ASFUNCTIONBODY(TextField,_getTextHeight)
 	return abstract_i(th->textHeight);
 }
 
+ASFUNCTIONBODY(TextField,_getHtmlText)
+{
+	TextField* th=Class<TextField>::cast(obj);
+	return Class<ASString>::getInstanceS(th->toHtmlText());
+}
+
+ASFUNCTIONBODY(TextField,_setHtmlText)
+{
+	TextField* th=Class<TextField>::cast(obj);
+	tiny_string value;
+	ARG_UNPACK(value);
+	th->setHtmlText(value);
+	return NULL;
+}
+
 ASFUNCTIONBODY(TextField,_getText)
 {
 	TextField* th=Class<TextField>::cast(obj);
@@ -332,6 +380,38 @@ ASFUNCTIONBODY(TextField,_setDefaultTextFormat)
 	return NULL;
 }
 
+ASFUNCTIONBODY(TextField, _getter_type)
+{
+	TextField* th=Class<TextField>::cast(obj);
+	if (th->type == READ_ONLY)
+		return Class<ASString>::getInstanceS("dynamic");
+	else
+		return Class<ASString>::getInstanceS("input");
+}
+
+ASFUNCTIONBODY(TextField, _setter_type)
+{
+	TextField* th=Class<TextField>::cast(obj);
+
+	tiny_string value;
+	ARG_UNPACK(value);
+
+	if (value == "dynamic")
+		th->type = READ_ONLY;
+	else if (value == "input")
+		th->type = EDITABLE;
+	else
+		throwError<ArgumentError>(kInvalidEnumError, "type");
+
+	return NULL;
+}
+
+ASFUNCTIONBODY(TextField,_getLineMetrics)
+{
+	LOG(LOG_NOT_IMPLEMENTED, "TextField.getLineMetrics() returns bogus values");
+	return Class<TextLineMetrics>::getInstanceS(19, 280, 14, 11, 3.5, 0);
+}
+
 void TextField::updateSizes()
 {
 	uint32_t w,h,tw,th;
@@ -343,6 +423,45 @@ void TextField::updateSizes()
 	textWidth=tw;
 	height = h;
 	textHeight=th;
+}
+
+tiny_string TextField::toHtmlText()
+{
+	xmlpp::DomParser parser;
+	xmlpp::Document *doc = parser.get_document();
+	xmlpp::Element *root = doc->create_root_node("font");
+
+	ostringstream ss;
+	ss << fontSize;
+	root->set_attribute("size", ss.str());
+	root->set_attribute("color", textColor.toString());
+	root->set_attribute("face", font);
+
+	//Split text into paragraphs and wraps them into <p> tags
+	uint32_t para_start = 0;
+	uint32_t para_end;
+	do
+	{
+		para_end = text.find("\n", para_start);
+		if (para_end == text.npos)
+			para_end = text.numChars();
+
+		xmlpp::Element *pNode = root->add_child("p");
+		pNode->add_child_text(text.substr(para_start, para_end));
+		para_start = para_end + 1;
+	} while (para_end < text.numChars());
+
+	xmlBufferPtr buf = xmlBufferCreateSize(4096);
+	xmlNodeDump(buf, doc->cobj(), doc->get_root_node()->cobj(), 0, 0);
+	tiny_string ret = tiny_string((char*)buf->content,true);
+	xmlBufferFree(buf);
+	return ret;
+}
+
+void TextField::setHtmlText(const tiny_string& html)
+{
+	HtmlTextParser parser;
+	parser.parseTextAndFormating(html, this);
 }
 
 void TextField::updateText(const tiny_string& new_text)
@@ -396,6 +515,138 @@ void TextField::renderImpl(RenderContext& ctxt) const
 	defaultRender(ctxt);
 }
 
+void TextField::HtmlTextParser::parseTextAndFormating(const tiny_string& html,
+						      TextData *dest)
+{
+	textdata = dest;
+	if (!textdata)
+		return;
+
+	textdata->text = "";
+
+	tiny_string rooted = tiny_string("<root>") + html + tiny_string("</root>");
+	try
+	{
+		parse_memory_raw((const unsigned char*)rooted.raw_buf(), rooted.numBytes());
+	}
+	catch (xmlpp::exception& exc)
+	{
+		LOG(LOG_ERROR, "TextField HTML parser error");
+		return;
+	}
+}
+
+void TextField::HtmlTextParser::on_start_element(const Glib::ustring& name,
+						 const xmlpp::SaxParser::AttributeList& attributes)
+{
+	if (!textdata)
+		return;
+
+	if (name == "root")
+	{
+		return;
+	}
+	else if (name == "br")
+	{
+		if (textdata->multiline)
+			textdata->text += "\n";
+			
+	}
+	else if (name == "p")
+	{
+		if (textdata->multiline)
+		{
+			if (!textdata->text.empty() && 
+			    !textdata->text.endsWith("\n"))
+				textdata->text += "\n";
+		}
+	}
+	else if (name == "font")
+	{
+		if (!textdata->text.empty())
+		{
+			LOG(LOG_NOT_IMPLEMENTED, "Font can be defined only in the beginning");
+			return;
+		}
+
+		for (auto it=attributes.begin(); it!=attributes.end(); ++it)
+		{
+			if (it->name == "face")
+			{
+				textdata->font = it->value;
+			}
+			else if (it->name == "size")
+			{
+				textdata->fontSize = parseFontSize(it->value, textdata->fontSize);
+			}
+			else if (it->name == "color")
+			{
+				textdata->textColor = RGB(tiny_string(it->value));
+			}
+		}
+	}
+	else if (name == "a" || name == "img" || name == "u" ||
+		 name == "li" || name == "b" || name == "i" ||
+		 name == "span" || name == "textformat" || name == "tab")
+	{
+		LOG(LOG_NOT_IMPLEMENTED, _("Unsupported tag in TextField: ") + name);
+	}
+	else
+	{
+		LOG(LOG_NOT_IMPLEMENTED, _("Unknown tag in TextField: ") + name);
+	}
+}
+
+void TextField::HtmlTextParser::on_end_element(const Glib::ustring& name)
+{
+	if (!textdata)
+		return;
+
+	if (name == "p")
+	{
+		if (textdata->multiline)
+		{
+			if (!textdata->text.empty() && 
+			    !textdata->text.endsWith("\n"))
+				textdata->text += "\n";
+		}
+	}
+}
+
+void TextField::HtmlTextParser::on_characters(const Glib::ustring& characters)
+{
+	if (!textdata)
+		return;
+
+	textdata->text += characters;
+}
+
+uint32_t TextField::HtmlTextParser::parseFontSize(const Glib::ustring& sizestr,
+						  uint32_t currentFontSize)
+{
+	const char *s = sizestr.c_str();
+	if (!s)
+		return currentFontSize;
+
+	uint32_t basesize = 0;
+	int multiplier = 1;
+	if (s[0] == '+' || s[0] == '-')
+	{
+		// relative size
+		basesize = currentFontSize;
+		if (s[0] == '-')
+			multiplier = -1;
+	}
+
+	int64_t size = basesize + multiplier*g_ascii_strtoll(s, NULL, 10);
+	if (size < 1)
+		size = 1;
+	if (size > G_MAXUINT32)
+		size = G_MAXUINT32;
+	
+	return (uint32_t)size;
+}
+
 void TextFieldAutoSize ::sinit(Class_base* c)
 {
 	c->setVariableByQName("CENTER","",Class<ASString>::getInstanceS("center"),DECLARED_TRAIT);
@@ -424,32 +675,94 @@ void TextFormat::sinit(Class_base* c)
 {
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
 	c->setSuper(Class<ASObject>::getRef());
+	REGISTER_GETTER_SETTER(c,align);
+	REGISTER_GETTER_SETTER(c,blockIndent);
+	REGISTER_GETTER_SETTER(c,bold);
+	REGISTER_GETTER_SETTER(c,bullet);
 	REGISTER_GETTER_SETTER(c,color);
 	REGISTER_GETTER_SETTER(c,font);
+	REGISTER_GETTER_SETTER(c,indent);
+	REGISTER_GETTER_SETTER(c,italic);
+	REGISTER_GETTER_SETTER(c,kerning);
+	REGISTER_GETTER_SETTER(c,leading);
+	REGISTER_GETTER_SETTER(c,leftMargin);
+	REGISTER_GETTER_SETTER(c,letterSpacing);
+	REGISTER_GETTER_SETTER(c,rightMargin);
 	REGISTER_GETTER_SETTER(c,size);
+	REGISTER_GETTER_SETTER(c,tabStops);
+	REGISTER_GETTER_SETTER(c,target);
+	REGISTER_GETTER_SETTER(c,underline);
+	REGISTER_GETTER_SETTER(c,url);
 }
+
+void TextFormat::finalize()
+{
+	ASObject::finalize();
+	blockIndent.reset();
+	bold.reset();
+	bullet.reset();
+	color.reset();
+	indent.reset();
+	italic.reset();
+	kerning.reset();
+	leading.reset();
+	leftMargin.reset();
+	letterSpacing.reset();
+	rightMargin.reset();
+	tabStops.reset();
+	underline.reset();
+}
+
 ASFUNCTIONBODY(TextFormat,_constructor)
 {
 	TextFormat* th=static_cast<TextFormat*>(obj);
-	tiny_string font;
-	int32_t size;
-	_NR<ASObject> color;
-	ARG_UNPACK (font, "")(size, 12)(color,_MNR(getSys()->getNullRef()));
-	th->font = font;
-	th->size = size;
-	th->color = color;
-	LOG(LOG_NOT_IMPLEMENTED,"TextFormat: not all properties are set in constructor");
+	ARG_UNPACK (th->font, "")
+		(th->size, 12)
+		(th->color,_MNR(getSys()->getNullRef()))
+		(th->bold,_MNR(getSys()->getNullRef()))
+		(th->italic,_MNR(getSys()->getNullRef()))
+		(th->underline,_MNR(getSys()->getNullRef()))
+		(th->url,"")
+		(th->target,"")
+		(th->align,"left")
+		(th->leftMargin,_MNR(getSys()->getNullRef()))
+		(th->rightMargin,_MNR(getSys()->getNullRef()))
+		(th->indent,_MNR(getSys()->getNullRef()))
+		(th->leading,_MNR(getSys()->getNullRef()));
 	return NULL;
 }
 
-
-
+ASFUNCTIONBODY_GETTER_SETTER_CB(TextFormat,align,onAlign);
+ASFUNCTIONBODY_GETTER_SETTER(TextFormat,blockIndent);
+ASFUNCTIONBODY_GETTER_SETTER(TextFormat,bold);
+ASFUNCTIONBODY_GETTER_SETTER(TextFormat,bullet);
 ASFUNCTIONBODY_GETTER_SETTER(TextFormat,color);
 ASFUNCTIONBODY_GETTER_SETTER(TextFormat,font);
+ASFUNCTIONBODY_GETTER_SETTER(TextFormat,indent);
+ASFUNCTIONBODY_GETTER_SETTER(TextFormat,italic);
+ASFUNCTIONBODY_GETTER_SETTER(TextFormat,kerning);
+ASFUNCTIONBODY_GETTER_SETTER(TextFormat,leading);
+ASFUNCTIONBODY_GETTER_SETTER(TextFormat,leftMargin);
+ASFUNCTIONBODY_GETTER_SETTER(TextFormat,letterSpacing);
+ASFUNCTIONBODY_GETTER_SETTER(TextFormat,rightMargin);
 ASFUNCTIONBODY_GETTER_SETTER(TextFormat,size);
+ASFUNCTIONBODY_GETTER_SETTER(TextFormat,tabStops);
+ASFUNCTIONBODY_GETTER_SETTER(TextFormat,target);
+ASFUNCTIONBODY_GETTER_SETTER(TextFormat,underline);
+ASFUNCTIONBODY_GETTER_SETTER(TextFormat,url);
 
 void TextFormat::buildTraits(ASObject* o)
 {
+}
+
+void TextFormat::onAlign(const tiny_string& old)
+{
+	if (align != "center" && align != "end" && align != "justify" && 
+	    align != "left" && align != "right" && align != "start")
+	{
+		align = old;
+		throwError<ArgumentError>(kInvalidEnumError, "align");
+	}
 }
 
 void StyleSheet::finalize()
@@ -522,7 +835,7 @@ void StaticText::sinit(Class_base* c)
 {
 	//TODO: spec says that constructor should throw ArgumentError
 	c->setConstructor(NULL);
-	c->setSuper(Class<InteractiveObject>::getRef());
+	c->setSuper(Class<DisplayObject>::getRef());
 	c->setDeclaredMethodByQName("text","",Class<IFunction>::getFunction(_getText),GETTER_METHOD,true);
 }
 
@@ -576,3 +889,36 @@ void GridFitType::sinit(Class_base* c)
 	c->setVariableByQName("PIXEL","",Class<ASString>::getInstanceS("pixel"),DECLARED_TRAIT);
 	c->setVariableByQName("SUBPIXEL","",Class<ASString>::getInstanceS("subpixel"),DECLARED_TRAIT);
 }
+
+void TextLineMetrics::sinit(Class_base* c)
+{
+	c->setConstructor(Class<IFunction>::getFunction(_constructor));
+	c->setSuper(Class<ASObject>::getRef());
+	REGISTER_GETTER_SETTER(c, ascent);
+	REGISTER_GETTER_SETTER(c, descent);
+	REGISTER_GETTER_SETTER(c, height);
+	REGISTER_GETTER_SETTER(c, leading);
+	REGISTER_GETTER_SETTER(c, width);
+	REGISTER_GETTER_SETTER(c, x);
+}
+
+ASFUNCTIONBODY(TextLineMetrics, _constructor)
+{
+	if (argslen == 0)
+	{
+		//Assume that the values were initialized by the C++
+		//constructor
+		return NULL;
+	}
+
+	TextLineMetrics* th=static_cast<TextLineMetrics*>(obj);
+	ARG_UNPACK (th->x) (th->width) (th->height) (th->ascent) (th->descent) (th->leading);
+	return NULL;
+}
+
+ASFUNCTIONBODY_GETTER_SETTER(TextLineMetrics, ascent);
+ASFUNCTIONBODY_GETTER_SETTER(TextLineMetrics, descent);
+ASFUNCTIONBODY_GETTER_SETTER(TextLineMetrics, height);
+ASFUNCTIONBODY_GETTER_SETTER(TextLineMetrics, leading);
+ASFUNCTIONBODY_GETTER_SETTER(TextLineMetrics, width);
+ASFUNCTIONBODY_GETTER_SETTER(TextLineMetrics, x);

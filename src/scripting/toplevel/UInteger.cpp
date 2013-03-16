@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2009-2012  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2009-2013  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -102,6 +102,17 @@ ASFUNCTIONBODY(UInteger,generator)
 	return abstract_ui(args[0]->toUInt());
 }
 
+ASFUNCTIONBODY(UInteger,_valueOf)
+{
+	if(Class<UInteger>::getClass()->prototype->getObj() == obj)
+		return abstract_ui(0);
+
+	if(!obj->is<UInteger>())
+			throw Class<TypeError>::getInstanceS("");
+
+	return abstract_ui(obj->as<UInteger>()->val);
+}
+
 void UInteger::sinit(Class_base* c)
 {
 	c->isFinal = true;
@@ -110,6 +121,7 @@ void UInteger::sinit(Class_base* c)
 	c->setVariableByQName("MAX_VALUE","",abstract_ui(0xFFFFFFFF),CONSTANT_TRAIT);
 	c->setVariableByQName("MIN_VALUE","",abstract_ui(0),CONSTANT_TRAIT);
 	c->prototype->setVariableByQName("toString",AS3,Class<IFunction>::getFunction(_toString),DYNAMIC_TRAIT);
+	c->prototype->setVariableByQName("valueOf",AS3,Class<IFunction>::getFunction(_valueOf),DYNAMIC_TRAIT);
 }
 
 ASFUNCTIONBODY(UInteger,_toString)

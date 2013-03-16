@@ -1,7 +1,7 @@
 #**************************************************************************
 #    Lightspark, a free flash player implementation
 #
-#    Copyright (C) 2010-2012  Alessandro Pignotti <a.pignotti@sssup.it>
+#    Copyright (C) 2010-2013  Alessandro Pignotti <a.pignotti@sssup.it>
 #    Copyright (C) 2010  Giacomo Spigler <g.spigler@sssup.it>
 #
 #    This program is free software: you can redistribute it and/or modify
@@ -31,6 +31,7 @@ SET(LIBSPARK_SOURCES
   threading.cpp
   timer.cpp
   tiny_string.cpp
+  errorconstants.cpp
   backends/audio.cpp
   backends/builtindecoder.cpp
   backends/config.cpp

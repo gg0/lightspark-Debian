@@ -1,7 +1,7 @@
 /**************************************************************************
     Lighspark, a free flash player implementation
 
-    Copyright (C) 2009-2012  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2009-2013  Alessandro Pignotti (a.pignotti@sssup.it)
     Copyright (C) 2010-2011  Timon Van Overveldt (timonvo@gmail.com)
 
     This program is free software: you can redistribute it and/or modify
@@ -89,7 +89,8 @@ public:
 	/* must be called within the gtk_main() thread and within gdk_threads_enter/leave */
 	GtkWidget* createGtkWidget();
 	/* must be called within the gtk_main() thread and within gdk_threads_enter/leave */
-        void grabFocus();
+	void grabFocus();
+	void openPageInBrowser(const tiny_string& url, const tiny_string& window);
 };
 
 class nsPluginInstance : public nsPluginInstanceBase
@@ -111,6 +112,7 @@ public:
 	void    StreamAsFile(NPStream* stream, const char* fname);
 	void    URLNotify(const char* url, NPReason reason,
 			void* notifyData);
+	void openLink(const tiny_string& url, const tiny_string& window);
 
 	// locals
 	const char * getVersion();
@@ -121,6 +123,7 @@ private:
 	std::string getPageURL() const;
 	void asyncDownloaderDestruction(const char *url, NPDownloader* dl) const;
 	void downloaderFinished(NPDownloader* dl, const char *url, NPReason reason) const;
+	static void asyncOpenPage(void* data);
 
 	NPP mInstance;
 	NPBool mInitialized;

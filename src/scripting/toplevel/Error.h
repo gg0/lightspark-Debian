@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2009-2012  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2009-2013  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -20,10 +20,24 @@
 #ifndef SCRIPTING_TOPLEVEL_ERROR_H
 #define SCRIPTING_TOPLEVEL_ERROR_H 1
 
+#include "errorconstants.h"
 #include "asobject.h"
 
 namespace lightspark
 {
+
+tiny_string createErrorMessage(int errorID, const tiny_string& arg1, const tiny_string& arg2, const tiny_string& arg3);
+
+/*
+ * Retrieves the error message for the errorID, constructs an Error
+ * object and throws it.
+ */
+template<class T>
+void throwError(int errorID, const tiny_string& arg1="", const tiny_string& arg2="", const tiny_string& arg3="")
+{
+	tiny_string message = createErrorMessage(errorID, arg1, arg2, arg3);
+	throw Class<T>::getInstanceS(message, errorID);
+}
 
 class ASError: public ASObject
 {

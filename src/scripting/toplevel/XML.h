@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2009-2012  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2009-2013  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -60,6 +60,8 @@ private:
         void setLocalName(const tiny_string& localname);
         void setNamespace(const tiny_string& ns_uri, const tiny_string& ns_prefix="");
 	void removeAllChildren();
+	static void normalizeRecursive(xmlpp::Node *node);
+	void addTextContent(const tiny_string& str);
 public:
 	XML(Class_base* c);
 	XML(Class_base* c,const std::string& str);
@@ -82,6 +84,7 @@ public:
 	ASFUNCTION(localName);
 	ASFUNCTION(name);
 	ASFUNCTION(_namespace);
+	ASFUNCTION(_normalize);
 	ASFUNCTION(descendants);
 	ASFUNCTION(generator);
 	ASFUNCTION(_hasSimpleContent);
@@ -111,6 +114,7 @@ public:
         xmlElementType getNodeKind() const;
 	ASObject *getParentNode();
 	XML *copy() const;
+	void normalize();
 	bool isEqual(ASObject* r);
 	uint32_t nextNameIndex(uint32_t cur_index);
 	_R<ASObject> nextName(uint32_t index);

@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2009-2012  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2009-2013  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -35,7 +35,8 @@ void ContentElement::sinit(Class_base* c)
 
 ASFUNCTIONBODY(ContentElement, _constructor)
 {
-	throw Class<ArgumentError>::getInstanceS("Error #2012: ContentElement class cannot be instantiated.");
+	throwError<ArgumentError>(kCantInstantiateError, "ContentElement");
+	return NULL;
 }
 
 void ElementFormat::sinit(Class_base* c)

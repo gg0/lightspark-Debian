@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2009-2012  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2009-2013  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -491,7 +491,10 @@ void IOErrorEvent::sinit(Class_base* c)
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
 	c->setSuper(Class<ErrorEvent>::getRef());
 
+	c->setVariableByQName("DISK_ERROR","",Class<ASString>::getInstanceS("diskError"),DECLARED_TRAIT);
 	c->setVariableByQName("IO_ERROR","",Class<ASString>::getInstanceS("ioError"),DECLARED_TRAIT);
+	c->setVariableByQName("NETWORK_ERROR","",Class<ASString>::getInstanceS("networkError"),DECLARED_TRAIT);
+	c->setVariableByQName("VERIFY_ERROR","",Class<ASString>::getInstanceS("verifyError"),DECLARED_TRAIT);
 }
 
 EventDispatcher::EventDispatcher(Class_base* c):ASObject(c)
@@ -640,29 +643,20 @@ ASFUNCTIONBODY(EventDispatcher,dispatchEvent)
 	args[0]->incRef();
 	_R<Event> e=_MR(Class<Event>::cast(args[0]));
 	assert_and_throw(e->type!="");
-	if(!e->target.isNull())
-	{
-		//Object must be cloned, closing is implemented with the clone AS method
-		multiname cloneName(NULL);
-		cloneName.name_type=multiname::NAME_STRING;
-		cloneName.name_s_id=getSys()->getUniqueStringId("clone");
-		cloneName.ns.push_back(nsNameAndKind("",NAMESPACE));
 
-		_NR<ASObject> clone=e->getVariableByMultiname(cloneName);
+	// Must call the AS getter, because the getter may have been
+	// overridden
+	_NR<ASObject> target = e->getVariableByMultiname("target", {""});
+	if(!target.isNull() && !target->is<Null>() && !target->is<Undefined>())
+	{
+		//Object must be cloned, cloning is implemented with the clone AS method
+		_NR<ASObject> cloned = e->executeASMethod("clone", {""}, NULL, 0);
 		//Clone always exists since it's implemented in Event itself
-		assert(!clone.isNull());
-		IFunction* f = static_cast<IFunction*>(clone.getPtr());
-		e->incRef();
-		ASObject* funcRet=f->call(e.getPtr(),NULL,0);
-		//Verify that the returned object is actually an event
-		Event* newEvent=dynamic_cast<Event*>(funcRet);
-		if(newEvent==NULL)
-		{
-			if(funcRet)
-				funcRet->decRef();
+		if(!cloned->is<Event>())
 			return abstract_b(false);
-		}
-		e=_MR(newEvent);
+
+		cloned->incRef();
+		e = _MR(cloned->as<Event>());
 	}
 	if(!th->forcedTarget.isNull())
 		e->setTarget(th->forcedTarget);

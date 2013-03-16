@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2009-2012  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2009-2013  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -173,6 +173,9 @@ class Timer: public EventDispatcher, public ITickJob
 private:
 	void tick();
 	void tickFence();
+	//tickJobInstance keeps a reference to self while this
+	//instance is being used by the timer thread.
+	_NR<Timer> tickJobInstance;
 protected:
 	bool running;
 	uint32_t delay;

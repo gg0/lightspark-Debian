@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2009-2012  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2009-2013  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -24,6 +24,7 @@
 #include "scripting/flash/net/URLRequestHeader.h"
 #include "scripting/class.h"
 #include "scripting/flash/system/flashsystem.h"
+#include "scripting/flash/media/flashmedia.h"
 #include "compat.h"
 #include "backends/audio.h"
 #include "backends/builtindecoder.h"
@@ -88,7 +89,7 @@ tiny_string URLRequest::validatedContentType() const
 	if(contentType.find("\r")!=contentType.npos || 
 	   contentType.find("\n")!=contentType.npos)
 	{
-		throw Class<ArgumentError>::getInstanceS(tiny_string("Error #2096: The HTTP request header ") + contentType + tiny_string(" cannot be set via ActionScript."));
+		throw Class<ArgumentError>::getInstanceS(tiny_string("The HTTP request header ") + contentType + tiny_string(" cannot be set via ActionScript."), 2096);
 	}
 
 	return contentType;
@@ -123,16 +124,16 @@ void URLRequest::validateHeaderName(const tiny_string& headerName) const
 
 	if ((headerName.strchr('\r') != NULL) ||
 	     headerName.strchr('\n') != NULL)
-		throw Class<ArgumentError>::getInstanceS("Error #2096: The HTTP request header cannot be set via ActionScript");
+		throw Class<ArgumentError>::getInstanceS("The HTTP request header cannot be set via ActionScript", 2096);
 
 	for (unsigned i=0; i<(sizeof illegalHeaders)/(sizeof illegalHeaders[0]); i++)
 	{
 		if (headerName.lowercase() == illegalHeaders[i])
 		{
-			tiny_string msg("Error #2096: The HTTP request header ");
+			tiny_string msg("The HTTP request header ");
 			msg += headerName;
 			msg += " cannot be set via ActionScript";
-			throw Class<ArgumentError>::getInstanceS(msg);
+			throw Class<ArgumentError>::getInstanceS(msg, 2096);
 		}
 	}
 }
@@ -151,7 +152,7 @@ std::list<tiny_string> URLRequest::getHeaders() const
 
 		// Validate
 		if (!headerObject->is<URLRequestHeader>())
-			throw Class<TypeError>::getInstanceS("Error #1034: Object is not URLRequestHeader");
+			throwError<TypeError>(kCheckTypeFailedError, headerObject->getClassName(), "URLRequestHeader");
 		URLRequestHeader *header = headerObject->as<URLRequestHeader>();
 		tiny_string headerName = header->name;
 		validateHeaderName(headerName);
@@ -163,7 +164,7 @@ std::list<tiny_string> URLRequest::getHeaders() const
 		headerTotalLen += header->name.numBytes();
 		headerTotalLen += header->value.numBytes();
 		if (headerTotalLen >= 8192)
-			throw Class<ArgumentError>::getInstanceS("Error #2145: Cumulative length of requestHeaders must be less than 8192 characters.");
+			throw Class<ArgumentError>::getInstanceS("Cumulative length of requestHeaders must be less than 8192 characters.", 2145);
 
 		// Append header to results
 		headers.push_back(headerName + ": " + header->value);
@@ -863,7 +864,9 @@ ASFUNCTIONBODY_GETTER_SETTER(NetConnection, client);
 NetStream::NetStream(Class_base* c):EventDispatcher(c),tickStarted(false),paused(false),closed(true),
 	streamTime(0),frameRate(0),connection(),downloader(NULL),videoDecoder(NULL),
 	audioDecoder(NULL),audioStream(NULL),
-	client(NullRef),oldVolume(-1.0),checkPolicyFile(false),rawAccessAllowed(false)
+	client(NullRef),oldVolume(-1.0),checkPolicyFile(false),rawAccessAllowed(false),
+	backBufferLength(0),backBufferTime(30),bufferLength(0),bufferTime(0.1),bufferTimeMax(0),
+	maxPauseBufferTime(0)
 {
 	soundTransform = _MNR(Class<SoundTransform>::getInstanceS());
 }
@@ -903,6 +906,12 @@ void NetStream::sinit(Class_base* c)
 	c->setDeclaredMethodByQName("client","",Class<IFunction>::getFunction(_setClient),SETTER_METHOD,true);
 	c->setDeclaredMethodByQName("checkPolicyFile","",Class<IFunction>::getFunction(_getCheckPolicyFile),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("checkPolicyFile","",Class<IFunction>::getFunction(_setCheckPolicyFile),SETTER_METHOD,true);
+	REGISTER_GETTER(c, backBufferLength);
+	REGISTER_GETTER_SETTER(c, backBufferTime);
+	REGISTER_GETTER(c, bufferLength);
+	REGISTER_GETTER_SETTER(c, bufferTime);
+	REGISTER_GETTER_SETTER(c, bufferTimeMax);
+	REGISTER_GETTER_SETTER(c, maxPauseBufferTime);
 	REGISTER_GETTER_SETTER(c,soundTransform);
 }
 
@@ -910,6 +919,12 @@ void NetStream::buildTraits(ASObject* o)
 {
 }
 
+ASFUNCTIONBODY_GETTER(NetStream, backBufferLength);
+ASFUNCTIONBODY_GETTER_SETTER(NetStream, backBufferTime);
+ASFUNCTIONBODY_GETTER(NetStream, bufferLength);
+ASFUNCTIONBODY_GETTER_SETTER(NetStream, bufferTime);
+ASFUNCTIONBODY_GETTER_SETTER(NetStream, bufferTimeMax);
+ASFUNCTIONBODY_GETTER_SETTER(NetStream, maxPauseBufferTime);
 ASFUNCTIONBODY_GETTER_SETTER(NetStream,soundTransform);
 
 ASFUNCTIONBODY(NetStream,_getClient)
@@ -1043,6 +1058,10 @@ ASFUNCTIONBODY(NetStream,play)
 
 	assert_and_throw(th->downloader==NULL);
 
+	//Until buffering is implemented, set a fake value. The BBC
+	//news player panics if bufferLength is smaller than 2.
+	th->bufferLength = 10;
+
 	if(!th->url.isValid())
 	{
 		//Notify an error during loading
@@ -1159,7 +1178,8 @@ void NetStream::tick()
 	else
 	{
 		streamTime+=1000/frameRate;
-		audioDecoder->skipAll();
+		if (audioDecoder)
+			audioDecoder->skipAll();
 	}
 	videoDecoder->skipUntil(streamTime);
 	//The next line ensures that the downloader will not be destroyed before the upload jobs are fenced
@@ -1173,11 +1193,10 @@ void NetStream::tickFence()
 
 bool NetStream::isReady() const
 {
-	if(videoDecoder==NULL || audioDecoder==NULL)
-		return false;
-
-	bool ret=videoDecoder->isValid() && audioDecoder->isValid();
-	return ret;
+	//Must have videoDecoder, but audioDecoder is optional (in
+	//case the video doesn't have audio)
+	return videoDecoder && videoDecoder->isValid() && 
+		(!audioDecoder || audioDecoder->isValid());
 }
 
 bool NetStream::lockIfReady()
@@ -1214,7 +1233,7 @@ void NetStream::execute()
 	//The downloader hasn't failed yet at this point
 
 	istream s(downloader);
-	s.exceptions ( istream::eofbit | istream::failbit | istream::badbit );
+	s.exceptions(istream::goodbit);
 
 	ThreadProfile* profile=getSys()->allocateProfiler(RGB(0,0,200));
 	profile->setTag("NetStream");
@@ -1234,7 +1253,10 @@ void NetStream::execute()
 		{
 			//Check if threadAbort has been called, if so, stop this loop
 			if(closed)
+			{
 				done = true;
+				continue;
+			}
 			bool decodingSuccess=streamDecoder->decodeNextFrame();
 			if(decodingSuccess==false)
 				done = true;
@@ -1693,28 +1715,14 @@ ASFUNCTIONBODY(lightspark,sendToURL)
 	if(!url.isValid())
 		return NULL;
 
-	//TODO: support the right events (like SecurityErrorEvent)
-	//URLLoader ALWAYS checks for policy files, in contrast to NetStream.play().
-	SecurityManager::EVALUATIONRESULT evaluationResult =
-		getSys()->securityManager->evaluateURLStatic(url, ~(SecurityManager::LOCAL_WITH_FILE),
-			SecurityManager::LOCAL_WITH_FILE | SecurityManager::LOCAL_TRUSTED,
-			true);
-	//Network sandboxes can't access local files (this should be a SecurityErrorEvent)
-	if(evaluationResult == SecurityManager::NA_REMOTE_SANDBOX)
-		throw Class<SecurityError>::getInstanceS("SecurityError: sendToURL: "
-				"connect to network");
-	//Local-with-filesystem sandbox can't access network
-	else if(evaluationResult == SecurityManager::NA_LOCAL_SANDBOX)
-		throw Class<SecurityError>::getInstanceS("SecurityError: sendToURL: "
-				"connect to local file");
-	else if(evaluationResult == SecurityManager::NA_PORT)
-		throw Class<SecurityError>::getInstanceS("SecurityError: sendToURL: "
-				"connect to restricted port");
-	else if(evaluationResult == SecurityManager::NA_RESTRICT_LOCAL_DIRECTORY)
-		throw Class<SecurityError>::getInstanceS("SecurityError: sendToURL: "
-				"not allowed to navigate up for local files");
+	getSys()->securityManager->checkURLStaticAndThrow(
+		url, 
+		~(SecurityManager::LOCAL_WITH_FILE),
+		SecurityManager::LOCAL_WITH_FILE | SecurityManager::LOCAL_TRUSTED,
+		true);
 
 	//Also check cross domain policies. TODO: this should be async as it could block if invoked from ExternalInterface
+	SecurityManager::EVALUATIONRESULT evaluationResult;
 	evaluationResult = getSys()->securityManager->evaluatePoliciesURL(url, true);
 	if(evaluationResult == SecurityManager::NA_CROSSDOMAIN_POLICY)
 	{
@@ -1735,6 +1743,41 @@ ASFUNCTIONBODY(lightspark,sendToURL)
 	//TODO: make the download asynchronous instead of waiting for an unused response
 	downloader->waitForTermination();
 	getSys()->downloadManager->destroy(downloader);
+	return NULL;
+}
+
+ASFUNCTIONBODY(lightspark,navigateToURL)
+{
+	_NR<URLRequest> request;
+	tiny_string window;
+	ARG_UNPACK (request) (window,"");
+
+	if (request.isNull())
+		return NULL;
+
+	URLInfo url=request->getRequestURL();
+	if(!url.isValid())
+		return NULL;
+
+	getSys()->securityManager->checkURLStaticAndThrow(
+		url, 
+		~(SecurityManager::LOCAL_WITH_FILE),
+		SecurityManager::LOCAL_WITH_FILE | SecurityManager::LOCAL_TRUSTED,
+		true);
+
+	if (window.empty())
+		window = "_blank";
+
+	vector<uint8_t> postData;
+	request->getPostData(postData);
+	if (!postData.empty())
+	{
+		LOG(LOG_NOT_IMPLEMENTED, "POST requests not supported in navigateToURL");
+		return NULL;
+	}
+
+	getSys()->openPageInBrowser(url.getURL(), window);
+
 	return NULL;
 }
 
@@ -1793,7 +1836,7 @@ ASFUNCTIONBODY(lightspark,getClassByAlias)
 	const tiny_string& arg0 = args[0]->toString();
 	auto it=getSys()->aliasMap.find(arg0);
 	if(it==getSys()->aliasMap.end())
-		throw Class<ReferenceError>::getInstanceS("Alias not set");
+		throwError<ReferenceError>(kClassNotFoundError, arg0);
 
 	it->second->incRef();
 	return it->second.getPtr();

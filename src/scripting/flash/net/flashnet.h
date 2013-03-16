@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2009-2012  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2009-2013  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -264,6 +264,12 @@ public:
 	ASFUNCTION(_setClient);
 	ASFUNCTION(_getCheckPolicyFile);
 	ASFUNCTION(_setCheckPolicyFile);
+	ASPROPERTY_GETTER(number_t, backBufferLength);
+	ASPROPERTY_GETTER_SETTER(number_t, backBufferTime);
+	ASPROPERTY_GETTER(number_t, bufferLength);
+	ASPROPERTY_GETTER_SETTER(number_t, bufferTime);
+	ASPROPERTY_GETTER_SETTER(number_t, bufferTimeMax);
+	ASPROPERTY_GETTER_SETTER(number_t, maxPauseBufferTime);
 
 	//Interface for video
 	/**
@@ -328,6 +334,7 @@ public:
 	void unlock();
 };
 
+ASObject* navigateToURL(ASObject* obj,ASObject* const* args, const unsigned int argslen);
 ASObject* sendToURL(ASObject* obj,ASObject* const* args, const unsigned int argslen);
 ASObject* registerClassAlias(ASObject* obj,ASObject* const* args, const unsigned int argslen);
 ASObject* getClassByAlias(ASObject* obj,ASObject* const* args, const unsigned int argslen);

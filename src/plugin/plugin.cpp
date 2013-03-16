@@ -1,7 +1,7 @@
 /**************************************************************************
     Lighspark, a free flash player implementation
 
-    Copyright (C) 2009-2012  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2009-2013  Alessandro Pignotti (a.pignotti@sssup.it)
     Copyright (C) 2010-2011  Timon Van Overveldt (timonvo@gmail.com)
 
     This program is free software: you can redistribute it and/or modify
@@ -315,7 +315,7 @@ nsPluginInstance::nsPluginInstance(NPP aInstance, int16_t argc, char** argn, cha
 	nsPluginInstanceBase(), mInstance(aInstance),mInitialized(FALSE),mWindow(0),
 	mainDownloaderStream(NULL),mainDownloader(NULL),scriptObject(NULL),m_pt(NULL)
 {
-	LOG(LOG_INFO, "Lightspark version " << VERSION << " Copyright 2009-2012 Alessandro Pignotti and others");
+	LOG(LOG_INFO, "Lightspark version " << VERSION << " Copyright 2009-2013 Alessandro Pignotti and others");
 	setTLSSys( NULL );
 	m_sys=new lightspark::SystemState(0, lightspark::SystemState::FLASH);
 	//Files running in the plugin have REMOTE sandbox
@@ -763,6 +763,40 @@ void PluginEngineData::stopMainDownload()
 GdkNativeWindow PluginEngineData::getWindowForGnash()
 {
 	return instance->mWindow;
+}
+
+struct linkOpenData
+{
+	NPP instance;
+	tiny_string url;
+	tiny_string window;
+};
+
+void nsPluginInstance::openLink(const tiny_string& url, const tiny_string& window)
+{
+	assert(!window.empty());
+
+	linkOpenData *data = new linkOpenData;
+	data->instance = mInstance;
+	data->url = url;
+	data->window = window;
+	NPN_PluginThreadAsyncCall(mInstance, asyncOpenPage, data);
+}
+
+void nsPluginInstance::asyncOpenPage(void *data)
+{
+	linkOpenData *page = (linkOpenData *)data;
+
+	NPError e = NPN_GetURL(page->instance, page->url.raw_buf(), page->window.raw_buf());
+	if (e != NPERR_NO_ERROR)
+		LOG(LOG_ERROR, _("Failed to open a page in the browser"));
+	
+	delete page;
+}
+
+void PluginEngineData::openPageInBrowser(const tiny_string& url, const tiny_string& window)
+{
+	instance->openLink(url, window);
 }
 
 #ifdef _WIN32

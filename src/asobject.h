@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2009-2012  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2009-2013  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -241,7 +241,7 @@ enum METHOD_TYPE { NORMAL_METHOD=0, SETTER_METHOD=1, GETTER_METHOD=2 };
 //for toPrimitive
 enum TP_HINT { NO_HINT, NUMBER_HINT, STRING_HINT };
 
-class ASObject: public memory_reporter, public boost::intrusive::list_base_hook<>
+class ASObject: public memory_reporter, public boost::intrusive::list_base_hook<>, public RefCountable
 {
 friend class ABCVm;
 friend class ABCContext;
@@ -251,7 +251,6 @@ friend class IFunction; //Needed for clone
 private:
 	variables_map Variables;
 	Class_base* classdef;
-	ATOMIC_INT32(ref_count);
 	const variable* findGettable(const multiname& name) const DLL_LOCAL;
 	variable* findSettable(const multiname& name, bool* has_getter=NULL) DLL_LOCAL;
 protected:
@@ -259,6 +258,7 @@ protected:
 	ASObject(const ASObject& o);
 	virtual ~ASObject();
 	SWFOBJECT_TYPE type;
+	bool traitsInitialized:1;
 	void serializeDynamicProperties(ByteArray* out, std::map<tiny_string, uint32_t>& stringMap,
 				std::map<const ASObject*, uint32_t>& objMap,
 				std::map<const Class_base*, uint32_t> traitsMap) const;
@@ -270,7 +270,6 @@ public:
 #ifndef NDEBUG
 	//Stuff only used in debugging
 	bool initialized:1;
-	int getRefCount(){ return ref_count; }
 #endif
 	bool implEnable:1;
 	Class_base* getClass() const { return classdef; }
@@ -281,29 +280,6 @@ public:
 	ASFUNCTION(isPrototypeOf);
 	ASFUNCTION(propertyIsEnumerable);
 	void check() const;
-	void incRef()
-	{
-		//std::cout << "incref " << this << std::endl;
-		ATOMIC_INCREMENT(ref_count);
-		assert(ref_count>0);
-	}
-	void decRef()
-	{
-		//std::cout << "decref " << this << std::endl;
-		assert(ref_count>0);
-		uint32_t t=ATOMIC_DECREMENT(ref_count);
-		if(t==0)
-		{
-			//Let's make refcount very invalid
-			ref_count=-1024;
-			//std::cout << "delete " << this << std::endl;
-			delete this;
-		}
-	}
-	void fake_decRef()
-	{
-		ATOMIC_DECREMENT(ref_count);
-	}
 	static void s_incRef(ASObject* o)
 	{
 		o->incRef();
@@ -345,6 +321,15 @@ public:
 	 */
 	_NR<ASObject> getVariableByMultiname(const multiname& name, GET_VARIABLE_OPTION opt, Class_base* cls);
 	virtual int32_t getVariableByMultiname_i(const multiname& name);
+	/* Simple getter interface for the common case */
+	_NR<ASObject> getVariableByMultiname(const tiny_string& name, std::list<tiny_string> namespaces);
+	/*
+	 * Execute a AS method on this object. Returns the value
+	 * returned by the function. One reference of each args[i] is
+	 * consumed. The method must exist, otherwise a TypeError is
+	 * thrown.
+	 */
+	_NR<ASObject> executeASMethod(const tiny_string& methodName, std::list<tiny_string> namespaces, ASObject* const* args, uint32_t num_args);
 	virtual void setVariableByMultiname_i(const multiname& name, int32_t value);
 	enum CONST_ALLOWED_FLAG { CONST_ALLOWED=0, CONST_NOT_ALLOWED };
 	virtual void setVariableByMultiname(const multiname& name, ASObject* o, CONST_ALLOWED_FLAG allowConst)
@@ -418,6 +403,9 @@ public:
 	_R<ASObject> call_valueOf();
 	bool has_toString();
 	_R<ASObject> call_toString();
+
+	/* Helper function for calling getClass()->getQualifiedClassName() */
+	virtual tiny_string getClassName();
 
 	ASFUNCTION(generator);
 

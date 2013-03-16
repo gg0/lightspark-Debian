@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2009-2012  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2009-2013  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -61,7 +61,7 @@ ASFUNCTIONBODY(RegExp,_constructor)
 	if(argslen > 0 && args[0]->is<RegExp>())
 	{
 		if(argslen > 1 && !args[1]->is<Undefined>())
-			throw Class<TypeError>::getInstanceS("flags must be Undefined");
+			throwError<TypeError>(kRegExpFlagsArgumentError);
 		RegExp *src=args[0]->as<RegExp>();
 		th->source=src->source;
 		th->dotall=src->dotall;

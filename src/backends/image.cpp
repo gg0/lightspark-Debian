@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2011-2012  Matthias Gehre (M.Gehre@gmx.de)
+    Copyright (C) 2011-2013  Matthias Gehre (M.Gehre@gmx.de)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -32,13 +32,6 @@ extern "C" {
 namespace lightspark
 {
 
-struct source_mgr : public jpeg_source_mgr
-{
-	source_mgr(const uint8_t* _data, int _len) : data(_data), len(_len) {}
-	const uint8_t* data;
-	int len;
-};
-
 struct istream_source_mgr : public jpeg_source_mgr
 {
 	istream_source_mgr(std::istream& str) : input(str), data(NULL), capacity(0) {}
@@ -47,10 +40,9 @@ struct istream_source_mgr : public jpeg_source_mgr
 	int capacity;
 };
 
-static void init_source(j_decompress_ptr cinfo) {
-	source_mgr*  src = static_cast<source_mgr*>(cinfo->src);
-	src->next_input_byte = (const JOCTET*)src->data;
-	src->bytes_in_buffer = src->len;
+static void init_source_nop(j_decompress_ptr cinfo)
+{
+	//do nothing
 }
 
 static boolean fill_input_buffer(j_decompress_ptr cinfo) {
@@ -58,7 +50,7 @@ static boolean fill_input_buffer(j_decompress_ptr cinfo) {
 }
 
 static void skip_input_data(j_decompress_ptr cinfo, long num_bytes) {
-	source_mgr*  src = static_cast<source_mgr*>(cinfo->src);
+	jpeg_source_mgr *src = cinfo->src;
 	src->next_input_byte = (const JOCTET*)((const char*)src->next_input_byte + num_bytes);
 	src->bytes_in_buffer -= num_bytes;
 }
@@ -140,20 +132,24 @@ void error_exit(j_common_ptr cinfo) {
 
 uint8_t* ImageDecoder::decodeJPEG(uint8_t* inData, int len, const uint8_t* tablesData, int tablesLen, uint32_t* width, uint32_t* height, bool* hasAlpha)
 {
-	struct source_mgr src(inData,len);
+	struct jpeg_source_mgr src;
 
-	src.init_source = init_source;
+	src.next_input_byte = (const JOCTET*)inData;
+	src.bytes_in_buffer = len;
+	src.init_source = init_source_nop;
 	src.fill_input_buffer = fill_input_buffer;
 	src.skip_input_data = skip_input_data;
 	src.resync_to_restart = resync_to_restart;
 	src.term_source = term_source;
 
-	struct source_mgr *tablesSrc;
+	struct jpeg_source_mgr *tablesSrc;
 	if (tablesData)
 	{
-		tablesSrc = new source_mgr(tablesData,tablesLen);
+		tablesSrc = new jpeg_source_mgr();
 
-		tablesSrc->init_source = init_source;
+		tablesSrc->next_input_byte = (const JOCTET*)tablesData;
+		tablesSrc->bytes_in_buffer = tablesLen;
+		tablesSrc->init_source = init_source_nop;
 		tablesSrc->fill_input_buffer = fill_input_buffer;
 		tablesSrc->skip_input_data = skip_input_data;
 		tablesSrc->resync_to_restart = resync_to_restart;
@@ -164,6 +160,8 @@ uint8_t* ImageDecoder::decodeJPEG(uint8_t* inData, int len, const uint8_t* table
 		tablesSrc = NULL;
 	}
 
+	*width = 0;
+	*height = 0;
 	uint8_t* decoded = decodeJPEGImpl(&src, tablesSrc, width, height, hasAlpha);
 	delete tablesSrc;
 	return decoded;
@@ -202,20 +200,30 @@ uint8_t* ImageDecoder::decodeJPEGImpl(jpeg_source_mgr *src, jpeg_source_mgr *hea
 	jpeg_create_decompress(&cinfo);
 	
 	if (headerTables)
-	{
 		cinfo.src = headerTables;
-		jpeg_read_header(&cinfo, FALSE);
-	}
+	else
+		cinfo.src = src;
 
-	cinfo.src = src;
+	//DefineBits tag may contain "abbreviated datastreams" (as
+	//they are called in the libjpeg documentation), i.e. streams
+	//with only compression tables and no image data. The first
+	//jpeg_read_header accepts table-only streams.
+	int headerStatus = jpeg_read_header(&cinfo, FALSE);
 
 	if (headerTables)
 	{
 		// Must call init_source manually after switching src
+		// Check this. Doesn't jpeg_read_header call
+		// init_source anyway?
+		cinfo.src = src;
 		src->init_source(&cinfo);
 	}
 
-	jpeg_read_header(&cinfo, TRUE);
+	//If the first jpeg_read_header got tables-only datastream,
+	//a second call is needed to read the real image header.
+	if (headerStatus == JPEG_HEADER_TABLES_ONLY) 
+		jpeg_read_header(&cinfo, TRUE);
+
 #ifdef JCS_EXTENSIONS
 	//JCS_EXT_XRGB is a fast decoder that outputs alpha channel,
 	//but is only available on libjpeg-turbo
@@ -400,17 +408,20 @@ uint8_t* ImageDecoder::decodePNGImpl(png_structp pngPtr, uint32_t* width, uint32
 	return outData;
 }
 
-uint8_t* ImageDecoder::decodePalette(uint8_t* pixels, uint32_t width, uint32_t height, uint8_t* palette, unsigned int numColors)
+uint8_t* ImageDecoder::decodePalette(uint8_t* pixels, uint32_t width, uint32_t height, uint32_t stride, uint8_t* palette, unsigned int numColors, unsigned int paletteBPP)
 {
 	if (numColors == 0)
 		return NULL;
+
+	assert(stride >= width);
+	assert(paletteBPP==3 || paletteBPP==4);
 
 	uint8_t* outData = new uint8_t[3*width*height];
 	for (size_t y=0; y<height; y++)
 	{
 		for (size_t x=0; x<width; x++)
 		{
-			size_t pixelPos = y*width + x;
+			size_t pixelPos = y*stride + x;
 			uint8_t paletteIndex = pixels[pixelPos];
 			if ((unsigned)paletteIndex >= numColors)
 			{
@@ -418,8 +429,8 @@ uint8_t* ImageDecoder::decodePalette(uint8_t* pixels, uint32_t width, uint32_t h
 				paletteIndex = 0;
 			}
 
-			uint8_t *dest = outData + 3*pixelPos;
-			memcpy(dest, &palette[3*paletteIndex], 3);
+			uint8_t *dest = outData + 3*(y*width + x);
+			memcpy(dest, &palette[paletteBPP*paletteIndex], 3);
 		}
 	}
 

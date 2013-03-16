@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2012  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2012-2013  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -349,6 +349,12 @@ public:
 	{
 		return strncmp(buf,o,strlen(o)) == 0;
 	}
+        bool endsWith(const char* o) const
+        {
+                size_t olen = strlen(o);
+                return (numBytes() >= olen) && 
+                        (strncmp(buf+numBytes()-olen,o,olen) == 0);
+        }
 	/* idx is an index of utf-8 characters */
 	uint32_t charAt(uint32_t idx) const
 	{

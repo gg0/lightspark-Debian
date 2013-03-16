@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2012  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2012-2013  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -48,7 +48,7 @@ public:
 	std::vector<GeomToken> tokens;
 	static void FromShaperecordListToShapeVector(const std::vector<SHAPERECORD>& shapeRecords,
 					 tokensVector& tokens, const std::list<FILLSTYLE>& fillStyles,
-					 const Vector2& offset = Vector2(), int scaling = 1);
+					 const MATRIX& matrix = MATRIX());
 	void getTextureSize(int *width, int *height) const;
 	float scaling;
 protected:

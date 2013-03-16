@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2012  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2012-2013  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -34,6 +34,7 @@ class LoaderInfo;
 class RenderContext;
 class Stage;
 class Transform;
+class Rectangle;
 
 class DisplayObject: public EventDispatcher, public IBitmapDrawable
 {
@@ -99,7 +100,6 @@ protected:
 	number_t computeWidth();
 	number_t computeHeight();
 	bool skipRender() const;
-	float clippedAlpha() const;
 
 	void defaultRender(RenderContext& ctxt) const;
 	virtual bool boundsRect(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const
@@ -122,6 +122,7 @@ public:
 	_NR<DisplayObject> invalidateQueueNext;
 	_NR<LoaderInfo> loaderInfo;
 	ASPROPERTY_GETTER_SETTER(_NR<Array>,filters);
+	ASPROPERTY_GETTER_SETTER(_NR<Rectangle>,scrollRect);
 	CXFORMWITHALPHA ColorTransform;
 	/**
 	 * cacheAsBitmap is true also if any filter is used
@@ -160,6 +161,8 @@ public:
 	virtual void setOnStage(bool staged);
 	bool isOnStage() const { return onStage; }
 	bool isMask() const { return !maskOf.isNull(); }
+	bool isVisible() const { return visible; };
+	float clippedAlpha() const;
 	virtual _NR<RootMovieClip> getRoot();
 	virtual _NR<Stage> getStage();
 	void setLegacyMatrix(const MATRIX& m);
@@ -209,6 +212,7 @@ public:
 	ASFUNCTION(_getMouseX);
 	ASFUNCTION(_getMouseY);
 	ASFUNCTION(_getTransform);
+	ASFUNCTION(_setTransform);
 	ASFUNCTION(localToGlobal);
 	ASFUNCTION(globalToLocal);
 	ASFUNCTION(hitTestObject);

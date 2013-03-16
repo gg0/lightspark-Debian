@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2012  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2012-2013  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -62,6 +62,7 @@ REGISTER_CLASS_NAME(NativeApplication,"flash.desktop")
 REGISTER_CLASS_NAME(AVM1Movie,"flash.display")
 REGISTER_CLASS_NAME(Bitmap,"flash.display")
 REGISTER_CLASS_NAME(BitmapData,"flash.display")
+REGISTER_CLASS_NAME(BitmapDataChannel,"flash.display")
 REGISTER_CLASS_NAME(BlendMode,"flash.display")
 REGISTER_CLASS_NAME(DisplayObject,"flash.display")
 REGISTER_CLASS_NAME(DisplayObjectContainer,"flash.display")
@@ -188,6 +189,7 @@ REGISTER_CLASS_NAME(TextFieldAutoSize,"flash.text")
 REGISTER_CLASS_NAME(TextFieldType,"flash.text")
 REGISTER_CLASS_NAME(TextFormat,"flash.text")
 REGISTER_CLASS_NAME(TextFormatAlign,"flash.text")
+REGISTER_CLASS_NAME(TextLineMetrics,"flash.text")
 REGISTER_CLASS_NAME(StaticText,"flash.text")
 REGISTER_CLASS_NAME(StyleSheet,"flash.text")
 

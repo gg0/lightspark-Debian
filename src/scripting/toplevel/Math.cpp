@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2009-2012  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2009-2013  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -62,12 +62,14 @@ void Math::sinit(Class_base* c)
 
 ASFUNCTIONBODY(Math,_constructor)
 {
-	throw Class<TypeError>::getInstanceS("Error #1076: Math is not a constructor");
+	throwError<TypeError>(kMathNotConstructorError);
+	return NULL;
 }
 
 ASFUNCTIONBODY(Math,generator)
 {
-	throw Class<TypeError>::getInstanceS("Error #1075: Math is not a function");
+	throwError<TypeError>(kMathNotFunctionError);
+	return NULL;
 }
 
 ASFUNCTIONBODY(Math,atan2)

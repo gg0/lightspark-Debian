@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2008-2012  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2008-2013  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -74,7 +74,7 @@ ParseThread* lightspark::getParseThread()
 
 RootMovieClip::RootMovieClip(_NR<LoaderInfo> li, _NR<ApplicationDomain> appDomain, _NR<SecurityDomain> secDomain, Class_base* c):
 	MovieClip(c),
-	parsingIsFailed(false),frameRate(0),
+	parsingIsFailed(false),Background(0xFF,0xFF,0xFF),frameRate(0),
 	finishedLoading(false),applicationDomain(appDomain),securityDomain(secDomain)
 {
 	loaderInfo=li;
@@ -1255,7 +1255,12 @@ void ParseThread::parseSWFHeader(RootMovieClip *root, UI8 ver)
 
 	root->fileLength=FileLength;
 	float frameRate=FrameRate;
-	frameRate/=256;
+	if (frameRate == 0)
+		//The Adobe player ignores frameRate == 0 and substitutes
+		//some larger value. Value 30 here is arbitrary.
+		frameRate = 30;
+	else
+		frameRate/=256;
 	LOG(LOG_INFO,_("FrameRate ") << frameRate);
 	root->setFrameRate(frameRate);
 	//TODO: setting render rate should be done when the clip is added to the displaylist
@@ -1437,7 +1442,11 @@ void ParseThread::parseSWF(UI8 ver)
 					 * locking in ctag->execute's implementation.
 					 * ABC_TAG's are an exception, as they require no locking.
 					 */
-					assert(root->frames.size()==1);
+					if (root->frames.size()!=1)
+					{
+						delete tag;
+						break;
+					}
 					//fall through
 				case ABC_TAG:
 				{
@@ -1915,6 +1924,12 @@ void SystemState::windowToStageCoordinates(int windowX, int windowY, int& stageX
 			       offsetX, offsetY, scaleX, scaleY);
 	stageX = (windowX-offsetX)/scaleX;
 	stageY = (windowY-offsetY)/scaleY;
+}
+
+void SystemState::openPageInBrowser(const tiny_string& url, const tiny_string& window)
+{
+	assert(engineData);
+	engineData->openPageInBrowser(url, window);
 }
 
 /* This is run in vm's thread context */

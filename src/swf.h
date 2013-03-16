@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2008-2012  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2008-2013  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -426,6 +426,9 @@ public:
 	 */
 	void getUniqueNamespaceId(const nsNameAndKindImpl& s, uint32_t& nsId, uint32_t& baseId);
 	const nsNameAndKindImpl& getNamespaceFromUniqueId(uint32_t id) const;
+
+	//Opening web pages
+	void openPageInBrowser(const tiny_string& url, const tiny_string& window);
 };
 
 class ParseThread: public IThreadJob

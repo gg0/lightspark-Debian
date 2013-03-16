@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2009-2012  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2009-2013  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -28,6 +28,7 @@
 #include "scripting/toplevel/Date.h"
 #include "scripting/toplevel/XML.h"
 #include "scripting/toplevel/XMLList.h"
+#include "scripting/toplevel/Error.h"
 
 using namespace lightspark;
 using namespace std;
@@ -286,7 +287,7 @@ _R<ASObject> ASObject::call_valueOf()
 
 	_NR<ASObject> o=getVariableByMultiname(valueOfName,SKIP_IMPL);
 	if (!o->is<IFunction>())
-		throw Class<TypeError>::getInstanceS("Error #1006: Call attempted on an object that is not a function.");
+		throwError<TypeError>(kCallOfNonFunctionError, valueOfName.normalizedName());
 	IFunction* f=o->as<IFunction>();
 
 	incRef();
@@ -455,8 +456,6 @@ void ASObject::setDeclaredMethodByQName(uint32_t nameId, const nsNameAndKind& ns
 
 bool ASObject::deleteVariableByMultiname(const multiname& name)
 {
-	assert_and_throw(ref_count>0);
-
 	variable* obj=Variables.findObjVar(name,NO_CREATE_TRAIT,DYNAMIC_TRAIT|DECLARED_TRAIT);
 	
 	if(obj==NULL)
@@ -523,10 +522,7 @@ void ASObject::setVariableByMultiname(const multiname& name, ASObject* o, CONST_
 
 	if (obj && (obj->kind == CONSTANT_TRAIT && allowConst==CONST_NOT_ALLOWED))
 	{
-		tiny_string err=tiny_string("Error #1074: Illegal write to read-only property ")+name.normalizedName();
-		if(classdef)
-			err+=tiny_string(" on type ")+classdef->as<Class_base>()->getQualifiedClassName();
-		throw Class<ReferenceError>::getInstanceS(err);
+		throwError<ReferenceError>(kConstWriteError, name.normalizedName(), classdef->as<Class_base>()->getQualifiedClassName());
 	}
 	if(!obj && cls)
 	{
@@ -537,8 +533,7 @@ void ASObject::setVariableByMultiname(const multiname& name, ASObject* o, CONST_
 		obj=cls->findBorrowedSettable(name,&has_getter);
 		if(obj && cls->isFinal && !obj->setter)
 		{
-			tiny_string err=tiny_string("Error #1037: Cannot assign to a method ")+name.normalizedName()+tiny_string(" on ")+cls->getQualifiedClassName();
-			throw Class<ReferenceError>::getInstanceS(err);
+			throwError<ReferenceError>(kCannotAssignToMethodError, name.normalizedName(), cls ? cls->getQualifiedClassName() : "");
 		}
 	}
 
@@ -546,13 +541,17 @@ void ASObject::setVariableByMultiname(const multiname& name, ASObject* o, CONST_
 
 	if(!obj)
 	{
-		if(has_getter)
+		if(has_getter)  // Is this a read-only property?
 		{
-			tiny_string err=tiny_string("Error #1074: Illegal write to read-only property ")+name.normalizedName();
-			if(cls)
-				err+=tiny_string(" on type ")+cls->getQualifiedClassName();
-			throw Class<ReferenceError>::getInstanceS(err);
+			throwError<ReferenceError>(kConstWriteError, name.normalizedName(), cls ? cls->getQualifiedClassName() : "");
 		}
+
+		// Properties can not be added to a sealed class
+		if (cls && cls->isSealed)
+		{
+			throwError<ReferenceError>(kWriteSealedError, name.normalizedName(), cls->getQualifiedClassName());
+		}
+
 		//Create a new dynamic variable
 		obj=Variables.findObjVar(name,DYNAMIC_TRAIT,DYNAMIC_TRAIT);
 	}
@@ -630,15 +629,16 @@ variable::variable(TRAIT_KIND _k, ASObject* _v, multiname* _t, const Type* _type
 void variable::setVar(ASObject* v)
 {
 	//Resolve the typename if we have one
-	if(!(traitState&TYPE_RESOLVED) && traitTypemname)
+	//currentCallContext may be NULL when inserting legacy
+	//children, which is done outisde any ABC context
+	if(!(traitState&TYPE_RESOLVED) && traitTypemname && getVm()->currentCallContext)
 	{
 		type = Type::getTypeFromMultiname(traitTypemname, getVm()->currentCallContext->context);
 		assert(type);
-		if(type)
-			traitState=TYPE_RESOLVED;
+		traitState=TYPE_RESOLVED;
 	}
 
-	if(type)
+	if((traitState&TYPE_RESOLVED) && type)
 		v = type->coerce(v);
 
 	if(var)
@@ -720,7 +720,7 @@ variable* variables_map::findObjVar(const multiname& mname, TRAIT_KIND createKin
 	if(createKind == DYNAMIC_TRAIT)
 	{
 		if(!mname.ns.begin()->hasEmptyName())
-			throw Class<ReferenceError>::getInstanceS("Error #1056: Trying to create a dynamic variable with namespace != \"\"");
+			throwError<ReferenceError>(kWriteSealedError, mname.normalizedName(), "" /* TODO: class name */);
 		var_iterator inserted=Variables.insert(
 			make_pair(varName(name,mname.ns[0]),variable(createKind))).first;
 		return &inserted->second;
@@ -996,10 +996,39 @@ _NR<ASObject> ASObject::getVariableByMultiname(const multiname& name, GET_VARIAB
 	}
 }
 
+_NR<ASObject> ASObject::getVariableByMultiname(const tiny_string& name, std::list<tiny_string> namespaces)
+{
+	multiname varName(NULL);
+	varName.name_type=multiname::NAME_STRING;
+	varName.name_s_id=getSys()->getUniqueStringId(name);
+	for (auto ns=namespaces.begin(); ns!=namespaces.end(); ns++)
+		varName.ns.push_back(nsNameAndKind(*ns,NAMESPACE));
+	varName.isAttribute = false;
+
+	return getVariableByMultiname(varName,SKIP_IMPL);
+}
+
+_NR<ASObject> ASObject::executeASMethod(const tiny_string& methodName,
+					std::list<tiny_string> namespaces,
+					ASObject* const* args,
+					uint32_t num_args)
+{
+	_NR<ASObject> o = getVariableByMultiname(methodName, namespaces);
+	if (o.isNull() || !o->is<IFunction>())
+		throwError<TypeError>(kCallOfNonFunctionError, methodName);
+	IFunction* f=o->as<IFunction>();
+
+	incRef();
+	ASObject *ret=f->call(this,args,num_args);
+	return _MNR(ret);
+}
+
 void ASObject::check() const
 {
 	//Put here a bunch of safety check on the object
-	assert(ref_count>0);
+#ifndef NDEBUG
+	assert(getRefCount()>0);
+#endif
 	Variables.check();
 }
 
@@ -1084,7 +1113,7 @@ void variables_map::destroyContents()
 }
 
 ASObject::ASObject(MemoryAccount* m):Variables(m),classdef(NULL),
-	ref_count(1),type(T_OBJECT),implEnable(true)
+	type(T_OBJECT),traitsInitialized(false),implEnable(true)
 {
 #ifndef NDEBUG
 	//Stuff only used in debugging
@@ -1093,7 +1122,7 @@ ASObject::ASObject(MemoryAccount* m):Variables(m),classdef(NULL),
 }
 
 ASObject::ASObject(Class_base* c):Variables((c)?c->memoryAccount:NULL),classdef(NULL),
-	ref_count(1),type(T_OBJECT),implEnable(true)
+	type(T_OBJECT),traitsInitialized(false),implEnable(true)
 {
 	setClass(c);
 #ifndef NDEBUG
@@ -1103,7 +1132,7 @@ ASObject::ASObject(Class_base* c):Variables((c)?c->memoryAccount:NULL),classdef(
 }
 
 ASObject::ASObject(const ASObject& o):Variables((o.classdef)?o.classdef->memoryAccount:NULL),classdef(NULL),
-	ref_count(1),type(o.type),implEnable(true)
+	type(o.type),traitsInitialized(false),implEnable(true)
 {
 	if(o.classdef)
 		setClass(o.classdef);
@@ -1312,7 +1341,7 @@ void ASObject::serialize(ByteArray* out, std::map<tiny_string, uint32_t>& string
 	{
 		//Custom serialization necessary
 		if(!serializeTraits)
-			throw Class<TypeError>::getInstanceS("#2004: IExternalizable class must have an alias registered");
+			throwError<TypeError>(kInvalidParamError);
 		out->writeU29(0x7);
 		out->writeStringVR(stringMap, alias);
 
@@ -1403,9 +1432,9 @@ ASObject *ASObject::describeType() const
 		if(prot->super)
 			root->set_attribute("base", prot->super->getQualifiedClassName().raw_buf());
 	}
-	bool isDynamic=type==T_ARRAY; // FIXME
+	bool isDynamic = classdef && !classdef->isSealed;
 	root->set_attribute("isDynamic", isDynamic?"true":"false");
-	bool isFinal=!(type==T_OBJECT || type==T_ARRAY); // FIXME
+	bool isFinal = classdef && classdef->isFinal;
 	root->set_attribute("isFinal", isFinal?"true":"false");
 	root->set_attribute("isStatic", "false");
 
@@ -1448,7 +1477,9 @@ void ASObject::setprop_prototype(_NR<ASObject>& o)
 	bool has_getter = false;
 	variable* ret=findSettable(prototypeName,&has_getter);
 	if(!ret && has_getter)
-		throw Class<ReferenceError>::getInstanceS("Error #1074: Illegal write to read-only property prototype");
+		throwError<ReferenceError>(kConstWriteError,
+					   prototypeName.normalizedName(),
+					   classdef ? classdef->as<Class_base>()->getQualifiedClassName() : "");
 	if(!ret)
 		ret = Variables.findObjVar(prototypeName,DYNAMIC_TRAIT,DECLARED_TRAIT|DYNAMIC_TRAIT);
 	if(ret->setter)
@@ -1458,4 +1489,12 @@ void ASObject::setprop_prototype(_NR<ASObject>& o)
 	}
 	else
 		ret->setVar(obj);
+}
+
+tiny_string ASObject::getClassName()
+{
+	if (getClass())
+		return getClass()->getQualifiedClassName();
+	else
+		return "";
 }

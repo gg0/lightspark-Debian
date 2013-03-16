@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2008-2012  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2008-2013  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -33,6 +33,8 @@
 #include "compat.h"
 #include "parsing/streams.h"
 #include "scripting/flash/display/BitmapData.h"
+#include "scripting/flash/text/flashtext.h"
+#include "scripting/flash/media/flashmedia.h"
 
 #undef RGB
 
@@ -83,6 +85,9 @@ Tag* TagFactory::readTag(RootMovieClip* root)
 	//		ret=new PlaceObjectTag(h,f);
 		case 6:
 			ret=new DefineBitsTag(h,f,root);
+			break;
+		case 7:
+			ret=new DefineButtonTag(h,f,1,root);
 			break;
 		case 8:
 			ret=new JPEGTablesTag(h,f);
@@ -136,7 +141,7 @@ Tag* TagFactory::readTag(RootMovieClip* root)
 			ret=new DefineText2Tag(h,f,root);
 			break;
 		case 34:
-			ret=new DefineButton2Tag(h,f,root);
+			ret=new DefineButtonTag(h,f,2,root);
 			break;
 		case 35:
 			ret=new DefineBitsJPEG3Tag(h,f,root);
@@ -303,7 +308,12 @@ DefineEditTextTag::DefineEditTextTag(RECORDHEADER h, std::istream& in, RootMovie
 		textData.fontSize = twipsToPixels(FontHeight);
 	}
 	if(HasTextColor)
+	{
 		in >> TextColor;
+		textData.textColor.Red = TextColor.Red;
+		textData.textColor.Green = TextColor.Green;
+		textData.textColor.Blue = TextColor.Blue;
+	}
 	if(HasMaxLength)
 		in >> MaxLength;
 	if(HasLayout)
@@ -317,6 +327,12 @@ DefineEditTextTag::DefineEditTextTag(RECORDHEADER h, std::istream& in, RootMovie
 		in >> InitialText;
 		textData.text = (const char*)InitialText;
 	}
+	textData.wordWrap = WordWrap;
+	textData.multiline = Multiline;
+	textData.border = Border;
+	if (AutoSize)
+		textData.autoSize = TextData::AS_LEFT;
+
 	LOG(LOG_NOT_IMPLEMENTED, "DefineEditTextTag does not parse many attributes");
 }
 
@@ -326,7 +342,9 @@ ASObject* DefineEditTextTag::instance(Class_base* c) const
 		c=Class<TextField>::getClass();
 	//TODO: check
 	assert_and_throw(bindedTo==NULL);
-	TextField* ret=new (c->memoryAccount) TextField(c, textData);
+	TextField* ret=new (c->memoryAccount) TextField(c, textData, !NoSelect, ReadOnly);
+	if (HTML)
+		ret->setHtmlText((const char*)InitialText);
 	return ret;
 }
 
@@ -570,7 +588,7 @@ ASObject* DefineFont2Tag::instance(Class_base* c) const
 	return ret;
 }
 
-DefineFont3Tag::DefineFont3Tag(RECORDHEADER h, std::istream& in, RootMovieClip* root):FontTag(h, 1, root)
+DefineFont3Tag::DefineFont3Tag(RECORDHEADER h, std::istream& in, RootMovieClip* root):FontTag(h, 1, root),CodeTableOffset(0)
 {
 	LOG(LOG_TRACE,_("DefineFont3"));
 	in >> FontID;
@@ -591,6 +609,7 @@ DefineFont3Tag::DefineFont3Tag(RECORDHEADER h, std::istream& in, RootMovieClip* 
 		FontName.push_back(t);
 	}
 	in >> NumGlyphs;
+	streampos offsetReference = in.tellg();
 	if(FontFlagsWideOffsets)
 	{
 		UI32_SWF t;
@@ -621,11 +640,40 @@ DefineFont3Tag::DefineFont3Tag(RECORDHEADER h, std::istream& in, RootMovieClip* 
 			CodeTableOffset=t;
 		}
 	}
+
 	GlyphShapeTable.resize(NumGlyphs);
 	for(int i=0;i<NumGlyphs;i++)
 	{
+		//It seems legal to have 1 byte records. We ignore
+		//them, because 1 byte is too short to encode a SHAPE.
+		if ((i < NumGlyphs-1) && 
+		    (OffsetTable[i+1]-OffsetTable[i] == 1))
+		{
+			char ignored;
+			in.get(ignored);
+			continue;
+		}
+
 		in >> GlyphShapeTable[i];
 	}
+
+	//sanity check the stream position
+	streampos expectedPos = offsetReference + (streampos)CodeTableOffset;
+	if (in.tellg() != expectedPos)
+	{
+		LOG(LOG_ERROR, "Malformed SWF file: unexpected offset in DefineFont3 tag");
+		if (in.tellg() < expectedPos)
+		{
+			//Read too few bytes => We can still continue
+			ignore(in, expectedPos-in.tellg());
+		}
+		else
+		{
+			//Read too many bytes => fail
+			assert(in.tellg() == expectedPos);
+		}
+	}
+
 	for(int i=0;i<NumGlyphs;i++)
 	{
 		UI16_SWF t;
@@ -705,8 +753,12 @@ ASObject* DefineFont4Tag::instance(Class_base* c) const
 	return ret;
 }
 
-BitmapTag::BitmapTag(RECORDHEADER h,RootMovieClip* root):DictionaryTag(h,root),BitmapContainer(getSys()->tagsMemory)
+BitmapTag::BitmapTag(RECORDHEADER h,RootMovieClip* root):DictionaryTag(h,root),bitmap(_MR(new BitmapContainer(getSys()->tagsMemory)))
 {
+}
+
+_R<BitmapContainer> BitmapTag::getBitmap() const {
+	return bitmap;
 }
 
 DefineBitsLosslessTag::DefineBitsLosslessTag(RECORDHEADER h, istream& in, int version, RootMovieClip* root):BitmapTag(h,root),BitmapColorTableSize(0)
@@ -736,26 +788,37 @@ DefineBitsLosslessTag::DefineBitsLosslessTag(RECORDHEADER h, istream& in, int ve
 
 		BitmapContainer::BITMAP_FORMAT format;
 		if (BitmapFormat == LOSSLESS_BITMAP_RGB15)
-			format = RGB15;
+			format = BitmapContainer::RGB15;
 		else if (version == 1)
-			format = RGB24;
+			format = BitmapContainer::RGB24;
 		else
-			format = ARGB32;
+			format = BitmapContainer::ARGB32;
 
-		fromRGB(inData, BitmapWidth, BitmapHeight, format);
+		bitmap->fromRGB(inData, BitmapWidth, BitmapHeight, format);
 	}
 	else if (BitmapFormat == LOSSLESS_BITMAP_PALETTE)
 	{
 		unsigned numColors = BitmapColorTableSize+1;
-		
-		size_t size = 3*numColors + BitmapWidth*BitmapHeight;
+
+		/* Bitmap rows are 32 bit aligned */
+		uint32_t stride = BitmapWidth;
+		while (stride % 4 != 0)
+			stride++;
+
+		unsigned int paletteBPP;
+		if (version == 1)
+			paletteBPP = 3;
+		else
+			paletteBPP = 4;
+
+		size_t size = paletteBPP*numColors + stride*BitmapHeight;
 		uint8_t* inData=new(nothrow) uint8_t[size];
 		zfstream.read((char*)inData,size);
 		assert(!zfstream.fail() && !zfstream.eof());
 
 		uint8_t *palette = inData;
-		uint8_t *pixelData = inData + 3*numColors;
-		fromPalette(pixelData, BitmapWidth, BitmapHeight, palette, numColors);
+		uint8_t *pixelData = inData + paletteBPP*numColors;
+		bitmap->fromPalette(pixelData, BitmapWidth, BitmapHeight, stride, palette, numColors, paletteBPP);
 		delete[] inData;
 	}
 	else
@@ -773,11 +836,11 @@ ASObject* BitmapTag::instance(Class_base* c) const
 	Class_base* classRet = Class<BitmapData>::getClass();
 
 	if(!realClass)
-		return new (classRet->memoryAccount) BitmapData(classRet, *this);
+		return new (classRet->memoryAccount) BitmapData(classRet, bitmap);
 
 	if(realClass->isSubClass(Class<Bitmap>::getClass()))
 	{
-		BitmapData* ret=new (classRet->memoryAccount) BitmapData(classRet, *this);
+		BitmapData* ret=new (classRet->memoryAccount) BitmapData(classRet, bitmap);
 		Bitmap* bitmapRet=new (realClass->memoryAccount) Bitmap(realClass,_MR(ret));
 		return bitmapRet;
 	}
@@ -787,7 +850,7 @@ ASObject* BitmapTag::instance(Class_base* c) const
 		classRet = realClass;
 	}
 
-	return new (classRet->memoryAccount) BitmapData(classRet, *this);
+	return new (classRet->memoryAccount) BitmapData(classRet, bitmap);
 }
 
 DefineTextTag::DefineTextTag(RECORDHEADER h, istream& in, RootMovieClip* root,int v):DictionaryTag(h,root),
@@ -838,6 +901,21 @@ void DefineTextTag::computeCached() const
 	fs.Color = RGBA(0,0,0,255);
 	fillStyles.push_back(fs);
 
+	/*
+	 * All coordinates are scaled into 1024*20*20 units per pixel.
+	 * This is scaled back to pixels by cairo. (1024 is the glyph
+	 * EM square scale, 20 is twips-per-pixel and the second 20
+	 * comes from TextHeight, which is also in twips)
+	 */
+	const int twipsScaling = 1024*20;
+	const int pixelScaling = 1024*20*20;
+
+	// Scale the translation component of TextMatrix. -1 because
+	// removes the unscaled translation first.
+	MATRIX scaledTextMatrix = TextMatrix;
+	scaledTextMatrix.translate((pixelScaling-1)*TextMatrix.getTranslateX(),
+				   (pixelScaling-1)*TextMatrix.getTranslateY());
+
 	for(size_t i=0; i< TextRecords.size();++i)
 	{
 		if(TextRecords[i].StyleFlagsHasFont)
@@ -870,10 +948,16 @@ void DefineTextTag::computeCached() const
 		{
 			const GLYPHENTRY& ge = TextRecords[i].GlyphEntries[j];
 			const std::vector<SHAPERECORD>& sr = curFont->getGlyphShapes().at(ge.GlyphIndex).ShapeRecords;
-			/* curPos is in pixel, but the glyph coordinates are 1024*20 times pixel size,
-			 * so we scale curPos. This is scaled back to pixels by cairo.
-			 */
-			TokenContainer::FromShaperecordListToShapeVector(sr,tokens,fillStyles,curPos*1024*20,scaling);
+			Vector2 glyphPos = curPos*twipsScaling;
+
+			MATRIX glyphMatrix(scaling, scaling, 0, 0, 
+					   glyphPos.x,
+					   glyphPos.y);
+			
+			//Apply glyphMatrix first, then scaledTextMatrix
+			glyphMatrix = scaledTextMatrix.multiplyMatrix(glyphMatrix);
+
+			TokenContainer::FromShaperecordListToShapeVector(sr,tokens,fillStyles,glyphMatrix);
 			curPos.x += ge.GlyphAdvance;
 		}
 	}
@@ -1085,6 +1169,11 @@ void PlaceObject2Tag::setProperties(DisplayObject* obj, DisplayObjectContainer* 
 		else
 			LOG(LOG_ERROR, _("Moving of registered objects not really supported"));
 	}
+	else if (!PlaceFlagMove)
+	{
+		//Remove the automatic name set by the DisplayObject constructor
+		obj->name = "";
+	}
 }
 
 void PlaceObject2Tag::execute(DisplayObjectContainer* parent) const
@@ -1111,7 +1200,17 @@ void PlaceObject2Tag::execute(DisplayObjectContainer* parent) const
 			throw RunTimeException("No tag to place");
 
 		//We can create the object right away
-		DisplayObject* toAdd=dynamic_cast<DisplayObject*>(placedTag->instance());
+		ASObject *instance = placedTag->instance();
+		DisplayObject* toAdd=dynamic_cast<DisplayObject*>(instance);
+
+		if(!toAdd && instance)
+		{
+			//We ignore weird tags. I have seen ASFont
+			//(from a DefineFont) being added by PlaceObject2.
+			LOG(LOG_NOT_IMPLEMENTED, "Adding non-DisplayObject to display list");
+			instance->decRef();
+			return;
+		}
 
 		assert_and_throw(toAdd);
 		//The matrix must be set before invoking the constructor
@@ -1275,15 +1374,23 @@ FrameLabelTag::FrameLabelTag(RECORDHEADER h, std::istream& in):Tag(h)
 		in >> NamedAnchor;
 }
 
-DefineButton2Tag::DefineButton2Tag(RECORDHEADER h, std::istream& in,RootMovieClip* root):DictionaryTag(h,root)
+DefineButtonTag::DefineButtonTag(RECORDHEADER h, std::istream& in, int version, RootMovieClip* root):DictionaryTag(h,root)
 {
 	in >> ButtonId;
-	BitStream bs(in);
-	UB(7,bs);
-	TrackAsMenu=UB(1,bs);
-	in >> ActionOffset;
+	if (version > 1)
+	{
+		BitStream bs(in);
+		UB(7,bs);
+		TrackAsMenu=UB(1,bs);
+		in >> ActionOffset;
+	}
+	else
+	{
+		TrackAsMenu=false;
+		ActionOffset=0;
+	}
 
-	BUTTONRECORD br(2);
+	BUTTONRECORD br(version);
 
 	do
 	{
@@ -1294,11 +1401,11 @@ DefineButton2Tag::DefineButton2Tag(RECORDHEADER h, std::istream& in,RootMovieCli
 	}
 	while(true);
 
-	if(ActionOffset)
-		LOG(LOG_NOT_IMPLEMENTED,"DefineButton2Tag: Actions are not supported");
+	if(ActionOffset || version == 1)
+		LOG(LOG_NOT_IMPLEMENTED,"DefineButton(2)Tag: Actions are not supported");
 }
 
-ASObject* DefineButton2Tag::instance(Class_base* c) const
+ASObject* DefineButtonTag::instance(Class_base* c) const
 {
 	DisplayObject* states[4] = {NULL, NULL, NULL, NULL};
 	bool isSprite[4] = {false, false, false, false};
@@ -1441,8 +1548,16 @@ DefineSoundTag::DefineSoundTag(RECORDHEADER h, std::istream& in,RootMovieClip* r
 
 ASObject* DefineSoundTag::instance(Class_base* c) const
 {
+	Class_base* retClass=NULL;
+	if (c)
+		retClass=c;
+	else if(bindedTo)
+		retClass=bindedTo;
+	else
+		retClass=Class<Sound>::getClass();
+
 	//TODO: use the tag sound data
-	return Class<Sound>::getInstanceS(c);
+	return new (retClass->memoryAccount) Sound(retClass);
 }
 
 ScriptLimitsTag::ScriptLimitsTag(RECORDHEADER h, std::istream& in):ControlTag(h)
@@ -1553,7 +1668,7 @@ DefineBitsTag::DefineBitsTag(RECORDHEADER h, std::istream& in,RootMovieClip* roo
 	int dataSize=Header.getLength()-2;
 	uint8_t *inData=new(nothrow) uint8_t[dataSize];
 	in.read((char*)inData,dataSize);
-	fromJPEG(inData,dataSize,JPEGTablesTag::getJPEGTables(),JPEGTablesTag::getJPEGTableSize());
+	bitmap->fromJPEG(inData,dataSize,JPEGTablesTag::getJPEGTables(),JPEGTablesTag::getJPEGTableSize());
 	delete[] inData;
 }
 
@@ -1566,7 +1681,7 @@ DefineBitsJPEG2Tag::DefineBitsJPEG2Tag(RECORDHEADER h, std::istream& in, RootMov
 	uint8_t* inData=new(nothrow) uint8_t[dataSize];
 	in.read((char*)inData,dataSize);
 
-	fromJPEG(inData,dataSize);
+	bitmap->fromJPEG(inData,dataSize);
 	delete[] inData;
 }
 
@@ -1580,7 +1695,7 @@ DefineBitsJPEG3Tag::DefineBitsJPEG3Tag(RECORDHEADER h, std::istream& in, RootMov
 	in.read((char*)inData,dataSize);
 
 	//TODO: check header. Could also be PNG or GIF
-	fromJPEG(inData,dataSize);
+	bitmap->fromJPEG(inData,dataSize);
 	delete[] inData;
 
 	//Read alpha data (if any)
@@ -1600,10 +1715,10 @@ DefineBitsJPEG3Tag::DefineBitsJPEG3Tag(RECORDHEADER h, std::istream& in, RootMov
 		try
 		{
 			//Set alpha
-			for(int32_t i=0;i<height;i++)
+			for(int32_t i=0;i<bitmap->getHeight();i++)
 			{
-				for(int32_t j=0;j<width;j++)
-					data[i*stride + j*4 + 3]=zfstream.get();
+				for(int32_t j=0;j<bitmap->getWidth();j++)
+					bitmap->setAlpha(i, j, zfstream.get());
 			}
 		}
 		catch(std::exception& e)

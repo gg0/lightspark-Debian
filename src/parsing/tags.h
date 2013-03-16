@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2008-2012  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2008-2013  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -25,10 +25,7 @@
 #include <iostream>
 #include "swftypes.h"
 #include "backends/geometry.h"
-#include "scripting/flash/text/flashtext.h"
 #include "scripting/flash/utils/flashutils.h"
-#include "scripting/flash/media/flashmedia.h"
-#include "scripting/flash/display/BitmapContainer.h"
 #include "scripting/class.h"
 
 namespace lightspark
@@ -337,16 +334,16 @@ public:
 	SoundStreamHead2Tag(RECORDHEADER h, std::istream& in);
 };
 
-class DefineButton2Tag: public DictionaryTag
+class DefineButtonTag: public DictionaryTag
 {
 private:
 	UI16_SWF ButtonId;
 	UB ReservedFlags;
-	UB TrackAsMenu;
+	bool TrackAsMenu;
 	UI16_SWF ActionOffset;
 	std::vector<BUTTONRECORD> Characters;
 public:
-	DefineButton2Tag(RECORDHEADER h, std::istream& in, RootMovieClip* root);
+	DefineButtonTag(RECORDHEADER h, std::istream& in, int version, RootMovieClip* root);
 	virtual int getId() const { return ButtonId; }
 	ASObject* instance(Class_base* c=NULL) const;
 };
@@ -525,11 +522,16 @@ public:
 	void execute(RootMovieClip* root) const{};
 };
 
-class BitmapTag: public DictionaryTag, public BitmapContainer
+class BitmapContainer;
+
+class BitmapTag: public DictionaryTag
 {
+protected:
+        _R<BitmapContainer> bitmap;
 public:
 	BitmapTag(RECORDHEADER h,RootMovieClip* root);
 	ASObject* instance(Class_base* c=NULL) const;
+        _R<BitmapContainer> getBitmap() const;
 };
 
 class JPEGTablesTag: public Tag

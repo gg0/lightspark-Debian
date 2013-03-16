@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2009-2012  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2009-2013  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -977,7 +977,7 @@ ASFUNCTIONBODY(Transform,_setColorTransform)
 	_NR<ColorTransform> ct;
 	ARG_UNPACK(ct);
 	if (ct.isNull())
-		throw Class<TypeError>::getInstanceS();
+		throwError<TypeError>(kNullPointerError, "colorTransform");
 
 	LOG(LOG_NOT_IMPLEMENTED, "Transform::setColorTransform");
 	// Set colortransform on th->owner

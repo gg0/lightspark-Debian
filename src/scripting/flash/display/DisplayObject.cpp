@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2012  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2012-2013  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -27,6 +27,7 @@
 #include "scripting/flash/geom/flashgeom.h"
 #include "scripting/flash/accessibility/flashaccessibility.h"
 #include "scripting/flash/display/BitmapData.h"
+#include "scripting/flash/geom/flashgeom.h"
 
 using namespace lightspark;
 using namespace std;
@@ -160,9 +161,11 @@ void DisplayObject::sinit(Class_base* c)
 	c->setDeclaredMethodByQName("hitTestObject","",Class<IFunction>::getFunction(hitTestObject),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("hitTestPoint","",Class<IFunction>::getFunction(hitTestPoint),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("transform","",Class<IFunction>::getFunction(_getTransform),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("transform","",Class<IFunction>::getFunction(_setTransform),SETTER_METHOD,true);
 	REGISTER_GETTER_SETTER(c,accessibilityProperties);
 	REGISTER_GETTER_SETTER(c,cacheAsBitmap);
 	REGISTER_GETTER_SETTER(c,filters);
+	REGISTER_GETTER_SETTER(c,scrollRect);
 
 	c->addImplementedInterface(InterfaceClass<IBitmapDrawable>::getClass());
 	IBitmapDrawable::linkTraits(c);
@@ -172,6 +175,7 @@ ASFUNCTIONBODY_GETTER_SETTER(DisplayObject,accessibilityProperties);
 //TODO: Use a callback for the cacheAsBitmap getter, since it should use computeCacheAsBitmap
 ASFUNCTIONBODY_GETTER_SETTER(DisplayObject,cacheAsBitmap);
 ASFUNCTIONBODY_GETTER_SETTER(DisplayObject,filters);
+ASFUNCTIONBODY_GETTER_SETTER(DisplayObject,scrollRect);
 
 bool DisplayObject::computeCacheAsBitmap() const
 {
@@ -187,6 +191,12 @@ ASFUNCTIONBODY(DisplayObject,_getTransform)
 	LOG(LOG_NOT_IMPLEMENTED, "DisplayObject::transform is a stub and does not reflect the real display state");
 	th->incRef();
 	return Class<Transform>::getInstanceS(_MR(th));
+}
+
+ASFUNCTIONBODY(DisplayObject,_setTransform)
+{
+	LOG(LOG_NOT_IMPLEMENTED, "DisplayObject::transform is a stub");
+	return NULL;
 }
 
 void DisplayObject::buildTraits(ASObject* o)
@@ -301,6 +311,8 @@ bool DisplayObject::skipRender() const
 
 void DisplayObject::defaultRender(RenderContext& ctxt) const
 {
+	// TODO: use scrollRect
+
 	const CachedSurface& surface=ctxt.getCachedSurface(this);
 	/* surface is only modified from within the render thread
 	 * so we need no locking here */
@@ -1019,7 +1031,7 @@ void DisplayObject::computeMasksAndMatrix(DisplayObject* target, std::vector<IDr
 {
 	const DisplayObject* cur=this;
 	bool gatherMasks = true;
-	while(cur!=target)
+	while(cur && cur!=target)
 	{
 		totalMatrix=cur->getMatrix().multiplyMatrix(totalMatrix);
 		//Get an IDrawable for all the hierarchy of each mask.

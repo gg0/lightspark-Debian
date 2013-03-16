@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2008-2012  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2008-2013  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -33,7 +33,6 @@
 #include "smartrefs.h"
 #include "tiny_string.h"
 #include "memory_support.h"
-#include "scripting/flash/display/BitmapContainer.h"
 
 #ifdef BIG_ENDIAN
 #include <algorithm>
@@ -292,8 +291,8 @@ struct nsNameAndKindImpl
 	tiny_string name;
 	NS_KIND kind;
 	uint32_t baseId;
-	nsNameAndKindImpl(const tiny_string& _name, NS_KIND _kind, uint32_t b=-1):name(_name),kind(_kind),baseId(b){}
-	nsNameAndKindImpl(const char* _name, NS_KIND _kind, uint32_t b=-1):name(_name),kind(_kind),baseId(b){}
+	nsNameAndKindImpl(const tiny_string& _name, NS_KIND _kind, uint32_t b=-1);
+	nsNameAndKindImpl(const char* _name, NS_KIND _kind, uint32_t b=-1);
 	bool operator<(const nsNameAndKindImpl& r) const
 	{
 		if(kind==r.kind)
@@ -376,7 +375,7 @@ struct multiname: public memory_reporter
 	void setName(ASObject* n);
 	void resetNameIfObject();
 	bool isQName() const { return ns.size() == 1; }
-	bool toUInt(uint32_t& out) const;
+	bool toUInt(uint32_t& out, bool acceptStringFractions=false) const;
 };
 
 class FLOAT 
@@ -433,10 +432,14 @@ public:
 	RGB(){};
 	RGB(int r,int g, int b):Red(r),Green(g),Blue(b){};
 	RGB(uint32_t color):Red((color>>16)&0xFF),Green((color>>8)&0xFF),Blue(color&0xFF){}
+	//Parses a color from hex triplet string #RRGGBB
+	RGB(const tiny_string& colorstr);
 	UI8 Red;
 	UI8 Green;
 	UI8 Blue;
 	uint32_t toUInt() const { return Blue + (Green<<8) + (Red<<16); }
+	//Return a string representation in #RRGGBB format
+	tiny_string toString() const;
 };
 
 class RGBA
@@ -764,6 +767,7 @@ public:
 };
 
 template<class T> class Vector2Tmpl;
+typedef Vector2Tmpl<int> Vector2;
 typedef Vector2Tmpl<double> Vector2f;
 
 class MATRIX: public cairo_matrix_t
@@ -775,6 +779,7 @@ public:
 	void get4DMatrix(float matrix[16]) const;
 	void multiply2D(number_t xin, number_t yin, number_t& xout, number_t& yout) const;
 	Vector2f multiply2D(const Vector2f& in) const;
+	Vector2 multiply2D(const Vector2& in) const;
 	MATRIX multiplyMatrix(const MATRIX& r) const;
 	bool operator!=(const MATRIX& r) const;
 	MATRIX getInverted() const;
@@ -873,6 +878,8 @@ class MORPHFILLSTYLE;
 enum FILL_STYLE_TYPE { SOLID_FILL=0x00, LINEAR_GRADIENT=0x10, RADIAL_GRADIENT=0x12, FOCAL_RADIAL_GRADIENT=0x13, REPEATING_BITMAP=0x40,
 			CLIPPED_BITMAP=0x41, NON_SMOOTHED_REPEATING_BITMAP=0x42, NON_SMOOTHED_CLIPPED_BITMAP=0x43};
 
+class BitmapContainer;
+
 class FILLSTYLE
 {
 public:
@@ -882,7 +889,7 @@ public:
 	MATRIX Matrix;
 	GRADIENT Gradient;
 	FOCALGRADIENT FocalGradient;
-	BitmapContainer bitmap;
+	_NR<BitmapContainer> bitmap;
 	RGBA Color;
 	FILL_STYLE_TYPE FillStyleType;
 	uint8_t version;
@@ -1066,12 +1073,14 @@ class SHAPE
 	friend std::istream& operator>>(std::istream& stream, SHAPE& v);
 	friend std::istream& operator>>(std::istream& stream, SHAPEWITHSTYLE& v);
 public:
-	SHAPE():fillOffset(0),lineOffset(0){}
+	SHAPE(uint8_t v=0):fillOffset(0),lineOffset(0),version(v){}
 	virtual ~SHAPE(){};
 	UB NumFillBits;
 	UB NumLineBits;
 	unsigned int fillOffset;
 	unsigned int lineOffset;
+	uint8_t version; /* version of the DefineShape tag, 0 if
+			  * DefineFont or other tag */
 	std::vector<SHAPERECORD> ShapeRecords;
 };
 
@@ -1079,10 +1088,9 @@ class SHAPEWITHSTYLE : public SHAPE
 {
 	friend std::istream& operator>>(std::istream& stream, SHAPEWITHSTYLE& v);
 public:
-	SHAPEWITHSTYLE(uint8_t v):FillStyles(v),LineStyles(v),version(v){}
+	SHAPEWITHSTYLE(uint8_t v):SHAPE(v),FillStyles(v),LineStyles(v){}
 	FILLSTYLEARRAY FillStyles;
 	LINESTYLEARRAY LineStyles;
-	const uint8_t version;
 };
 
 class CXFORMWITHALPHA

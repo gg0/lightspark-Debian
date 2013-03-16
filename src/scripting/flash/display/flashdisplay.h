@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2009-2012  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2009-2013  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -61,11 +61,15 @@ protected:
 	~InteractiveObject();
 public:
 	InteractiveObject(Class_base* c);
+	ASPROPERTY_GETTER_SETTER(_NR<ASObject>,contextMenu); // TOOD: should be NativeMenu
+	ASPROPERTY_GETTER_SETTER(bool,tabEnabled);
+	ASPROPERTY_GETTER_SETTER(int32_t,tabIndex);
 	ASFUNCTION(_constructor);
 	ASFUNCTION(_setMouseEnabled);
 	ASFUNCTION(_getMouseEnabled);
 	ASFUNCTION(_setDoubleClickEnabled);
 	ASFUNCTION(_getDoubleClickEnabled);
+	void finalize();
 	static void sinit(Class_base* c);
 	static void buildTraits(ASObject* o);
 };
@@ -87,9 +91,10 @@ protected:
 	_NR<DisplayObject> hitTestImpl(_NR<DisplayObject> last, number_t x, number_t y, DisplayObject::HIT_TYPE type);
 	bool boundsRect(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const;
 	void renderImpl(RenderContext& ctxt) const;
+	ASPROPERTY_GETTER_SETTER(bool, tabChildren);
 public:
 	void _addChildAt(_R<DisplayObject> child, unsigned int index);
-	void dumpDisplayList();
+	void dumpDisplayList(unsigned int level=0);
 	bool _removeChild(_R<DisplayObject> child);
 	int getChildIndex(_R<DisplayObject> child);
 	DisplayObjectContainer(Class_base* c);
@@ -337,7 +342,9 @@ class Loader: public DisplayObjectContainer, public IDownloaderThreadListener
 private:
 	mutable Spinlock spinlock;
 	_NR<DisplayObject> content;
-	IThreadJob *job;
+	// There can be multiple jobs, one active and aborted ones
+	// that have not yet terminated
+	std::list<IThreadJob *> jobs;
 	URLInfo url;
 	_NR<LoaderInfo> contentLoaderInfo;
 	void unload();
@@ -370,6 +377,9 @@ class Sprite: public DisplayObjectContainer, public TokenContainer
 friend class DisplayObject;
 private:
 	_NR<Graphics> graphics;
+	//hitTarget is non-null if another Sprite has registered this
+	//Sprite as its hitArea. Hits will be relayed to hitTarget.
+	_NR<Sprite> hitTarget;
 protected:
 	bool boundsRect(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const;
 	void renderImpl(RenderContext& ctxt) const;
@@ -383,6 +393,9 @@ public:
 	ASFUNCTION(_getGraphics);
 	ASFUNCTION(_startDrag);
 	ASFUNCTION(_stopDrag);
+	ASPROPERTY_GETTER_SETTER(bool, buttonMode);
+	ASPROPERTY_GETTER_SETTER(_NR<Sprite>, hitArea);
+	ASPROPERTY_GETTER_SETTER(bool, useHandCursor);
 	int getDepth() const
 	{
 		return 0;
@@ -483,13 +496,17 @@ class MovieClip: public Sprite, public FrameContainer
 {
 friend class ParserThread;
 private:
-	uint32_t getCurrentScene();
+	uint32_t getCurrentScene() const;
+	const Scene_data *getScene(const tiny_string &sceneName) const;
+	uint32_t getFrameIdByNumber(uint32_t i, const tiny_string& sceneName) const;
+	uint32_t getFrameIdByLabel(const tiny_string& l, const tiny_string& sceneName) const;
 	std::map<uint32_t,_NR<IFunction> > frameScripts;
 	bool fromDefineSpriteTag;
 protected:
 	/* This is read from the SWF header. It's only purpose is for flash.display.MovieClip.totalFrames */
 	uint32_t totalFrames_unreliable;
 	void constructionComplete();
+	ASPROPERTY_GETTER_SETTER(bool, enabled);
 public:
 	RunState state;
 	MovieClip(Class_base* c);
@@ -523,7 +540,6 @@ public:
 
 	void advanceFrame();
 	void initFrame();
-	uint32_t getFrameIdByLabel(const tiny_string& l) const;
 
 	void addScene(uint32_t sceneNo, uint32_t startframe, const tiny_string& name);
 };
@@ -556,6 +572,7 @@ public:
 	ASFUNCTION(_getStageVideos);
 	ASFUNCTION(_getFocus);
 	ASFUNCTION(_setFocus);
+	ASFUNCTION(_setTabChildren);
 	ASPROPERTY_GETTER_SETTER(tiny_string,displayState);
 };
 
@@ -641,11 +658,13 @@ class Bitmap: public DisplayObject, public TokenContainer
 friend class CairoTokenRenderer;
 private:
 	void onBitmapData(_NR<BitmapData>);
+	void onSmoothingChanged(bool);
 protected:
 	void renderImpl(RenderContext& ctxt) const
 		{ TokenContainer::renderImpl(ctxt); }
 public:
 	ASPROPERTY_GETTER_SETTER(_NR<BitmapData>,bitmapData);
+	ASPROPERTY_GETTER_SETTER(bool, smoothing);
 	/* Call this after updating any member of 'data' */
 	void updatedData();
 	Bitmap(Class_base* c, _NR<LoaderInfo> li=NullRef, std::istream *s = NULL, FILE_TYPE type=FT_UNKNOWN);
@@ -677,6 +696,16 @@ public:
 	Shader(Class_base* c):ASObject(c){}
 	static void sinit(Class_base* c);
 	ASFUNCTION(_constructor);
+};
+
+class BitmapDataChannel : public ASObject
+{
+public:
+	enum {RED=1, GREEN=2, BLUE=4, ALPHA=8};
+	BitmapDataChannel(Class_base* c):ASObject(c){}
+	static void sinit(Class_base* c);
+	ASFUNCTION(_constructor);
+	static unsigned int channelShift(uint32_t channelConstant);
 };
 
 };

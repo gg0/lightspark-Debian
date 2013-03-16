@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2009-2012  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2009-2013  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -267,18 +267,27 @@ void ABCVm::registerClasses()
 	builtin->registerBuiltin("Scene","flash.display",Class<Scene>::getRef());
 	builtin->registerBuiltin("AVM1Movie","flash.display",Class<AVM1Movie>::getRef());
 	builtin->registerBuiltin("Shader","flash.display",Class<Shader>::getRef());
+	builtin->registerBuiltin("BitmapDataChannel","flash.display",Class<BitmapDataChannel>::getRef());
 
 	builtin->registerBuiltin("BitmapFilter","flash.filters",Class<BitmapFilter>::getRef());
 	builtin->registerBuiltin("DropShadowFilter","flash.filters",Class<DropShadowFilter>::getRef());
 	builtin->registerBuiltin("GlowFilter","flash.filters",Class<GlowFilter>::getRef());
 	builtin->registerBuiltin("GradientGlowFilter","flash.filters",
-			Class<ASObject>::getStubClass(QName("GradientGlowFilter","flash.filters")));
+			Class<ASObject>::getStubClass(QName("GradientGlowFilter","flash.filters"), Class<BitmapFilter>::getRef()));
 	builtin->registerBuiltin("BevelFilter","flash.filters",
-			Class<ASObject>::getStubClass(QName("BevelFilter","flash.filters")));
+			Class<ASObject>::getStubClass(QName("BevelFilter","flash.filters"), Class<BitmapFilter>::getRef()));
 	builtin->registerBuiltin("ColorMatrixFilter","flash.filters",
-			Class<ASObject>::getStubClass(QName("ColorMatrixFilter","flash.filters")));
+			Class<ASObject>::getStubClass(QName("ColorMatrixFilter","flash.filters"), Class<BitmapFilter>::getRef()));
 	builtin->registerBuiltin("BlurFilter","flash.filters",
-			Class<ASObject>::getStubClass(QName("BlurFilter","flash.filters")));
+			Class<ASObject>::getStubClass(QName("BlurFilter","flash.filters"), Class<BitmapFilter>::getRef()));
+	builtin->registerBuiltin("ConvolutionFilter","flash.filters",
+			Class<ASObject>::getStubClass(QName("ConvolutionFilter","flash.filters"), Class<BitmapFilter>::getRef()));
+	builtin->registerBuiltin("DisplacementMapFilter","flash.filters",
+			Class<ASObject>::getStubClass(QName("DisplacementMapFilter","flash.filters"), Class<BitmapFilter>::getRef()));
+	builtin->registerBuiltin("GradientBevelFilter","flash.filters",
+			Class<ASObject>::getStubClass(QName("GradientBevelFilter","flash.filters"), Class<BitmapFilter>::getRef()));
+	builtin->registerBuiltin("ShaderFilter","flash.filters",
+			Class<ASObject>::getStubClass(QName("ShaderFilter","flash.filters"), Class<BitmapFilter>::getRef()));
 
 	builtin->registerBuiltin("AntiAliasType","flash.text",Class<AntiAliasType>::getRef());
 	builtin->registerBuiltin("Font","flash.text",Class<ASFont>::getRef());
@@ -293,6 +302,7 @@ void ABCVm::registerClasses()
 	builtin->registerBuiltin("TextFieldAutoSize","flash.text",Class<TextFieldAutoSize>::getRef());
 	builtin->registerBuiltin("TextFormat","flash.text",Class<TextFormat>::getRef());
 	builtin->registerBuiltin("TextFormatAlign","flash.text",Class<TextFormatAlign>::getRef());
+	builtin->registerBuiltin("TextLineMetrics","flash.text",Class<TextLineMetrics>::getRef());
 	builtin->registerBuiltin("StaticText","flash.text",Class<StaticText>::getRef());
 
 	builtin->registerBuiltin("ContentElement","flash.text.engine",Class<ContentElement>::getRef());
@@ -360,6 +370,7 @@ void ABCVm::registerClasses()
 	builtin->registerBuiltin("StageVideoEvent","flash.events",Class<StageVideoEvent>::getRef());
 	builtin->registerBuiltin("StageVideoAvailabilityEvent","flash.events",Class<StageVideoAvailabilityEvent>::getRef());
 
+	builtin->registerBuiltin("navigateToURL","flash.net",_MR(Class<IFunction>::getFunction(navigateToURL)));
 	builtin->registerBuiltin("sendToURL","flash.net",_MR(Class<IFunction>::getFunction(sendToURL)));
 	builtin->registerBuiltin("LocalConnection","flash.net",Class<ASObject>::getStubClass(QName("LocalConnection","flash.net")));
 	builtin->registerBuiltin("NetConnection","flash.net",Class<NetConnection>::getRef());
@@ -412,6 +423,11 @@ void ABCVm::registerClasses()
 	builtin->registerBuiltin("MemoryError","flash.errors",Class<MemoryError>::getRef());
 	builtin->registerBuiltin("ScriptTimeoutError","flash.errors",Class<ScriptTimeoutError>::getRef());
 	builtin->registerBuiltin("StackOverflowError","flash.errors",Class<StackOverflowError>::getRef());
+
+	builtin->registerBuiltin("PrintJob","flash.printing",
+				 Class<ASObject>::getStubClass(QName("PrintJob","flash.printing"), Class<EventDispatcher>::getRef()));
+	builtin->registerBuiltin("PrintJobOptions","flash.printing",Class<ASObject>::getStubClass(QName("PrintJobOptions","flash.printing")));
+	builtin->registerBuiltin("PrintJobOrientation","flash.printing",Class<ASObject>::getStubClass(QName("PrintJobOrientation","flash.printing")));
 
 	builtin->registerBuiltin("isNaN","",_MR(Class<IFunction>::getFunction(isNaN)));
 	builtin->registerBuiltin("isFinite","",_MR(Class<IFunction>::getFunction(isFinite)));
@@ -718,6 +734,16 @@ multiname* ABCContext::getMultinameImpl(ASObject* n, ASObject* n2, unsigned int 
 		case 0x1c: //MultinameLA
 		{
 			assert(n && !n2);
+
+			//Testing shows that the namespace from a
+			//QName is used even in MultinameL
+			if (n->is<ASQName>())
+			{
+				ASQName *qname = n->as<ASQName>();
+				ret->ns.clear();
+				ret->ns.push_back(nsNameAndKind(qname->getURI(),NAMESPACE));
+			}
+
 			ret->setName(n);
 			n->decRef();
 			break;

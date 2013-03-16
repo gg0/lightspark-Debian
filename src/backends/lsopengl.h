@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2011-2012  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2011-2013  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -39,6 +39,9 @@
 	#define glBufferData(...)
 	#define glPixelStorei(...)
 #else
+	//GLEW_NO_GLU tells glew.h to not include glu.h. Required to
+	//compile on systems without glu.h.
+	#define GLEW_NO_GLU
 	#include <GL/glew.h>
 	#ifndef _WIN32
 		#include <GL/glx.h>

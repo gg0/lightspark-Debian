@@ -1,7 +1,7 @@
 /**************************************************************************
     Lighspark, a free flash player implementation
 
-    Copyright (C) 2009-2012  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2009-2013  Alessandro Pignotti (a.pignotti@sssup.it)
     Copyright (C) 2010-2011  Timon Van Overveldt (timonvo@gmail.com)
 
     This program is free software: you can redistribute it and/or modify
@@ -64,8 +64,6 @@ NPError NPN_GetURLNotify(NPP instance, const char *url, const char *target, void
 NPError NPN_GetURL(NPP instance, const char *url, const char *target)
 {
   NPError rv = CallNPN_GetURLProc(NPNFuncs.geturl, instance, url, target);
-  if(rv!=0)
-	  abort();
   return rv;
 }
 

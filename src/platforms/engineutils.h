@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2011-2012  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2011-2013  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -23,6 +23,7 @@
 #include <gtk/gtk.h>
 #include "compat.h"
 #include "threading.h"
+#include "tiny_string.h"
 
 namespace lightspark
 {
@@ -79,7 +80,8 @@ public:
          */
 	void showWindow(uint32_t w, uint32_t h);
 	/* This function must be called within gdk_threads_enter/leave */
-        virtual void grabFocus()=0;
+	virtual void grabFocus()=0;
+	virtual void openPageInBrowser(const tiny_string& url, const tiny_string& window)=0;
 	static gboolean inputDispatch(GtkWidget *widget, GdkEvent *event, EngineData* e)
 	{
 		RecMutex::Lock l(e->mutex);

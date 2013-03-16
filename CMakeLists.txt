@@ -1,7 +1,7 @@
 #**************************************************************************
 #    Lightspark, a free flash player implementation
 #
-#    Copyright (C) 2010-2012  Alessandro Pignotti <a.pignotti@sssup.it>
+#    Copyright (C) 2010-2013  Alessandro Pignotti <a.pignotti@sssup.it>
 #    Copyright (C) 2010  Giacomo Spigler <g.spigler@sssup.it>
 #
 #    This program is free software: you can redistribute it and/or modify
@@ -25,7 +25,7 @@ CMAKE_MINIMUM_REQUIRED(VERSION 2.6)
 PROJECT(LIGHTSPARK)
 SET(MAJOR_VERSION "0")
 SET(MINOR_VERSION "7")
-SET(PATCH_VERSION "1")
+SET(PATCH_VERSION "2")
 SET(SUBPATCH_VERSION "0")
 
 IF(EXISTS "${CMAKE_SOURCE_DIR}/.git/")
@@ -76,18 +76,18 @@ SET(SHORTVERSION "${MINOR_VERSION}${PATCH_VERSION}${SUBPATCH_VERSION}")
 CONFIGURE_FILE("${CMAKE_SOURCE_DIR}/src/version.h.in" "${CMAKE_CURRENT_BINARY_DIR}/version.h" @ONLY)
 INCLUDE_DIRECTORIES(${CMAKE_CURRENT_BINARY_DIR})
 
-# GCC 4.4+ is required, GCC_VERSION macro taken from GCC manual
+# GCC 4.6+ is required, GCC_VERSION macro taken from GCC manual
 INCLUDE(CheckCSourceCompiles)
 IF(CMAKE_COMPILER_IS_GNUCC)
    CHECK_C_SOURCE_COMPILES("
    #define GCC_VERSION (__GNUC__ * 10000 + __GNUC_MINOR__ * 100 + __GNUC_PATCHLEVEL__)
-   #if GCC_VERSION < 40400
+   #if GCC_VERSION < 40600
    #error
    #endif
-   int main() { return 0; }" GCC_IS_4_4)
-   IF(NOT GCC_IS_4_4)
-	  MESSAGE(FATAL_ERROR "GCC 4.4+ is required.")
-   ENDIF(NOT GCC_IS_4_4)
+   int main() { return 0; }" GCC_IS_4_6)
+   IF(NOT GCC_IS_4_6)
+	  MESSAGE(FATAL_ERROR "GCC 4.6+ is required.")
+   ENDIF(NOT GCC_IS_4_6)
 ENDIF(CMAKE_COMPILER_IS_GNUCC)
 
 # Find put the path of the gnash executable, if available
@@ -142,7 +142,10 @@ ELSEIF(${CMAKE_SYSTEM_PROCESSOR} MATCHES "^x86_64$|^amd64$")
 ELSEIF(${CMAKE_SYSTEM_PROCESSOR} MATCHES "ppc")
 	SET(ppc 1)
 	SET(LIB_SUFFIX "" CACHE STRING "Choose the suffix of the lib folder (if any) : None ppc")
-	SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -maltivec -D__STDC_CONSTANT_MACROS -fPIC")
+	SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -D__STDC_CONSTANT_MACROS -fPIC")
+	IF(NOT(DISABLE_ALTIVEC))
+		SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -maltivec")
+	ENDIF()
 ELSE(${CMAKE_SYSTEM_PROCESSOR} MATCHES "^i[3-6]86$|^x86$")
 	# All non-x86 non-ppc architectures.
 	SET(LIB_SUFFIX "" CACHE STRING "Choose the suffix of the lib folder (if any) : None")

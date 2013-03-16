@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2009-2012  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2009-2013  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -35,12 +35,13 @@ friend class ABCVm;
 private:
 	static void purgeTrailingZeroes(char* buf);
 public:
-	Number(Class_base* c, double v=NaN):ASObject(c),val(v){type=T_NUMBER;}
+	Number(Class_base* c, double v=0.):ASObject(c),val(v){type=T_NUMBER;}
 	static const number_t NaN;
 	double val;
 	ASFUNCTION(_constructor);
 	ASFUNCTION(_toString);
 	ASFUNCTION(toFixed);
+	ASFUNCTION(_valueOf);
 	tiny_string toString();
 	static tiny_string toString(number_t val);
 	static tiny_string toStringRadix(number_t val, int radix);

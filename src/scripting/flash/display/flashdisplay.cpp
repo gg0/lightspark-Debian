@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2009-2012  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2009-2013  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -32,9 +32,12 @@
 #include "backends/geometry.h"
 #include "backends/input.h"
 #include "scripting/flash/accessibility/flashaccessibility.h"
+#include "scripting/flash/media/flashmedia.h"
 #include "scripting/flash/display/BitmapData.h"
 #include "scripting/argconv.h"
 #include "scripting/toplevel/Vector.h"
+
+#define FRAME_NOT_FOUND 0xffffffff //Used by getFrameIdBy*
 
 using namespace std;
 using namespace lightspark;
@@ -314,21 +317,28 @@ void LoaderThread::execute()
 		loaderInfo->setBytesTotal(bytes->getLength());
 		loaderInfo->setBytesLoaded(bytes->getLength());
 
-		bytes_buf bb(bytes->bytes,bytes->getLength());
-		sbuf=&bb;
+		sbuf = new bytes_buf(bytes->bytes,bytes->getLength());
 	}
 
 	istream s(sbuf);
 	ParseThread local_pt(s,loaderInfo->applicationDomain,loaderInfo->securityDomain,loader.getPtr(),url.getParsedURL());
 	local_pt.execute();
 
-	{
+	// Delete the bytes container (downloader or bytes_buf)
+	if (source==URL) {
 		//Acquire the lock to ensure consistency in threadAbort
 		SpinlockLocker l(downloaderLock);
 		if(downloader)
 			getSys()->downloadManager->destroy(downloader);
 		downloader=NULL;
+		sbuf = NULL;
 	}
+	else if (source==BYTES)
+	{
+		delete sbuf;
+		sbuf = NULL;
+	}
+
 	bytes.reset();
 
 	_NR<DisplayObject> obj=local_pt.getParsedObject();
@@ -372,8 +382,8 @@ ASFUNCTIONBODY(Loader,close)
 {
 	Loader* th=static_cast<Loader*>(obj);
  	SpinlockLocker l(th->spinlock);
-	if(th->job)
-		th->job->threadAbort();
+	for (auto j=th->jobs.begin(); j!=th->jobs.end(); j++)
+		(*j)->threadAbort();
 
 	return NULL;
 }
@@ -436,8 +446,11 @@ ASFUNCTIONBODY(Loader,load)
 	th->incRef();
 	r->incRef();
 	LoaderThread *thread=new LoaderThread(_MR(r), _MR(th));
+
+	SpinlockLocker l(th->spinlock);
+	th->jobs.push_back(thread);
 	getSys()->addJob(thread);
-	th->job=thread;
+
 	return NULL;
 }
 
@@ -464,8 +477,9 @@ ASFUNCTIONBODY(Loader,loadBytes)
 	{
 		th->incRef();
 		LoaderThread *thread=new LoaderThread(_MR(bytes), _MR(th));
+		SpinlockLocker l(th->spinlock);
+		th->jobs.push_back(thread);
 		getSys()->addJob(thread);
-		th->job=thread;
 	}
 	else
 		LOG(LOG_INFO, "Empty ByteArray passed to Loader.loadBytes");
@@ -484,8 +498,8 @@ void Loader::unload()
 	_NR<DisplayObject> content_copy = NullRef;
 	{
 		SpinlockLocker l(spinlock);
-		if(job)
-			job->threadAbort();
+		for (auto j=jobs.begin(); j!=jobs.end(); j++)
+			(*j)->threadAbort();
 
 		content_copy=content;
 		content.reset();
@@ -512,7 +526,7 @@ void Loader::finalize()
 	contentLoaderInfo.reset();
 }
 
-Loader::Loader(Class_base* c):DisplayObjectContainer(c),content(NullRef),job(NULL),contentLoaderInfo(NullRef),loaded(false)
+Loader::Loader(Class_base* c):DisplayObjectContainer(c),content(NullRef),contentLoaderInfo(NullRef),loaded(false)
 {
 	incRef();
 	contentLoaderInfo=_MR(Class<LoaderInfo>::getInstanceS(_MR(this)));
@@ -536,14 +550,8 @@ void Loader::sinit(Class_base* c)
 
 void Loader::threadFinished(IThreadJob* finishedJob)
 {
-	// If this is the current job, we are done. If these are not
-	// equal, finishedJob is a job that was cancelled when load()
-	// was called again, and we have to still wait for the correct
-	// job.
 	SpinlockLocker l(spinlock);
-	if(finishedJob==job)
-		job=NULL;
-
+	jobs.remove(finishedJob);
 	delete finishedJob;
 }
 
@@ -568,7 +576,7 @@ void Loader::setContent(_R<DisplayObject> o)
 	_addChildAt(o, 0);
 }
 
-Sprite::Sprite(Class_base* c):DisplayObjectContainer(c),TokenContainer(this),graphics(NullRef)
+Sprite::Sprite(Class_base* c):DisplayObjectContainer(c),TokenContainer(this),graphics(NullRef),buttonMode(false),useHandCursor(false)
 {
 }
 
@@ -576,6 +584,8 @@ void Sprite::finalize()
 {
 	DisplayObjectContainer::finalize();
 	graphics.reset();
+	hitArea.reset();
+	hitTarget.reset();
 }
 
 void Sprite::sinit(Class_base* c)
@@ -585,7 +595,13 @@ void Sprite::sinit(Class_base* c)
 	c->setDeclaredMethodByQName("graphics","",Class<IFunction>::getFunction(_getGraphics),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("startDrag","",Class<IFunction>::getFunction(_startDrag),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("stopDrag","",Class<IFunction>::getFunction(_stopDrag),NORMAL_METHOD,true);
+	REGISTER_GETTER_SETTER(c, buttonMode);
+	REGISTER_GETTER_SETTER(c, hitArea);
+	REGISTER_GETTER_SETTER(c, useHandCursor);
 }
+
+ASFUNCTIONBODY_GETTER_SETTER(Sprite, buttonMode);
+ASFUNCTIONBODY_GETTER_SETTER(Sprite, useHandCursor);
 
 void Sprite::buildTraits(ASObject* o)
 {
@@ -622,6 +638,27 @@ ASFUNCTIONBODY(Sprite,_stopDrag)
 {
 	Sprite* th=Class<Sprite>::cast(obj);
 	getSys()->getInputThread()->stopDrag(th);
+	return NULL;
+}
+
+ASFUNCTIONBODY_GETTER(Sprite, hitArea);
+
+ASFUNCTIONBODY(Sprite,_setter_hitArea)
+{
+	Sprite* th=Class<Sprite>::cast(obj);
+	_NR<Sprite> value;
+	ARG_UNPACK(value);
+
+	if (!th->hitArea.isNull())
+		th->hitArea->hitTarget.reset();
+
+	th->hitArea = value;
+	if (!th->hitArea.isNull())
+	{
+		th->incRef();
+		th->hitArea->hitTarget = _MNR(th);
+	}
+
 	return NULL;
 }
 
@@ -751,17 +788,37 @@ _NR<DisplayObject> DisplayObjectContainer::hitTestImpl(_NR<DisplayObject> last, 
 
 _NR<DisplayObject> Sprite::hitTestImpl(_NR<DisplayObject>, number_t x, number_t y, DisplayObject::HIT_TYPE type)
 {
+	//Did we hit a children?
 	_NR<DisplayObject> ret = NullRef;
 	this->incRef();
 	ret = DisplayObjectContainer::hitTestImpl(_MR(this),x,y, type);
-	if(!ret && isHittable(type))
+
+	if (ret.isNull() && hitArea.isNull())
 	{
 		//The coordinates are locals
 		this->incRef();
-		return TokenContainer::hitTestImpl(_MR(this),x,y, type);
+		ret = TokenContainer::hitTestImpl(_MR(this),x,y, type);
+
+		if (!ret.isNull())  //Did we hit the sprite?
+		{
+			if (!hitTarget.isNull())
+			{
+				//Another Sprite has registered us
+				//as its hitArea -> relay the hit
+				if (hitTarget->isHittable(type))
+					ret = hitTarget;
+				else
+					ret.reset();
+			}
+			else if (!isHittable(type))
+			{
+				//Hit ignored due to a disabled HIT_TYPE
+				ret.reset();
+			}
+		}
 	}
-	else
-		return ret;
+
+	return ret;
 }
 
 ASFUNCTIONBODY(Sprite,_constructor)
@@ -958,17 +1015,20 @@ void MovieClip::sinit(Class_base* c)
 	c->setDeclaredMethodByQName("gotoAndPlay","",Class<IFunction>::getFunction(gotoAndPlay),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("nextFrame","",Class<IFunction>::getFunction(nextFrame),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("addFrameScript","",Class<IFunction>::getFunction(addFrameScript),NORMAL_METHOD,true);
+	REGISTER_GETTER_SETTER(c, enabled);
 }
+
+ASFUNCTIONBODY_GETTER_SETTER(MovieClip, enabled);
 
 void MovieClip::buildTraits(ASObject* o)
 {
 }
 
-MovieClip::MovieClip(Class_base* c):Sprite(c),fromDefineSpriteTag(false),totalFrames_unreliable(1)
+MovieClip::MovieClip(Class_base* c):Sprite(c),fromDefineSpriteTag(false),totalFrames_unreliable(1),enabled(true)
 {
 }
 
-MovieClip::MovieClip(Class_base* c, const FrameContainer& f, bool defineSpriteTag):Sprite(c),FrameContainer(f),fromDefineSpriteTag(defineSpriteTag),totalFrames_unreliable(frames.size())
+MovieClip::MovieClip(Class_base* c, const FrameContainer& f, bool defineSpriteTag):Sprite(c),FrameContainer(f),fromDefineSpriteTag(defineSpriteTag),totalFrames_unreliable(frames.size()),enabled(true)
 {
 	//For sprites totalFrames_unreliable is the actual frame count
 	//For the root movie, it's the frame count from the header
@@ -981,15 +1041,71 @@ void MovieClip::finalize()
 	frameScripts.clear();
 }
 
-uint32_t MovieClip::getFrameIdByLabel(const tiny_string& l) const
+/* Returns a Scene_data pointer for a scene called sceneName, or for
+ * the current scene if sceneName is empty. Returns NULL, if not found.
+ */
+const Scene_data *MovieClip::getScene(const tiny_string &sceneName) const
 {
-	for(size_t i=0;i<scenes.size();++i)
+	if (sceneName.empty())
 	{
-		for(size_t j=0;j<scenes[i].labels.size();++j)
-			if(scenes[i].labels[j].name == l)
-				return scenes[i].labels[j].frame;
+		return &scenes[getCurrentScene()];
 	}
-	return 0xffffffff;
+	else
+	{
+		//Find scene by name
+		for (auto it=scenes.begin(); it!=scenes.end(); ++it)
+		{
+			if (it->name == sceneName)
+				return &*it;
+		}
+	}
+
+	return NULL;  //Not found!
+}
+
+/* Return global frame index for a named frame. If sceneName is not
+ * empty, return a frame only if it belong to the named scene.
+ */
+uint32_t MovieClip::getFrameIdByLabel(const tiny_string& label, const tiny_string& sceneName) const
+{
+	if (sceneName.empty())
+	{
+		//Find frame in any scene
+		for(size_t i=0;i<scenes.size();++i)
+		{
+			for(size_t j=0;j<scenes[i].labels.size();++j)
+				if(scenes[i].labels[j].name == label)
+					return scenes[i].labels[j].frame;
+		}
+	}
+	else
+	{
+		//Find frame in the named scene only
+		const Scene_data *scene = getScene(sceneName);
+		if (scene)
+		{
+			for(size_t j=0;j<scene->labels.size();++j)
+			{
+				if(scene->labels[j].name == label)
+					return scene->labels[j].frame;
+			}
+		}
+	}
+
+	return FRAME_NOT_FOUND;
+}
+
+/* Return global frame index for frame i (zero-based) in a scene
+ * called sceneName. If sceneName is empty, use the current scene.
+ */
+uint32_t MovieClip::getFrameIdByNumber(uint32_t i, const tiny_string& sceneName) const
+{
+	const Scene_data *sceneData = getScene(sceneName);
+	if (!sceneData)
+		return FRAME_NOT_FOUND;
+
+	//Should we check if the scene has at least i frames?
+	return sceneData->startframe + i;
 }
 
 ASFUNCTIONBODY(MovieClip,addFrameScript)
@@ -1038,16 +1154,16 @@ ASFUNCTIONBODY(MovieClip,play)
 ASObject* MovieClip::gotoAnd(ASObject* const* args, const unsigned int argslen, bool stop)
 {
 	uint32_t next_FP;
+	tiny_string sceneName;
 	assert_and_throw(argslen==1 || argslen==2);
 	if(argslen==2)
 	{
-		LOG(LOG_NOT_IMPLEMENTED,"MovieClip.gotoAndStop/Play with two args is not supported yet");
-		return NULL;
+		sceneName = args[1]->toString();
 	}
 	if(args[0]->getObjectType()==T_STRING)
 	{
-		uint32_t dest=getFrameIdByLabel(args[0]->toString());
-		if(dest==0xffffffff)
+		uint32_t dest=getFrameIdByLabel(args[0]->toString(), sceneName);
+		if(dest==FRAME_NOT_FOUND)
 			throw Class<ArgumentError>::getInstanceS("gotoAndPlay/Stop: label not found");
 
 		next_FP = dest;
@@ -1057,8 +1173,8 @@ ASObject* MovieClip::gotoAnd(ASObject* const* args, const unsigned int argslen, 
 		uint32_t inFrameNo = args[0]->toInt();
 		if(inFrameNo == 0)
 			return NULL; /*this behavior was observed by testing */
-		/* "the current scene determines the global frame number" */
-		next_FP = scenes[getCurrentScene()].startframe + inFrameNo - 1;
+
+		next_FP = getFrameIdByNumber(inFrameNo-1, sceneName);
 		if(next_FP >= getFramesLoaded())
 		{
 			LOG(LOG_ERROR, next_FP << "= next_FP >= state.max_FP = " << getFramesLoaded());
@@ -1124,7 +1240,7 @@ ASFUNCTIONBODY(MovieClip,_getScenes)
 	return ret;
 }
 
-uint32_t MovieClip::getCurrentScene()
+uint32_t MovieClip::getCurrentScene() const
 {
 	for(size_t i=0;i<scenes.size();++i)
 	{
@@ -1244,13 +1360,16 @@ void DisplayObjectContainer::sinit(Class_base* c)
 	c->setDeclaredMethodByQName("contains","",Class<IFunction>::getFunction(contains),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("mouseChildren","",Class<IFunction>::getFunction(_setMouseChildren),SETTER_METHOD,true);
 	c->setDeclaredMethodByQName("mouseChildren","",Class<IFunction>::getFunction(_getMouseChildren),GETTER_METHOD,true);
+	REGISTER_GETTER_SETTER(c, tabChildren);
 }
+
+ASFUNCTIONBODY_GETTER_SETTER(DisplayObjectContainer, tabChildren);
 
 void DisplayObjectContainer::buildTraits(ASObject* o)
 {
 }
 
-DisplayObjectContainer::DisplayObjectContainer(Class_base* c):InteractiveObject(c),mouseChildren(true)
+DisplayObjectContainer::DisplayObjectContainer(Class_base* c):InteractiveObject(c),mouseChildren(true),tabChildren(true)
 {
 }
 
@@ -1300,15 +1419,7 @@ void DisplayObjectContainer::insertLegacyChildAt(uint32_t depth, DisplayObject* 
 		objName.name_type=multiname::NAME_STRING;
 		objName.name_s_id=getSys()->getUniqueStringId(obj->name);
 		objName.ns.push_back(nsNameAndKind("",NAMESPACE));
-		//TODO: discuss the following comment with aajanki
-		// If this function is called by PlaceObject tag
-		// before the properties are initialized, we need to
-		// initialize the property here to make sure that it
-		// will be a declared property and not a dynamic one.
-		if(hasPropertyByMultiname(objName,true,false))
-			setVariableByMultiname(objName,obj,ASObject::CONST_NOT_ALLOWED);
-		else
-			setVariableByQName(objName.name_s_id,objName.ns[0],obj,DYNAMIC_TRAIT);
+		setVariableByMultiname(objName,obj,ASObject::CONST_NOT_ALLOWED);
 	}
 
 	depthToLegacyChild.insert(boost::bimap<uint32_t,DisplayObject*>::value_type(depth,obj));
@@ -1341,7 +1452,7 @@ void DisplayObjectContainer::finalize()
 	dynamicDisplayList.clear();
 }
 
-InteractiveObject::InteractiveObject(Class_base* c):DisplayObject(c),mouseEnabled(true),doubleClickEnabled(false)
+InteractiveObject::InteractiveObject(Class_base* c):DisplayObject(c),mouseEnabled(true),doubleClickEnabled(false),tabEnabled(false),tabIndex(-1)
 {
 }
 
@@ -1390,6 +1501,12 @@ ASFUNCTIONBODY(InteractiveObject,_getDoubleClickEnabled)
 	return abstract_b(th->doubleClickEnabled);
 }
 
+void InteractiveObject::finalize()
+{
+	DisplayObject::finalize();
+	contextMenu.reset();
+}
+
 void InteractiveObject::buildTraits(ASObject* o)
 {
 }
@@ -1402,14 +1519,35 @@ void InteractiveObject::sinit(Class_base* c)
 	c->setDeclaredMethodByQName("mouseEnabled","",Class<IFunction>::getFunction(_getMouseEnabled),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("doubleClickEnabled","",Class<IFunction>::getFunction(_setDoubleClickEnabled),SETTER_METHOD,true);
 	c->setDeclaredMethodByQName("doubleClickEnabled","",Class<IFunction>::getFunction(_getDoubleClickEnabled),GETTER_METHOD,true);
+	REGISTER_GETTER_SETTER(c, contextMenu);
+	REGISTER_GETTER_SETTER(c, tabEnabled);
+	REGISTER_GETTER_SETTER(c, tabIndex);
 }
 
-void DisplayObjectContainer::dumpDisplayList()
+ASFUNCTIONBODY_GETTER_SETTER(InteractiveObject, contextMenu);
+ASFUNCTIONBODY_GETTER_SETTER(InteractiveObject, tabEnabled);
+ASFUNCTIONBODY_GETTER_SETTER(InteractiveObject, tabIndex);
+
+void DisplayObjectContainer::dumpDisplayList(unsigned int level)
 {
-	LOG(LOG_INFO, "Size: " << dynamicDisplayList.size());
+	tiny_string indent(std::string(2*level, ' '));
 	list<_R<DisplayObject> >::const_iterator it=dynamicDisplayList.begin();
 	for(;it!=dynamicDisplayList.end();++it)
-		LOG(LOG_INFO, (*it)->getClass()->class_name);
+	{
+		Vector2f pos = (*it)->getXY();
+		LOG(LOG_INFO, indent << (*it)->getClass()->class_name <<
+		    " (" << pos.x << "," << pos.y << ") " <<
+		    (*it)->getNominalWidth() << "x" << (*it)->getNominalHeight() << " " <<
+		    ((*it)->isVisible() ? "v" : "") <<
+		    ((*it)->isMask() ? "m" : "") << " " <<
+		    "a=" << (*it)->clippedAlpha() << " " <<
+		    it->getPtr());
+
+		if ((*it)->is<DisplayObjectContainer>())
+		{
+			(*it)->as<DisplayObjectContainer>()->dumpDisplayList(level+1);
+		}
+	}
 }
 
 void DisplayObjectContainer::setOnStage(bool staged)
@@ -1624,7 +1762,7 @@ ASFUNCTIONBODY(DisplayObjectContainer,removeChild)
 	DisplayObject* d=Class<DisplayObject>::cast(args[0]);
 	d->incRef();
 	if(!th->_removeChild(_MR(d)))
-		throw Class<ArgumentError>::getInstanceS("removeChild: child not in list");
+		throw Class<ArgumentError>::getInstanceS("removeChild: child not in list", 2025);
 
 	//As we return the child we have to incRef it
 	d->incRef();
@@ -1643,7 +1781,7 @@ ASFUNCTIONBODY(DisplayObjectContainer,removeChildAt)
 	{
 		Locker l(th->mutexDisplayList);
 		if(index>=int(th->dynamicDisplayList.size()) || index<0)
-			throw Class<RangeError>::getInstanceS("removeChildAt: invalid index");
+			throw Class<RangeError>::getInstanceS("removeChildAt: invalid index", 2025);
 		list<_R<DisplayObject>>::iterator it=th->dynamicDisplayList.begin();
 		for(int32_t i=0;i<index;i++)
 			++it;
@@ -1721,7 +1859,7 @@ ASFUNCTIONBODY(DisplayObjectContainer,swapChildren)
 		std::list<_R<DisplayObject>>::iterator it1=find(th->dynamicDisplayList.begin(),th->dynamicDisplayList.end(),child1);
 		std::list<_R<DisplayObject>>::iterator it2=find(th->dynamicDisplayList.begin(),th->dynamicDisplayList.end(),child2);
 		if(it1==th->dynamicDisplayList.end() || it2==th->dynamicDisplayList.end())
-			throw Class<ArgumentError>::getInstanceS("Argument is not child of this object");
+			throw Class<ArgumentError>::getInstanceS("Argument is not child of this object", 2025);
 
 		th->dynamicDisplayList.insert(it1, child2);
 		th->dynamicDisplayList.insert(it2, child1);
@@ -1762,7 +1900,7 @@ ASFUNCTIONBODY(DisplayObjectContainer,getChildAt)
 	assert_and_throw(argslen==1);
 	unsigned int index=args[0]->toInt();
 	if(index>=th->dynamicDisplayList.size())
-		throw Class<RangeError>::getInstanceS("getChildAt: invalid index");
+		throw Class<RangeError>::getInstanceS("getChildAt: invalid index", 2025);
 	list<_R<DisplayObject>>::iterator it=th->dynamicDisplayList.begin();
 	for(unsigned int i=0;i<index;i++)
 		++it;
@@ -1782,7 +1920,7 @@ int DisplayObjectContainer::getChildIndex(_R<DisplayObject> child)
 		ret++;
 		++it;
 		if(it == dynamicDisplayList.end())
-			throw Class<ArgumentError>::getInstanceS("getChildIndex: child not in list");
+			throw Class<ArgumentError>::getInstanceS("getChildIndex: child not in list", 2025);
 	}
 	while(1);
 	return ret;
@@ -1888,6 +2026,8 @@ void Stage::sinit(Class_base* c)
 	c->setDeclaredMethodByQName("stageVideos","",Class<IFunction>::getFunction(_getStageVideos),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("focus","",Class<IFunction>::getFunction(_getFocus),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("focus","",Class<IFunction>::getFunction(_setFocus),SETTER_METHOD,true);
+	// override the setter from DisplayObjectContainer
+	c->setDeclaredMethodByQName("tabChildren","",Class<IFunction>::getFunction(_setTabChildren),SETTER_METHOD,true);
 	REGISTER_GETTER_SETTER(c,displayState);
 }
 
@@ -2056,6 +2196,14 @@ ASFUNCTIONBODY(Stage,_setFocus)
 	_NR<InteractiveObject> focus;
 	ARG_UNPACK(focus);
 	th->setFocusTarget(focus);
+	return NULL;
+}
+
+ASFUNCTIONBODY(Stage,_setTabChildren)
+{
+	// The specs says that Stage.tabChildren should throw
+	// IllegalOperationError, but testing shows that instead of
+	// throwing this simply ignores the value.
 	return NULL;
 }
 
@@ -2389,7 +2537,7 @@ ASFUNCTIONBODY(Graphics,drawTriangles)
 	if ((indices.isNull() && (vertices->size() % 6 != 0)) || 
 	    (!indices.isNull() && (indices->size() % 3 != 0)))
 	{
-		throw Class<ArgumentError>::getInstanceS("Error #2004");
+		throwError<ArgumentError>(kInvalidParamError);
 	}
 
 	unsigned int numvertices=vertices->size()/2;
@@ -2419,7 +2567,7 @@ ASFUNCTIONBODY(Graphics,drawTriangles)
 		}
 		else
 		{
-			throw Class<ArgumentError>::getInstanceS("Error #2004");
+			throwError<ArgumentError>(kInvalidParamError);
 		}
 
 		th->owner->getTextureSize(&texturewidth, &textureheight);
@@ -2504,7 +2652,7 @@ ASFUNCTIONBODY(Graphics,lineStyle)
 	}
 	uint32_t color = 0;
 	uint8_t alpha = 255;
-	UI16_SWF thickness = UI16_SWF(args[0]->toNumber() * 20);
+	UI16_SWF thickness = UI16_SWF(imax(args[0]->toNumber() * 20, 0));
 	if (argslen >= 2)
 		color = args[1]->toUInt();
 	if (argslen >= 3)
@@ -2637,7 +2785,7 @@ ASFUNCTIONBODY(Graphics,beginBitmapFill)
 	if(!matrix.isNull())
 		style.Matrix = matrix->getMATRIX();
 
-	style.bitmap = *static_cast<BitmapContainer*>((bitmap.getPtr()));
+	style.bitmap = bitmap->getBitmapContainer();
 	th->owner->tokens.emplace_back(GeomToken(SET_FILL, style));
 	return NULL;
 }
@@ -2721,7 +2869,7 @@ void StageDisplayState::sinit(Class_base* c)
 }
 
 Bitmap::Bitmap(Class_base* c, _NR<LoaderInfo> li, std::istream *s, FILE_TYPE type):
-	DisplayObject(c),TokenContainer(this)
+	DisplayObject(c),TokenContainer(this),smoothing(false)
 {
 	if(li)
 	{
@@ -2749,10 +2897,10 @@ Bitmap::Bitmap(Class_base* c, _NR<LoaderInfo> li, std::istream *s, FILE_TYPE typ
 	switch(type)
 	{
 		case FT_JPEG:
-			bitmapData->fromJPEG(*s);
+			bitmapData->getBitmapContainer()->fromJPEG(*s);
 			break;
 		case FT_PNG:
-			bitmapData->fromPNG(*s);
+			bitmapData->getBitmapContainer()->fromPNG(*s);
 			break;
 		case FT_GIF:
 			LOG(LOG_NOT_IMPLEMENTED, _("GIFs are not yet supported"));
@@ -2764,7 +2912,7 @@ Bitmap::Bitmap(Class_base* c, _NR<LoaderInfo> li, std::istream *s, FILE_TYPE typ
 	Bitmap::updatedData();
 }
 
-Bitmap::Bitmap(Class_base* c, _R<BitmapData> data) : DisplayObject(c),TokenContainer(this)
+Bitmap::Bitmap(Class_base* c, _R<BitmapData> data) : DisplayObject(c),TokenContainer(this),smoothing(false)
 {
 	bitmapData = data;
 	bitmapData->addUser(this);
@@ -2789,22 +2937,20 @@ void Bitmap::sinit(Class_base* c)
 	c->setConstructor(Class<IFunction>::getFunction(_constructor));
 	c->setSuper(Class<DisplayObject>::getRef());
 	REGISTER_GETTER_SETTER(c,bitmapData);
+	REGISTER_GETTER_SETTER(c,smoothing);
 }
 
 ASFUNCTIONBODY(Bitmap,_constructor)
 {
 	tiny_string _pixelSnapping;
-	bool _smoothing;
 	_NR<BitmapData> _bitmapData;
 	Bitmap* th = obj->as<Bitmap>();
-	ARG_UNPACK(_bitmapData, NullRef)(_pixelSnapping, "auto")(_smoothing, false);
+	ARG_UNPACK(_bitmapData, NullRef)(_pixelSnapping, "auto")(th->smoothing, false);
 
 	DisplayObject::_constructor(obj,NULL,0);
 
 	if(_pixelSnapping!="auto")
 		LOG(LOG_NOT_IMPLEMENTED, "Bitmap constructor doesn't support pixelSnapping");
-	if(_smoothing)
-		LOG(LOG_NOT_IMPLEMENTED, "Bitmap constructor doesn't support smoothing");
 
 	if(!_bitmapData.isNull())
 	{
@@ -2825,23 +2971,32 @@ void Bitmap::onBitmapData(_NR<BitmapData> old)
 	Bitmap::updatedData();
 }
 
+void Bitmap::onSmoothingChanged(bool /*old*/)
+{
+	updatedData();
+}
+
 ASFUNCTIONBODY_GETTER_SETTER_CB(Bitmap,bitmapData,onBitmapData);
+ASFUNCTIONBODY_GETTER_SETTER_CB(Bitmap,smoothing,onSmoothingChanged);
 
 void Bitmap::updatedData()
 {
 	tokens.clear();
 
-	if(bitmapData.isNull())
+	if(bitmapData.isNull() || bitmapData->getBitmapContainer().isNull())
 		return;
 
 	FILLSTYLE style(0xff);
-	style.FillStyleType=CLIPPED_BITMAP;
-	style.bitmap=*static_cast<BitmapContainer*>(bitmapData.getPtr());
+	if (smoothing)
+		style.FillStyleType=CLIPPED_BITMAP;
+	else
+		style.FillStyleType=NON_SMOOTHED_CLIPPED_BITMAP;
+	style.bitmap=bitmapData->getBitmapContainer();
 	tokens.emplace_back(GeomToken(SET_FILL, style));
 	tokens.emplace_back(GeomToken(MOVE, Vector2(0, 0)));
-	tokens.emplace_back(GeomToken(STRAIGHT, Vector2(0, bitmapData->getHeight())));
-	tokens.emplace_back(GeomToken(STRAIGHT, Vector2(bitmapData->getWidth(), bitmapData->getHeight())));
-	tokens.emplace_back(GeomToken(STRAIGHT, Vector2(bitmapData->getWidth(), 0)));
+	tokens.emplace_back(GeomToken(STRAIGHT, Vector2(0, style.bitmap->getHeight())));
+	tokens.emplace_back(GeomToken(STRAIGHT, Vector2(style.bitmap->getWidth(), style.bitmap->getHeight())));
+	tokens.emplace_back(GeomToken(STRAIGHT, Vector2(style.bitmap->getWidth(), 0)));
 	tokens.emplace_back(GeomToken(STRAIGHT, Vector2(0, 0)));
 	if(onStage)
 		requestInvalidation(getSys());
@@ -2955,6 +3110,8 @@ SimpleButton::SimpleButton(Class_base* c, DisplayObject *dS, DisplayObject *hTS,
 	if(hTS) hTS->initFrame();
 	if(oS) oS->initFrame();
 	if(uS) uS->initFrame();
+
+	tabEnabled = true;
 }
 
 void SimpleButton::finalize()
@@ -3194,6 +3351,10 @@ void MovieClip::initFrame()
 	if((int)state.FP < state.last_FP)
 		purgeLegacyChildren();
 
+	//Declared traits must exists before legacy objects are added
+	if (getClass())
+		getClass()->setupDeclaredTraits(this);
+
 	if(getFramesLoaded())
 	{
 		std::list<Frame>::iterator iter=frames.begin();
@@ -3320,4 +3481,37 @@ ASFUNCTIONBODY(Shader,_constructor)
 {
 	LOG(LOG_NOT_IMPLEMENTED, _("Shader class is unimplemented."));
 	return NULL;
+}
+
+void BitmapDataChannel::sinit(Class_base* c)
+{
+	c->setConstructor(NULL);
+	c->setSuper(Class<ASObject>::getRef());
+	c->setVariableByQName("ALPHA","",abstract_ui(8),DECLARED_TRAIT);
+	c->setVariableByQName("BLUE","",abstract_ui(4),DECLARED_TRAIT);
+	c->setVariableByQName("GREEN","",abstract_ui(2),DECLARED_TRAIT);
+	c->setVariableByQName("RED","",abstract_ui(1),DECLARED_TRAIT);
+}
+
+unsigned int BitmapDataChannel::channelShift(uint32_t channelConstant)
+{
+	unsigned int shift;
+	switch (channelConstant)
+	{
+		case BitmapDataChannel::ALPHA:
+			shift = 24;
+			break;
+		case BitmapDataChannel::RED:
+			shift = 16;
+			break;
+		case BitmapDataChannel::GREEN:
+			shift = 8;
+			break;
+		case BitmapDataChannel::BLUE:
+		default: // check
+			shift = 0;
+			break;
+	}
+
+	return shift;
 }

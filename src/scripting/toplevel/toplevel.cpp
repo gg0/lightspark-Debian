@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2009-2012  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2009-2013  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -262,7 +262,7 @@ ASObject* SyntheticFunction::call(ASObject* obj, ASObject* const* args, uint32_t
 		for(uint32_t i=0;i<numArgs;i++)
 			args[i]->decRef();
 		obj->decRef();
-		throw Class<ASError>::getInstanceS("Error #1023: Stack overflow occurred");
+		throwError<ASError>(kStackOverflowError);
 	}
 
 	/* resolve argument and return types */
@@ -289,7 +289,10 @@ ASObject* SyntheticFunction::call(ASObject* obj, ASObject* const* args, uint32_t
 		 * We won't throw if all arguments are of 'Any' type.
 		 * This is in accordance with the proprietary player. */
 		if(isMethod() || mi->hasExplicitTypes)
-			throw Class<ArgumentError>::getInstanceS("Error #1063: Not enough arguments provided");
+			throwError<ArgumentError>(kWrongArgumentCountError,
+						  obj ? obj->getClassName() : "",
+						  Integer::toString(mi->numArgs()-mi->numOptions()),
+						  Integer::toString(numArgs));
 	}
 
 	//For sufficiently hot methods, optimize them to the internal bytecode
@@ -593,12 +596,14 @@ TRISTATE Null::isLess(ASObject* r)
 
 int32_t Null::getVariableByMultiname_i(const multiname& name)
 {
-	throw Class<TypeError>::getInstanceS("Error #1009: null has no properties.");
+	throwError<TypeError>(kConvertNullToObjectError);
+	return 0;
 }
 
 _NR<ASObject> Null::getVariableByMultiname(const multiname& name, GET_VARIABLE_OPTION opt)
 {
-	throw Class<TypeError>::getInstanceS("Error #1009: null has no properties.");
+	throwError<TypeError>(kConvertNullToObjectError);
+	return NullRef;
 }
 
 int Null::toInt()
@@ -616,7 +621,7 @@ void Null::serialize(ByteArray* out, std::map<tiny_string, uint32_t>& stringMap,
 void Null::setVariableByMultiname(const multiname& name, ASObject* o, CONST_ALLOWED_FLAG allowConst)
 {
 	o->decRef();
-	throw Class<TypeError>::getInstanceS("Cannot set on null");
+	throwError<TypeError>(kConvertNullToObjectError);
 }
 
 ASObject* Void::coerce(ASObject* o) const
@@ -759,12 +764,12 @@ ASObject* Class_base::coerce(ASObject* o) const
 		|| (class_name.name=="Class" && class_name.ns==""))
 		       return o; /* 'this' is the type of a class */
 	       else
-		       throw Class<TypeError>::getInstanceS("Error #1034: Wrong type");
+		       throwError<TypeError>(kCheckTypeFailedError, o->getClassName(), getQualifiedClassName());
 	}
 	//o->getClass() == NULL for primitive types
 	//those are handled in overloads Class<Number>::coerce etc.
 	if(!o->getClass() || !o->getClass()->isSubClass(this))
-		throw Class<TypeError>::getInstanceS("Error #1034: Wrong type");
+		throwError<TypeError>(kCheckTypeFailedError, o->getClassName(), getQualifiedClassName());
 	return o;
 }
 
@@ -847,9 +852,9 @@ void Class_base::setConstructor(IFunction* c)
 	constructor=c;
 }
 
-void Class_base::handleConstruction(ASObject* target, ASObject* const* args, unsigned int argslen, bool buildAndLink)
+void Class_base::setupDeclaredTraits(ASObject *target)
 {
-	if(buildAndLink)
+	if (!target->traitsInitialized)
 	{
 	#ifndef NDEBUG
 		assert_and_throw(!target->initialized);
@@ -860,9 +865,20 @@ void Class_base::handleConstruction(ASObject* target, ASObject* const* args, uns
 		recursiveBuild(target);
 		//And restore it
 		target->implEnable=bak;
+
 	#ifndef NDEBUG
 		target->initialized=true;
 	#endif
+		target->traitsInitialized = true;
+	}
+}
+
+void Class_base::handleConstruction(ASObject* target, ASObject* const* args, unsigned int argslen, bool buildAndLink)
+{
+	if(buildAndLink)
+	{
+		setupDeclaredTraits(target);
+
 		//Tell the object that the construction is complete
 		target->constructionComplete();
 	}
@@ -1021,30 +1037,32 @@ void Class_base::linkInterface(Class_base* c) const
 	}
 }
 
-bool Class_base::isSubClass(const Class_base* cls) const
+bool Class_base::isSubClass(const Class_base* cls, bool considerInterfaces) const
 {
 	check();
 	if(cls==this || cls==Class<ASObject>::getClass())
 		return true;
 
 	//Now check the interfaces
-	for(unsigned int i=0;i<getInterfaces().size();i++)
+	if (considerInterfaces)
 	{
-		if(getInterfaces()[i]->isSubClass(cls))
-			return true;
+		for(unsigned int i=0;i<getInterfaces().size();i++)
+		{
+			if(getInterfaces()[i]->isSubClass(cls, considerInterfaces))
+				return true;
+		}
 	}
 
 	//Now ask the super
-	if(super && super->isSubClass(cls))
+	if(super && super->isSubClass(cls, considerInterfaces))
 		return true;
 	return false;
 }
 
 tiny_string Class_base::getQualifiedClassName() const
 {
-	//TODO: use also the namespace
 	if(class_index==-1)
-		return class_name.name;
+		return class_name.getQualifiedName();
 	else
 	{
 		assert_and_throw(context);
@@ -1790,7 +1808,7 @@ IFunction* Class<IFunction>::getNopFunction()
 ASObject* Class<IFunction>::getInstance(bool construct, ASObject* const* args, const unsigned int argslen, Class_base* realClass)
 {
 	if (argslen > 0)
-		throw Class<EvalError>::getInstanceS("Error #1066: Function('function body') is not supported");
+		throwError<EvalError>(kFunctionConstructorError);
 	return getNopFunction();
 }
 

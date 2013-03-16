@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2009-2012  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2009-2013  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -176,7 +176,7 @@ ASFUNCTIONBODY(Number,_toString)
 	if(Class<Number>::getClass()->prototype->getObj() == obj)
 		return Class<ASString>::getInstanceS("0");
 	if(!obj->is<Number>())
-		throw Class<TypeError>::getInstanceS("Error #1004: Number.toString is not generic");
+		throwError<TypeError>(kInvokeOnIncompatibleObjectError, "Number.toString");
 	Number* th=static_cast<Number*>(obj);
 	int radix=10;
 	ARG_UNPACK (radix,10);
@@ -233,7 +233,7 @@ tiny_string Number::toString(number_t val)
 tiny_string Number::toStringRadix(number_t val, int radix)
 {
 	if(radix < 2 || radix > 36)
-		throw Class<RangeError>::getInstanceS("Error #1003");
+		throwError<RangeError>(kInvalidRadixError, Integer::toString(radix));
 
 	if(std::isnan(val) || std::isinf(val))
 		return Number::toString(val);
@@ -275,6 +275,7 @@ void Number::sinit(Class_base* c)
 	c->prototype->setVariableByQName("toString",AS3,Class<IFunction>::getFunction(Number::_toString),DYNAMIC_TRAIT);
 	c->prototype->setVariableByQName("toLocaleString",AS3,Class<IFunction>::getFunction(Number::_toString),DYNAMIC_TRAIT);
 	c->prototype->setVariableByQName("toFixed",AS3,Class<IFunction>::getFunction(Number::toFixed),DYNAMIC_TRAIT);
+	c->prototype->setVariableByQName("valueOf",AS3,Class<IFunction>::getFunction(_valueOf),DYNAMIC_TRAIT);
 }
 
 ASFUNCTIONBODY(Number,_constructor)
@@ -295,7 +296,7 @@ ASFUNCTIONBODY(Number,toFixed)
 	int fractiondigits=0;
 	ARG_UNPACK (fractiondigits,0);
 	if (fractiondigits < 0 || fractiondigits > 20)
-		throw Class<RangeError>::getInstanceS("Error #1002");
+		throwError<RangeError>(kInvalidPrecisionError, Integer::toString(fractiondigits));
 	if(std::isnan(val))
 		return  Class<ASString>::getInstanceS("NaN");
 	number_t fractpart, intpart;
@@ -325,6 +326,17 @@ ASFUNCTIONBODY(Number,toFixed)
 	if ( val < 0)
 		res = tiny_string::fromChar('-')+res;
 	return Class<ASString>::getInstanceS(res);
+}
+
+ASFUNCTIONBODY(Number,_valueOf)
+{
+	if(Class<Number>::getClass()->prototype->getObj() == obj)
+		return abstract_d(0.);
+
+	if(!obj->is<Number>())
+		throwError<TypeError>(kInvokeOnIncompatibleObjectError);
+
+	return abstract_d(obj->as<Number>()->val);
 }
 
 void Number::serialize(ByteArray* out, std::map<tiny_string, uint32_t>& stringMap,

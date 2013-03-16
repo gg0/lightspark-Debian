@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2009-2012  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2009-2013  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -47,7 +47,8 @@ using namespace lightspark;
 		if(th->nodes.size()==1) \
 			return XML::name(th->nodes[0].getPtr(), args, argslen); \
 		else \
-			throw Class<TypeError>::getInstanceS("Error #1086: The method only works on lists of one item."); \
+			throwError<TypeError>(kXMLOnlyWorksWithOneItemLists, #name); \
+		return NULL; \
 	}
 
 XMLList::XMLList(Class_base* c):ASObject(c),nodes(c->memoryAccount),constructed(false)
@@ -88,6 +89,7 @@ void XMLList::sinit(Class_base* c)
 	c->setDeclaredMethodByQName("copy",AS3,Class<IFunction>::getFunction(copy),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("descendants",AS3,Class<IFunction>::getFunction(descendants),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("elements",AS3,Class<IFunction>::getFunction(elements),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("normalize",AS3,Class<IFunction>::getFunction(normalize),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("parent",AS3,Class<IFunction>::getFunction(parent),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("hasSimpleContent",AS3,Class<IFunction>::getFunction(_hasSimpleContent),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("hasComplexContent",AS3,Class<IFunction>::getFunction(_hasComplexContent),NORMAL_METHOD,true);
@@ -211,7 +213,10 @@ _R<XML> XMLList::reduceToXML() const
 	if(nodes.size()==1)
 		return nodes[0];
 	else
-		throw Class<TypeError>::getInstanceS("#1080");
+	{
+		throwError<TypeError>(kIllegalNamespaceError);
+		return nodes[0]; // not reached, the previous line throws always
+	}
 }
 
 ASFUNCTIONBODY(XMLList,_getLength)
@@ -428,6 +433,46 @@ ASFUNCTIONBODY(XMLList,attributes)
 		res->nodes.insert(res->nodes.end(), nodeAttributes.begin(), nodeAttributes.end());
 	}
 	return res;
+}
+
+ASFUNCTIONBODY(XMLList,normalize)
+{
+	XMLList *th = obj->as<XMLList>();
+	auto it=th->nodes.begin();
+	while (it!=th->nodes.end())
+	{
+		if ((*it)->getNodeKind() == XML_ELEMENT_NODE)
+		{
+			(*it)->normalize();
+			++it;
+		}
+		else if ((*it)->getNodeKind() == XML_TEXT_NODE)
+		{
+			if ((*it)->toString().empty())
+			{
+				it = th->nodes.erase(it);
+			}
+			else
+			{
+				_R<XML> textnode = *it;
+
+				++it;
+				while (it!=th->nodes.end() && (*it)->getNodeKind() == XML_TEXT_NODE)
+				{
+					textnode->addTextContent((*it)->toString());
+					it = th->nodes.erase(it);
+				}
+			}
+
+		}
+		else
+		{
+			++it;
+		}
+	}
+
+	th->incRef();
+	return th;
 }
 
 _NR<ASObject> XMLList::getVariableByMultiname(const multiname& name, GET_VARIABLE_OPTION opt)

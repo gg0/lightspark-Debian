@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2009-2012  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2009-2013  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -20,9 +20,11 @@
 #ifndef SCRIPTING_FLASH_TEXT_FLASHTEXT_H
 #define SCRIPTING_FLASH_TEXT_FLASHTEXT_H 1
 
+#include <libxml++/parsers/saxparser.h>
 #include "compat.h"
 #include "asobject.h"
 #include "scripting/flash/display/flashdisplay.h"
+#include "scripting/toplevel/Array.h"
 
 namespace lightspark
 {
@@ -53,6 +55,26 @@ public:
 class TextField: public InteractiveObject, public TextData
 {
 private:
+	/*
+	 * A parser for the HTML subset supported by TextField.
+	 */
+	class HtmlTextParser : public xmlpp::SaxParser {
+	protected:
+		TextData *textdata;
+
+		uint32_t parseFontSize(const Glib::ustring& s, uint32_t currentFontSize);
+		void on_start_element(const Glib::ustring& name, const xmlpp::SaxParser::AttributeList& attributes);
+		void on_end_element(const Glib::ustring& name);
+		void on_characters(const Glib::ustring& characters);
+	public:
+		HtmlTextParser() : textdata(NULL) {};
+		//Stores the text and formating into a TextData object
+		void parseTextAndFormating(const tiny_string& html, TextData *dest);
+	};
+
+public:
+	enum EDIT_TYPE {READ_ONLY, EDITABLE};
+private:
 	_NR<DisplayObject> hitTestImpl(_NR<DisplayObject> last, number_t x, number_t y, HIT_TYPE type);
 	void renderImpl(RenderContext& ctxt) const;
 	bool boundsRect(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const;
@@ -61,16 +83,20 @@ private:
 	void updateText(const tiny_string& new_text);
 	//Computes and changes (text)width and (text)height using Pango
 	void updateSizes();
+	tiny_string toHtmlText();
+	EDIT_TYPE type;
 public:
-	TextField(Class_base* c):InteractiveObject(c) {};
-	TextField(Class_base* c,const TextData& textData):InteractiveObject(c),TextData(textData) {};
+	TextField(Class_base* c, const TextData& textData=TextData(), bool _selectable=true, bool readOnly=true);
 	static void sinit(Class_base* c);
 	static void buildTraits(ASObject* o);
+	void setHtmlText(const tiny_string& html);
 	ASFUNCTION(appendText);
 	ASFUNCTION(_getWidth);
 	ASFUNCTION(_setWidth);
 	ASFUNCTION(_getHeight);
 	ASFUNCTION(_setHeight);
+	ASFUNCTION(_getHtmlText);
+	ASFUNCTION(_setHtmlText);
 	ASFUNCTION(_getText);
 	ASFUNCTION(_setText);
 	ASFUNCTION(_setAutoSize);
@@ -83,20 +109,46 @@ public:
 	ASFUNCTION(_setTextFormat);
 	ASFUNCTION(_getDefaultTextFormat);
 	ASFUNCTION(_setDefaultTextFormat);
-	
+	ASFUNCTION(_getLineMetrics);
+	ASFUNCTION_GETTER_SETTER(background);
+	ASFUNCTION_GETTER_SETTER(backgroundColor);
+	ASFUNCTION_GETTER_SETTER(border);
+	ASFUNCTION_GETTER_SETTER(borderColor);
+	ASFUNCTION_GETTER_SETTER(multiline);
+	ASPROPERTY_GETTER_SETTER(bool, mouseWheelEnabled);
+	ASPROPERTY_GETTER_SETTER(bool, selectable);
 	ASFUNCTION_GETTER_SETTER(textColor);
+	ASFUNCTION_GETTER_SETTER(type);
 };
 
 class TextFormat: public ASObject
 {
+private:
+	void onAlign(const tiny_string& old);
 public:
 	TextFormat(Class_base* c):ASObject(c){}
+	void finalize();
 	static void sinit(Class_base* c);
 	static void buildTraits(ASObject* o);
 	ASFUNCTION(_constructor);
+	ASPROPERTY_GETTER_SETTER(tiny_string,align);
+	ASPROPERTY_GETTER_SETTER(_NR<ASObject>,blockIndent);
+	ASPROPERTY_GETTER_SETTER(_NR<ASObject>,bold);
+	ASPROPERTY_GETTER_SETTER(_NR<ASObject>,bullet);
 	ASPROPERTY_GETTER_SETTER(_NR<ASObject>,color);
 	ASPROPERTY_GETTER_SETTER(tiny_string,font);
+	ASPROPERTY_GETTER_SETTER(_NR<ASObject>,indent);
+	ASPROPERTY_GETTER_SETTER(_NR<ASObject>,italic);
+	ASPROPERTY_GETTER_SETTER(_NR<ASObject>,kerning);
+	ASPROPERTY_GETTER_SETTER(_NR<ASObject>,leading);
+	ASPROPERTY_GETTER_SETTER(_NR<ASObject>,leftMargin);
+	ASPROPERTY_GETTER_SETTER(_NR<ASObject>,letterSpacing);
+	ASPROPERTY_GETTER_SETTER(_NR<ASObject>,rightMargin);
 	ASPROPERTY_GETTER_SETTER(int32_t,size);
+	ASPROPERTY_GETTER_SETTER(_NR<Array>,tabStops);
+	ASPROPERTY_GETTER_SETTER(tiny_string,target);
+	ASPROPERTY_GETTER_SETTER(_NR<ASObject>,underline);
+	ASPROPERTY_GETTER_SETTER(tiny_string,url);
 };
 
 class TextFieldType: public ASObject
@@ -189,6 +241,25 @@ public:
 	GridFitType(Class_base* c):ASObject(c){}
 	static void sinit(Class_base* c);
 };
+
+class TextLineMetrics : public ASObject
+{
+protected:
+	ASPROPERTY_GETTER_SETTER(number_t, ascent);
+	ASPROPERTY_GETTER_SETTER(number_t, descent);
+	ASPROPERTY_GETTER_SETTER(number_t, height);
+	ASPROPERTY_GETTER_SETTER(number_t, leading);
+	ASPROPERTY_GETTER_SETTER(number_t, width);
+	ASPROPERTY_GETTER_SETTER(number_t, x);
+public:
+	TextLineMetrics(Class_base* c, number_t _x=0, number_t _width=0, number_t _height=0,
+			number_t _ascent=0, number_t _descent=0, number_t _leading=0)
+		: ASObject(c), ascent(_ascent), descent(_descent),
+		  height(_height), leading(_leading), width(_width), x(_x) {}
+	static void sinit(Class_base* c);
+	ASFUNCTION(_constructor);
+};
+
 };
 
 #endif /* SCRIPTING_FLASH_TEXT_FLASHTEXT_H */

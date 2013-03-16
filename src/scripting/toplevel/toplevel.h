@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2009-2012  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2009-2013  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -177,6 +177,7 @@ private:
 public:
 	void addPrototypeGetter();
 	void addLengthGetter();
+	void setupDeclaredTraits(ASObject *target);
 	void handleConstruction(ASObject* target, ASObject* const* args, unsigned int argslen, bool buildAndLink);
 	void setConstructor(IFunction* c);
 	Class_base(const QName& name, MemoryAccount* m);
@@ -193,8 +194,9 @@ public:
 	/*
 	 * Returns true when 'this' is a subclass of 'cls',
 	 * i.e. this == cls or cls equals some super of this.
+         * If considerInterfaces is true, check interfaces, too.
 	 */
-	bool isSubClass(const Class_base* cls) const;
+	bool isSubClass(const Class_base* cls, bool considerInterfaces=true) const;
 	tiny_string getQualifiedClassName() const;
 	tiny_string getName() const { return class_name.name; }
 	tiny_string toString();

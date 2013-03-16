@@ -1,7 +1,7 @@
 /**************************************************************************
     Lightspark, a free flash player implementation
 
-    Copyright (C) 2009-2012  Alessandro Pignotti (a.pignotti@sssup.it)
+    Copyright (C) 2009-2013  Alessandro Pignotti (a.pignotti@sssup.it)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -21,6 +21,7 @@
 #include "scripting/toplevel/Number.h"
 #include "scripting/toplevel/Integer.h"
 #include "scripting/toplevel/UInteger.h"
+#include "scripting/toplevel/Vector.h"
 #include "compat.h"
 #include "asobject.h"
 #include "swf.h"
@@ -243,12 +244,12 @@ public:
 	/* This creates a stub class, i.e. a class with given name but without
 	 * any implementation.
 	 */
-	static _R<Class<ASObject>> getStubClass(const QName& name)
+	static _R<Class<ASObject>> getStubClass(const QName& name, _R<Class_base> superClass=Class<ASObject>::getRef())
 	{
 		MemoryAccount* memoryAccount = getSys()->allocateMemoryAccount(name.name);
 		Class<ASObject>* ret = new (getSys()->unaccountedMemory) Class<ASObject>(name, memoryAccount);
 
-		ret->setSuper(Class<ASObject>::getRef());
+		ret->setSuper(superClass);
 		ret->prototype = _MNR(new_objectPrototype());
 		ret->prototype->prevPrototype=ret->super->prototype;
 		ret->incRef();
@@ -419,6 +420,29 @@ public:
 	const std::vector<Type*> getTypes() const
 	{
 		return types;
+	}
+
+	ASObject* coerce(ASObject* o) const
+	{
+		if (o->is<Undefined>())
+		{
+			o->decRef();
+			return getSys()->getNullRef();
+		}
+		else if ((o->is<Vector>() && o->as<Vector>()->sameType(types)) || 
+			 o->is<Null>())
+		{
+			// Vector.<x> can be coerced to Vector.<y>
+			// only if x and y are the same type
+			return o;
+		}
+		else
+		{
+			o->decRef();
+			throwError<TypeError>(kCheckTypeFailedError, o->getClassName(),
+					      Class<T>::getQualifiedClassName());
+			return NULL; // not reached
+		}
 	}
 };
 

@@ -1,3 +1,16 @@
+lightspark (0.7.2-1) experimental; urgency=low
+
+  * New 0.7.2 upstream version
+    - Improved image support: alpha in palettes, abbreviated JPEGs
+    - Improved embedded font parsing and text positioning
+    - Open links in a browser (plugin only)
+    -  BitmapData improvements
+     - Fixed many crashes
+
+  * Drop all patches, incorporated upstream.
+
+ -- Didier Raboud <odyx@debian.org>  Sat, 16 Mar 2013 14:56:46 +0100
+
 lightspark (0.7.1-2) experimental; urgency=low
 
   [ Roland Stigge ]

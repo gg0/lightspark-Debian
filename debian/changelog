@@ -1,3 +1,11 @@
+lightspark (0.7.2-2) unstable; urgency=low
+
+  * Upload to unstable, here we come Jessie!
+  * Build-Depend against the generic llvm-dev, to permit easier LLVM
+    version changes. (Closes: #706699)
+
+ -- Didier Raboud <odyx@debian.org>  Mon, 06 May 2013 11:52:55 +0200
+
 lightspark (0.7.2-1) experimental; urgency=low
 
   * New 0.7.2 upstream version

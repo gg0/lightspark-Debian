@@ -1,3 +1,13 @@
+lightspark (0.7.2-3) unstable; urgency=low
+
+  [ Sylvestre Ledru ]
+  * Add patch to make lightspark build with llvm-3.3 (Closes: #730780)
+
+  [ Didier Raboud ]
+  * Bump llvm-dev Build-Dependency to 1:3.3
+
+ -- Didier Raboud <odyx@debian.org>  Mon, 02 Dec 2013 14:56:28 +0100
+
 lightspark (0.7.2-2) unstable; urgency=low
 
   * Upload to unstable, here we come Jessie!

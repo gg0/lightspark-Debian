@@ -15,7 +15,7 @@ Applied upstream git commits:
 
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -287,12 +287,17 @@ ENDIF(AUDIO_BACKEND)
+@@ -290,12 +290,17 @@
  
  IF(ENABLE_LIBAVCODEC)
  	pkg_check_modules(FFMPEG libavcodec libavutil libavformat)
@@ -34,7 +34,7 @@ Applied upstream git commits:
    SET(CMAKE_REQUIRED_INCLUDES ${FFMPEG_INCLUDE_DIRS})
    SET(CMAKE_REQUIRED_LIBRARIES ${FFMPEG_LIBRARIES})
    CHECK_FUNCTION_EXISTS(avcodec_decode_video2 HAVE_AVCODEC_DECODE_VIDEO2)
-@@ -303,7 +308,8 @@ IF(ENABLE_LIBAVCODEC)
+@@ -306,7 +311,8 @@
    CHECK_FUNCTION_EXISTS(avcodec_open2 HAVE_AVCODEC_OPEN2)
    CHECK_FUNCTION_EXISTS(avformat_close_input HAVE_AVFORMAT_CLOSE_INPUT)
    CHECK_FUNCTION_EXISTS(avformat_find_stream_info HAVE_AVFORMAT_FIND_STREAM_INFO)
@@ -44,7 +44,7 @@ Applied upstream git commits:
    SET(CMAKE_REQUIRED_FLAGS)
    SET(CMAKE_REQUIRED_INCLUDES)
    SET(CMAKE_REQUIRED_LIBRARIES)
-@@ -331,6 +337,12 @@ IF(ENABLE_LIBAVCODEC)
+@@ -334,6 +340,12 @@
    IF(HAVE_AVFORMAT_FIND_STREAM_INFO)
      ADD_DEFINITIONS(-DHAVE_AVFORMAT_FIND_STREAM_INFO)
    ENDIF(HAVE_AVFORMAT_FIND_STREAM_INFO)
@@ -59,7 +59,7 @@ Applied upstream git commits:
  
 --- a/conf/FindFFMpeg.cmake
 +++ b/conf/FindFFMpeg.cmake
-@@ -23,7 +23,11 @@ FIND_LIBRARY(FFMPEG_AVFORMAT_LIBRARY NAM
+@@ -23,7 +23,11 @@
      avformat
  )
  
@@ -74,7 +74,7 @@ Applied upstream git commits:
  # handle the QUIETLY and REQUIRED arguments and set FFMPEG_FOUND to TRUE if 
 --- a/src/backends/decoder.cpp
 +++ b/src/backends/decoder.cpp
-@@ -119,7 +119,7 @@ FFMpegVideoDecoder::FFMpegVideoDecoder(L
+@@ -119,7 +119,7 @@
  	if(codecId==H264)
  	{
  		//TODO: serialize access to avcodec_open
@@ -83,7 +83,7 @@ Applied upstream git commits:
  		codec=avcodec_find_decoder(FFMPEGcodecId);
  		assert(codec);
  		//Ignore the frameRateHint as the rate is gathered from the video data
-@@ -127,7 +127,7 @@ FFMpegVideoDecoder::FFMpegVideoDecoder(L
+@@ -127,7 +127,7 @@
  	else if(codecId==H263)
  	{
  		//TODO: serialize access to avcodec_open
@@ -92,7 +92,7 @@ Applied upstream git commits:
  		codec=avcodec_find_decoder(FFMPEGcodecId);
  		assert(codec);
  
-@@ -138,7 +138,7 @@ FFMpegVideoDecoder::FFMpegVideoDecoder(L
+@@ -138,7 +138,7 @@
  	else if(codecId==VP6)
  	{
  		//TODO: serialize access to avcodec_open
@@ -101,7 +101,7 @@ Applied upstream git commits:
  		codec=avcodec_find_decoder(FFMPEGcodecId);
  		assert(codec);
  
-@@ -176,13 +176,13 @@ FFMpegVideoDecoder::FFMpegVideoDecoder(A
+@@ -176,13 +176,13 @@
  	//The tag is the header, initialize decoding
  	switch(codecContext->codec_id)
  	{
@@ -118,7 +118,7 @@ Applied upstream git commits:
  			videoCodec=VP6;
  			break;
  		default:
-@@ -295,6 +295,8 @@ bool FFMpegVideoDecoder::decodePacket(AV
+@@ -295,6 +295,8 @@
  #else
  	int ret=avcodec_decode_video(codecContext, frameIn, &frameOk, pkt->data, pkt->size);
  #endif
@@ -127,7 +127,7 @@ Applied upstream git commits:
  
  	assert_and_throw(ret==(int)pkt->size);
  	if(frameOk)
-@@ -455,10 +457,10 @@ FFMpegAudioDecoder::FFMpegAudioDecoder(L
+@@ -455,10 +457,10 @@
  	switch(audioCodec)
  	{
  		case AAC:
@@ -140,7 +140,7 @@ Applied upstream git commits:
  			break;
  		default:
  			::abort();
-@@ -566,22 +568,30 @@ uint32_t FFMpegAudioDecoder::decodeData(
+@@ -566,22 +568,30 @@
  		ret=-1;
  	else
  	{
@@ -178,7 +178,7 @@ Applied upstream git commits:
  	curTail.len=maxLen;
  	assert(!(curTail.len&0x80000000));
  	assert(maxLen%2==0);
-@@ -604,10 +614,17 @@ uint32_t FFMpegAudioDecoder::decodePacke
+@@ -604,10 +614,17 @@
  		ret=-1;
  	else
  	{
@@ -200,7 +200,7 @@ Applied upstream git commits:
  	}
  #elif HAVE_AVCODEC_DECODE_AUDIO3
  	int ret=avcodec_decode_audio3(codecContext, curTail.samples, &maxLen, pkt);
-@@ -639,6 +656,36 @@ uint32_t FFMpegAudioDecoder::decodePacke
+@@ -639,6 +656,36 @@
  	samplesBuffer.commitLast();
  	return maxLen;
  }
@@ -237,7 +237,7 @@ Applied upstream git commits:
  #endif //ENABLE_LIBAVCODEC
  
  StreamDecoder::~StreamDecoder()
-@@ -711,7 +758,7 @@ FFMpegStreamDecoder::FFMpegStreamDecoder
+@@ -711,7 +758,7 @@
  			videoFound=true;
  			videoIndex=(int32_t)i;
  		}
@@ -246,7 +246,7 @@ Applied upstream git commits:
  		{
  			audioFound=true;
  			audioIndex=(int32_t)i;
-@@ -721,7 +768,7 @@ FFMpegStreamDecoder::FFMpegStreamDecoder
+@@ -721,7 +768,7 @@
  	if(videoFound)
  	{
  		//Pass the frame rate from the container, the once from the codec is often wrong
@@ -257,7 +257,7 @@ Applied upstream git commits:
  	}
 --- a/src/backends/decoder.h
 +++ b/src/backends/decoder.h
-@@ -28,6 +28,17 @@ extern "C"
+@@ -28,6 +28,17 @@
  {
  #include <libavcodec/avcodec.h>
  #include <libavformat/avformat.h>
@@ -275,7 +275,7 @@ Applied upstream git commits:
  #define MAX_AUDIO_FRAME_SIZE AVCODEC_MAX_AUDIO_FRAME_SIZE
  }
  #else
-@@ -281,6 +292,7 @@ private:
+@@ -281,6 +292,7 @@
  #if HAVE_AVCODEC_DECODE_AUDIO4
  	AVFrame* frameIn;
  #endif

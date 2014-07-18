@@ -27,6 +27,7 @@ Build-Depends: debhelper (>= 9),
   libjpeg-dev,
   librtmp-dev,
   libsdl1.2-dev,
+  libgnutls28-dev,
   libxml++2.6-dev (>= 2.33.1),
   liblzma-dev,
 Standards-Version: 3.9.4

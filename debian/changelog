@@ -1,3 +1,12 @@
+lightspark (0.7.2-4) unstable; urgency=medium
+
+  * Backport upstream commit to fix build with llvm-3.4 (Closes: #754484)
+  * Add libgnutls28-dev build-dependency to satisfy librtmp-dev's pkg-config
+    requirements
+  * Ack NMU, thanks Reinhard!
+
+ -- Didier Raboud <odyx@debian.org>  Fri, 18 Jul 2014 21:39:27 +0200
+
 lightspark (0.7.2-3.1) unstable; urgency=medium
 
   * Non-maintainer upload.

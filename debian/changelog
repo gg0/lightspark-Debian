@@ -1,3 +1,11 @@
+lightspark (0.7.2-5) unstable; urgency=medium
+
+  * Team upload.
+  * Fix alternatives on ubuntu (LP: #1266089).
+  * Bump Standards-Version to 3.9.5 (no changes).
+
+ -- Gabriele Giacone <1o5g4r8o@gmail.com>  Fri, 01 Aug 2014 17:10:58 +0200
+
 lightspark (0.7.2-4) unstable; urgency=medium
 
   * Backport upstream commit to fix build with llvm-3.4 (Closes: #754484)

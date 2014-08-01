@@ -32,8 +32,8 @@ Build-Depends: debhelper (>= 9),
   liblzma-dev,
 Standards-Version: 3.9.5
 Homepage: http://lightspark.github.com/
-Vcs-Git: git://git.debian.org/pkg-flash/lightspark.git
-Vcs-Browser: http://git.debian.org/?p=pkg-flash/lightspark.git
+Vcs-Git: git://anonscm.debian.org/pkg-flash/lightspark.git
+Vcs-Browser: http://anonscm.debian.org/gitweb/?p=pkg-flash/lightspark.git
 
 Package: lightspark
 Architecture: any

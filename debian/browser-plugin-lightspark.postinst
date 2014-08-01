@@ -4,8 +4,14 @@ set -e
 
 case "$1" in
     configure)
+        ALTLINK=/usr/lib/mozilla/plugins/flash-mozilla.so
+        ALTNAME=flash-mozilla.so
+        if dpkg-vendor --derives-from Ubuntu; then
+            ALTLINK=/usr/lib/mozilla/plugins/flashplugin-alternative.so
+            ALTNAME=mozilla-flashplugin
+        fi
 	update-alternatives --quiet --install \
-		/usr/lib/mozilla/plugins/flash-mozilla.so flash-mozilla.so \
+		$ALTLINK $ALTNAME \
 		/usr/lib/lightspark/liblightsparkplugin.so 0
     ;;
 

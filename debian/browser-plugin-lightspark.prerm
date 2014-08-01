@@ -4,7 +4,11 @@ set -e
 
 case "$1" in
     remove|upgrade|deconfigure)
-	update-alternatives --quiet --remove flash-mozilla.so \
+        ALTNAME=flash-mozilla.so
+        if dpkg-vendor --derives-from Ubuntu; then
+            ALTNAME=mozilla-flashplugin
+        fi
+        update-alternatives --quiet --remove $ALTNAME \
 		/usr/lib/lightspark/liblightsparkplugin.so
     ;;
 

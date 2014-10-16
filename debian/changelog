@@ -1,3 +1,9 @@
+lightspark (0.7.2-6) unstable; urgency=medium
+
+  * Add patch to fix build with LLVM 3.5 (Closes: #763235)
+
+ -- Didier Raboud <odyx@debian.org>  Thu, 16 Oct 2014 13:38:26 +0200
+
 lightspark (0.7.2-5) unstable; urgency=medium
 
   * Team upload.

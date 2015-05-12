@@ -26,7 +26,7 @@ using namespace std;
 
 void Rectangle::sinit(Class_base* c)
 {
-	c->setConstructor(Class<IFunction>::getFunction(_constructor));
+	CLASS_SETUP(c, ASObject, _constructor, CLASS_SEALED);
 	IFunction* gleft=Class<IFunction>::getFunction(_getLeft);
 	c->setDeclaredMethodByQName("left","",gleft,GETTER_METHOD,true);
 	gleft->incRef();
@@ -490,7 +490,7 @@ ColorTransform::ColorTransform(Class_base* c, const CXFORMWITHALPHA& cx)
 
 void ColorTransform::sinit(Class_base* c)
 {
-	c->setConstructor(Class<IFunction>::getFunction(_constructor));
+	CLASS_SETUP(c, ASObject, _constructor, CLASS_SEALED);
 
 	// properties
 	c->setDeclaredMethodByQName("color","",Class<IFunction>::getFunction(getColor),GETTER_METHOD,true);
@@ -582,7 +582,6 @@ ASFUNCTIONBODY(ColorTransform,setColor)
 
 ASFUNCTIONBODY(ColorTransform,getColor)
 {
-	assert_and_throw(argslen==1);
 	ColorTransform* th=static_cast<ColorTransform*>(obj);
 
 	int ao, ro, go, bo;
@@ -738,7 +737,7 @@ ASFUNCTIONBODY(ColorTransform,_toString)
 
 void Point::sinit(Class_base* c)
 {
-	c->setConstructor(Class<IFunction>::getFunction(_constructor));
+	CLASS_SETUP(c, ASObject, _constructor, CLASS_SEALED);
 	c->setDeclaredMethodByQName("x","",Class<IFunction>::getFunction(_getX),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("y","",Class<IFunction>::getFunction(_getY),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("length","",Class<IFunction>::getFunction(_getlength),GETTER_METHOD,true);
@@ -930,12 +929,13 @@ void Transform::finalize()
 
 void Transform::sinit(Class_base* c)
 {
-	c->setConstructor(Class<IFunction>::getFunction(_constructor));
+	CLASS_SETUP(c, ASObject, _constructor, CLASS_SEALED);
 	c->setDeclaredMethodByQName("colorTransform","",Class<IFunction>::getFunction(_getColorTransform),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("colorTransform","",Class<IFunction>::getFunction(_setColorTransform),SETTER_METHOD,true);
 	c->setDeclaredMethodByQName("matrix","",Class<IFunction>::getFunction(_setMatrix),SETTER_METHOD,true);
 	c->setDeclaredMethodByQName("matrix","",Class<IFunction>::getFunction(_getMatrix),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("matrix","",Class<IFunction>::getFunction(_setMatrix),SETTER_METHOD,true);
+	c->setDeclaredMethodByQName("concatenatedMatrix","",Class<IFunction>::getFunction(_getConcatenatedMatrix),GETTER_METHOD,true);
 }
 
 ASFUNCTIONBODY(Transform,_constructor)
@@ -985,6 +985,13 @@ ASFUNCTIONBODY(Transform,_setColorTransform)
 	return NULL;
 }
 
+ASFUNCTIONBODY(Transform,_getConcatenatedMatrix)
+{
+	Transform* th=Class<Transform>::cast(obj);
+	LOG(LOG_NOT_IMPLEMENTED,"contcatenatedMAtrix not implemented");
+	return Class<Matrix>::getInstanceS();
+}
+
 void Transform::buildTraits(ASObject* o)
 {
 }
@@ -999,7 +1006,7 @@ Matrix::Matrix(Class_base* c, const MATRIX& m):ASObject(c),matrix(m)
 
 void Matrix::sinit(Class_base* c)
 {
-	c->setConstructor(Class<IFunction>::getFunction(_constructor));
+	CLASS_SETUP(c, ASObject, _constructor, CLASS_SEALED);
 	
 	//Properties
 	c->setDeclaredMethodByQName("a","",Class<IFunction>::getFunction(_get_a),GETTER_METHOD,true);
@@ -1318,7 +1325,7 @@ ASFUNCTIONBODY(Matrix,deltaTransformPoint)
 
 void Vector3D::sinit(Class_base* c)
 {
-	c->setConstructor(Class<IFunction>::getFunction(_constructor));
+	CLASS_SETUP(c, ASObject, _constructor, CLASS_SEALED);
 
 	// constants
 	Vector3D* tx = new (c->memoryAccount) Vector3D(c);
@@ -1704,4 +1711,29 @@ ASFUNCTIONBODY(Vector3D,subtract)
 	ret->z = th->z - vc->z;
 
 	return ret;
+}
+
+
+void Matrix3D::sinit(Class_base* c)
+{
+	CLASS_SETUP(c, ASObject, _constructor, CLASS_SEALED);
+}
+
+ASFUNCTIONBODY(Matrix3D,_constructor)
+{
+	Matrix3D * th=static_cast<Matrix3D*>(obj);
+	LOG(LOG_NOT_IMPLEMENTED,"Matrix3D is not implemented");
+	return NULL;
+}
+
+void PerspectiveProjection::sinit(Class_base* c)
+{
+	CLASS_SETUP(c, ASObject, _constructor, CLASS_SEALED);
+}
+
+ASFUNCTIONBODY(PerspectiveProjection,_constructor)
+{
+	PerspectiveProjection * th=static_cast<PerspectiveProjection*>(obj);
+	LOG(LOG_NOT_IMPLEMENTED,"PerspectiveProjection is not implemented");
+	return NULL;
 }

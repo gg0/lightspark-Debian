@@ -107,7 +107,8 @@ public:
 
 class ColorTransform: public ASObject
 {
-private:
+friend class BitmapData;
+protected:
 	number_t redMultiplier,greenMultiplier,blueMultiplier,alphaMultiplier;
 	number_t redOffset,greenOffset,blueOffset,alphaOffset;
 public:
@@ -184,6 +185,7 @@ public:
 	ASFUNCTION(_set_ty);
 };
 
+class DisplayObject;
 class Transform: public ASObject
 {
 private:
@@ -199,6 +201,8 @@ public:
 	ASFUNCTION(_setColorTransform);
 	ASFUNCTION(_getMatrix);
 	ASFUNCTION(_setMatrix);
+	ASFUNCTION(_getConcatenatedMatrix);
+	
 };
 
 class Vector3D: public ASObject
@@ -243,5 +247,22 @@ public:
 	ASFUNCTION(_toString);
 };
 
+class Matrix3D: public ASObject
+{
+public:
+	Matrix3D(Class_base* c):ASObject(c){}
+	static void sinit(Class_base* c);
+	
+	ASFUNCTION(_constructor);
 };
+class PerspectiveProjection: public ASObject
+{
+public:
+	PerspectiveProjection(Class_base* c):ASObject(c){}
+	static void sinit(Class_base* c);
+	
+	ASFUNCTION(_constructor);
+};
+
+}
 #endif /* SCRIPTING_FLASH_FLASHGEOM_H */

@@ -48,6 +48,13 @@ Function_object* lightspark::new_functionObject(_NR<ASObject> p)
 	return new (c->memoryAccount) Function_object(c, p);
 }
 
+ObjectConstructor* lightspark::new_objectConstructor(Class_base* cls,uint32_t length)
+{
+	return new (cls->memoryAccount) ObjectConstructor(cls, length);
+}
+
+
+
 Class_inherit::Class_inherit(const QName& name, MemoryAccount* m):Class_base(name, m),tag(NULL),bindedToRoot(false)
 {
 	this->incRef(); //create on reference for the classes map
@@ -71,7 +78,6 @@ ASObject* Class_inherit::getInstance(bool construct, ASObject* const* args, cons
 		realClass=this;
 
 	ASObject* ret=NULL;
-	assert_and_throw(!bindedToRoot);
 	if(tag)
 	{
 		ret=tag->instance(realClass);
@@ -170,5 +176,27 @@ ASObject* Class<ASObject>::getInstance(bool construct, ASObject* const* args, co
 	ASObject* ret=new (realClass->memoryAccount) ASObject(realClass);
 	if(construct)
 		handleConstruction(ret,args,argslen,true);
+	return ret;
+}
+Class<ASObject>* Class<ASObject>::getClass()
+{
+	uint32_t classId=ClassName<ASObject>::id;
+	Class<ASObject>* ret=NULL;
+	Class_base** retAddr=&getSys()->builtinClasses[classId];
+	if(*retAddr==NULL)
+	{
+		//Create the class
+		QName name(ClassName<ASObject>::name,ClassName<ASObject>::ns);
+		MemoryAccount* memoryAccount = getSys()->allocateMemoryAccount(name.name);
+		ret=new (getSys()->unaccountedMemory) Class<ASObject>(name, memoryAccount);
+		ret->incRef();
+		*retAddr=ret;
+		ret->prototype = _MNR(new_objectPrototype());
+		ASObject::sinit(ret);
+		ret->initStandardProps();
+	}
+	else
+		ret=static_cast<Class<ASObject>*>(*retAddr);
+	
 	return ret;
 }

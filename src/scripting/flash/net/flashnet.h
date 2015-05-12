@@ -39,6 +39,7 @@ private:
 	METHOD method;
 	tiny_string url;
 	_NR<ASObject> data;
+	tiny_string digest;
 	tiny_string validatedContentType() const;
 	tiny_string getContentTypeHeader() const;
 	void validateHeaderName(const tiny_string& headerName) const;
@@ -56,6 +57,8 @@ public:
 	ASFUNCTION(_setMethod);
 	ASFUNCTION(_setData);
 	ASFUNCTION(_getData);
+	ASFUNCTION(_getDigest);
+	ASFUNCTION(_setDigest);
 	URLInfo getRequestURL() const;
 	std::list<tiny_string> getHeaders() const;
 	void getPostData(std::vector<uint8_t>& data) const;
@@ -88,6 +91,14 @@ class URLLoaderDataFormat: public ASObject
 {
 public:
 	URLLoaderDataFormat(Class_base* c):ASObject(c){}
+	static void sinit(Class_base*);
+};
+
+
+class SharedObjectFlushStatus: public ASObject
+{
+public:
+	SharedObjectFlushStatus(Class_base* c):ASObject(c){}
 	static void sinit(Class_base*);
 };
 
@@ -165,6 +176,7 @@ class NetConnection: public EventDispatcher, public IThreadJob
 {
 friend class NetStream;
 private:
+	enum PROXY_TYPE { PT_NONE, PT_HTTP, PT_CONNECT_ONLY, PT_CONNECT, PT_BEST };
 	//Indicates whether the application is connected to a server through a persistent RMTP connection/HTTP server with Flash Remoting
 	bool _connected;
 	tiny_string protocol;
@@ -178,6 +190,7 @@ private:
 	uint32_t messageCount;
 	//The connection is to a flash media server
 	ObjectEncoding::ENCODING objectEncoding;
+	PROXY_TYPE proxyType;
 	//IThreadJob interface
 	void execute();
 	void threadAbort();
@@ -191,14 +204,26 @@ public:
 	ASFUNCTION(connect);
 	ASFUNCTION(call);
 	ASFUNCTION(_getConnected);
+	ASFUNCTION(_getConnectedProxyType);
 	ASFUNCTION(_getDefaultObjectEncoding);
 	ASFUNCTION(_setDefaultObjectEncoding);
 	ASFUNCTION(_getObjectEncoding);
 	ASFUNCTION(_setObjectEncoding);
 	ASFUNCTION(_getProtocol);
+	ASFUNCTION(_getProxyType);
+	ASFUNCTION(_setProxyType);
 	ASFUNCTION(_getURI);
+	ASFUNCTION(close);
 	ASPROPERTY_GETTER_SETTER(NullableRef<ASObject>,client);
 };
+
+class NetStreamAppendBytesAction: public ASObject
+{
+public:
+	NetStreamAppendBytesAction(Class_base* c):ASObject(c){}
+	static void sinit(Class_base*);
+};
+
 
 class SoundTransform;
 class NetStream: public EventDispatcher, public IThreadJob, public ITickJob
@@ -264,6 +289,9 @@ public:
 	ASFUNCTION(_setClient);
 	ASFUNCTION(_getCheckPolicyFile);
 	ASFUNCTION(_setCheckPolicyFile);
+	ASFUNCTION(attach);
+	ASFUNCTION(appendBytes);
+	ASFUNCTION(appendBytesAction);
 	ASPROPERTY_GETTER(number_t, backBufferLength);
 	ASPROPERTY_GETTER_SETTER(number_t, backBufferTime);
 	ASPROPERTY_GETTER(number_t, bufferLength);
@@ -334,11 +362,46 @@ public:
 	void unlock();
 };
 
+class LocalConnection: public EventDispatcher
+{
+public:
+	LocalConnection(Class_base* c);
+	static void sinit(Class_base*);
+	ASFUNCTION(_constructor);
+	ASPROPERTY_GETTER(bool,isSupported);
+	ASFUNCTION(allowDomain);
+	ASFUNCTION(allowInsecureDomain);
+};
+
+class NetGroup: public EventDispatcher
+{
+public:
+	NetGroup(Class_base* c);
+	static void sinit(Class_base*);
+	ASFUNCTION(_constructor);
+};
+
+class ASSocket: public EventDispatcher, IDataInput, IDataOutput
+{
+public:
+	ASSocket(Class_base* c);
+	static void sinit(Class_base*);
+	ASFUNCTION(_constructor);
+};
+
+class DRMManager: public EventDispatcher
+{
+public:
+	DRMManager(Class_base* c);
+	static void sinit(Class_base*);
+	ASPROPERTY_GETTER(bool,isSupported);
+};
+
 ASObject* navigateToURL(ASObject* obj,ASObject* const* args, const unsigned int argslen);
 ASObject* sendToURL(ASObject* obj,ASObject* const* args, const unsigned int argslen);
 ASObject* registerClassAlias(ASObject* obj,ASObject* const* args, const unsigned int argslen);
 ASObject* getClassByAlias(ASObject* obj,ASObject* const* args, const unsigned int argslen);
 
-};
+}
 
 #endif /* SCRIPTING_FLASH_NET_FLASHNET_H */

@@ -73,6 +73,12 @@ ASObject* ABCVm::executeFunction(const SyntheticFunction* function, call_context
 		context->exec_pos = code.tellg();
 		switch(opcode)
 		{
+			case 0x01:
+			{
+				//bkpt
+				LOG(LOG_CALLS, _("bkpt") );
+				break;
+			}
 			case 0x02:
 			{
 				//nop
@@ -663,6 +669,20 @@ ASObject* ABCVm::executeFunction(const SyntheticFunction* function, call_context
 				loadIntN<uint32_t>(context);
 				break;
 			}
+			case 0x38:
+			{
+				//lf32
+				LOG(LOG_CALLS, "lf32");
+				loadNumber(context);
+				break;
+			}
+			case 0x39:
+			{
+				//lf32
+				LOG(LOG_CALLS, "lf64");
+				loadNumber(context);
+				break;
+			}
 			case 0x3a:
 			{
 				//si8
@@ -682,6 +702,20 @@ ASObject* ABCVm::executeFunction(const SyntheticFunction* function, call_context
 				//si32
 				LOG(LOG_CALLS, "si32");
 				storeIntN<uint32_t>(context);
+				break;
+			}
+			case 0x3d:
+			{
+				//sf32
+				LOG(LOG_CALLS, "sf32");
+				storeNumber(context);
+				break;
+			}
+			case 0x3e:
+			{
+				//sf32
+				LOG(LOG_CALLS, "sf64");
+				storeNumber(context);
 				break;
 			}
 			case 0x40:
@@ -909,7 +943,12 @@ ASObject* ABCVm::executeFunction(const SyntheticFunction* function, call_context
 				//getlocal
 				u30 i;
 				code >> i;
-				assert_and_throw(context->locals[i]);
+				if (!context->locals[i])
+				{
+					LOG(LOG_CALLS, _("getLocal ") << i << " not set, pushing Undefined");
+					context->runtime_stack_push(getSys()->getUndefinedRef());
+					break;
+				}
 				context->locals[i]->incRef();
 				LOG(LOG_CALLS, _("getLocal ") << i << _(": ") << context->locals[i]->toDebugString() );
 				context->runtime_stack_push(context->locals[i]);
@@ -1003,6 +1042,27 @@ ASObject* ABCVm::executeFunction(const SyntheticFunction* function, call_context
 				setSlot(v1, v2, t);
 				break;
 			}
+			case 0x6e:
+			{
+				//getglobalSlot
+				u30 t;
+				code >> t;
+
+				Global* globalscope = getGlobalScope(context);
+				context->runtime_stack_push(globalscope->getSlot(t));
+				break;
+			}
+			case 0x6f:
+			{
+				//setglobalSlot
+				u30 t;
+				code >> t;
+
+				Global* globalscope = getGlobalScope(context);
+				ASObject* obj=context->runtime_stack_pop();
+				globalscope->setSlot(t,obj);
+				break;
+			}
 			case 0x70:
 			{
 				//convert_s
@@ -1012,16 +1072,12 @@ ASObject* ABCVm::executeFunction(const SyntheticFunction* function, call_context
 			}
 			case 0x71:
 			{
-				//FIXME: Properly escape as described in ECMA-357 section 10.2
-				//esc_xelem
 				ASObject* val=context->runtime_stack_pop();
-				context->runtime_stack_push(convert_s(val));
+				context->runtime_stack_push(esc_xelem(val));
 				break;
 			}
 			case 0x72:
 			{
-				//FIXME: Properly escape as described in ECMA-357 section 10.2
-				//esc_xattr
 				ASObject* val=context->runtime_stack_pop();
 				context->runtime_stack_push(esc_xattr(val));
 				break;
@@ -1051,6 +1107,18 @@ ASObject* ABCVm::executeFunction(const SyntheticFunction* function, call_context
 				//convert_b
 				ASObject* val=context->runtime_stack_pop();
 				context->runtime_stack_push(abstract_b(convert_b(val)));
+				break;
+			}
+			case 0x77:
+			{
+				//convert_o
+				ASObject* val=context->runtime_stack_pop();
+				if (val->is<Null>())
+					throwError<TypeError>(kConvertNullToObjectError);
+				if (val->is<Undefined>())
+					throwError<TypeError>(kConvertUndefinedToObjectError);
+					
+				context->runtime_stack_push(val);
 				break;
 			}
 			case 0x78:
@@ -1244,7 +1312,7 @@ ASObject* ABCVm::executeFunction(const SyntheticFunction* function, call_context
 				ASObject* v1=context->runtime_stack_pop();
 				ASObject* v2=context->runtime_stack_pop();
 
-				ASObject* ret=abstract_i(urShift(v1, v2));
+				ASObject* ret=abstract_ui(urShift(v1, v2));
 				context->runtime_stack_push(ret);
 				break;
 			}
@@ -1457,7 +1525,12 @@ ASObject* ABCVm::executeFunction(const SyntheticFunction* function, call_context
 			{
 				//getlocal_n
 				int i=opcode&3;
-				assert_and_throw(context->locals[i]);
+				if (!context->locals[i])
+				{
+					LOG(LOG_CALLS, _("getLocal ") << i << " not set, pushing Undefined");
+					context->runtime_stack_push(getSys()->getUndefinedRef());
+					break;
+				}
 				LOG(LOG_CALLS, _("getLocal ") << i << _(": ") << context->locals[i]->toDebugString() );
 				context->locals[i]->incRef();
 				context->runtime_stack_push(context->locals[i]);
@@ -1505,6 +1578,20 @@ ASObject* ABCVm::executeFunction(const SyntheticFunction* function, call_context
 				LOG(LOG_CALLS, _("debugfile") );
 				u30 t;
 				code >> t;
+				break;
+			}
+			case 0xf2:
+			{
+				//bkptline
+				LOG(LOG_CALLS, _("bkptline") );
+				u30 t;
+				code >> t;
+				break;
+			}
+			case 0xf3:
+			{
+				//timestamp
+				LOG(LOG_CALLS, _("timestamp") );
 				break;
 			}
 			default:

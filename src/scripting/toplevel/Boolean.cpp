@@ -19,6 +19,7 @@
 
 #include "scripting/toplevel/Boolean.h"
 #include "scripting/toplevel/toplevel.h"
+#include "scripting/flash/utils/ByteArray.h"
 #include "scripting/class.h"
 #include "scripting/argconv.h"
 #include "parsing/amf3_generator.h"
@@ -51,7 +52,16 @@ bool lightspark::Boolean_concrete(const ASObject* o)
 	case T_UINTEGER:
 		return o->as<UInteger>()->val != 0;
 	case T_STRING:
+		if (!o->isConstructed())
+			return false;
 		return !o->as<ASString>()->data.empty();
+	case T_FUNCTION:
+	case T_ARRAY:
+	case T_OBJECT:
+		// not constructed objects return false
+		if (!o->isConstructed())
+			return false;
+		return true;
 	default:
 		//everything else is an Object regarding to the spec
 		return true;
@@ -69,11 +79,10 @@ ASFUNCTIONBODY(Boolean,generator)
 
 void Boolean::sinit(Class_base* c)
 {
-	c->isFinal=true;
-	c->setConstructor(Class<IFunction>::getFunction(_constructor));
-	c->setSuper(Class<ASObject>::getRef());
-	c->prototype->setVariableByQName("toString",AS3,Class<IFunction>::getFunction(_toString),DYNAMIC_TRAIT);
-	c->prototype->setVariableByQName("valueOf",AS3,Class<IFunction>::getFunction(_valueOf),DYNAMIC_TRAIT);
+	CLASS_SETUP(c, ASObject, _constructor, CLASS_SEALED | CLASS_FINAL);
+	c->setDeclaredMethodByQName("toString",AS3,Class<IFunction>::getFunction(_toString),NORMAL_METHOD,true);
+	c->prototype->setVariableByQName("toString","",Class<IFunction>::getFunction(_toString),DYNAMIC_TRAIT);
+	c->prototype->setVariableByQName("valueOf","",Class<IFunction>::getFunction(_valueOf),DYNAMIC_TRAIT);
 }
 
 ASFUNCTIONBODY(Boolean,_constructor)
@@ -133,6 +142,9 @@ bool Boolean::isEqual(ASObject* r)
 			return b->val==val;
 		}
 		case T_STRING:
+			if (!r->isConstructed())
+				return false;
+			return val==r->toNumber();
 		case T_INTEGER:
 		case T_UINTEGER:
 		case T_NUMBER:

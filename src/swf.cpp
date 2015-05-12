@@ -52,22 +52,22 @@ extern "C" {
 using namespace std;
 using namespace lightspark;
 
-static GStaticPrivate tls_system = G_STATIC_PRIVATE_INIT;
+DEFINE_AND_INITIALIZE_TLS(tls_system);
 SystemState* lightspark::getSys()
 {
-	SystemState* ret = (SystemState*)g_static_private_get(&tls_system);
+	SystemState* ret = (SystemState*)tls_get(&tls_system);
 	return ret;
 }
 
 void lightspark::setTLSSys(SystemState* sys)
 {
-        g_static_private_set(&tls_system,sys,NULL);
+        tls_set(&tls_system,sys);
 }
 
-static GStaticPrivate parse_thread_tls = G_STATIC_PRIVATE_INIT; /* TLS */
+DEFINE_AND_INITIALIZE_TLS(parse_thread_tls);
 ParseThread* lightspark::getParseThread()
 {
-	ParseThread* pt = (ParseThread*)g_static_private_get(&parse_thread_tls);
+	ParseThread* pt = (ParseThread*)tls_get(&parse_thread_tls);
 	assert(pt);
 	return pt;
 }
@@ -145,6 +145,7 @@ RootMovieClip* RootMovieClip::getInstance(_NR<LoaderInfo> li, _R<ApplicationDoma
 {
 	Class_base* movieClipClass = Class<MovieClip>::getClass();
 	RootMovieClip* ret=new (movieClipClass->memoryAccount) RootMovieClip(li, appDomain, secDomain, movieClipClass);
+	ret->constructIndicator = true;
 	return ret;
 }
 
@@ -1271,7 +1272,7 @@ void ParseThread::parseSWFHeader(RootMovieClip *root, UI8 ver)
 
 void ParseThread::execute()
 {
-	g_static_private_set(&parse_thread_tls,this,NULL);
+	tls_set(&parse_thread_tls,this);
 	try
 	{
 		UI8 Signature[4];
@@ -1315,6 +1316,14 @@ void ParseThread::execute()
 
 void ParseThread::parseSWF(UI8 ver)
 {
+	if (loader && !loader->allowLoadingSWF())
+	{
+		_NR<LoaderInfo> li=loader->getContentLoaderInfo();
+		getVm()->addEvent(li,_MR(Class<SecurityErrorEvent>::getInstanceS(
+			"Cannot import a SWF file when LoaderContext.allowCodeImport is false."))); // 3226
+		return;
+	}
+
 	objectSpinlock.lock();
 	RootMovieClip* root=NULL;
 	if(parsedObject.isNull())
@@ -1333,10 +1342,15 @@ void ParseThread::parseSWF(UI8 ver)
 	}
 	objectSpinlock.unlock();
 
-	std::queue<const ControlTag*> symbolClassTags;
+	std::queue<const ControlTag*> queuedTags;
 	try
 	{
 		parseSWFHeader(root, ver);
+		if (loader)
+		{
+			_NR<LoaderInfo> li=loader->getContentLoaderInfo();
+			li->swfVersion = root->version;
+		}
 		if(root->version < 9)
 		{
 			LOG(LOG_INFO,"SWF version " << root->version << " is not handled by lightspark, falling back to gnash (if available)");
@@ -1359,7 +1373,10 @@ void ParseThread::parseSWF(UI8 ver)
 		{
 			getSys()->needsAVM2(fat->ActionScript3);
 			if(!fat->ActionScript3)
+			{
+                                delete fat;
 				return; /* no more parsing necessary, handled by fallback */
+                        }
 			if(fat->UseNetwork
 			&& getSys()->securityManager->getSandboxType() == SecurityManager::LOCAL_WITH_FILE)
 			{
@@ -1378,14 +1395,14 @@ void ParseThread::parseSWF(UI8 ver)
 			{
 				case END_TAG:
 				{
-					// The whole frame has been parsed, now execute all queued SymbolClass tags,
+					// The whole frame has been parsed, now execute all queued tags,
 					// in the order in which they appeared in the file.
-					while(!symbolClassTags.empty())
+					while(!queuedTags.empty())
 					{
-						const ControlTag* t=symbolClassTags.front();
+						const ControlTag* t=queuedTags.front();
 						t->execute(root);
 						delete t;
-						symbolClassTags.pop();
+						queuedTags.pop();
 					}
 
 					if(!empty)
@@ -1411,12 +1428,12 @@ void ParseThread::parseSWF(UI8 ver)
 				case SHOW_TAG:
 					// The whole frame has been parsed, now execute all queued SymbolClass tags,
 					// in the order in which they appeared in the file.
-					while(!symbolClassTags.empty())
+					while(!queuedTags.empty())
 					{
-						const ControlTag* t=symbolClassTags.front();
+						const ControlTag* t=queuedTags.front();
 						t->execute(root);
 						delete t;
-						symbolClassTags.pop();
+						queuedTags.pop();
 					}
 
 					root->commitFrame(true);
@@ -1424,13 +1441,14 @@ void ParseThread::parseSWF(UI8 ver)
 					delete tag;
 					break;
 				case SYMBOL_CLASS_TAG:
+				case ACTION_TAG:
 				{
-					// Add symbol class tags to the queue, to be executed when the rest of the 
+					// Add symbol class tags or action to the queue, to be executed when the rest of the 
 					// frame has been parsed. This is to handle invalid SWF files that define ID's
 					// used in the SymbolClass tag only after the tag, which would otherwise result
 					// in "undefined dictionary ID" errors.
 					const ControlTag* stag = static_cast<const ControlTag*>(tag);
-					symbolClassTags.push(stag);
+					queuedTags.push(stag);
 					break;
 				}
 				case CONTROL_TAG:
@@ -1930,6 +1948,14 @@ void SystemState::openPageInBrowser(const tiny_string& url, const tiny_string& w
 {
 	assert(engineData);
 	engineData->openPageInBrowser(url, window);
+}
+
+void SystemState::showMouseCursor(bool visible)
+{
+	if (visible)
+		EngineData::runInGtkThread(sigc::mem_fun(engineData, &EngineData::showMouseCursor));
+	else
+		EngineData::runInGtkThread(sigc::mem_fun(engineData, &EngineData::hideMouseCursor));
 }
 
 /* This is run in vm's thread context */

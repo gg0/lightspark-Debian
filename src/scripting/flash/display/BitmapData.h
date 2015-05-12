@@ -81,6 +81,9 @@ public:
 	ASFUNCTION(getVector);
 	ASFUNCTION(setPixels);
 	ASFUNCTION(setVector);
+	ASFUNCTION(colorTransform);
+	ASFUNCTION(compare);
+	ASFUNCTION(applyFilter);
 };
 
 };

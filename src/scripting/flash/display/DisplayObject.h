@@ -58,6 +58,7 @@ private:
 	number_t rotation;
 	number_t sx,sy;
 	float alpha;
+	tiny_string blendMode;
 public:
 	UI16_SWF Ratio;
 	UI16_SWF ClipDepth;
@@ -179,7 +180,6 @@ public:
 	number_t getNominalHeight();
 	static void sinit(Class_base* c);
 	static void buildTraits(ASObject* o);
-	ASFUNCTION(_constructor);
 	ASFUNCTION(_getVisible);
 	ASFUNCTION(_setVisible);
 	ASFUNCTION(_getStage);
@@ -207,6 +207,7 @@ public:
 	ASFUNCTION(_getParent);
 	ASFUNCTION(_getRoot);
 	ASFUNCTION(_getBlendMode);
+	ASFUNCTION(_setBlendMode);
 	ASFUNCTION(_getScale9Grid);
 	ASFUNCTION(_setRotation);
 	ASFUNCTION(_getMouseX);
@@ -218,5 +219,5 @@ public:
 	ASFUNCTION(hitTestObject);
 	ASFUNCTION(hitTestPoint);
 };
-};
+}
 #endif /* SCRIPTING_FLASH_DISPLAY_DISPLAYOBJECT_H */

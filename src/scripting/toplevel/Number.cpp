@@ -20,6 +20,7 @@
 #include "parsing/amf3_generator.h"
 #include "scripting/argconv.h"
 #include "scripting/toplevel/Number.h"
+#include "scripting/flash/utils/ByteArray.h"
 
 using namespace std;
 using namespace lightspark;
@@ -258,24 +259,23 @@ tiny_string Number::toStringRadix(number_t val, int radix)
 
 void Number::sinit(Class_base* c)
 {
-	c->isFinal = true;
-	c->setSuper(Class<ASObject>::getRef());
-	c->setConstructor(Class<IFunction>::getFunction(_constructor));
-	//Must create and link the number the hard way
-	Number* ninf=new (c->memoryAccount) Number(c, -numeric_limits<double>::infinity());
-	Number* pinf=new (c->memoryAccount) Number(c, numeric_limits<double>::infinity());
-	Number* pmax=new (c->memoryAccount) Number(c, numeric_limits<double>::max());
-	Number* pmin=new (c->memoryAccount) Number(c, numeric_limits<double>::min());
-	Number* pnan=new (c->memoryAccount) Number(c, numeric_limits<double>::quiet_NaN());
-	c->setVariableByQName("NEGATIVE_INFINITY","",ninf,CONSTANT_TRAIT);
-	c->setVariableByQName("POSITIVE_INFINITY","",pinf,CONSTANT_TRAIT);
-	c->setVariableByQName("MAX_VALUE","",pmax,CONSTANT_TRAIT);
-	c->setVariableByQName("MIN_VALUE","",pmin,CONSTANT_TRAIT);
-	c->setVariableByQName("NaN","",pnan,CONSTANT_TRAIT);
-	c->prototype->setVariableByQName("toString",AS3,Class<IFunction>::getFunction(Number::_toString),DYNAMIC_TRAIT);
-	c->prototype->setVariableByQName("toLocaleString",AS3,Class<IFunction>::getFunction(Number::_toString),DYNAMIC_TRAIT);
-	c->prototype->setVariableByQName("toFixed",AS3,Class<IFunction>::getFunction(Number::toFixed),DYNAMIC_TRAIT);
-	c->prototype->setVariableByQName("valueOf",AS3,Class<IFunction>::getFunction(_valueOf),DYNAMIC_TRAIT);
+	CLASS_SETUP(c, ASObject, _constructor, CLASS_SEALED | CLASS_FINAL);
+	c->setVariableByQName("NEGATIVE_INFINITY","",abstract_d(-numeric_limits<double>::infinity()),CONSTANT_TRAIT);
+	c->setVariableByQName("POSITIVE_INFINITY","",abstract_d(numeric_limits<double>::infinity()),CONSTANT_TRAIT);
+	c->setVariableByQName("MAX_VALUE","",abstract_d(numeric_limits<double>::max()),CONSTANT_TRAIT);
+	c->setVariableByQName("MIN_VALUE","",abstract_d(numeric_limits<double>::min()),CONSTANT_TRAIT);
+	c->setVariableByQName("NaN","",abstract_d(numeric_limits<double>::quiet_NaN()),CONSTANT_TRAIT);
+	c->setDeclaredMethodByQName("toString",AS3,Class<IFunction>::getFunction(_toString),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("toFixed",AS3,Class<IFunction>::getFunction(toFixed,1),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("toExponential",AS3,Class<IFunction>::getFunction(toExponential,1),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("toPrecision",AS3,Class<IFunction>::getFunction(toPrecision,1),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("valueOf",AS3,Class<IFunction>::getFunction(_valueOf),NORMAL_METHOD,true);
+	c->prototype->setVariableByQName("toString","",Class<IFunction>::getFunction(Number::_toString),DYNAMIC_TRAIT);
+	c->prototype->setVariableByQName("toLocaleString","",Class<IFunction>::getFunction(Number::_toString),DYNAMIC_TRAIT);
+	c->prototype->setVariableByQName("toFixed","",Class<IFunction>::getFunction(Number::toFixed, 1),DYNAMIC_TRAIT);
+	c->prototype->setVariableByQName("toExponential","",Class<IFunction>::getFunction(Number::toExponential, 1),DYNAMIC_TRAIT);
+	c->prototype->setVariableByQName("toPrecision","",Class<IFunction>::getFunction(Number::toPrecision, 1),DYNAMIC_TRAIT);
+	c->prototype->setVariableByQName("valueOf","",Class<IFunction>::getFunction(_valueOf),DYNAMIC_TRAIT);
 }
 
 ASFUNCTIONBODY(Number,_constructor)
@@ -283,7 +283,9 @@ ASFUNCTIONBODY(Number,_constructor)
 	Number* th=static_cast<Number*>(obj);
 	if(argslen==0)
 	{
-		//The number is already initialized to NaN
+		// not constructed Numbers are set to NaN, so we have to set it to the default value during dynamic construction
+		if (std::isnan(th->val))
+			th->val = 0.;
 		return NULL;
 	}
 	th->val=args[0]->toNumber();
@@ -293,39 +295,190 @@ ASFUNCTIONBODY(Number,_constructor)
 ASFUNCTIONBODY(Number,toFixed)
 {
 	number_t val = obj->toNumber();
-	int fractiondigits=0;
+	int fractiondigits;
 	ARG_UNPACK (fractiondigits,0);
+	return Class<ASString>::getInstanceS(toFixedString(val, fractiondigits));
+}
+
+tiny_string Number::toFixedString(double v, int32_t fractiondigits)
+{
 	if (fractiondigits < 0 || fractiondigits > 20)
-		throwError<RangeError>(kInvalidPrecisionError, Integer::toString(fractiondigits));
-	if(std::isnan(val))
-		return  Class<ASString>::getInstanceS("NaN");
+		throwError<RangeError>(kInvalidPrecisionError);
+	if (std::isnan(v))
+		return  "NaN";
+	if (v >= pow(10., 21))
+		return toString(v);
 	number_t fractpart, intpart;
-	if (fractiondigits == 0)
-		val+=0.5;
-	fractpart = modf (val , &intpart);
+	double rounded = v + 0.5*pow(10., -fractiondigits);
+	fractpart = modf(rounded , &intpart);
 
 	tiny_string res("");
-	number_t v = fabs(intpart);
 	char buf[40];
-	snprintf(buf,40,"%ld",int64_t(v));
+	snprintf(buf,40,"%ld",int64_t(fabs(intpart)));
 	res += buf;
 	
 	if (fractiondigits > 0)
 	{
-		int x = fractiondigits;
+		number_t x = fractpart;
 		res += ".";
-		while (fractiondigits) 
+		for (int i=0; i<fractiondigits; i++)
 		{
-			fractpart*=10.0;
-			fractiondigits--;
+			x*=10.0;
+			int n = (int)x;
+			x -= n;
+			res += tiny_string::fromChar('0' + n);
 		}
-		fractpart+=0.5;
-		snprintf(buf,40,"%0*ld",x,int64_t(fractpart));
-		res += buf;
 	}
-	if ( val < 0)
+	if ( v < 0)
 		res = tiny_string::fromChar('-')+res;
-	return Class<ASString>::getInstanceS(res);
+	return res;
+}
+
+ASFUNCTIONBODY(Number,toExponential)
+{
+	Number* th=obj->as<Number>();
+	double v = th->val;
+	int32_t fractionDigits;
+	ARG_UNPACK(fractionDigits, 0);
+	if (argslen == 0 || args[0]->is<Undefined>())
+		fractionDigits = imin(imax(Number::countSignificantDigits(v)-1, 1), 20);
+	return Class<ASString>::getInstanceS(toExponentialString(v, fractionDigits));
+}
+
+tiny_string Number::toExponentialString(double v, int32_t fractionDigits)
+{
+	if (std::isnan(v) || std::isinf(v))
+		return toString(v);
+
+	tiny_string res;
+	if (v < 0)
+	{
+		res = "-";
+		v = -v;
+	}
+
+	if (fractionDigits < 0 || fractionDigits > 20)
+		throwError<RangeError>(kInvalidPrecisionError);
+	
+	char buf[40];
+	snprintf(buf,40,"%.*e", fractionDigits, v);
+	res += buf;
+	res = purgeExponentLeadingZeros(res);
+	return res;
+}
+
+tiny_string Number::purgeExponentLeadingZeros(const tiny_string& exponentialForm)
+{
+	uint32_t i = exponentialForm.find("e");
+	if (i == tiny_string::npos)
+		return exponentialForm;
+
+	tiny_string res;
+	res = exponentialForm.substr(0, i+1);
+
+	i++;
+	if (i >= exponentialForm.numChars())
+		return res;
+
+	uint32_t c = exponentialForm.charAt(i);
+	if (c == '-' || c == '+')
+	{
+		res += c;
+		i++;
+	}
+
+	bool leadingZero = true;
+	while (i < exponentialForm.numChars())
+	{
+		uint32_t c = exponentialForm.charAt(i);
+		if (!leadingZero || (leadingZero && c != '0'))
+		{
+			res += c;
+			leadingZero = false;
+		}
+
+		i++;
+	}
+
+	if (leadingZero)
+		res += '0';
+
+	return res;
+}
+
+/*
+ * Should return the number of significant decimal digits necessary to
+ * uniquely specify v. The actual implementation is a quick-and-dirty
+ * approximation.
+ */
+int32_t Number::countSignificantDigits(double v) {
+	char buf[40];
+	snprintf(buf,40,"%.20e", v);
+	
+	char *p = &buf[0];
+	while (*p == '0' || *p == '.')
+		p++;
+	
+	int32_t digits = 0;
+	int32_t consecutiveZeros = 0;
+	while ((('0' <= *p && *p <= '9') || *p == '.') && consecutiveZeros < 10)
+	{
+		if (*p != '.')
+			digits++;
+
+		if (*p == '0')
+			consecutiveZeros++;
+		else if (*p != '.')
+			consecutiveZeros = 0;
+		p++;
+	}
+
+	digits -= consecutiveZeros;
+
+	if (digits <= 0)
+		digits = 1;
+
+	return digits;
+}
+
+ASFUNCTIONBODY(Number,toPrecision)
+{
+	Number* th=obj->as<Number>();
+	double v = th->val;
+	if (argslen == 0 || args[0]->is<Undefined>())
+		return Class<ASString>::getInstanceS(toString(v));
+
+	int32_t precision;
+	ARG_UNPACK(precision);
+	return Class<ASString>::getInstanceS(toPrecisionString(v, precision));
+}
+
+tiny_string Number::toPrecisionString(double v, int32_t precision)
+{
+	if (precision < 1 || precision > 21)
+	{
+		throwError<RangeError>(kInvalidPrecisionError);
+		return NULL;
+	}
+	else if (std::isnan(v) || std::isinf(v))
+		return toString(v);
+	else if (::fabs(v) > pow(10., precision))
+		return toExponentialString(v, precision-1);
+	else if (v == 0)
+	{
+		tiny_string zero = "0.";
+		for (int i=0; i<precision; i++)
+			zero += "0";
+		return zero;
+	}
+	else
+	{
+		int n = (int)::ceil(::log10(::fabs(v)));
+		if (n < 0)
+			return toExponentialString(v, precision-1);
+		else
+			return toFixedString(v, precision-n);
+	}
 }
 
 ASFUNCTIONBODY(Number,_valueOf)

@@ -31,6 +31,7 @@
 #include "backends/netutils.h"
 #include "scripting/flash/display/DisplayObject.h"
 #include "scripting/flash/display/TokenContainer.h"
+#include "scripting/flash/ui/ContextMenu.h"
 
 namespace lightspark
 {
@@ -43,6 +44,10 @@ class RenderContext;
 class ApplicationDomain;
 class SecurityDomain;
 class BitmapData;
+class Matrix;
+class Vector;
+class Graphics;
+class Rectangle;
 
 class InteractiveObject: public DisplayObject
 {
@@ -61,9 +66,10 @@ protected:
 	~InteractiveObject();
 public:
 	InteractiveObject(Class_base* c);
-	ASPROPERTY_GETTER_SETTER(_NR<ASObject>,contextMenu); // TOOD: should be NativeMenu
+	ASPROPERTY_GETTER_SETTER(_NR<ContextMenu>,contextMenu); // TOOD: should be NativeMenu
 	ASPROPERTY_GETTER_SETTER(bool,tabEnabled);
 	ASPROPERTY_GETTER_SETTER(int32_t,tabIndex);
+	ASPROPERTY_GETTER_SETTER(_NR<ASObject>,focusRect);
 	ASFUNCTION(_constructor);
 	ASFUNCTION(_setMouseEnabled);
 	ASFUNCTION(_getMouseEnabled);
@@ -171,55 +177,6 @@ public:
 	ASFUNCTION(_setUseHandCursor);
 };
 
-/* This objects paints to its owners tokens */
-class Graphics: public ASObject
-{
-private:
-	int curX, curY;
-	TokenContainer *const owner;
-	//TODO: Add spinlock
-	void checkAndSetScaling()
-	{
-		if(owner->scaling != 1.0f)
-		{
-			owner->scaling = 1.0f;
-			owner->tokens.clear();
-			assert(curX == 0 && curY == 0);
-		}
-	}
-	static void solveVertexMapping(double x1, double y1,
-				       double x2, double y2,
-				       double x3, double y3,
-				       double u1, double u2, double u3,
-				       double c[3]);
-public:
-	Graphics(Class_base* c):ASObject(c),curX(0),curY(0),owner(NULL)
-	{
-		throw RunTimeException("Cannot instantiate a Graphics object");
-	}
-	Graphics(Class_base* c, TokenContainer* _o)
-		: ASObject(c),curX(0),curY(0),owner(_o) {}
-	static void sinit(Class_base* c);
-	static void buildTraits(ASObject* o);
-	ASFUNCTION(_constructor);
-	ASFUNCTION(lineStyle);
-	ASFUNCTION(beginFill);
-	ASFUNCTION(beginGradientFill);
-	ASFUNCTION(beginBitmapFill);
-	ASFUNCTION(endFill);
-	ASFUNCTION(drawRect);
-	ASFUNCTION(drawRoundRect);
-	ASFUNCTION(drawCircle);
-	ASFUNCTION(drawTriangles);
-	ASFUNCTION(moveTo);
-	ASFUNCTION(lineTo);
-	ASFUNCTION(curveTo);
-	ASFUNCTION(cubicCurveTo);
-	ASFUNCTION(clear);
-	ASFUNCTION(copyFrom);
-};
-
-
 class Shape: public DisplayObject, public TokenContainer
 {
 protected:
@@ -253,7 +210,6 @@ public:
 	MorphShape(Class_base* c):DisplayObject(c){}
 	static void sinit(Class_base* c);
 	static void buildTraits(ASObject* o);
-	ASFUNCTION(_constructor);
 };
 
 class Loader;
@@ -272,6 +228,7 @@ private:
 	tiny_string loaderURL;
 	_NR<EventDispatcher> sharedEvents;
 	_NR<Loader> loader;
+	_NR<ByteArray> bytesData;
 	/*
 	 * waitedObject is the object we are supposed to wait,
 	 * it's necessary when multiple loads are invoked on
@@ -290,18 +247,20 @@ private:
 	void sendInit();
 public:
 	ASPROPERTY_GETTER(uint32_t,actionScriptVersion);
+	ASPROPERTY_GETTER(uint32_t,swfVersion);
 	ASPROPERTY_GETTER(bool, childAllowsParent);
+	ASPROPERTY_GETTER(_NR<UncaughtErrorEvents>,uncaughtErrorEvents);
 	LoaderInfo(Class_base* c);
 	LoaderInfo(Class_base* c, _R<Loader> l);
 	void finalize();
 	static void sinit(Class_base* c);
 	static void buildTraits(ASObject* o);
 	ASFUNCTION(_constructor);
-	ASFUNCTION(addEventListener);
 	ASFUNCTION(_getLoaderURL);
 	ASFUNCTION(_getURL);
 	ASFUNCTION(_getBytesLoaded);
 	ASFUNCTION(_getBytesTotal);
+	ASFUNCTION(_getBytes);
 	ASFUNCTION(_getApplicationDomain);
 	ASFUNCTION(_getLoader);
 	ASFUNCTION(_getContent);
@@ -318,6 +277,7 @@ public:
 	void setBytesLoaded(uint32_t b);
 	void setURL(const tiny_string& _url, bool setParameters=true);
 	void setLoaderURL(const tiny_string& _url) { loaderURL=_url; }
+	void setParameters(_NR<ASObject> p) { parameters = p; }
 	void resetState();
 };
 
@@ -349,6 +309,7 @@ private:
 	_NR<LoaderInfo> contentLoaderInfo;
 	void unload();
 	bool loaded;
+	bool allowCodeImport;
 public:
 	Loader(Class_base* c);
 	~Loader();
@@ -361,8 +322,10 @@ public:
 	ASFUNCTION(load);
 	ASFUNCTION(loadBytes);
 	ASFUNCTION(_unload);
+	ASFUNCTION(_unloadAndStop);
 	ASFUNCTION(_getContentLoaderInfo);
 	ASFUNCTION(_getContent);
+	ASPROPERTY_GETTER(_NR<UncaughtErrorEvents>,uncaughtErrorEvents);
 	int getDepth() const
 	{
 		return 0;
@@ -370,6 +333,7 @@ public:
 	void setContent(_R<DisplayObject> o);
 	_NR<DisplayObject> getContent() { return content; }
 	_R<LoaderInfo> getContentLoaderInfo() { return contentLoaderInfo; }
+	bool allowLoadingSWF() { return allowCodeImport; };
 };
 
 class Sprite: public DisplayObjectContainer, public TokenContainer
@@ -528,6 +492,7 @@ public:
 	ASFUNCTION(play);
 	ASFUNCTION(gotoAndStop);
 	ASFUNCTION(gotoAndPlay);
+	ASFUNCTION(prevFrame);
 	ASFUNCTION(nextFrame);
 	ASFUNCTION(_getCurrentFrame);
 	ASFUNCTION(_getCurrentFrameLabel);
@@ -550,6 +515,9 @@ private:
 	uint32_t internalGetHeight() const;
 	uint32_t internalGetWidth() const;
 	void onDisplayState(const tiny_string&);
+	void onAlign(const tiny_string&);
+	void onColorCorrection(const tiny_string&);
+	void onFullScreenSourceRect(_NR<Rectangle>);
 	// Keyboard focus object is accessed from the VM thread (AS
 	// code) and the input thread and is protected focusSpinlock
 	Spinlock focusSpinlock;
@@ -564,6 +532,9 @@ public:
 	_NR<InteractiveObject> getFocusTarget();
 	void setFocusTarget(_NR<InteractiveObject> focus);
 	ASFUNCTION(_constructor);
+	ASFUNCTION(_getAllowFullScreen);
+	ASFUNCTION(_getAllowFullScreenInteractive);
+	ASFUNCTION(_getColorCorrectionSupport);
 	ASFUNCTION(_getStageWidth);
 	ASFUNCTION(_getStageHeight);
 	ASFUNCTION(_getScaleMode);
@@ -573,7 +544,17 @@ public:
 	ASFUNCTION(_getFocus);
 	ASFUNCTION(_setFocus);
 	ASFUNCTION(_setTabChildren);
+	ASFUNCTION(_getFrameRate);
+	ASFUNCTION(_setFrameRate);
+	ASFUNCTION(_getWmodeGPU);
+	ASFUNCTION(_invalidate);
+	ASPROPERTY_GETTER_SETTER(tiny_string,align);
+	ASPROPERTY_GETTER_SETTER(tiny_string,colorCorrection);
 	ASPROPERTY_GETTER_SETTER(tiny_string,displayState);
+	ASPROPERTY_GETTER_SETTER(_NR<Rectangle>,fullScreenSourceRect);
+	ASPROPERTY_GETTER_SETTER(bool,showDefaultContextMenu);
+	ASPROPERTY_GETTER_SETTER(tiny_string,quality);
+	ASPROPERTY_GETTER_SETTER(bool,stageFocusRect);
 };
 
 class StageScaleMode: public ASObject
@@ -643,6 +624,22 @@ class SpreadMethod: public ASObject
 public:
 	SpreadMethod(Class_base* c):ASObject(c){}
 	static void sinit(Class_base* c);
+};
+
+class GraphicsPathCommand: public ASObject
+{
+public:
+	enum {NO_OP=0, MOVE_TO, LINE_TO, CURVE_TO, WIDE_MOVE_TO, WIDE_LINE_TO, CUBIC_CURVE_TO};
+	GraphicsPathCommand(Class_base* c):ASObject(c){}
+	static void sinit(Class_base* c);
+};
+
+class GraphicsPathWinding: public ASObject
+{
+public:
+	GraphicsPathWinding(Class_base* c):ASObject(c){}
+	static void sinit(Class_base* c);
+
 };
 
 class IntSize

@@ -45,7 +45,6 @@
 #include "parsing/amf3_generator.h"
 #include "scripting/argconv.h"
 #include "scripting/toplevel/Number.h"
-#include "scripting/toplevel/XML.h"
 
 using namespace std;
 using namespace lightspark;
@@ -86,8 +85,12 @@ bool Undefined::isEqual(ASObject* r)
 		case T_NUMBER:
 		case T_INTEGER:
 		case T_UINTEGER:
-		case T_STRING:
 		case T_BOOLEAN:
+			return false;
+		case T_FUNCTION:
+		case T_STRING:
+			if (!r->isConstructed())
+				return true;
 			return false;
 		default:
 			return r->isEqual(this);
@@ -113,8 +116,7 @@ void Undefined::serialize(ByteArray* out, std::map<tiny_string, uint32_t>& strin
 
 void Undefined::setVariableByMultiname(const multiname& name, ASObject* o, CONST_ALLOWED_FLAG allowConst)
 {
-	LOG(LOG_NOT_IMPLEMENTED, "Ignoring set on Undefined " << name);
-	o->decRef();
+	throwError<TypeError>(kConvertUndefinedToObjectError);
 }
 
 IFunction::IFunction(Class_base* c):ASObject(c),length(0),inClass(NULL)
@@ -126,6 +128,18 @@ void IFunction::finalize()
 {
 	ASObject::finalize();
 	closure_this.reset();
+}
+
+void IFunction::sinit(Class_base* c)
+{
+	c->prototype->setVariableByQName("toString","",Class<IFunction>::getFunction(IFunction::_toString),DYNAMIC_TRAIT);
+
+	c->setDeclaredMethodByQName("call","",Class<IFunction>::getFunction(IFunction::_call),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("call",AS3,Class<IFunction>::getFunction(IFunction::_call),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("apply","",Class<IFunction>::getFunction(IFunction::apply),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("apply",AS3,Class<IFunction>::getFunction(IFunction::apply),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("length","",Class<IFunction>::getFunction(IFunction::_getter_length),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("toString","",Class<IFunction>::getFunction(IFunction::_toString),NORMAL_METHOD,false);
 }
 
 ASFUNCTIONBODY_GETTER_SETTER(IFunction,prototype);
@@ -204,6 +218,15 @@ ASFUNCTIONBODY(IFunction,_call)
 ASFUNCTIONBODY(IFunction,_toString)
 {
 	return Class<ASString>::getInstanceS("function Function() {}");
+}
+
+ASObject* Class<IFunction>::generator(ASObject* const* args, const unsigned int argslen)
+{
+	for(unsigned int i=0;i<argslen;i++)
+		args[i]->decRef();
+	if (argslen > 0)
+		throwError<EvalError>(kFunctionConstructorError);
+	return getNopFunction();
 }
 
 ASObject *IFunction::describeType() const
@@ -350,6 +373,8 @@ ASObject* SyntheticFunction::call(ASObject* obj, ASObject* const* args, uint32_t
 	cc.scope_stack=func_scope;
 	cc.initialScopeStack=func_scope.size();
 	cc.exec_pos=0;
+	if (getVm()->currentCallContext)
+		cc.defaultNamespaceUri = getVm()->currentCallContext->defaultNamespaceUri;
 
 	/* Set the current global object, each script in each DoABCTag has its own */
 	call_context* saved_cc = getVm()->currentCallContext;
@@ -530,6 +555,13 @@ ASObject* Function::call(ASObject* obj, ASObject* const* args, uint32_t num_args
 		ret=getSys()->getUndefinedRef();
 	return ret;
 }
+bool Function::isEqual(ASObject* r)
+{
+	Function* f=dynamic_cast<Function*>(r);
+	if(f==NULL)
+		return false;
+	return (val==f->val) && (closure_this==f->closure_this);
+}
 
 bool Null::isEqual(ASObject* r)
 {
@@ -541,8 +573,12 @@ bool Null::isEqual(ASObject* r)
 		case T_INTEGER:
 		case T_UINTEGER:
 		case T_NUMBER:
-		case T_STRING:
 		case T_BOOLEAN:
+			return false;
+		case T_FUNCTION:
+		case T_STRING:
+			if (!r->isConstructed())
+				return true;
 			return false;
 		default:
 			return r->isEqual(this);
@@ -658,7 +694,7 @@ Type* Type::getBuiltinType(const multiname* mn)
  * by running ABCContext::exec() for all ABCContexts.
  * Therefore, all classes are at least declared.
  */
-const Type* Type::getTypeFromMultiname(const multiname* mn, const ABCContext* context)
+const Type* Type::getTypeFromMultiname(const multiname* mn, ABCContext* context)
 {
 	if(mn == 0) //multiname idx zero indicates any type
 		return Type::anyType;
@@ -671,17 +707,17 @@ const Type* Type::getTypeFromMultiname(const multiname* mn, const ABCContext* co
 		&& mn->ns.size() == 1 && mn->ns[0].hasEmptyName())
 		return Type::voidType;
 
-	ASObject* typeObject;
+	ASObject* typeObject = NULL;
 	/*
-	 * During the newClass opcode, the class is added to context->classesBeingDefined.
+	 * During the newClass opcode, the class is added to context->root->applicationDomain->classesBeingDefined.
 	 * The class variable in the global scope is only set a bit later.
 	 * When the class has to be resolved in between (for example, the
 	 * class has traits of the class's type), then we'll find it in
 	 * classesBeingDefined, but context->root->getVariableAndTargetByMultiname()
 	 * would still return "Undefined".
 	 */
-	auto i = context->classesBeingDefined.find(mn);
-	if(i != context->classesBeingDefined.end())
+	auto i = context->root->applicationDomain->classesBeingDefined.find(mn);
+	if(i != context->root->applicationDomain->classesBeingDefined.end())
 		typeObject = i->second;
 	else
 	{
@@ -691,17 +727,11 @@ const Type* Type::getTypeFromMultiname(const multiname* mn, const ABCContext* co
 
 	if(!typeObject)
 	{
-		//HACK: until we have implemented all flash classes, we need this hack
-		LOG(LOG_NOT_IMPLEMENTED,"getTypeFromMultiname: could not find " << *mn << ", using AnyType");
-		return Type::anyType;
-	}
-
-	if(!typeObject->is<Type>())
-	{
-		//It actually happens in the wild that the class for a member might be a private class
-		//that is defined later in the same script. We have no way to solve the dependency, so return any
-		LOG(LOG_NOT_IMPLEMENTED,"Not resolvable type " << *mn << ", using AnyType");
-		return Type::anyType;
+		if (mn->ns.size() >= 1 && mn->ns[0].getImpl().name == "__AS3__.vec")
+		{
+			QName qname(getSys()->getStringFromUniqueId(mn->name_s_id),mn->ns[0].getImpl().name);
+			typeObject = Template<Vector>::getTemplateInstance(qname,context).getPtr();
+		}
 	}
 	return typeObject->as<Type>();
 }
@@ -753,6 +783,23 @@ void Class_base::copyBorrowedTraitsFromSuper()
 	}
 }
 
+void Class_base::initStandardProps()
+{
+	incRef();
+	constructorprop = _NR<ObjectConstructor>(new_objectConstructor(this,0));
+	constructorprop->incRef();
+	addConstructorGetter();
+	
+	setDeclaredMethodByQName("toString","",Class<IFunction>::getFunction(Class_base::_toString),NORMAL_METHOD,false);
+	incRef();
+	prototype->setVariableByQName("constructor","",this,DYNAMIC_TRAIT);
+
+	if(super)
+		prototype->prevPrototype=super->prototype;
+	addPrototypeGetter();
+	addLengthGetter();
+}
+
 
 ASObject* Class_base::coerce(ASObject* o) const
 {
@@ -760,12 +807,15 @@ ASObject* Class_base::coerce(ASObject* o) const
 		return o;
 	if(o->is<Class_base>())
 	{ /* classes can be cast to the type 'Object' or 'Class' */
-	       if(this == Class<ASObject>::getClass()
+		if(this == Class<ASObject>::getClass()
 		|| (class_name.name=="Class" && class_name.ns==""))
-		       return o; /* 'this' is the type of a class */
-	       else
-		       throwError<TypeError>(kCheckTypeFailedError, o->getClassName(), getQualifiedClassName());
+			return o; /* 'this' is the type of a class */
+		else
+			throwError<TypeError>(kCheckTypeFailedError, o->getClassName(), getQualifiedClassName());
 	}
+	if (o->is<ObjectConstructor>())
+		return o;
+
 	//o->getClass() == NULL for primitive types
 	//those are handled in overloads Class<Number>::coerce etc.
 	if(!o->getClass() || !o->getClass()->isSubClass(this))
@@ -783,6 +833,11 @@ ASFUNCTIONBODY(Class_base,_toString)
 	return Class<ASString>::getInstanceS(ret);
 }
 
+void Class_base::addConstructorGetter()
+{
+	setDeclaredMethodByQName("constructor","",Class<IFunction>::getFunction(_getter_constructorprop),GETTER_METHOD,false);
+}
+
 void Class_base::addPrototypeGetter()
 {
 	setDeclaredMethodByQName("prototype","",Class<IFunction>::getFunction(_getter_prototype),GETTER_METHOD,false);
@@ -797,6 +852,20 @@ Class_base::~Class_base()
 {
 	if(!referencedObjects.empty())
 		LOG(LOG_ERROR,_("Class destroyed without cleanUp called"));
+}
+
+ASObject* Class_base::_getter_constructorprop(ASObject* obj, ASObject* const* args, const unsigned int argslen)
+{
+	Class_base* th = NULL;
+	if(obj->is<Class_base>())
+		th = obj->as<Class_base>();
+	else
+		th = obj->getClass();
+	if(argslen != 0)
+		throw Class<ArgumentError>::getInstanceS("Arguments provided in getter");
+	ASObject* ret=th->constructorprop.getPtr();
+	ret->incRef();
+	return ret;
 }
 
 ASObject* Class_base::_getter_prototype(ASObject* obj, ASObject* const* args, const unsigned int argslen)
@@ -832,7 +901,7 @@ void Class_base::addImplementedInterface(Class_base* i)
 
 tiny_string Class_base::toString()
 {
-	tiny_string ret="[Class ";
+	tiny_string ret="[class ";
 	ret+=class_name.name;
 	ret+="]";
 	return ret;
@@ -888,13 +957,16 @@ void Class_base::handleConstruction(ASObject* target, ASObject* const* args, uns
 	{
 		target->incRef();
 		ASObject* ret=constructor->call(target,args,argslen);
+		target->constructIndicator = true;
 		assert_and_throw(ret->is<Undefined>());
 		ret->decRef();
 	}
 	else
 	{
+		target->constructIndicator = true;
 		for(uint32_t i=0;i<argslen;i++)
 			args[i]->decRef();
+		//throwError<TypeError>(kConstructOfNonFunctionError);
 	}
 }
 
@@ -990,25 +1062,40 @@ void Class_object::finalize()
 	Class_base::finalize();
 }
 
-const std::vector<Class_base*>& Class_base::getInterfaces() const
+const std::vector<Class_base*>& Class_base::getInterfaces(bool *alldefined) const
 {
+	if (alldefined)
+		*alldefined = true;
 	if(!interfaces.empty())
 	{
 		//Recursively get interfaces implemented by this interface
-		for(unsigned int i=0;i<interfaces.size();i++)
+		std::vector<multiname>::iterator it = interfaces.begin();
+		while (it !=interfaces.end())
 		{
 			ASObject* target;
 			ASObject* interface_obj=this->context->root->applicationDomain->
-				getVariableAndTargetByMultiname(interfaces[i], target);
-			assert_and_throw(interface_obj && interface_obj->getObjectType()==T_CLASS);
-			Class_base* inter=static_cast<Class_base*>(interface_obj);
-
-			interfaces_added.push_back(inter);
-			//Probe the interface for its interfaces
-			inter->getInterfaces();
+					getVariableAndTargetByMultiname(*it, target);
+			if (interface_obj)
+			{
+				assert_and_throw(interface_obj->getObjectType()==T_CLASS);
+				Class_base* inter=static_cast<Class_base*>(interface_obj);
+				//Probe the interface for its interfaces
+				bool bAllDefinedSub;
+				inter->getInterfaces(&bAllDefinedSub);
+				
+				if (bAllDefinedSub)
+				{
+					interfaces_added.push_back(inter);
+					interfaces.erase(it);
+					continue;
+				}
+				else if (alldefined)
+					*alldefined = false;
+			}
+			else if (alldefined)
+				*alldefined = false;
+			it++;
 		}
-		//Clean the interface vector to save some space
-		interfaces.clear();
 	}
 	return interfaces_added;
 }
@@ -1041,6 +1128,11 @@ bool Class_base::isSubClass(const Class_base* cls, bool considerInterfaces) cons
 {
 	check();
 	if(cls==this || cls==Class<ASObject>::getClass())
+		return true;
+
+	// it seems that classes with the same name from different applicationDomains 
+	// are treated as equal, so we test for same names
+	if (this->getQualifiedClassName() == cls->getQualifiedClassName())
 		return true;
 
 	//Now check the interfaces
@@ -1146,7 +1238,7 @@ void Class_base::describeTraits(xmlpp::Element* root,
 		int kind=t.kind&0xf;
 		multiname* mname=context->getMultiname(t.name,NULL);
 		if (mname->name_type!=multiname::NAME_STRING ||
-		    (mname->ns.size()==1 && !mname->ns[0].hasEmptyName()) ||
+		    (mname->ns.size()==1 && (!mname->ns[0].hasEmptyName() || mname->ns[0].getImpl().kind == PRIVATE_NAMESPACE)) ||
 		    mname->ns.size() > 1)
 			continue;
 		
@@ -1278,9 +1370,9 @@ void Class_base::initializeProtectedNamespace(const tiny_string& name, const nam
 		protected_ns=nsNameAndKind(name,baseNs->nsId,(NS_KIND)(int)ns.kind);
 }
 
-const variable* Class_base::findBorrowedGettable(const multiname& name) const
+const variable* Class_base::findBorrowedGettable(const multiname& name,NS_KIND& nskind) const
 {
-	return ASObject::findGettableImpl(borrowedVariables,name);
+	return ASObject::findGettableImpl(borrowedVariables,name,nskind);
 }
 
 variable* Class_base::findBorrowedSettable(const multiname& name, bool* has_getter)
@@ -1288,9 +1380,25 @@ variable* Class_base::findBorrowedSettable(const multiname& name, bool* has_gett
 	return ASObject::findSettableImpl(borrowedVariables,name,has_getter);
 }
 
+variable* Class_base::findSettableInPrototype(const multiname& name)
+{
+	Prototype* proto = prototype.getPtr();
+	while(proto)
+	{
+		variable *obj = proto->getObj()->findSettable(name);
+		if (obj)
+			return obj;
+
+		proto = proto->prevPrototype.getPtr();
+	}
+
+	return NULL;
+}
+
 EARLY_BIND_STATUS Class_base::resolveMultinameStatically(const multiname& name) const
 {
-	if(findBorrowedGettable(name)!=NULL)
+	NS_KIND nskind;
+	if(findBorrowedGettable(name,nskind)!=NULL)
 		return BINDED;
 	else
 		return NOT_BINDED;
@@ -1306,14 +1414,19 @@ void ASQName::setByNode(xmlpp::Node* node)
 	local_name = node->get_name();
 	uri=node->get_namespace_uri();
 }
+void ASQName::setByXML(XML* node)
+{
+	uri_is_null=false;
+	local_name = node->getName();
+	uri=node->getNamespaceURI();
+}
 
 void ASQName::sinit(Class_base* c)
 {
-	c->setSuper(Class<ASObject>::getRef());
-	c->setConstructor(Class<IFunction>::getFunction(_constructor));
+	CLASS_SETUP(c, ASObject, _constructor, CLASS_SEALED | CLASS_FINAL);
 	c->setDeclaredMethodByQName("uri","",Class<IFunction>::getFunction(_getURI),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("localName","",Class<IFunction>::getFunction(_getLocalName),GETTER_METHOD,true);
-	c->prototype->setVariableByQName("toString",AS3,Class<IFunction>::getFunction(_toString),DYNAMIC_TRAIT);
+	c->prototype->setVariableByQName("toString","",Class<IFunction>::getFunction(_toString),DYNAMIC_TRAIT);
 }
 
 ASFUNCTIONBODY(ASQName,_constructor)
@@ -1404,9 +1517,7 @@ ASFUNCTIONBODY(ASQName,generator)
 	{
 		th->local_name="";
 		th->uri_is_null=false;
-		th->uri="";
-		// Should set th->uri to the default namespace
-		LOG(LOG_NOT_IMPLEMENTED, "QName constructor not completely implemented");
+		th->uri=getVm()->getDefaultXMLNamespace();
 		return th;
 	}
 	if(argslen==1)
@@ -1448,9 +1559,7 @@ ASFUNCTIONBODY(ASQName,generator)
 		}
 		else
 		{
-			// Should set th->uri to the default namespace
-			LOG(LOG_NOT_IMPLEMENTED, "QName constructor not completely implemented");
-			th->uri="";
+			th->uri=getVm()->getDefaultXMLNamespace();
 		}
 	}
 	else if(namespaceval->getObjectType()==T_NULL)
@@ -1517,14 +1626,14 @@ tiny_string ASQName::toString()
 	return s + local_name;
 }
 
-Namespace::Namespace(Class_base* c):ASObject(c)
+Namespace::Namespace(Class_base* c):ASObject(c),nskind(NAMESPACE)
 {
 	type=T_NAMESPACE;
 	prefix_is_undefined=false;
 }
 
 Namespace::Namespace(Class_base* c, const tiny_string& _uri, const tiny_string& _prefix)
-  : ASObject(c),uri(_uri),prefix(_prefix)
+  : ASObject(c),nskind(NAMESPACE),uri(_uri),prefix(_prefix)
 {
 	type=T_NAMESPACE;
 	prefix_is_undefined=false;
@@ -1532,11 +1641,10 @@ Namespace::Namespace(Class_base* c, const tiny_string& _uri, const tiny_string& 
 
 void Namespace::sinit(Class_base* c)
 {
-	c->setSuper(Class<ASObject>::getRef());
-	c->setConstructor(Class<IFunction>::getFunction(_constructor));
-	c->setDeclaredMethodByQName("uri","",Class<IFunction>::getFunction(_setURI),SETTER_METHOD,true);
+	CLASS_SETUP(c, ASObject, _constructor, CLASS_SEALED | CLASS_FINAL);
+	//c->setDeclaredMethodByQName("uri","",Class<IFunction>::getFunction(_setURI),SETTER_METHOD,true);
 	c->setDeclaredMethodByQName("uri","",Class<IFunction>::getFunction(_getURI),GETTER_METHOD,true);
-	c->setDeclaredMethodByQName("prefix","",Class<IFunction>::getFunction(_setPrefix),SETTER_METHOD,true);
+	//c->setDeclaredMethodByQName("prefix","",Class<IFunction>::getFunction(_setPrefix),SETTER_METHOD,true);
 	c->setDeclaredMethodByQName("prefix","",Class<IFunction>::getFunction(_getPrefix),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("valueOf",AS3,Class<IFunction>::getFunction(_valueOf),NORMAL_METHOD,true);
 	c->prototype->setVariableByQName("toString","",Class<IFunction>::getFunction(_toString),DYNAMIC_TRAIT);
@@ -1720,20 +1828,20 @@ ASFUNCTIONBODY(Namespace,generator)
 	}
 	return th;
 }
-
+/*
 ASFUNCTIONBODY(Namespace,_setURI)
 {
 	Namespace* th=static_cast<Namespace*>(obj);
 	th->uri=args[0]->toString();
 	return NULL;
 }
-
+*/
 ASFUNCTIONBODY(Namespace,_getURI)
 {
 	Namespace* th=static_cast<Namespace*>(obj);
 	return Class<ASString>::getInstanceS(th->uri);
 }
-
+/*
 ASFUNCTIONBODY(Namespace,_setPrefix)
 {
 	Namespace* th=static_cast<Namespace*>(obj);
@@ -1749,7 +1857,7 @@ ASFUNCTIONBODY(Namespace,_setPrefix)
 	}
 	return NULL;
 }
-
+*/
 ASFUNCTIONBODY(Namespace,_getPrefix)
 {
 	Namespace* th=static_cast<Namespace*>(obj);
@@ -1809,7 +1917,10 @@ ASObject* Class<IFunction>::getInstance(bool construct, ASObject* const* args, c
 {
 	if (argslen > 0)
 		throwError<EvalError>(kFunctionConstructorError);
-	return getNopFunction();
+	ASObject* ret = getNopFunction();
+	if (construct)
+		ret->setConstructIndicator();
+	return ret;
 }
 
 Class<IFunction>* Class<IFunction>::getClass()
@@ -1831,6 +1942,7 @@ Class<IFunction>* Class<IFunction>::getClass()
 		ret->prototype = _MNR(new_functionPrototype(ret, ret->super->prototype));
 		ret->incRef();
 		ret->prototype->getObj()->setVariableByQName("constructor","",ret,DYNAMIC_TRAIT);
+		ret->prototype->getObj()->setConstructIndicator();
 		ret->incRef();
 		*retAddr = ret;
 
@@ -1838,15 +1950,14 @@ Class<IFunction>* Class<IFunction>::getClass()
 		//addPrototypeGetter and setDeclaredMethodByQName.
 		//Thus we make sure that everything is in order when getFunction() below is called
 		ret->addPrototypeGetter();
-		//copy borrowed traits from ASObject by ourself
-		ASObject::sinit(ret);
-		ret->setDeclaredMethodByQName("call",AS3,Class<IFunction>::getFunction(IFunction::_call),NORMAL_METHOD,true);
-		ret->setDeclaredMethodByQName("apply",AS3,Class<IFunction>::getFunction(IFunction::apply),NORMAL_METHOD,true);
+		IFunction::sinit(ret);
+		ret->constructorprop = _NR<ObjectConstructor>(new_objectConstructor(ret,ret->length));
+		ret->constructorprop->incRef();
+
+		ret->addConstructorGetter();
+
 		ret->setDeclaredMethodByQName("prototype","",Class<IFunction>::getFunction(IFunction::_getter_prototype),GETTER_METHOD,true);
 		ret->setDeclaredMethodByQName("prototype","",Class<IFunction>::getFunction(IFunction::_setter_prototype),SETTER_METHOD,true);
-		ret->setDeclaredMethodByQName("length","",Class<IFunction>::getFunction(IFunction::_getter_length),GETTER_METHOD,true);
-		ret->prototype->setVariableByQName("toString",AS3,Class<IFunction>::getFunction(IFunction::_toString),DYNAMIC_TRAIT);
-		ret->setDeclaredMethodByQName("toString",AS3,Class<IFunction>::getFunction(Class_base::_toString),NORMAL_METHOD,false);
 	}
 	else
 		ret=static_cast<Class<IFunction>*>(*retAddr);
@@ -2243,8 +2354,15 @@ ASFUNCTIONBODY(lightspark,_isXMLName)
 
 ObjectPrototype::ObjectPrototype(Class_base* c) : ASObject(c)
 {
+	traitsInitialized = true;
+	constructIndicator = true;
 }
-
+bool ObjectPrototype::isEqual(ASObject* r)
+{
+	if (r->is<ObjectPrototype>())
+		return this->getClass() == r->getClass();
+	return ASObject::isEqual(r);
+}
 void ObjectPrototype::finalize()
 {
 	ASObject::finalize();
@@ -2258,6 +2376,31 @@ _NR<ASObject> ObjectPrototype::getVariableByMultiname(const multiname& name, GET
 		return ret;
 
 	return prevPrototype->getObj()->getVariableByMultiname(name, opt);
+}
+
+
+ObjectConstructor::ObjectConstructor(Class_base* c,uint32_t length) : ASObject(c),_length(length)
+{
+	Class<ASObject>::getRef()->prototype->incRef();
+	this->prototype = Class<ASObject>::getRef()->prototype.getPtr();
+}
+
+_NR<ASObject> ObjectConstructor::getVariableByMultiname(const multiname& name, GET_VARIABLE_OPTION opt)
+{
+	if (name.normalizedName() == "prototype")
+	{
+		prototype->getObj()->incRef();
+		return _NR<ASObject>(prototype->getObj());
+	}
+	if (name.normalizedName() == "length")
+	{
+		return _NR<ASObject>(abstract_d(_length));
+	}
+	return getClass()->getVariableByMultiname(name, opt);
+}
+bool ObjectConstructor::isEqual(ASObject* r)
+{
+	return this == r || getClass() == r;
 }
 
 FunctionPrototype::FunctionPrototype(Class_base* c, _NR<Prototype> p) : Function(c, ASNop)

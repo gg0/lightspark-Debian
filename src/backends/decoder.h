@@ -28,6 +28,24 @@ extern "C"
 {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
+#ifdef HAVE_LIBAVRESAMPLE
+#include <libavresample/avresample.h>
+#endif
+#include <libavutil/opt.h>
+#include <libavutil/mathematics.h>
+#ifndef AVCODEC_MAX_AUDIO_FRAME_SIZE
+#define AVCODEC_MAX_AUDIO_FRAME_SIZE 192000 // 1 second of 48khz 32bit audio
+#endif
+#ifdef HAVE_AVCODECID
+#define CodecID AVCodecID
+#define CODEC_ID_NONE AV_CODEC_ID_NONE
+#define CODEC_ID_H264 AV_CODEC_ID_H264
+#define CODEC_ID_FLV1 AV_CODEC_ID_FLV1
+#define CODEC_ID_VP6F AV_CODEC_ID_VP6F
+#define CODEC_ID_AAC AV_CODEC_ID_AAC
+#define CODEC_ID_MP3 AV_CODEC_ID_MP3
+#define CODEC_ID_ADPCM_SWF AV_CODEC_ID_ADPCM_SWF
+#endif
 #define MAX_AUDIO_FRAME_SIZE AVCODEC_MAX_AUDIO_FRAME_SIZE
 }
 #else
@@ -40,7 +58,8 @@ namespace lightspark
 {
 
 enum LS_VIDEO_CODEC { H264=0, H263, VP6 };
-enum LS_AUDIO_CODEC { LINEAR_PCM_PLATFORM_ENDIAN=0, ADPCM=1, MP3=2, LINEAR_PCM_LE=3, AAC=10 };
+// "Audio coding formats" from Chapter 11 in SWF documentation
+enum LS_AUDIO_CODEC { CODEC_NONE=-1, LINEAR_PCM_PLATFORM_ENDIAN=0, ADPCM=1, MP3=2, LINEAR_PCM_LE=3, AAC=10 };
 
 class Decoder
 {
@@ -277,12 +296,16 @@ class FFMpegAudioDecoder: public AudioDecoder
 private:
 	bool ownedContext;
 	AVCodecContext* codecContext;
+	std::vector<uint8_t> overflowBuffer;
 	bool fillDataAndCheckValidity();
+	CodecID LSToFFMpegCodec(LS_AUDIO_CODEC lscodec);
 #if HAVE_AVCODEC_DECODE_AUDIO4
 	AVFrame* frameIn;
+	int resampleFrameToS16(FrameSamples& curTail);
 #endif
 public:
 	FFMpegAudioDecoder(LS_AUDIO_CODEC codec, uint8_t* initdata, uint32_t datalen);
+	FFMpegAudioDecoder(LS_AUDIO_CODEC codec, int sampleRate, int channels, bool);
 	/*
 	   Specialized constructor used by FFMpegStreamDecoder
 	*/
@@ -293,6 +316,7 @@ public:
 	*/
 	uint32_t decodePacket(AVPacket* pkt, uint32_t time);
 	uint32_t decodeData(uint8_t* data, int32_t datalen, uint32_t time);
+	uint32_t decodeStreamSomePackets(std::istream& s, uint32_t time);
 };
 #endif
 

@@ -122,6 +122,25 @@
 		REGISTER_GETTER(c,name); \
 		REGISTER_SETTER(c,name)
 
+#define CLASS_DYNAMIC_NOT_FINAL 0
+#define CLASS_FINAL 1
+#define CLASS_SEALED 2
+
+// TODO: Every class should have a constructor
+#define CLASS_SETUP_NO_CONSTRUCTOR(c, superClass, attributes) \
+	c->setSuper(Class<superClass>::getRef()); \
+	c->setConstructor(NULL); \
+	c->isFinal = ((attributes) & CLASS_FINAL) != 0;	\
+	c->isSealed = ((attributes) & CLASS_SEALED) != 0
+
+#define CLASS_SETUP(c, superClass, constructor, attributes) \
+	CLASS_SETUP_NO_CONSTRUCTOR(c, superClass, attributes); \
+	c->setConstructor(Class<IFunction>::getFunction(constructor));
+
+#define CLASS_SETUP_CONSTRUCTOR_LENGTH(c, superClass, constructor, ctorlength, attributes) \
+	CLASS_SETUP_NO_CONSTRUCTOR(c, superClass, attributes); \
+	c->setConstructor(Class<IFunction>::getFunction((constructor), (ctorlength)));
+
 namespace lightspark
 {
 
@@ -134,7 +153,7 @@ class Loader;
 class Type;
 class ABCContext;
 
-enum TRAIT_KIND { NO_CREATE_TRAIT=0, DECLARED_TRAIT=1, DYNAMIC_TRAIT=2, CONSTANT_TRAIT=9 /* constants are also declared traits */ };
+enum TRAIT_KIND { NO_CREATE_TRAIT=0, DECLARED_TRAIT=1, DYNAMIC_TRAIT=2, INSTANCE_TRAIT=5, CONSTANT_TRAIT=9 /* constants are also declared traits */ };
 enum TRAIT_STATE { NO_STATE=0, HAS_GETTER_SETTER=1, TYPE_RESOLVED=2 };
 
 struct variable
@@ -150,8 +169,9 @@ struct variable
 	IFunction* getter;
 	TRAIT_KIND kind;
 	TRAIT_STATE traitState;
+	bool isenumerable:1;
 	variable(TRAIT_KIND _k)
-		: var(NULL),typeUnion(NULL),setter(NULL),getter(NULL),kind(_k),traitState(NO_STATE) {}
+		: var(NULL),typeUnion(NULL),setter(NULL),getter(NULL),kind(_k),traitState(NO_STATE),isenumerable(true) {}
 	variable(TRAIT_KIND _k, ASObject* _v, multiname* _t, const Type* type);
 	void setVar(ASObject* v);
 	/*
@@ -201,9 +221,9 @@ public:
 	/**
 	 * Const version of findObjVar, useful when looking for getters
 	 */
-	const variable* findObjVar(const multiname& mname, uint32_t traitKinds) const;
+	const variable* findObjVar(const multiname& mname, uint32_t traitKinds, NS_KIND &nskind) const;
 	//Initialize a new variable specifying the type (TODO: add support for const)
-	void initializeVar(const multiname& mname, ASObject* obj, multiname* typemname, ABCContext* context, TRAIT_KIND traitKind);
+	void initializeVar(const multiname& mname, ASObject* obj, multiname *typemname, ABCContext* context, TRAIT_KIND traitKind, ASObject* mainObj);
 	void killObjVar(const multiname& mname);
 	ASObject* getSlot(unsigned int n)
 	{
@@ -221,6 +241,10 @@ public:
 	 */
 	void setSlotNoCoerce(unsigned int n,ASObject* o);
 	void initSlot(unsigned int n, uint32_t nameId, const nsNameAndKind& ns);
+	void appendSlot(uint32_t nameId, const nsNameAndKind& ns)
+	{
+		initSlot(slots_vars.size()+1, nameId, ns);
+	}
 	int size() const
 	{
 		return Variables.size();
@@ -251,20 +275,22 @@ friend class IFunction; //Needed for clone
 private:
 	variables_map Variables;
 	Class_base* classdef;
-	const variable* findGettable(const multiname& name) const DLL_LOCAL;
+	const variable* findGettable(const multiname& name, NS_KIND &nskind) const DLL_LOCAL;
 	variable* findSettable(const multiname& name, bool* has_getter=NULL) DLL_LOCAL;
+	multiname* proxyMultiName;
 protected:
 	ASObject(MemoryAccount* m);
 	ASObject(const ASObject& o);
 	virtual ~ASObject();
 	SWFOBJECT_TYPE type;
 	bool traitsInitialized:1;
+	bool constructIndicator:1;
 	void serializeDynamicProperties(ByteArray* out, std::map<tiny_string, uint32_t>& stringMap,
 				std::map<const ASObject*, uint32_t>& objMap,
 				std::map<const Class_base*, uint32_t> traitsMap) const;
 	void setClass(Class_base* c);
 	static variable* findSettableImpl(variables_map& map, const multiname& name, bool* has_getter);
-	static const variable* findGettableImpl(const variables_map& map, const multiname& name);
+	static const variable* findGettableImpl(const variables_map& map, const multiname& name, NS_KIND &nskind);
 public:
 	ASObject(Class_base* c);
 #ifndef NDEBUG
@@ -274,11 +300,16 @@ public:
 	bool implEnable:1;
 	Class_base* getClass() const { return classdef; }
 	ASFUNCTION(_constructor);
+	// constructor for subclasses that can't be instantiated.
+	// Throws ArgumentError.
+	ASFUNCTION(_constructorNotInstantiatable);
 	ASFUNCTION(_toString);
+	ASFUNCTION(_toLocaleString);
 	ASFUNCTION(hasOwnProperty);
 	ASFUNCTION(valueOf);
 	ASFUNCTION(isPrototypeOf);
 	ASFUNCTION(propertyIsEnumerable);
+	ASFUNCTION(setPropertyIsEnumerable);
 	void check() const;
 	static void s_incRef(ASObject* o)
 	{
@@ -313,7 +344,7 @@ public:
 	 * Helper method using the get the raw variable struct instead of calling the getter.
 	 * It is used by getVariableByMultiname and by early binding code
 	 */
-	const variable* findVariableByMultiname(const multiname& name, GET_VARIABLE_OPTION opt, Class_base* cls);
+	const variable* findVariableByMultiname(const multiname& name, GET_VARIABLE_OPTION opt, Class_base* cls, NS_KIND &nskind);
 	/*
 	 * Gets a variable of this object. It looks through all classes (beginning at cls),
 	 * then the prototype chain, and then instance variables.
@@ -348,7 +379,7 @@ public:
 	 * Called by ABCVm::buildTraits to create DECLARED_TRAIT or CONSTANT_TRAIT and set their type
 	 */
 	void initializeVariableByMultiname(const multiname& name, ASObject* o, multiname* typemname,
-			ABCContext* context, TRAIT_KIND traitKind);
+			ABCContext* context, TRAIT_KIND traitKind,bool bOverwrite);
 	/*
 	 * Called by ABCVm::initProperty (implementation of ABC instruction), it is allowed to set CONSTANT_TRAIT
 	 */
@@ -375,6 +406,7 @@ public:
 		Variables.setSlotNoCoerce(n,o);
 	}
 	void initSlot(unsigned int n, const multiname& name);
+	void appendSlot(const multiname& name);
 	unsigned int numVariables() const;
 	tiny_string getNameAt(int i) const
 	{
@@ -387,6 +419,7 @@ public:
 	}
 	/* Implements ECMA's 9.8 ToString operation, but returns the concrete value */
 	tiny_string toString();
+	tiny_string toLocaleString();
 	virtual int32_t toInt();
 	virtual uint32_t toUInt();
 	uint16_t toUInt16();
@@ -396,6 +429,9 @@ public:
 	_R<ASObject> toPrimitive(TP_HINT hint = NO_HINT);
 	bool isPrimitive() const;
 
+	bool isInitialized() const {return traitsInitialized;}
+	virtual bool isConstructed() const;
+	
 	/* helper functions for calling the "valueOf" and
 	 * "toString" AS-functions which may be members of this
 	 *  object */
@@ -403,9 +439,11 @@ public:
 	_R<ASObject> call_valueOf();
 	bool has_toString();
 	_R<ASObject> call_toString();
+	bool has_toJSON();
+	tiny_string call_toJSON();
 
 	/* Helper function for calling getClass()->getQualifiedClassName() */
-	virtual tiny_string getClassName();
+	virtual tiny_string getClassName() const;
 
 	ASFUNCTION(generator);
 
@@ -441,6 +479,7 @@ public:
 
 	virtual ASObject *describeType() const;
 
+	virtual tiny_string toJSON(std::vector<ASObject *> &path, IFunction *replacer, const tiny_string &spaces,const tiny_string& filter);
 	/* returns true if the current object is of type T */
 	template<class T> bool is() const { return dynamic_cast<const T*>(this); }
 	/* returns this object casted to the given type.
@@ -451,6 +490,15 @@ public:
 
 	/* Returns a debug string identifying this object */
 	virtual std::string toDebugString();
+	
+	/* stores proxy namespace settings for internal usage */
+	void setProxyProperty(const multiname& name); 
+	/* applies proxy namespace settings to name for internal usage */
+	void applyProxyProperty(multiname &name); 
+	
+	void dumpVariables() { Variables.dumpVariables(); }
+	
+	void setConstructIndicator() { constructIndicator = true; }
 };
 
 class Number;

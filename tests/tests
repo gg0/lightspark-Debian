@@ -33,6 +33,56 @@ BLACKLIST=0;
 JUNITFILE=""
 NOXVFB=0;
 
+# Convert output from local and pre-7555 commit Tamarin testcases to JUnit XML
+function writeJUnit1() {
+	tcnum=0
+	#Find all lines that start with '. [' or 'F [' or 'A ..F.. ['
+	tcnum=$(echo "$1" | sed -n -e "/^\(A \)\?[F\.]\+ \[.*/p" \
+	| { while read L
+	do
+		tcnum=`expr $tcnum + 1`
+		#Escape <>& and remove non-printable characters
+		xml_l=`echo -e "$L" | sed -e 's/[^[:print:]]//g' -e 's/\&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'`
+		#Check if L starts with an 'F' or with 'A ...F'
+		if echo -e "$L" | grep -e "^\(A \.*\)\?F" > /dev/null ; then
+			echo "<testcase classname=\"$2\" name=\"${3}_tc${tcnum}\"><failure type=\"testfailure\">$xml_l</failure></testcase>" >> "$JUNITFILE"
+		else
+			echo "<testcase classname=\"$2\" name=\"${3}_tc${tcnum}\"/>" >> "$JUNITFILE"
+		fi
+	done
+	echo $tcnum
+	})
+
+	if [[ "$tcnum" != "$4" ]]; then
+		echo -e "\nError parsing test output of $test: Not enough testcases seen"
+		exit 1
+	fi
+}
+
+# Convert output from post-7555 commit Tamarin to JUnit XML
+function writeJUnit2() {
+	tcnum=0
+	tcnum=$(echo "$1" | grep 'PASSED!\|FAILED!' \
+	| { while read L
+	do
+		tcnum=`expr $tcnum + 1`
+		#Escape <>& and remove non-printable characters
+		xml_l=`echo -e "$L" | sed -e 's/[^[:print:]]//g' -e 's/\&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'`
+		if echo "$L" | grep 'FAILED!' > /dev/null ; then
+		    echo  "<testcase classname=\"$2\" name=\"${3}_tc${tcnum}\"><failure type=\"testfailure\">$xml_l</failure></testcase>" >> "$JUNITFILE"
+		else
+		    echo "<testcase classname=\"$2\" name=\"${3}_tc${tcnum}\"/>" >> "$JUNITFILE"
+		fi
+	done
+	echo $tcnum
+	})
+
+	if [[ "$tcnum" != "$4" ]]; then
+		echo -e "\nError parsing test output of $test: Not enough testcases seen"
+		exit 1
+	fi
+}
+
 if ! `which timeout > /dev/null`; then
 	echo "Warning: 'timeout' command not found"
 	TIMEOUTCMD=""
@@ -182,7 +232,7 @@ if [ $COMPILE -eq 1 ]; then
 	echo -e "\n" 1>&2;
 fi
 
-FAILURECOUNT=0; SUCCESSCOUNT=0; TESTCOUNT=0;
+FAILURECOUNT=0; SUCCESSCOUNT=0; TESTCOUNT=0; EXITEDCOUNT=0; ALLSUCCESSCOUNT=0; NOSUMMARYCOUNT=0;
 
 #Colors used for colorization
 CLEAR='\\\e[0m';
@@ -283,15 +333,21 @@ for test in $TESTS; do
 			fi
 		fi
 		if [[ -n "$JUNITFILE" ]]; then
-			echo "<testcase classname=\"$testclass\" name=\"$testname\"><failure type=\"exitvalue\">Exit Value $ev</failure></testcase>" >> "$JUNITFILE"
+			if [[ "$ev" = "124" ]]; then
+				echo "<testcase classname=\"$testclass\" name=\"$testname\"><failure type=\"timeout\">Timeout</failure></testcase>" >> "$JUNITFILE"
+			else
+				echo "<testcase classname=\"$testclass\" name=\"$testname\"><failure type=\"exitvalue\">Exit Value $ev</failure></testcase>" >> "$JUNITFILE"
+			fi
 		fi
 		FAILURECOUNT=`expr $FAILURECOUNT + 1`;
 		FAILED_TESTS="$FAILED_TESTS $test"
+		EXITEDCOUNT=`expr $EXITEDCOUNT + 1`
 		continue
 	fi
 	#Remove the RANDR error when running under xvfb, convert control characters to something like \303
 	lines=`sed -e '/Xlib:  extension "RANDR" missing on display.*/d' -e 's/[[:cntrl:]]//' $LOGFILE`
 	if [ "`echo $lines | grep '==Failures'`" != "" ]; then
+		# local tests and Tamarin before commit 7555 
 		THISFAILEDCOUNT=`echo "$lines" | sed -n -e 's/.*=Failures (\(.*\)\/.*)=.*/\1/p'`
 		THISNUMTESTS=`echo "$lines" | sed -n -e 's/.*=Failures (.*\/\(.*\))=.*/\1/p'`
 		THISSUCCESSCOUNT=`expr $THISNUMTESTS - $THISFAILEDCOUNT`
@@ -299,9 +355,22 @@ for test in $TESTS; do
 		SUCCESSCOUNT=`expr $SUCCESSCOUNT + $THISSUCCESSCOUNT`;
 		FAILED_TESTS="$FAILED_TESTS $test"
 	elif [ "`echo $lines | grep '==No failures'`" != "" ]; then
+		# local tests and Tamarin before commit 7555 
 		THISSUCCESSCOUNT=`echo "$lines" | sed -n -e 's/.*=No failures (\(.*\))=.*/\1/p'`
 		THISNUMTESTS="$THISSUCCESSCOUNT"
 		SUCCESSCOUNT=`expr $SUCCESSCOUNT + $THISSUCCESSCOUNT`;
+		ALLSUCCESSCOUNT=`expr $ALLSUCCESSCOUNT + 1`
+	elif [ "`echo $lines | grep 'PASSED!\|FAILED!'`" != "" ]; then
+		# Tamarin commit 7555 and later
+		THISSUCCESSCOUNT=`echo "$lines" | grep -c 'PASSED!'`
+		THISFAILEDCOUNT=`echo "$lines" | grep -c 'FAILED!'`
+		THISNUMTESTS=`expr $THISSUCCESSCOUNT + $THISFAILEDCOUNT`
+		FAILURECOUNT=`expr $FAILURECOUNT + $THISFAILEDCOUNT`;
+		SUCCESSCOUNT=`expr $SUCCESSCOUNT + $THISSUCCESSCOUNT`;
+		FAILED_TESTS="$FAILED_TESTS $test"
+		if [ $THISFAILEDCOUNT -eq 0 ]; then
+			ALLSUCCESSCOUNT=`expr $ALLSUCCESSCOUNT + 1`
+		fi
 	else
 		if [ $COLORS -eq 1 ]; then
 			echo -e "\\e[0;31m$test printed no test summary!\\e[0m"
@@ -313,31 +382,15 @@ for test in $TESTS; do
 		fi
 		FAILURECOUNT=`expr $FAILURECOUNT + 1`;
 		FAILED_TESTS="$FAILED_TESTS $test"
+		NOSUMMARYCOUNT=`expr $NOSUMMARYCOUNT + 1`
 		continue
 	fi
 
 	if [[ -n "$JUNITFILE" ]]; then
-		#For xml output
-		tcnum=0
-		#Find all lines that start with '. [' or 'F [' or 'A ..F.. ['
-		tcnum=$(echo "$lines" | sed -n -e "/^\(A \)\?[F\.]\+ \[.*/p" \
-		| { while read L
-		do
-			tcnum=`expr $tcnum + 1`
-			#Escape <>& and remove non-printable characters
-			xml_l=`echo -e "$L" | sed -e 's/[^[:print:]]//g' -e 's/\&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'`
-			#Check if L starts with an 'F' or with 'A ...F'
-			if echo -e "$L" | grep -e "^\(A \.*\)\?F" > /dev/null ; then
-				echo "<testcase classname=\"$testclass\" name=\"${testname}_tc${tcnum}\"><failure type=\"testfailure\">$xml_l</failure></testcase>" >> "$JUNITFILE"
-			else
-				echo "<testcase classname=\"$testclass\" name=\"${testname}_tc${tcnum}\"/>" >> "$JUNITFILE"
-			fi
-		done
-		echo $tcnum
-		})
-		if [[ "$tcnum" != "$THISNUMTESTS" ]]; then
-			echo -e "\nError parsing test output of $test: Not enough testcases seen"
-			exit 1
+		if [[ "`echo $lines | grep '==Failures\|==No failures'`" != "" ]]; then
+			writeJUnit1 "$lines" "$testclass" "$testname" "$THISNUMTESTS"
+		else
+			writeJUnit2 "$lines" "$testclass" "$testname" "$THISNUMTESTS"
 		fi
 	fi
 
@@ -399,7 +452,13 @@ if [ $PROPRIETARY -eq 0 ]; then
 fi
 
 if [ $COLORS -eq 1 ]; then
-	echo -e "Tests run: $TESTCOUNT, \e[1;32m$SUCCESSCOUNT successful\e[0m and \e[1;31m$FAILURECOUNT failed\e[0m" 1>&2
+	echo -e "\e[1;36mTEST SUMMARY:" 1>&2
+	echo -e "$TESTCOUNT tests\e[0m were run, of which \e[1;32m`expr $TESTCOUNT - $EXITEDCOUNT` finished\e[0m and \e[1;31m$EXITEDCOUNT exited prematurely\e[0m." 1>&2
+	echo -e "\e[1;36m`expr $SUCCESSCOUNT + $FAILURECOUNT` single test cases\e[0m were performed: \e[1;32m$SUCCESSCOUNT were successful\e[0m and \e[1;31m$FAILURECOUNT failed\e[0m (\e[1;36m`expr $SUCCESSCOUNT \* 100 / \( $SUCCESSCOUNT + $FAILURECOUNT \)`% success rate\e[0m)." 1>&2
+	echo -e "\e[1;32m$ALLSUCCESSCOUNT tests passed every single test case\e[0m, while \e[1;31m$NOSUMMARYCOUNT didn't print a test summary\e[0m." 1>&2
 else
-	echo -e "Tests run: $TESTCOUNT, $SUCCESSCOUNT successful and $FAILURECOUNT failed" 1>&2
+	echo -e "TEST SUMMARY:" 1>&2
+	echo -e "$TESTCOUNT tests were run, of which `expr $TESTCOUNT - $EXITEDCOUNT` finished and $EXITEDCOUNT exited prematurely." 1>&2
+	echo -e "`expr $SUCCESSCOUNT + $FAILURECOUNT` single test cases were performed: $SUCCESSCOUNT were successful and $FAILURECOUNT failed (`expr $SUCCESSCOUNT \* 100 / \( $SUCCESSCOUNT + $FAILURECOUNT \)`% success rate)." 1>&2
+	echo -e "$ALLSUCCESSCOUNT tests passed every single test case, while $NOSUMMARYCOUNT didn't print a test summary." 1>&2
 fi

@@ -26,7 +26,7 @@ using namespace lightspark;
 
 void ExternalInterface::sinit(Class_base* c)
 {
-	c->setConstructor(NULL);
+	CLASS_SETUP_NO_CONSTRUCTOR(c, ASObject, CLASS_SEALED | CLASS_FINAL);
 	c->setDeclaredMethodByQName("available","",Class<IFunction>::getFunction(_getAvailable),GETTER_METHOD,false);
 	c->setDeclaredMethodByQName("objectID","",Class<IFunction>::getFunction(_getObjectID),GETTER_METHOD,false);
 	c->setDeclaredMethodByQName("marshallExceptions","",Class<IFunction>::getFunction(_getMarshallExceptions),GETTER_METHOD,false);
@@ -73,7 +73,8 @@ ASFUNCTIONBODY(ExternalInterface, _setMarshallExceptions)
 ASFUNCTIONBODY(ExternalInterface,addCallback)
 {
 	if(getSys()->extScriptObject == NULL)
-		throw Class<ASError>::getInstanceS("Container doesn't support callbacks");
+		return abstract_b(false);
+//		throw Class<ASError>::getInstanceS("Container doesn't support callbacks");
 
 	assert_and_throw(argslen == 2);
 
@@ -90,7 +91,8 @@ ASFUNCTIONBODY(ExternalInterface,addCallback)
 ASFUNCTIONBODY(ExternalInterface,call)
 {
 	if(getSys()->extScriptObject == NULL)
-		throw Class<ASError>::getInstanceS("Container doesn't support callbacks");
+		return getSys()->getNullRef();
+//		throw Class<ASError>::getInstanceS("Container doesn't support callbacks");
 
 	assert_and_throw(argslen >= 1);
 	const tiny_string& arg0=args[0]->toString();

@@ -142,6 +142,15 @@ struct typed_opcode_handler
 	ARGS_TYPE type;
 };
 
+struct uninitializedVar
+{
+	uninitializedVar():mname(NULL),mainObj(NULL),typemname(NULL),traitKind(NO_CREATE_TRAIT) {}
+	const multiname* mname;
+	ASObject* mainObj;
+	multiname* typemname;
+	TRAIT_KIND traitKind;
+};
+
 class ABCContext
 {
 friend class ABCVm;
@@ -174,6 +183,9 @@ public:
 	uint32_t namespaceBaseId;
 
 	std::vector<bool> hasRunScriptInit;
+	// list of vars that have to be initialized after script init is done
+	std::list<uninitializedVar> uninitializedVars;
+	void addUninitializedVar(uninitializedVar& v);
 	/**
 		Construct and insert in the a object a given trait
 		@param obj the tarhget object
@@ -194,8 +206,6 @@ public:
 	void exec(bool lazy);
 
 	bool isinstance(ASObject* obj, multiname* name);
-
-	std::map<const multiname*, Class_base*> classesBeingDefined;
 
 #ifdef PROFILING_SUPPORT
 	void dumpProfilingData(std::ostream& f) const;
@@ -246,6 +256,28 @@ private:
 		_R<ApplicationDomain> appDomain = getCurrentApplicationDomain(th);
 		appDomain->writeToDomainMemory<T>(addr, val);
 	}
+
+	static void loadNumber(call_context* th)
+	{
+		ASObject* arg1=th->runtime_stack_pop();
+		number_t addr=arg1->toNumber();
+		arg1->decRef();
+		_R<ApplicationDomain> appDomain = getCurrentApplicationDomain(th);
+		number_t ret=appDomain->readFromDomainMemory<number_t>(addr);
+		th->runtime_stack_push(abstract_d(ret));
+	}
+	static void storeNumber(call_context* th)
+	{
+		ASObject* arg1=th->runtime_stack_pop();
+		ASObject* arg2=th->runtime_stack_pop();
+		number_t addr=arg1->toNumber();
+		arg1->decRef();
+		number_t val=arg2->toNumber();
+		arg2->decRef();
+		_R<ApplicationDomain> appDomain = getCurrentApplicationDomain(th);
+		appDomain->writeToDomainMemory<number_t>(addr, val);
+	}
+
 	static void callSuper(call_context* th, int n, int m, method_info** called_mi, bool keepReturn);
 	static void callProperty(call_context* th, int n, int m, method_info** called_mi, bool keepReturn);
 	static void callImpl(call_context* th, ASObject* f, ASObject* obj, ASObject** args, int m, method_info** called_mi, bool keepReturn);
@@ -299,6 +331,7 @@ private:
 	static void decLocal_i(call_context* th, int n);
 	static void decLocal(call_context* th, int n);
 	static void coerce(call_context* th, int n);
+	static void checkDeclaredTraits(ASObject* obj);
 	static ASObject* getProperty(ASObject* obj, multiname* name);
 	static int32_t getProperty_i(ASObject* obj, multiname* name);
 	static void setProperty(ASObject* value,ASObject* obj, multiname* name);
@@ -380,6 +413,7 @@ private:
 	static uint32_t decrement_i(ASObject*);
 	static bool strictEquals(ASObject*,ASObject*);
 	static ASObject* esc_xattr(ASObject* o);
+	static ASObject* esc_xelem(ASObject* o);
 	static bool instanceOf(ASObject* value, ASObject* type);
 	static Namespace* pushNamespace(call_context* th, int n);
 	static void dxns(call_context* th, int n);
@@ -390,7 +424,10 @@ private:
 
 	//Internal utilities
 	static void method_reset(method_info* th);
-	static void newClassRecursiveLink(Class_base* target, Class_base* c);
+
+	static void SetAllClassLinks();
+	static void AddClassLinks(Class_base* target);
+	static bool newClassRecursiveLink(Class_base* target, Class_base* c);
 	static ASObject* constructFunction(call_context* th, IFunction* f, ASObject** args, int argslen);
 	void parseRPCMessage(_R<ByteArray> message, _NR<ASObject> client, _NR<Responder> responder);
 
@@ -404,6 +441,7 @@ private:
 	static typed_opcode_handler opcode_table_void[];
 	static typed_opcode_handler opcode_table_voidptr[];
 	static typed_opcode_handler opcode_table_bool_t[];
+
 
 	//Synchronization
 	Mutex event_queue_mutex;

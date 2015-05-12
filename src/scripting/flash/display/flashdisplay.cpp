@@ -22,6 +22,7 @@
 #include "backends/security.h"
 #include "scripting/abc.h"
 #include "scripting/flash/display/flashdisplay.h"
+#include "scripting/flash/display/Graphics.h"
 #include "swf.h"
 #include "scripting/flash/geom/flashgeom.h"
 #include "scripting/flash/system/flashsystem.h"
@@ -53,41 +54,45 @@ std::ostream& lightspark::operator<<(std::ostream& s, const DisplayObject& r)
 LoaderInfo::LoaderInfo(Class_base* c):EventDispatcher(c),applicationDomain(NullRef),securityDomain(NullRef),
 	contentType("application/x-shockwave-flash"),
 	bytesLoaded(0),bytesTotal(0),sharedEvents(NullRef),
-	loader(NullRef),loadStatus(STARTED),actionScriptVersion(3),childAllowsParent(true)
+	loader(NullRef),bytesData(NullRef),loadStatus(STARTED),actionScriptVersion(3),swfVersion(0),childAllowsParent(true),uncaughtErrorEvents(NullRef)
 {
 }
 
 LoaderInfo::LoaderInfo(Class_base* c, _R<Loader> l):EventDispatcher(c),applicationDomain(NullRef),securityDomain(NullRef),
 	contentType("application/x-shockwave-flash"),
 	bytesLoaded(0),bytesTotal(0),sharedEvents(NullRef),
-	loader(l),loadStatus(STARTED),actionScriptVersion(3),childAllowsParent(true)
+	loader(l),bytesData(NullRef),loadStatus(STARTED),actionScriptVersion(3),swfVersion(0),childAllowsParent(true),uncaughtErrorEvents(NullRef)
 {
 }
 
 void LoaderInfo::sinit(Class_base* c)
 {
-	c->setConstructor(Class<IFunction>::getFunction(_constructor));
-	c->setSuper(Class<EventDispatcher>::getRef());
+	CLASS_SETUP(c, EventDispatcher, _constructor, CLASS_SEALED);
 	c->setDeclaredMethodByQName("loaderURL","",Class<IFunction>::getFunction(_getLoaderURL),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("loader","",Class<IFunction>::getFunction(_getLoader),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("content","",Class<IFunction>::getFunction(_getContent),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("url","",Class<IFunction>::getFunction(_getURL),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("bytesLoaded","",Class<IFunction>::getFunction(_getBytesLoaded),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("bytesTotal","",Class<IFunction>::getFunction(_getBytesTotal),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("bytes","",Class<IFunction>::getFunction(_getBytes),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("applicationDomain","",Class<IFunction>::getFunction(_getApplicationDomain),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("sharedEvents","",Class<IFunction>::getFunction(_getSharedEvents),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("width","",Class<IFunction>::getFunction(_getWidth),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("height","",Class<IFunction>::getFunction(_getHeight),GETTER_METHOD,true);
 	REGISTER_GETTER(c,parameters);
 	REGISTER_GETTER(c,actionScriptVersion);
+	REGISTER_GETTER(c,swfVersion);
 	REGISTER_GETTER(c,childAllowsParent);
 	REGISTER_GETTER(c,contentType);
+	REGISTER_GETTER(c,uncaughtErrorEvents);
 }
 
 ASFUNCTIONBODY_GETTER(LoaderInfo,parameters);
 ASFUNCTIONBODY_GETTER(LoaderInfo,actionScriptVersion);
 ASFUNCTIONBODY_GETTER(LoaderInfo,childAllowsParent);
 ASFUNCTIONBODY_GETTER(LoaderInfo,contentType);
+ASFUNCTIONBODY_GETTER(LoaderInfo,swfVersion);
+ASFUNCTIONBODY_GETTER(LoaderInfo,uncaughtErrorEvents);
 
 void LoaderInfo::buildTraits(ASObject* o)
 {
@@ -101,6 +106,7 @@ void LoaderInfo::finalize()
 	applicationDomain.reset();
 	securityDomain.reset();
 	waitedObject.reset();
+	bytesData.reset();
 }
 
 void LoaderInfo::resetState()
@@ -108,6 +114,8 @@ void LoaderInfo::resetState()
 	SpinlockLocker l(spinlock);
 	bytesLoaded=0;
 	bytesTotal=0;
+	if(!bytesData.isNull())
+		bytesData->setLength(0);
 	loadStatus=STARTED;
 }
 
@@ -187,6 +195,7 @@ ASFUNCTIONBODY(LoaderInfo,_constructor)
 	EventDispatcher::_constructor(obj,NULL,0);
 	th->sharedEvents=_MR(Class<EventDispatcher>::getInstanceS());
 	th->parameters = _MR(Class<ASObject>::getInstanceS());
+	th->uncaughtErrorEvents = _MR(Class<UncaughtErrorEvents>::getInstanceS());
 	return NULL;
 }
 
@@ -243,6 +252,17 @@ ASFUNCTIONBODY(LoaderInfo,_getBytesTotal)
 	return abstract_i(th->bytesTotal);
 }
 
+ASFUNCTIONBODY(LoaderInfo,_getBytes)
+{
+	LoaderInfo* th=static_cast<LoaderInfo*>(obj);
+	if (th->bytesData.isNull())
+		th->bytesData = _NR<ByteArray>(Class<ByteArray>::getInstanceS());
+	if (!th->loader->getContent().isNull())
+		th->bytesData->writeObject(th->loader->getContent().getPtr());
+
+	return th->bytesData.getPtr();
+}
+
 ASFUNCTIONBODY(LoaderInfo,_getApplicationDomain)
 {
 	LoaderInfo* th=static_cast<LoaderInfo*>(obj);
@@ -296,19 +316,27 @@ void LoaderThread::execute()
 	streambuf *sbuf = 0;
 	if(source==URL)
 	{
-		if(!createDownloader(false, loaderInfo, loaderInfo.getPtr(), false))
+		_R<MemoryStreamCache> cache(_MR(new MemoryStreamCache));
+		if(!createDownloader(cache, loaderInfo, loaderInfo.getPtr(), false))
 			return;
 
-		downloader->waitForData(); //Wait for some data, making sure our check for failure is working
-		if(downloader->hasFailed()) //Check to see if the download failed for some reason
+		sbuf = cache->createReader();
+		
+		// Wait for some data, making sure our check for failure is working
+		sbuf->sgetc(); // peek one byte
+		if(downloader->getRequestStatus() == 204) // empty answer
+			return;
+
+		if(cache->hasFailed()) //Check to see if the download failed for some reason
 		{
 			LOG(LOG_ERROR, "Loader::execute(): Download of URL failed: " << url);
 			getVm()->addEvent(loaderInfo,_MR(Class<IOErrorEvent>::getInstanceS()));
+			getVm()->addEvent(loader,_MR(Class<IOErrorEvent>::getInstanceS()));
+			delete sbuf;
 			// downloader will be deleted in jobFence
 			return;
 		}
 		getVm()->addEvent(loaderInfo,_MR(Class<Event>::getInstanceS("open")));
-		sbuf=downloader;
 	}
 	else if(source==BYTES)
 	{
@@ -324,19 +352,15 @@ void LoaderThread::execute()
 	ParseThread local_pt(s,loaderInfo->applicationDomain,loaderInfo->securityDomain,loader.getPtr(),url.getParsedURL());
 	local_pt.execute();
 
-	// Delete the bytes container (downloader or bytes_buf)
+	// Delete the bytes container (cache reader or bytes_buf)
+	delete sbuf;
+	sbuf = NULL;
 	if (source==URL) {
 		//Acquire the lock to ensure consistency in threadAbort
 		SpinlockLocker l(downloaderLock);
 		if(downloader)
 			getSys()->downloadManager->destroy(downloader);
 		downloader=NULL;
-		sbuf = NULL;
-	}
-	else if (source==BYTES)
-	{
-		delete sbuf;
-		sbuf = NULL;
 	}
 
 	bytes.reset();
@@ -356,6 +380,7 @@ ASFUNCTIONBODY(Loader,_constructor)
 	Loader* th=static_cast<Loader*>(obj);
 	DisplayObjectContainer::_constructor(obj,NULL,0);
 	th->contentLoaderInfo->setLoaderURL(getSys()->mainClip->getOrigin().getParsedURL());
+	th->uncaughtErrorEvents = _MR(Class<UncaughtErrorEvents>::getInstanceS());
 	return NULL;
 }
 
@@ -402,12 +427,21 @@ ASFUNCTIONBODY(Loader,load)
 	//Check if a security domain has been manually set
 	_NR<SecurityDomain> secDomain;
 	_NR<SecurityDomain> curSecDomain=ABCVm::getCurrentSecurityDomain(getVm()->currentCallContext);
-	if(!context.isNull() && !context->securityDomain.isNull())
+	if(!context.isNull())
 	{
-		//The passed domain must be the current one. See Loader::load specs.
-		if(context->securityDomain!=curSecDomain)
-			throw Class<SecurityError>::getInstanceS("SecurityError: securityDomain must be current one");
-		secDomain=curSecDomain;
+		if (!context->securityDomain.isNull())
+		{
+			//The passed domain must be the current one. See Loader::load specs.
+			if(context->securityDomain!=curSecDomain)
+				throw Class<SecurityError>::getInstanceS("SecurityError: securityDomain must be current one");
+			secDomain=curSecDomain;
+		}
+
+		bool sameDomain = (secDomain == curSecDomain);
+		th->allowCodeImport = !sameDomain || context->getAllowCodeImport();
+
+		if (!context->parameters.isNull())
+			th->contentLoaderInfo->setParameters(context->parameters);
 	}
 	//Default is to create a child ApplicationDomain if the file is in the same security context
 	//otherwise create a child of the system domain. If the security domain is different
@@ -443,6 +477,19 @@ ASFUNCTIONBODY(Loader,load)
 	SecurityManager::checkURLStaticAndThrow(th->url, ~(SecurityManager::LOCAL_WITH_FILE),
 		SecurityManager::LOCAL_WITH_FILE | SecurityManager::LOCAL_TRUSTED, true);
 
+	if (!context.isNull() && context->getCheckPolicyFile())
+	{
+		//TODO: this should be async as it could block if invoked from ExternalInterface
+		SecurityManager::EVALUATIONRESULT evaluationResult;
+		evaluationResult = getSys()->securityManager->evaluatePoliciesURL(th->url, true);
+		if(evaluationResult == SecurityManager::NA_CROSSDOMAIN_POLICY)
+		{
+			// should this dispatch SecurityErrorEvent instead of throwing?
+			throw Class<SecurityError>::getInstanceS(
+				"SecurityError: connection to domain not allowed by securityManager");
+		}
+	}
+
 	th->incRef();
 	r->incRef();
 	LoaderThread *thread=new LoaderThread(_MR(r), _MR(th));
@@ -473,6 +520,11 @@ ASFUNCTIONBODY(Loader,loadBytes)
 	_NR<SecurityDomain> curSecDomain=ABCVm::getCurrentSecurityDomain(getVm()->currentCallContext);
 	th->contentLoaderInfo->securityDomain = curSecDomain;
 
+	th->allowCodeImport = context.isNull() || context->getAllowCodeImport();
+
+	if (!context.isNull() && !context->parameters.isNull())
+		th->contentLoaderInfo->setParameters(context->parameters);
+
 	if(bytes->getLength()!=0)
 	{
 		th->incRef();
@@ -490,6 +542,22 @@ ASFUNCTIONBODY(Loader,_unload)
 {
 	Loader* th=static_cast<Loader*>(obj);
 	th->unload();
+	return NULL;
+}
+ASFUNCTIONBODY(Loader,_unloadAndStop)
+{
+	Loader* th=static_cast<Loader*>(obj);
+	th->unload();
+	LOG(LOG_NOT_IMPLEMENTED,"unloadAndStop does not execute any stopping actions");
+	/* TODO: (taken from specs)
+	Sounds are stopped.
+	Stage event listeners are removed.
+	Event listeners for enterFrame, frameConstructed, exitFrame, activate and deactivate are removed.
+	Timers are stopped.
+	Camera and Microphone instances are detached
+	Movie clips are stopped.
+	*/
+
 	return NULL;
 }
 
@@ -526,7 +594,7 @@ void Loader::finalize()
 	contentLoaderInfo.reset();
 }
 
-Loader::Loader(Class_base* c):DisplayObjectContainer(c),content(NullRef),contentLoaderInfo(NullRef),loaded(false)
+Loader::Loader(Class_base* c):DisplayObjectContainer(c),content(NullRef),contentLoaderInfo(NullRef),loaded(false), allowCodeImport(true),uncaughtErrorEvents(NullRef)
 {
 	incRef();
 	contentLoaderInfo=_MR(Class<LoaderInfo>::getInstanceS(_MR(this)));
@@ -538,15 +606,18 @@ Loader::~Loader()
 
 void Loader::sinit(Class_base* c)
 {
-	c->setConstructor(Class<IFunction>::getFunction(_constructor));
-	c->setSuper(Class<DisplayObjectContainer>::getRef());
+	CLASS_SETUP(c, DisplayObjectContainer, _constructor, CLASS_SEALED);
 	c->setDeclaredMethodByQName("contentLoaderInfo","",Class<IFunction>::getFunction(_getContentLoaderInfo),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("content","",Class<IFunction>::getFunction(_getContent),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("close","",Class<IFunction>::getFunction(close),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("loadBytes","",Class<IFunction>::getFunction(loadBytes),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("load","",Class<IFunction>::getFunction(load),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("unload","",Class<IFunction>::getFunction(_unload),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("unloadAndStop","",Class<IFunction>::getFunction(_unloadAndStop),NORMAL_METHOD,true);
+	REGISTER_GETTER(c,uncaughtErrorEvents);
 }
+
+ASFUNCTIONBODY_GETTER(Loader,uncaughtErrorEvents);
 
 void Loader::threadFinished(IThreadJob* finishedJob)
 {
@@ -590,8 +661,7 @@ void Sprite::finalize()
 
 void Sprite::sinit(Class_base* c)
 {
-	c->setConstructor(Class<IFunction>::getFunction(_constructor));
-	c->setSuper(Class<DisplayObjectContainer>::getRef());
+	CLASS_SETUP(c, DisplayObjectContainer, _constructor, CLASS_SEALED);
 	c->setDeclaredMethodByQName("graphics","",Class<IFunction>::getFunction(_getGraphics),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("startDrag","",Class<IFunction>::getFunction(_startDrag),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("stopDrag","",Class<IFunction>::getFunction(_stopDrag),NORMAL_METHOD,true);
@@ -849,8 +919,7 @@ FrameLabel::FrameLabel(Class_base* c, const FrameLabel_data& data):ASObject(c),F
 
 void FrameLabel::sinit(Class_base* c)
 {
-	c->setConstructor(NULL);
-	c->setSuper(Class<ASObject>::getRef());
+	CLASS_SETUP_NO_CONSTRUCTOR(c, ASObject, CLASS_SEALED | CLASS_FINAL);
 	c->setDeclaredMethodByQName("frame","",Class<IFunction>::getFunction(_getFrame),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("name","",Class<IFunction>::getFunction(_getName),GETTER_METHOD,true);
 }
@@ -906,8 +975,7 @@ Scene::Scene(Class_base* c, const Scene_data& data, uint32_t _numFrames):ASObjec
 
 void Scene::sinit(Class_base* c)
 {
-	c->setConstructor(NULL);
-	c->setSuper(Class<ASObject>::getRef());
+	CLASS_SETUP_NO_CONSTRUCTOR(c, ASObject, CLASS_SEALED | CLASS_FINAL);
 	c->setDeclaredMethodByQName("labels","",Class<IFunction>::getFunction(_getLabels),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("name","",Class<IFunction>::getFunction(_getName),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("numFrames","",Class<IFunction>::getFunction(_getNumFrames),GETTER_METHOD,true);
@@ -999,8 +1067,7 @@ void FrameContainer::addFrameLabel(uint32_t frame, const tiny_string& label)
 
 void MovieClip::sinit(Class_base* c)
 {
-	c->setConstructor(Class<IFunction>::getFunction(_constructor));
-	c->setSuper(Class<Sprite>::getRef());
+	CLASS_SETUP(c, Sprite, _constructor, CLASS_DYNAMIC_NOT_FINAL);
 	c->setDeclaredMethodByQName("currentFrame","",Class<IFunction>::getFunction(_getCurrentFrame),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("totalFrames","",Class<IFunction>::getFunction(_getTotalFrames),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("framesLoaded","",Class<IFunction>::getFunction(_getFramesLoaded),GETTER_METHOD,true);
@@ -1013,6 +1080,7 @@ void MovieClip::sinit(Class_base* c)
 	c->setDeclaredMethodByQName("play","",Class<IFunction>::getFunction(play),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("gotoAndStop","",Class<IFunction>::getFunction(gotoAndStop),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("gotoAndPlay","",Class<IFunction>::getFunction(gotoAndPlay),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("prevFrame","",Class<IFunction>::getFunction(prevFrame),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("nextFrame","",Class<IFunction>::getFunction(nextFrame),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("addFrameScript","",Class<IFunction>::getFunction(addFrameScript),NORMAL_METHOD,true);
 	REGISTER_GETTER_SETTER(c, enabled);
@@ -1164,7 +1232,7 @@ ASObject* MovieClip::gotoAnd(ASObject* const* args, const unsigned int argslen, 
 	{
 		uint32_t dest=getFrameIdByLabel(args[0]->toString(), sceneName);
 		if(dest==FRAME_NOT_FOUND)
-			throw Class<ArgumentError>::getInstanceS("gotoAndPlay/Stop: label not found");
+			throwError<ArgumentError>(kInvalidArgumentError,stop ? "gotoAndStop: label not found" : "gotoAndPlay: label not found");
 
 		next_FP = dest;
 	}
@@ -1179,7 +1247,7 @@ ASObject* MovieClip::gotoAnd(ASObject* const* args, const unsigned int argslen, 
 		{
 			LOG(LOG_ERROR, next_FP << "= next_FP >= state.max_FP = " << getFramesLoaded());
 			/* spec says we should throw an error, but then YT breaks */
-			//throw Class<ArgumentError>::getInstanceS("gotoAndPlay/Stop: frame not found");
+			//throwError<ArgumentError>(kInvalidArgumentError,stop ? "gotoAndStop: frame not found" : "gotoAndPlay: frame not found");
 			next_FP = getFramesLoaded()-1;
 		}
 	}
@@ -1207,6 +1275,15 @@ ASFUNCTIONBODY(MovieClip,nextFrame)
 	MovieClip* th=static_cast<MovieClip*>(obj);
 	assert_and_throw(th->state.FP<th->getFramesLoaded());
 	th->state.next_FP = th->state.FP+1;
+	th->state.explicit_FP=true;
+	return NULL;
+}
+
+ASFUNCTIONBODY(MovieClip,prevFrame)
+{
+	MovieClip* th=static_cast<MovieClip*>(obj);
+	assert_and_throw(th->state.FP<th->getFramesLoaded());
+	th->state.next_FP = th->state.FP-1;
 	th->state.explicit_FP=true;
 	return NULL;
 }
@@ -1345,8 +1422,7 @@ void MovieClip::addScene(uint32_t sceneNo, uint32_t startframe, const tiny_strin
 
 void DisplayObjectContainer::sinit(Class_base* c)
 {
-	c->setConstructor(Class<IFunction>::getFunction(_constructor));
-	c->setSuper(Class<InteractiveObject>::getRef());
+	CLASS_SETUP(c, InteractiveObject, _constructor, CLASS_SEALED);
 	c->setDeclaredMethodByQName("numChildren","",Class<IFunction>::getFunction(_getNumChildren),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("getChildIndex","",Class<IFunction>::getFunction(_getChildIndex),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("setChildIndex","",Class<IFunction>::getFunction(_setChildIndex),NORMAL_METHOD,true);
@@ -1513,8 +1589,7 @@ void InteractiveObject::buildTraits(ASObject* o)
 
 void InteractiveObject::sinit(Class_base* c)
 {
-	c->setConstructor(Class<IFunction>::getFunction(_constructor));
-	c->setSuper(Class<DisplayObject>::getRef());
+	CLASS_SETUP(c, DisplayObject, _constructor, CLASS_SEALED);
 	c->setDeclaredMethodByQName("mouseEnabled","",Class<IFunction>::getFunction(_setMouseEnabled),SETTER_METHOD,true);
 	c->setDeclaredMethodByQName("mouseEnabled","",Class<IFunction>::getFunction(_getMouseEnabled),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("doubleClickEnabled","",Class<IFunction>::getFunction(_setDoubleClickEnabled),SETTER_METHOD,true);
@@ -1522,11 +1597,13 @@ void InteractiveObject::sinit(Class_base* c)
 	REGISTER_GETTER_SETTER(c, contextMenu);
 	REGISTER_GETTER_SETTER(c, tabEnabled);
 	REGISTER_GETTER_SETTER(c, tabIndex);
+	REGISTER_GETTER_SETTER(c, focusRect);
 }
 
 ASFUNCTIONBODY_GETTER_SETTER(InteractiveObject, contextMenu);
 ASFUNCTIONBODY_GETTER_SETTER(InteractiveObject, tabEnabled);
 ASFUNCTIONBODY_GETTER_SETTER(InteractiveObject, tabIndex);
+ASFUNCTIONBODY_GETTER_SETTER(InteractiveObject, focusRect); // stub
 
 void DisplayObjectContainer::dumpDisplayList(unsigned int level)
 {
@@ -1677,12 +1754,11 @@ ASFUNCTIONBODY(DisplayObjectContainer,contains)
 	DisplayObjectContainer* th=static_cast<DisplayObjectContainer*>(obj);
 	assert_and_throw(argslen==1);
 	if(args[0]->getObjectType() == T_CLASS)
-	{
 		return abstract_b(false);
-	}
-	//Validate object type
-	assert_and_throw(args[0] && args[0]->getClass() && 
-		args[0]->getClass()->isSubClass(Class<DisplayObject>::getClass()));
+	if (!args[0]->getClass())
+		return abstract_b(false);
+	if (!args[0]->getClass()->isSubClass(Class<DisplayObject>::getClass()))
+		return abstract_b(false);
 
 	//Cast to object
 	DisplayObject* d=static_cast<DisplayObject*>(args[0]);
@@ -1958,8 +2034,7 @@ void Shape::finalize()
 
 void Shape::sinit(Class_base* c)
 {
-	c->setConstructor(Class<IFunction>::getFunction(_constructor));
-	c->setSuper(Class<DisplayObject>::getRef());
+	CLASS_SETUP(c, DisplayObject, _constructor, CLASS_SEALED);
 	c->setDeclaredMethodByQName("graphics","",Class<IFunction>::getFunction(_getGraphics),GETTER_METHOD,true);
 }
 
@@ -1984,19 +2059,14 @@ ASFUNCTIONBODY(Shape,_getGraphics)
 
 void MorphShape::sinit(Class_base* c)
 {
-	c->setConstructor(Class<IFunction>::getFunction(_constructor));
-	c->setSuper(Class<DisplayObject>::getRef());
+	// FIXME: should use _constructorNotInstantiatable but then
+	// DefineMorphShapeTag::instance breaks
+	CLASS_SETUP_NO_CONSTRUCTOR(c, DisplayObject, CLASS_SEALED | CLASS_FINAL);
 }
 
 void MorphShape::buildTraits(ASObject* o)
 {
 	//No traits
-}
-
-ASFUNCTIONBODY(MorphShape,_constructor)
-{
-	DisplayObject::_constructor(obj,NULL,0);
-	return NULL;
 }
 
 bool MorphShape::boundsRect(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const
@@ -2012,8 +2082,12 @@ _NR<DisplayObject> MorphShape::hitTestImpl(_NR<DisplayObject> last, number_t x, 
 
 void Stage::sinit(Class_base* c)
 {
-	c->setConstructor(Class<IFunction>::getFunction(_constructor));
-	c->setSuper(Class<DisplayObjectContainer>::getRef());
+	CLASS_SETUP(c, DisplayObjectContainer, _constructor, CLASS_SEALED);
+	c->setDeclaredMethodByQName("allowFullScreen","",Class<IFunction>::getFunction(_getAllowFullScreen),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("allowFullScreenInteractive","",Class<IFunction>::getFunction(_getAllowFullScreenInteractive),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("colorCorrectionSupport","",Class<IFunction>::getFunction(_getColorCorrectionSupport),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("fullScreenHeight","",Class<IFunction>::getFunction(_getStageHeight),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("fullScreenWidth","",Class<IFunction>::getFunction(_getStageWidth),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("stageWidth","",Class<IFunction>::getFunction(_getStageWidth),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("stageWidth","",Class<IFunction>::getFunction(undefinedFunction),SETTER_METHOD,true);
 	c->setDeclaredMethodByQName("stageHeight","",Class<IFunction>::getFunction(_getStageHeight),GETTER_METHOD,true);
@@ -2026,23 +2100,65 @@ void Stage::sinit(Class_base* c)
 	c->setDeclaredMethodByQName("stageVideos","",Class<IFunction>::getFunction(_getStageVideos),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("focus","",Class<IFunction>::getFunction(_getFocus),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("focus","",Class<IFunction>::getFunction(_setFocus),SETTER_METHOD,true);
+	c->setDeclaredMethodByQName("frameRate","",Class<IFunction>::getFunction(_getFrameRate),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("frameRate","",Class<IFunction>::getFunction(_setFrameRate),SETTER_METHOD,true);
 	// override the setter from DisplayObjectContainer
 	c->setDeclaredMethodByQName("tabChildren","",Class<IFunction>::getFunction(_setTabChildren),SETTER_METHOD,true);
+	c->setDeclaredMethodByQName("wmodeGPU","",Class<IFunction>::getFunction(_getWmodeGPU),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("invalidate","",Class<IFunction>::getFunction(_invalidate),NORMAL_METHOD,true);
+	REGISTER_GETTER_SETTER(c,align);
+	REGISTER_GETTER_SETTER(c,colorCorrection);
 	REGISTER_GETTER_SETTER(c,displayState);
+	REGISTER_GETTER_SETTER(c,fullScreenSourceRect);
+	REGISTER_GETTER_SETTER(c,showDefaultContextMenu);
+	REGISTER_GETTER_SETTER(c,quality);
+	REGISTER_GETTER_SETTER(c,stageFocusRect);
 }
+
+ASFUNCTIONBODY_GETTER_SETTER_CB(Stage,align,onAlign);
+ASFUNCTIONBODY_GETTER_SETTER_CB(Stage,colorCorrection,onColorCorrection);
+ASFUNCTIONBODY_GETTER_SETTER_CB(Stage,displayState,onDisplayState);
+ASFUNCTIONBODY_GETTER_SETTER(Stage,showDefaultContextMenu);  // stub
+ASFUNCTIONBODY_GETTER_SETTER_CB(Stage,fullScreenSourceRect,onFullScreenSourceRect);
+ASFUNCTIONBODY_GETTER_SETTER(Stage,quality);
+ASFUNCTIONBODY_GETTER_SETTER(Stage,stageFocusRect);  // stub
 
 void Stage::onDisplayState(const tiny_string&)
 {
-	LOG(LOG_NOT_IMPLEMENTED,"Stage.displayState = " << displayState);
+	if (displayState != "normal")
+		LOG(LOG_NOT_IMPLEMENTED,"Stage.displayState = " << displayState);
+	displayState = "normal"; // until fullscreen support is implemented
 }
 
-ASFUNCTIONBODY_GETTER_SETTER_CB(Stage,displayState,onDisplayState);
+void Stage::onAlign(const tiny_string& /*oldValue*/)
+{
+	LOG(LOG_NOT_IMPLEMENTED, "Stage.align = " << align);
+}
+
+void Stage::onColorCorrection(const tiny_string& oldValue)
+{
+	if (colorCorrection != "default" && 
+	    colorCorrection != "on" && 
+	    colorCorrection != "off")
+	{
+		colorCorrection = oldValue;
+		throwError<ArgumentError>(kInvalidEnumError, "colorCorrection");
+	}
+}
+
+void Stage::onFullScreenSourceRect(_NR<Rectangle> /*oldValue*/)
+{
+	LOG(LOG_NOT_IMPLEMENTED, "Stage.fullScreenSourceRect");
+	fullScreenSourceRect.reset();
+}
 
 void Stage::buildTraits(ASObject* o)
 {
 }
 
-Stage::Stage(Class_base* c):DisplayObjectContainer(c)
+Stage::Stage(Class_base* c):
+	DisplayObjectContainer(c), colorCorrection("default"),
+	showDefaultContextMenu(true), quality("high")
 {
 	onStage = true;
 }
@@ -2152,7 +2268,7 @@ ASFUNCTIONBODY(Stage,_setScaleMode)
 ASFUNCTIONBODY(Stage,_getStageVideos)
 {
 	LOG(LOG_NOT_IMPLEMENTED, "Accelerated rendering through StageVideo not implemented, SWF should fall back to Video");
-	return Class<Vector>::getInstanceS(Class<StageVideo>::getClass());
+	return Template<Vector>::getInstanceS(Class<StageVideo>::getClass());
 }
 
 _NR<InteractiveObject> Stage::getFocusTarget()
@@ -2207,665 +2323,94 @@ ASFUNCTIONBODY(Stage,_setTabChildren)
 	return NULL;
 }
 
-void Graphics::sinit(Class_base* c)
+ASFUNCTIONBODY(Stage,_getFrameRate)
 {
-	c->setConstructor(Class<IFunction>::getFunction(_constructor));
-	c->setDeclaredMethodByQName("clear","",Class<IFunction>::getFunction(clear),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("copyFrom","",Class<IFunction>::getFunction(copyFrom),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("drawRect","",Class<IFunction>::getFunction(drawRect),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("drawRoundRect","",Class<IFunction>::getFunction(drawRoundRect),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("drawCircle","",Class<IFunction>::getFunction(drawCircle),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("drawTriangles","",Class<IFunction>::getFunction(drawTriangles),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("moveTo","",Class<IFunction>::getFunction(moveTo),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("curveTo","",Class<IFunction>::getFunction(curveTo),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("cubicCurveTo","",Class<IFunction>::getFunction(cubicCurveTo),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("lineTo","",Class<IFunction>::getFunction(lineTo),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("lineStyle","",Class<IFunction>::getFunction(lineStyle),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("beginFill","",Class<IFunction>::getFunction(beginFill),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("beginGradientFill","",Class<IFunction>::getFunction(beginGradientFill),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("beginBitmapFill","",Class<IFunction>::getFunction(beginBitmapFill),NORMAL_METHOD,true);
-	c->setDeclaredMethodByQName("endFill","",Class<IFunction>::getFunction(endFill),NORMAL_METHOD,true);
-}
-
-void Graphics::buildTraits(ASObject* o)
-{
-}
-
-ASFUNCTIONBODY(Graphics,_constructor)
-{
-	return NULL;
-}
-
-ASFUNCTIONBODY(Graphics,clear)
-{
-	Graphics* th=static_cast<Graphics*>(obj);
-	th->checkAndSetScaling();
-	th->owner->tokens.clear();
-	th->owner->owner->requestInvalidation(getSys());
-	return NULL;
-}
-
-ASFUNCTIONBODY(Graphics,moveTo)
-{
-	Graphics* th=static_cast<Graphics*>(obj);
-	th->checkAndSetScaling();
-	assert_and_throw(argslen==2);
-
-	th->curX=args[0]->toInt();
-	th->curY=args[1]->toInt();
-
-	th->owner->tokens.emplace_back(GeomToken(MOVE, Vector2(th->curX, th->curY)));
-	return NULL;
-}
-
-ASFUNCTIONBODY(Graphics,lineTo)
-{
-	Graphics* th=static_cast<Graphics*>(obj);
-	assert_and_throw(argslen==2);
-	th->checkAndSetScaling();
-
-	int x=args[0]->toInt();
-	int y=args[1]->toInt();
-
-	th->owner->tokens.emplace_back(GeomToken(STRAIGHT, Vector2(x, y)));
-	th->owner->owner->requestInvalidation(getSys());
-
-	th->curX=x;
-	th->curY=y;
-	return NULL;
-}
-
-ASFUNCTIONBODY(Graphics,curveTo)
-{
-	Graphics* th=static_cast<Graphics*>(obj);
-	assert_and_throw(argslen==4);
-	th->checkAndSetScaling();
-
-	int controlX=args[0]->toInt();
-	int controlY=args[1]->toInt();
-
-	int anchorX=args[2]->toInt();
-	int anchorY=args[3]->toInt();
-
-	th->owner->tokens.emplace_back(GeomToken(CURVE_QUADRATIC,
-	                        Vector2(controlX, controlY),
-	                        Vector2(anchorX, anchorY)));
-	th->owner->owner->requestInvalidation(getSys());
-
-	th->curX=anchorX;
-	th->curY=anchorY;
-	return NULL;
-}
-
-ASFUNCTIONBODY(Graphics,cubicCurveTo)
-{
-	Graphics* th=static_cast<Graphics*>(obj);
-	assert_and_throw(argslen==6);
-	th->checkAndSetScaling();
-
-	int control1X=args[0]->toInt();
-	int control1Y=args[1]->toInt();
-
-	int control2X=args[2]->toInt();
-	int control2Y=args[3]->toInt();
-
-	int anchorX=args[4]->toInt();
-	int anchorY=args[5]->toInt();
-
-	th->owner->tokens.emplace_back(GeomToken(CURVE_CUBIC,
-	                        Vector2(control1X, control1Y),
-	                        Vector2(control2X, control2Y),
-	                        Vector2(anchorX, anchorY)));
-	th->owner->owner->requestInvalidation(getSys());
-
-	th->curX=anchorX;
-	th->curY=anchorY;
-	return NULL;
-}
-
-/* KAPPA = 4 * (sqrt2 - 1) / 3
- * This value was found in a Python prompt:
- *
- * >>> 4.0 * (2**0.5 - 1) / 3.0
- *
- * Source: http://whizkidtech.redprince.net/bezier/circle/
- */
-const double KAPPA = 0.55228474983079356;
-
-ASFUNCTIONBODY(Graphics,drawRoundRect)
-{
-	Graphics* th=static_cast<Graphics*>(obj);
-	assert_and_throw(argslen==5 || argslen==6);
-	th->checkAndSetScaling();
-
-	double x=args[0]->toNumber();
-	double y=args[1]->toNumber();
-	double width=args[2]->toNumber();
-	double height=args[3]->toNumber();
-	double ellipseWidth=args[4]->toNumber();
-	double ellipseHeight;
-	if (argslen == 6)
-		ellipseHeight=args[5]->toNumber();
-
-	if (argslen == 5 || std::isnan(ellipseHeight))
-		ellipseHeight=ellipseWidth;
-
-	ellipseHeight /= 2;
-	ellipseWidth  /= 2;
-
-	double kappaW = KAPPA * ellipseWidth;
-	double kappaH = KAPPA * ellipseHeight;
-
-	/*
-	 *    A-----B
-	 *   /       \
-	 *  H         C
-	 *  |         |
-	 *  G         D
-	 *   \       /
-	 *    F-----E
-	 * 
-	 * Flash starts and stops the pen at 'D', so we will too.
-	 */
-
-	// D
-	th->owner->tokens.emplace_back(GeomToken(MOVE, Vector2(x+width, y+height-ellipseHeight)));
-
-	// D -> E
-	th->owner->tokens.emplace_back(GeomToken(CURVE_CUBIC,
-	                        Vector2(x+width, y+height-ellipseHeight+kappaH),
-	                        Vector2(x+width-ellipseWidth+kappaW, y+height),
-	                        Vector2(x+width-ellipseWidth, y+height)));
-
-	// E -> F
-	th->owner->tokens.emplace_back(GeomToken(STRAIGHT, Vector2(x+ellipseWidth, y+height)));
-
-	// F -> G
-	th->owner->tokens.emplace_back(GeomToken(CURVE_CUBIC,
-	                        Vector2(x+ellipseWidth-kappaW, y+height),
-	                        Vector2(x, y+height-kappaH),
-	                        Vector2(x, y+height-ellipseHeight)));
-
-	// G -> H
-	th->owner->tokens.emplace_back(GeomToken(STRAIGHT, Vector2(x, y+ellipseHeight)));
-
-	// H -> A
-	th->owner->tokens.emplace_back(GeomToken(CURVE_CUBIC,
-	                        Vector2(x, y+ellipseHeight-kappaH),
-	                        Vector2(x+ellipseWidth-kappaW, y),
-	                        Vector2(x+ellipseWidth, y)));
-
-	// A -> B
-	th->owner->tokens.emplace_back(GeomToken(STRAIGHT, Vector2(x+width-ellipseWidth, y)));
-
-	// B -> C
-	th->owner->tokens.emplace_back(GeomToken(CURVE_CUBIC,
-	                        Vector2(x+width-ellipseWidth+kappaW, y),
-	                        Vector2(x+width, y+kappaH),
-	                        Vector2(x+width, y+ellipseHeight)));
-
-	// C -> D
-	th->owner->tokens.emplace_back(GeomToken(STRAIGHT, Vector2(x+width, y+height-ellipseHeight)));
-
-	th->owner->owner->requestInvalidation(getSys());
-	
-	return NULL;
-}
-
-ASFUNCTIONBODY(Graphics,drawCircle)
-{
-	Graphics* th=static_cast<Graphics*>(obj);
-	assert_and_throw(argslen==3);
-	th->checkAndSetScaling();
-
-	double x=args[0]->toNumber();
-	double y=args[1]->toNumber();
-	double radius=args[2]->toNumber();
-
-	double kappa = KAPPA*radius;
-
-	// right
-	th->owner->tokens.emplace_back(GeomToken(MOVE, Vector2(x+radius, y)));
-
-	// bottom
-	th->owner->tokens.emplace_back(GeomToken(CURVE_CUBIC,
-	                        Vector2(x+radius, y+kappa ),
-	                        Vector2(x+kappa , y+radius),
-	                        Vector2(x       , y+radius)));
-
-	// left
-	th->owner->tokens.emplace_back(GeomToken(CURVE_CUBIC,
-	                        Vector2(x-kappa , y+radius),
-	                        Vector2(x-radius, y+kappa ),
-	                        Vector2(x-radius, y       )));
-
-	// top
-	th->owner->tokens.emplace_back(GeomToken(CURVE_CUBIC,
-	                        Vector2(x-radius, y-kappa ),
-	                        Vector2(x-kappa , y-radius),
-	                        Vector2(x       , y-radius)));
-
-	// back to right
-	th->owner->tokens.emplace_back(GeomToken(CURVE_CUBIC,
-	                        Vector2(x+kappa , y-radius),
-	                        Vector2(x+radius, y-kappa ),
-	                        Vector2(x+radius, y       )));
-
-	th->owner->owner->requestInvalidation(getSys());
-	
-	return NULL;
-}
-
-ASFUNCTIONBODY(Graphics,drawRect)
-{
-	Graphics* th=static_cast<Graphics*>(obj);
-	assert_and_throw(argslen==4);
-	th->checkAndSetScaling();
-
-	int x=args[0]->toInt();
-	int y=args[1]->toInt();
-	int width=args[2]->toInt();
-	int height=args[3]->toInt();
-
-	const Vector2 a(x,y);
-	const Vector2 b(x+width,y);
-	const Vector2 c(x+width,y+height);
-	const Vector2 d(x,y+height);
-
-	th->owner->tokens.emplace_back(GeomToken(MOVE, a));
-	th->owner->tokens.emplace_back(GeomToken(STRAIGHT, b));
-	th->owner->tokens.emplace_back(GeomToken(STRAIGHT, c));
-	th->owner->tokens.emplace_back(GeomToken(STRAIGHT, d));
-	th->owner->tokens.emplace_back(GeomToken(STRAIGHT, a));
-	th->owner->owner->requestInvalidation(getSys());
-	
-	return NULL;
-}
-
-/* Solve for c in the matrix equation
- *
- * [ 1 x1 y1 ] [ c[0] ]   [ u1 ]
- * [ 1 x2 y2 ] [ c[1] ] = [ u2 ]
- * [ 1 x3 y3 ] [ c[2] ]   [ u3 ]
- *
- * The result will be put in the output parameter c.
- */
-void Graphics::solveVertexMapping(double x1, double y1,
-				  double x2, double y2,
-				  double x3, double y3,
-				  double u1, double u2, double u3,
-				  double c[3])
-{
-	double eps = 1e-15;
-	double det = fabs(x2*y3 + x1*y2 + y1*x3 - y2*x3 - x1*y3 - y1*x2);
-
-	if (det < eps)
-	{
-		// Degenerate matrix
-		c[0] = c[1] = c[2] = 0;
-		return;
-	}
-
-	// Symbolic solution of the equation by Gaussian elimination
-	if (fabs(x1-x2) < eps)
-	{
-		c[2] = (u2-u1)/(y2-y1);
-		c[1] = (u3 - u1 - (y3-y1)*c[2])/(x3-x1);
-		c[0] = u1 - x1*c[1] - y1*c[2];
-	}
+	Stage* th=obj->as<Stage>();
+	_NR<RootMovieClip> root = th->getRoot();
+	if (root.isNull())
+		return abstract_d(getSys()->mainClip->getFrameRate());
 	else
-	{
-		c[2] = ((x2-x1)*(u3-u1) - (x3-x1)*(u2-u1))/((y3-y1)*(x2-x1) - (x3-x1)*(y2-y1));
-		c[1] = (u2 - u1 - (y2-y1)*c[2])/(x2-x1);
-		c[0] = u1 - x1*c[1] - y1*c[2];
-	}
+		return abstract_d(root->getFrameRate());
 }
 
-ASFUNCTIONBODY(Graphics,drawTriangles)
+ASFUNCTIONBODY(Stage,_setFrameRate)
 {
-	Graphics* th=static_cast<Graphics*>(obj);
-	_NR<Vector> vertices;
-	_NR<Vector> indices;
-	_NR<Vector> uvtData;
-	tiny_string culling;
-	ARG_UNPACK (vertices) (indices, NullRef) (uvtData, NullRef) (culling, "none");
-
-	if (culling != "none")
-		LOG(LOG_NOT_IMPLEMENTED, "Graphics.drawTriangles doesn't support culling");
-
-	// Validate the parameters
-	if ((indices.isNull() && (vertices->size() % 6 != 0)) || 
-	    (!indices.isNull() && (indices->size() % 3 != 0)))
-	{
-		throwError<ArgumentError>(kInvalidParamError);
-	}
-
-	unsigned int numvertices=vertices->size()/2;
-	unsigned int numtriangles;
-	bool has_uvt=false;
-	int uvtElemSize=2;
-	int texturewidth=0;
-	int textureheight=0;
-
-	if (indices.isNull())
-		numtriangles=numvertices/3;
-	else
-		numtriangles=indices->size()/3;
-
-	if (!uvtData.isNull())
-	{
-		if (uvtData->size()==2*numvertices)
-		{
-			has_uvt=true;
-			uvtElemSize=2; /* (u, v) */
-		}
-		else if (uvtData->size()==3*numvertices)
-		{
-			has_uvt=true;
-			uvtElemSize=3; /* (u, v, t), t is ignored */
-			LOG(LOG_NOT_IMPLEMENTED, "Graphics.drawTriangles doesn't support t in uvtData parameter");
-		}
-		else
-		{
-			throwError<ArgumentError>(kInvalidParamError);
-		}
-
-		th->owner->getTextureSize(&texturewidth, &textureheight);
-	}
-
-	// According to testing, drawTriangles first fills the current
-	// path and creates a new path, but keeps the source.
-	th->owner->tokens.emplace_back(FILL_KEEP_SOURCE);
-
-	if (has_uvt && (texturewidth==0 || textureheight==0))
-		return NULL;
-
-	// Construct the triangles
-	for (unsigned int i=0; i<numtriangles; i++)
-	{
-		double x[3], y[3], u[3]={0}, v[3]={0};
-		for (unsigned int j=0; j<3; j++)
-		{
-			unsigned int vertex;
-			if (indices.isNull())
-				vertex=3*i+j;
-			else
-				vertex=indices->at(3*i+j)->toInt();
-
-			x[j]=vertices->at(2*vertex)->toNumber();
-			y[j]=vertices->at(2*vertex+1)->toNumber();
-
-			if (has_uvt)
-			{
-				u[j]=uvtData->at(vertex*uvtElemSize)->toNumber()*texturewidth;
-				v[j]=uvtData->at(vertex*uvtElemSize+1)->toNumber()*textureheight;
-			}
-		}
-		
-		Vector2 a(x[0], y[0]);
-		Vector2 b(x[1], y[1]);
-		Vector2 c(x[2], y[2]);
-
-		th->owner->tokens.emplace_back(GeomToken(MOVE, a));
-		th->owner->tokens.emplace_back(GeomToken(STRAIGHT, b));
-		th->owner->tokens.emplace_back(GeomToken(STRAIGHT, c));
-		th->owner->tokens.emplace_back(GeomToken(STRAIGHT, a));
-
-		if (has_uvt)
-		{
-			double t[6];
-
-			// Use the known (x, y) and (u, v)
-			// correspondences to compute a transformation
-			// t from (x, y) space into (u, v) space
-			// (cairo needs the mapping in this
-			// direction).
-			//
-			// u = t[0] + t[1]*x + t[2]*y
-			// v = t[3] + t[4]*x + t[5]*y
-			//
-			// u and v parts can be solved separately.
-			th->solveVertexMapping(x[0], y[0], x[1], y[1], x[2], y[2],
-					       u[0], u[1], u[2], t);
-			th->solveVertexMapping(x[0], y[0], x[1], y[1], x[2], y[2],
-					       v[0], v[1], v[2], &t[3]);
-
-			MATRIX m(t[1], t[5], t[4], t[2], t[0], t[3]);
-			th->owner->tokens.emplace_back(GeomToken(FILL_TRANSFORM_TEXTURE, m));
-		}
-	}
-	
-	th->owner->owner->requestInvalidation(getSys());
-
+	Stage* th=obj->as<Stage>();
+	number_t frameRate;
+	ARG_UNPACK(frameRate);
+	_NR<RootMovieClip> root = th->getRoot();
+	if (!root.isNull())
+		root->setFrameRate(frameRate);
 	return NULL;
 }
 
-ASFUNCTIONBODY(Graphics,lineStyle)
+ASFUNCTIONBODY(Stage,_getAllowFullScreen)
 {
-	Graphics* th=static_cast<Graphics*>(obj);
-	th->checkAndSetScaling();
+	return abstract_b(false); // until fullscreen support is implemented
+}
 
-	if (argslen == 0)
-	{
-		th->owner->tokens.emplace_back(CLEAR_STROKE);
-		return NULL;
-	}
-	uint32_t color = 0;
-	uint8_t alpha = 255;
-	UI16_SWF thickness = UI16_SWF(imax(args[0]->toNumber() * 20, 0));
-	if (argslen >= 2)
-		color = args[1]->toUInt();
-	if (argslen >= 3)
-		alpha = uint8_t(args[1]->toNumber() * 255);
+ASFUNCTIONBODY(Stage,_getAllowFullScreenInteractive)
+{
+	return abstract_b(false);
+}
 
-	// TODO: pixel hinting, scaling, caps, miter, joints
-	
-	LINESTYLE2 style(0xff);
-	style.Color = RGBA(color, alpha);
-	style.Width = thickness;
-	th->owner->tokens.emplace_back(GeomToken(SET_STROKE, style));
+ASFUNCTIONBODY(Stage,_getColorCorrectionSupport)
+{
+	return abstract_b(false); // until color correction is implemented
+}
+
+ASFUNCTIONBODY(Stage,_getWmodeGPU)
+{
+	return abstract_b(false);
+}
+ASFUNCTIONBODY(Stage,_invalidate)
+{
+	LOG(LOG_NOT_IMPLEMENTED,"invalidate not implemented yet");
+	// TODO this crashes lightspark
+	//Stage* th=obj->as<Stage>();
+	//_R<FlushInvalidationQueueEvent> event=_MR(new (getSys()->unaccountedMemory) FlushInvalidationQueueEvent());
+	//getVm()->addEvent(_MR(th),event);
 	return NULL;
 }
 
-ASFUNCTIONBODY(Graphics,beginGradientFill)
-{
-	Graphics* th=static_cast<Graphics*>(obj);
-	assert_and_throw(argslen>=4);
-	th->checkAndSetScaling();
-
-	FILLSTYLE style(0xff);
-
-	assert_and_throw(args[1]->getObjectType()==T_ARRAY);
-	Array* colors=Class<Array>::cast(args[1]);
-
-	assert_and_throw(args[2]->getObjectType()==T_ARRAY);
-	Array* alphas=Class<Array>::cast(args[2]);
-
-	//assert_and_throw(args[3]->getObjectType()==T_ARRAY);
-	//Work around for bug in YouTube player of July 13 2011
-	if(args[3]->getObjectType()==T_UNDEFINED)
-		return NULL;
-	Array* ratios=Class<Array>::cast(args[3]);
-
-	int NumGradient = colors->size();
-	if (NumGradient != (int)alphas->size() || NumGradient != (int)ratios->size())
-		return NULL;
-
-	if (NumGradient < 1 || NumGradient > 15)
-		return NULL;
-
-	const tiny_string& type=args[0]->toString();
-
-	if(type == "linear")
-		style.FillStyleType=LINEAR_GRADIENT;
-	else if(type == "radial")
-		style.FillStyleType=RADIAL_GRADIENT;
-	else
-		return NULL;
-
-	// Don't support FOCALGRADIENT for now.
-	GRADIENT grad(0xff);
-	for(int i = 0; i < NumGradient; i ++)
-	{
-		GRADRECORD record(0xff);
-		record.Color = RGBA(colors->at(i)->toUInt(), (int)alphas->at(i)->toNumber()*255);
-		record.Ratio = UI8(ratios->at(i)->toUInt());
-		grad.GradientRecords.push_back(record);
-	}
-
-	if(argslen > 4 && args[4]->getClass()==Class<Matrix>::getClass())
-	{
-		style.Matrix = static_cast<Matrix*>(args[4])->getMATRIX();
-		//Conversion from twips to pixels
-		cairo_matrix_scale(&style.Matrix, 1.0f/20.0f, 1.0f/20.0f);
-	}
-	else
-	{
-		cairo_matrix_scale(&style.Matrix, 100.0/16384.0, 100.0/16384.0);
-	}
-
-	if(argslen > 5)
-	{
-		const tiny_string& spread=args[5]->toString();
-		if (spread == "pad")
-			grad.SpreadMode = 0;
-		else if (spread == "reflect")
-			grad.SpreadMode = 1;
-		else if (spread == "repeat")
-			grad.SpreadMode = 2;
-	}
-	else
-	{
-		//default is pad
-		grad.SpreadMode = 0;
-	}
-
-
-	if(argslen > 6)
-	{
-		const tiny_string& interp=args[6]->toString();
-		if (interp == "rgb")
-			grad.InterpolationMode = 0;
-		else if (interp == "linearRGB")
-			grad.InterpolationMode = 1;
-	}
-	else
-	{
-		//default is rgb
-		grad.InterpolationMode = 0;
-	}
-
-	style.Gradient = grad;
-	th->owner->tokens.emplace_back(GeomToken(SET_FILL, style));
-	return NULL;
-}
-
-ASFUNCTIONBODY(Graphics,beginBitmapFill)
-{
-	Graphics* th = obj->as<Graphics>();
-	_NR<BitmapData> bitmap;
-	_NR<Matrix> matrix;
-	bool repeat, smooth;
-	ARG_UNPACK (bitmap) (matrix, NullRef) (repeat, true) (smooth, false);
-
-	if(bitmap.isNull())
-		return NULL;
-
-	th->checkAndSetScaling();
-	FILLSTYLE style(0xff);
-	if(repeat && smooth)
-		style.FillStyleType = REPEATING_BITMAP;
-	else if(repeat && !smooth)
-		style.FillStyleType = NON_SMOOTHED_REPEATING_BITMAP;
-	else if(!repeat && smooth)
-		style.FillStyleType = CLIPPED_BITMAP;
-	else
-		style.FillStyleType = NON_SMOOTHED_CLIPPED_BITMAP;
-
-	if(!matrix.isNull())
-		style.Matrix = matrix->getMATRIX();
-
-	style.bitmap = bitmap->getBitmapContainer();
-	th->owner->tokens.emplace_back(GeomToken(SET_FILL, style));
-	return NULL;
-}
-
-ASFUNCTIONBODY(Graphics,beginFill)
-{
-	Graphics* th=static_cast<Graphics*>(obj);
-	th->checkAndSetScaling();
-	uint32_t color=0;
-	uint8_t alpha=255;
-	if(argslen>=1)
-		color=args[0]->toUInt();
-	if(argslen>=2)
-		alpha=(uint8_t(args[1]->toNumber()*0xff));
-	FILLSTYLE style(0xff);
-	style.FillStyleType = SOLID_FILL;
-	style.Color         = RGBA(color, alpha);
-	th->owner->tokens.emplace_back(GeomToken(SET_FILL, style));
-	return NULL;
-}
-
-ASFUNCTIONBODY(Graphics,endFill)
-{
-	Graphics* th=static_cast<Graphics*>(obj);
-	th->checkAndSetScaling();
-	th->owner->tokens.emplace_back(CLEAR_FILL);
-	return NULL;
-}
-
-ASFUNCTIONBODY(Graphics,copyFrom)
-{
-	Graphics* th=static_cast<Graphics*>(obj);
-	_NR<Graphics> source;
-	ARG_UNPACK(source);
-	if (source.isNull())
-		return NULL;
-
-	th->owner->tokens.assign(source->owner->tokens.begin(),
-				 source->owner->tokens.end());
-	return NULL;
-}
-
-void LineScaleMode::sinit(Class_base* c)
-{
-	c->setConstructor(NULL);
-	c->setVariableByQName("HORIZONTAL","",Class<ASString>::getInstanceS("horizontal"),DECLARED_TRAIT);
-	c->setVariableByQName("NONE","",Class<ASString>::getInstanceS("none"),DECLARED_TRAIT);
-	c->setVariableByQName("NORMAL","",Class<ASString>::getInstanceS("normal"),DECLARED_TRAIT);
-	c->setVariableByQName("VERTICAL","",Class<ASString>::getInstanceS("vertical"),DECLARED_TRAIT);
-}
 
 void StageScaleMode::sinit(Class_base* c)
 {
-	c->setConstructor(NULL);
-	c->setVariableByQName("EXACT_FIT","",Class<ASString>::getInstanceS("exactFit"),DECLARED_TRAIT);
-	c->setVariableByQName("NO_BORDER","",Class<ASString>::getInstanceS("noBorder"),DECLARED_TRAIT);
-	c->setVariableByQName("NO_SCALE","",Class<ASString>::getInstanceS("noScale"),DECLARED_TRAIT);
-	c->setVariableByQName("SHOW_ALL","",Class<ASString>::getInstanceS("showAll"),DECLARED_TRAIT);
+	CLASS_SETUP_NO_CONSTRUCTOR(c, ASObject, CLASS_SEALED | CLASS_FINAL);
+	c->setVariableByQName("EXACT_FIT","",Class<ASString>::getInstanceS("exactFit"),CONSTANT_TRAIT);
+	c->setVariableByQName("NO_BORDER","",Class<ASString>::getInstanceS("noBorder"),CONSTANT_TRAIT);
+	c->setVariableByQName("NO_SCALE","",Class<ASString>::getInstanceS("noScale"),CONSTANT_TRAIT);
+	c->setVariableByQName("SHOW_ALL","",Class<ASString>::getInstanceS("showAll"),CONSTANT_TRAIT);
 }
 
 void StageAlign::sinit(Class_base* c)
 {
-	c->setConstructor(NULL);
-	c->setVariableByQName("TOP_LEFT","",Class<ASString>::getInstanceS("TL"),DECLARED_TRAIT);
+	CLASS_SETUP_NO_CONSTRUCTOR(c, ASObject, CLASS_SEALED | CLASS_FINAL);
+	c->setVariableByQName("BOTTOM","",Class<ASString>::getInstanceS("B"),CONSTANT_TRAIT);
+	c->setVariableByQName("BOTTOM_LEFT","",Class<ASString>::getInstanceS("BL"),CONSTANT_TRAIT);
+	c->setVariableByQName("BOTTOM_RIGHT","",Class<ASString>::getInstanceS("BR"),CONSTANT_TRAIT);
+	c->setVariableByQName("LEFT","",Class<ASString>::getInstanceS("L"),CONSTANT_TRAIT);
+	c->setVariableByQName("RIGHT","",Class<ASString>::getInstanceS("R"),CONSTANT_TRAIT);
+	c->setVariableByQName("TOP","",Class<ASString>::getInstanceS("T"),CONSTANT_TRAIT);
+	c->setVariableByQName("TOP_LEFT","",Class<ASString>::getInstanceS("TL"),CONSTANT_TRAIT);
+	c->setVariableByQName("TOP_RIGHT","",Class<ASString>::getInstanceS("TR"),CONSTANT_TRAIT);
 }
 
 void StageQuality::sinit(Class_base* c)
 {
-	c->setConstructor(NULL);
-	c->setVariableByQName("BEST","",Class<ASString>::getInstanceS("best"),DECLARED_TRAIT);
-	c->setVariableByQName("HIGH","",Class<ASString>::getInstanceS("high"),DECLARED_TRAIT);
-	c->setVariableByQName("LOW","",Class<ASString>::getInstanceS("low"),DECLARED_TRAIT);
-	c->setVariableByQName("MEDIUM","",Class<ASString>::getInstanceS("medium"),DECLARED_TRAIT);
+	CLASS_SETUP_NO_CONSTRUCTOR(c, ASObject, CLASS_SEALED | CLASS_FINAL);
+	c->setVariableByQName("BEST","",Class<ASString>::getInstanceS("best"),CONSTANT_TRAIT);
+	c->setVariableByQName("HIGH","",Class<ASString>::getInstanceS("high"),CONSTANT_TRAIT);
+	c->setVariableByQName("LOW","",Class<ASString>::getInstanceS("low"),CONSTANT_TRAIT);
+	c->setVariableByQName("MEDIUM","",Class<ASString>::getInstanceS("medium"),CONSTANT_TRAIT);
 }
 
 void StageDisplayState::sinit(Class_base* c)
 {
-	c->setConstructor(NULL);
-	c->setVariableByQName("FULL_SCREEN","",Class<ASString>::getInstanceS("fullScreen"),DECLARED_TRAIT);
-	c->setVariableByQName("NORMAL","",Class<ASString>::getInstanceS("normal"),DECLARED_TRAIT);
+	CLASS_SETUP_NO_CONSTRUCTOR(c, ASObject, CLASS_SEALED | CLASS_FINAL);
+	c->setVariableByQName("FULL_SCREEN","",Class<ASString>::getInstanceS("fullScreen"),CONSTANT_TRAIT);
+	c->setVariableByQName("FULL_SCREEN_INTERACTIVE","",Class<ASString>::getInstanceS("fullScreenInteractive"),CONSTANT_TRAIT);
+	c->setVariableByQName("NORMAL","",Class<ASString>::getInstanceS("normal"),CONSTANT_TRAIT);
 }
 
 Bitmap::Bitmap(Class_base* c, _NR<LoaderInfo> li, std::istream *s, FILE_TYPE type):
@@ -2934,8 +2479,7 @@ void Bitmap::finalize()
 
 void Bitmap::sinit(Class_base* c)
 {
-	c->setConstructor(Class<IFunction>::getFunction(_constructor));
-	c->setSuper(Class<DisplayObject>::getRef());
+	CLASS_SETUP(c, DisplayObject, _constructor, CLASS_SEALED);
 	REGISTER_GETTER_SETTER(c,bitmapData);
 	REGISTER_GETTER_SETTER(c,smoothing);
 }
@@ -3027,8 +2571,7 @@ IntSize Bitmap::getBitmapSize() const
 
 void SimpleButton::sinit(Class_base* c)
 {
-	c->setConstructor(Class<IFunction>::getFunction(_constructor));
-	c->setSuper(Class<InteractiveObject>::getRef());
+	CLASS_SETUP(c, InteractiveObject, _constructor, CLASS_SEALED);
 	c->setDeclaredMethodByQName("upState","",Class<IFunction>::getFunction(_getUpState),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("upState","",Class<IFunction>::getFunction(_setUpState),SETTER_METHOD,true);
 	c->setDeclaredMethodByQName("downState","",Class<IFunction>::getFunction(_getDownState),GETTER_METHOD,true);
@@ -3039,6 +2582,8 @@ void SimpleButton::sinit(Class_base* c)
 	c->setDeclaredMethodByQName("hitTestState","",Class<IFunction>::getFunction(_setHitTestState),SETTER_METHOD,true);
 	c->setDeclaredMethodByQName("enabled","",Class<IFunction>::getFunction(_getEnabled),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("enabled","",Class<IFunction>::getFunction(_setEnabled),SETTER_METHOD,true);
+	c->setDeclaredMethodByQName("useHandCursor","",Class<IFunction>::getFunction(_getUseHandCursor),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("useHandCursor","",Class<IFunction>::getFunction(_setUseHandCursor),SETTER_METHOD,true);
 }
 
 void SimpleButton::buildTraits(ASObject* o)
@@ -3273,43 +2818,62 @@ ASFUNCTIONBODY(SimpleButton,_getUseHandCursor)
 
 void GradientType::sinit(Class_base* c)
 {
-	c->setConstructor(NULL);
-	c->setVariableByQName("LINEAR","",Class<ASString>::getInstanceS("linear"),DECLARED_TRAIT);
-	c->setVariableByQName("RADIAL","",Class<ASString>::getInstanceS("radial"),DECLARED_TRAIT);
+	CLASS_SETUP_NO_CONSTRUCTOR(c, ASObject, CLASS_SEALED | CLASS_FINAL);
+	c->setVariableByQName("LINEAR","",Class<ASString>::getInstanceS("linear"),CONSTANT_TRAIT);
+	c->setVariableByQName("RADIAL","",Class<ASString>::getInstanceS("radial"),CONSTANT_TRAIT);
 }
 
 void BlendMode::sinit(Class_base* c)
 {
-	c->setConstructor(NULL);
-	c->setVariableByQName("ADD","",Class<ASString>::getInstanceS("add"),DECLARED_TRAIT);
-	c->setVariableByQName("ALPHA","",Class<ASString>::getInstanceS("alpha"),DECLARED_TRAIT);
-	c->setVariableByQName("DARKEN","",Class<ASString>::getInstanceS("darken"),DECLARED_TRAIT);
-	c->setVariableByQName("DIFFERENCE","",Class<ASString>::getInstanceS("difference"),DECLARED_TRAIT);
-	c->setVariableByQName("ERASE","",Class<ASString>::getInstanceS("erase"),DECLARED_TRAIT);
-	c->setVariableByQName("HARDLIGHT","",Class<ASString>::getInstanceS("hardlight"),DECLARED_TRAIT);
-	c->setVariableByQName("INVERT","",Class<ASString>::getInstanceS("invert"),DECLARED_TRAIT);
-	c->setVariableByQName("LAYER","",Class<ASString>::getInstanceS("layer"),DECLARED_TRAIT);
-	c->setVariableByQName("LIGHTEN","",Class<ASString>::getInstanceS("lighten"),DECLARED_TRAIT);
-	c->setVariableByQName("MULTIPLY","",Class<ASString>::getInstanceS("multiply"),DECLARED_TRAIT);
-	c->setVariableByQName("NORMAL","",Class<ASString>::getInstanceS("normal"),DECLARED_TRAIT);
-	c->setVariableByQName("OVERLAY","",Class<ASString>::getInstanceS("overlay"),DECLARED_TRAIT);
-	c->setVariableByQName("SCREEN","",Class<ASString>::getInstanceS("screen"),DECLARED_TRAIT);
-	c->setVariableByQName("SUBSTRACT","",Class<ASString>::getInstanceS("substract"),DECLARED_TRAIT);
+	CLASS_SETUP_NO_CONSTRUCTOR(c, ASObject, CLASS_SEALED | CLASS_FINAL);
+	c->setVariableByQName("ADD","",Class<ASString>::getInstanceS("add"),CONSTANT_TRAIT);
+	c->setVariableByQName("ALPHA","",Class<ASString>::getInstanceS("alpha"),CONSTANT_TRAIT);
+	c->setVariableByQName("DARKEN","",Class<ASString>::getInstanceS("darken"),CONSTANT_TRAIT);
+	c->setVariableByQName("DIFFERENCE","",Class<ASString>::getInstanceS("difference"),CONSTANT_TRAIT);
+	c->setVariableByQName("ERASE","",Class<ASString>::getInstanceS("erase"),CONSTANT_TRAIT);
+	c->setVariableByQName("HARDLIGHT","",Class<ASString>::getInstanceS("hardlight"),CONSTANT_TRAIT);
+	c->setVariableByQName("INVERT","",Class<ASString>::getInstanceS("invert"),CONSTANT_TRAIT);
+	c->setVariableByQName("LAYER","",Class<ASString>::getInstanceS("layer"),CONSTANT_TRAIT);
+	c->setVariableByQName("LIGHTEN","",Class<ASString>::getInstanceS("lighten"),CONSTANT_TRAIT);
+	c->setVariableByQName("MULTIPLY","",Class<ASString>::getInstanceS("multiply"),CONSTANT_TRAIT);
+	c->setVariableByQName("NORMAL","",Class<ASString>::getInstanceS("normal"),CONSTANT_TRAIT);
+	c->setVariableByQName("OVERLAY","",Class<ASString>::getInstanceS("overlay"),CONSTANT_TRAIT);
+	c->setVariableByQName("SCREEN","",Class<ASString>::getInstanceS("screen"),CONSTANT_TRAIT);
+	c->setVariableByQName("SUBTRACT","",Class<ASString>::getInstanceS("subtract"),CONSTANT_TRAIT);
 }
 
 void SpreadMethod::sinit(Class_base* c)
 {
-	c->setConstructor(NULL);
-	c->setVariableByQName("PAD","",Class<ASString>::getInstanceS("pad"),DECLARED_TRAIT);
-	c->setVariableByQName("REFLECT","",Class<ASString>::getInstanceS("reflect"),DECLARED_TRAIT);
-	c->setVariableByQName("REPEAT","",Class<ASString>::getInstanceS("repeat"),DECLARED_TRAIT);
+	CLASS_SETUP_NO_CONSTRUCTOR(c, ASObject, CLASS_SEALED | CLASS_FINAL);
+	c->setVariableByQName("PAD","",Class<ASString>::getInstanceS("pad"),CONSTANT_TRAIT);
+	c->setVariableByQName("REFLECT","",Class<ASString>::getInstanceS("reflect"),CONSTANT_TRAIT);
+	c->setVariableByQName("REPEAT","",Class<ASString>::getInstanceS("repeat"),CONSTANT_TRAIT);
 }
 
 void InterpolationMethod::sinit(Class_base* c)
 {
-	c->setConstructor(NULL);
-	c->setVariableByQName("RGB","",Class<ASString>::getInstanceS("rgb"),DECLARED_TRAIT);
-	c->setVariableByQName("LINEAR_RGB","",Class<ASString>::getInstanceS("linearRGB"),DECLARED_TRAIT);
+	CLASS_SETUP_NO_CONSTRUCTOR(c, ASObject, CLASS_SEALED | CLASS_FINAL);
+	c->setVariableByQName("RGB","",Class<ASString>::getInstanceS("rgb"),CONSTANT_TRAIT);
+	c->setVariableByQName("LINEAR_RGB","",Class<ASString>::getInstanceS("linearRGB"),CONSTANT_TRAIT);
+}
+
+void GraphicsPathCommand::sinit(Class_base* c)
+{
+	CLASS_SETUP_NO_CONSTRUCTOR(c, ASObject, CLASS_SEALED | CLASS_FINAL);
+	c->setVariableByQName("CUBIC_CURVE_TO","",abstract_i(6),CONSTANT_TRAIT);
+	c->setVariableByQName("CURVE_TO","",abstract_i(3),CONSTANT_TRAIT);
+	c->setVariableByQName("LINE_TO","",abstract_i(2),CONSTANT_TRAIT);
+	c->setVariableByQName("MOVE_TO","",abstract_i(1),CONSTANT_TRAIT);
+	c->setVariableByQName("NO_OP","",abstract_i(0),CONSTANT_TRAIT);
+	c->setVariableByQName("WIDE_LINE_TO","",abstract_i(5),CONSTANT_TRAIT);
+	c->setVariableByQName("WIDE_MOVE_TO","",abstract_i(4),CONSTANT_TRAIT);
+}
+
+void GraphicsPathWinding::sinit(Class_base* c)
+{
+	CLASS_SETUP_NO_CONSTRUCTOR(c, ASObject, CLASS_SEALED | CLASS_FINAL);
+	c->setVariableByQName("EVEN_ODD","",Class<ASString>::getInstanceS("evenOdd"),CONSTANT_TRAIT);
+	c->setVariableByQName("NON_ZERO","",Class<ASString>::getInstanceS("nonZero"),CONSTANT_TRAIT);
 }
 
 /* Go through the hierarchy and add all
@@ -3456,8 +3020,7 @@ void MovieClip::constructionComplete()
 
 void AVM1Movie::sinit(Class_base* c)
 {
-	c->setConstructor(Class<IFunction>::getFunction(_constructor));
-	c->setSuper(Class<DisplayObject>::getRef());
+	CLASS_SETUP(c, DisplayObject, _constructor, CLASS_SEALED);
 }
 
 void AVM1Movie::buildTraits(ASObject* o)
@@ -3473,8 +3036,7 @@ ASFUNCTIONBODY(AVM1Movie,_constructor)
 
 void Shader::sinit(Class_base* c)
 {
-	c->setConstructor(Class<IFunction>::getFunction(_constructor));
-	c->setSuper(Class<ASObject>::getRef());
+	CLASS_SETUP(c, ASObject, _constructor, CLASS_SEALED);
 }
 
 ASFUNCTIONBODY(Shader,_constructor)
@@ -3485,12 +3047,11 @@ ASFUNCTIONBODY(Shader,_constructor)
 
 void BitmapDataChannel::sinit(Class_base* c)
 {
-	c->setConstructor(NULL);
-	c->setSuper(Class<ASObject>::getRef());
-	c->setVariableByQName("ALPHA","",abstract_ui(8),DECLARED_TRAIT);
-	c->setVariableByQName("BLUE","",abstract_ui(4),DECLARED_TRAIT);
-	c->setVariableByQName("GREEN","",abstract_ui(2),DECLARED_TRAIT);
-	c->setVariableByQName("RED","",abstract_ui(1),DECLARED_TRAIT);
+	CLASS_SETUP_NO_CONSTRUCTOR(c, ASObject, CLASS_SEALED | CLASS_FINAL);
+	c->setVariableByQName("ALPHA","",abstract_ui(8),CONSTANT_TRAIT);
+	c->setVariableByQName("BLUE","",abstract_ui(4),CONSTANT_TRAIT);
+	c->setVariableByQName("GREEN","",abstract_ui(2),CONSTANT_TRAIT);
+	c->setVariableByQName("RED","",abstract_ui(1),CONSTANT_TRAIT);
 }
 
 unsigned int BitmapDataChannel::channelShift(uint32_t channelConstant)
@@ -3514,4 +3075,13 @@ unsigned int BitmapDataChannel::channelShift(uint32_t channelConstant)
 	}
 
 	return shift;
+}
+
+void LineScaleMode::sinit(Class_base* c)
+{
+	CLASS_SETUP_NO_CONSTRUCTOR(c, ASObject, CLASS_SEALED | CLASS_FINAL);
+	c->setVariableByQName("HORIZONTAL","",Class<ASString>::getInstanceS("horizontal"),CONSTANT_TRAIT);
+	c->setVariableByQName("NONE","",Class<ASString>::getInstanceS("none"),CONSTANT_TRAIT);
+	c->setVariableByQName("NORMAL","",Class<ASString>::getInstanceS("normal"),CONSTANT_TRAIT);
+	c->setVariableByQName("VERTICAL","",Class<ASString>::getInstanceS("vertical"),CONSTANT_TRAIT);
 }

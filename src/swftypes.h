@@ -83,7 +83,7 @@ typedef double number_t;
 
 class ASObject;
 class ABCContext;
-class namespace_info;
+struct namespace_info;
 
 struct multiname;
 class QName
@@ -376,6 +376,7 @@ struct multiname: public memory_reporter
 	void resetNameIfObject();
 	bool isQName() const { return ns.size() == 1; }
 	bool toUInt(uint32_t& out, bool acceptStringFractions=false) const;
+	bool isEmpty() const { return name_type == NAME_OBJECT && name_o == NULL;}
 };
 
 class FLOAT 
@@ -885,6 +886,7 @@ class FILLSTYLE
 public:
 	FILLSTYLE(uint8_t v);
 	FILLSTYLE(const FILLSTYLE& r);
+	FILLSTYLE& operator=(FILLSTYLE r);
 	virtual ~FILLSTYLE();
 	MATRIX Matrix;
 	GRADIENT Gradient;
@@ -924,10 +926,10 @@ public:
 class LINESTYLE2
 {
 public:
-	LINESTYLE2(uint8_t v):FillType(v),version(v){}
+	LINESTYLE2(uint8_t v):HasFillFlag(false),FillType(v),version(v){}
 	UB StartCapStyle;
 	UB JointStyle;
-	UB HasFillFlag;
+	bool HasFillFlag;
 	UB NoHScaleFlag;
 	UB NoVScaleFlag;
 	UB PixelHintingFlag;
@@ -1295,6 +1297,21 @@ public:
 	CLIPEVENTFLAGS AllEventFlags;
 };
 
+class SOUNDINFO
+{
+public:
+	UB SyncStop;
+	UB SyncNoMultiple;
+	UB HasEnvelope;
+	UB HasLoops;
+	UB HasOutPoint;
+	UB HasInPoint;
+	UI32_SWF InPoint;
+	UI32_SWF OutPoint;
+	UI16_SWF LoopCount;
+	UI8 EnvPoints;
+};
+
 class RunState
 {
 public:
@@ -1359,7 +1376,7 @@ std::istream& operator>>(std::istream& stream, GRADIENTGLOWFILTER& v);
 std::istream& operator>>(std::istream& stream, CONVOLUTIONFILTER& v);
 std::istream& operator>>(std::istream& stream, COLORMATRIXFILTER& v);
 std::istream& operator>>(std::istream& stream, GRADIENTBEVELFILTER& v);
-
+std::istream& operator>>(std::istream& stream, SOUNDINFO& v);
 
 };
 #endif /* SWFTYPES_H */

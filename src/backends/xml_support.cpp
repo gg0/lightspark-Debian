@@ -40,6 +40,7 @@ void RecoveryDomParser::parse_memory_raw(const unsigned char* contents, size_typ
 
 	xmlSAXHandlerV1* handler=(xmlSAXHandlerV1*)calloc(1,sizeof(xmlSAXHandlerV1));
 	initxmlDefaultSAXHandler(handler, 0);
+	handler->comment = comment;
 	context_->recovery=1;
 	free(context_->sax);
 	context_->sax=(xmlSAXHandler*)handler;
@@ -60,7 +61,8 @@ void RecoveryDomParser::parse_memory_raw(const unsigned char* contents, size_typ
 	if(!context_->wellFormed)
 		LOG(LOG_ERROR, "XML data not well formed!");
 
-	doc_ = new RecoveryDocument(context_->myDoc);
+	if (context_->myDoc)
+		doc_ = new RecoveryDocument(context_->myDoc);
 	// This is to indicate to release_underlying that we took the
 	// ownership on the doc.
 	context_->myDoc = 0;
@@ -74,7 +76,7 @@ void RecoveryDomParser::parse_memory_raw(const unsigned char* contents, size_typ
 #endif
 
 xmlpp::Node* XMLBase::buildFromString(const string& str,
-				      bool ignoreEmptyTextNodes,
+				      bool ignoreEmptyTextNodes, bool *hasParent,
 				      const string& default_ns)
 {
 	string buf = parserQuirks(str);
@@ -86,27 +88,42 @@ xmlpp::Node* XMLBase::buildFromString(const string& str,
 	{
 	}
 	xmlpp::Document* doc=parser.get_document();
-	if(doc && doc->get_root_node())
+	if(doc)
 	{
-		xmlpp::Element *root = doc->get_root_node();
-		// It would be better to remove empty nodes during
-		// parsing, but xmlpp doesn't offer an interface.
-		if (ignoreEmptyTextNodes)
-			removeWhitespaceNodes(root);
-		addDefaultNamespace(root, default_ns);
-		return root;
+		if (!doc->get_root_node())
+		{
+			buf = removeWhitespace(str)+"<parent></parent>";
+			try
+			{
+				parser.parse_memory_raw((const unsigned char*)buf.c_str(), buf.size());
+			}
+			catch(const exception& e)
+			{
+			}
+			doc=parser.get_document();
+		}
+		if (doc && doc->get_root_node())
+		{
+			*hasParent = true;
+			xmlpp::Element *root = doc->get_root_node();
+			// It would be better to remove empty nodes during
+			// parsing, but xmlpp doesn't offer an interface.
+			if (ignoreEmptyTextNodes)
+				removeWhitespaceNodes(root);
+			addDefaultNamespace(root, default_ns);
+			return root;
+		}
 	}
-
-	LOG(LOG_ERROR, "XML parsing failed, creating text node");
 	//If everything fails, create a fake document and add a single text string child
+	// see 10.3.1 in ECMA 357
 	if (default_ns.empty())
-		buf="<a></a>";
+		buf="<parent></parent>";
 	else
-		buf="<a xmlns=\"" + default_ns + "\"></a>";
+		buf="<parent xmlns=\"" + default_ns + "\"></parent>";
 	parser.parse_memory_raw((const unsigned char*)buf.c_str(), buf.size());
 
+	*hasParent = false;
 	return parser.get_document()->get_root_node()->add_child_text(str);
-	// TODO: node's parent (root) should be inaccessible from AS code
 }
 
 void XMLBase::addDefaultNamespace(xmlpp::Element *root, const string& default_ns)
@@ -136,15 +153,25 @@ void XMLBase::addDefaultNamespaceRecursive(xmlNodePtr node, xmlNsPtr ns)
 	}
 }
 
-xmlpp::Node* XMLBase::buildCopy(const xmlpp::Node* src)
+xmlpp::Node* XMLBase::buildCopy(const xmlpp::Node* src, bool *hasParent)
 {
+	const xmlpp::ContentNode* contentnode;
 	const xmlpp::TextNode* textnode=dynamic_cast<const xmlpp::TextNode*>(src);
 	if(textnode)
 	{
-		return buildFromString(textnode->get_content(), false);
+		return buildFromString(textnode->get_content(), false,hasParent);
+	}
+	else if ((contentnode = dynamic_cast<const xmlpp::ContentNode*>(src)))
+	{
+		// ContentNode but not TextNode => comment, PI or CData
+		// These can't be root nodes so we add a dummy root.
+		*hasParent = false;
+		xmlpp::Element* root = parser.get_document()->create_root_node("dummy_root");
+		return root->import_node(contentnode);
 	}
 	else
 	{
+		*hasParent = true;
 		return parser.get_document()->create_root_node_by_import(src);
 	}
 }
@@ -209,4 +236,26 @@ void XMLBase::removeWhitespaceNodes(xmlpp::Element *node)
 			removeWhitespaceNodes(element);
 		}
 	}
+}
+tiny_string XMLBase::removeWhitespace(tiny_string val)
+{
+	bool bwhite = true;
+	uint32_t start = 0;
+	CharIterator it = val.begin();
+	CharIterator itend = val.begin();
+	while (it != val.end())
+	{
+		if (!g_unichar_isspace(*it))
+		{
+			itend=it;
+			itend++;
+			bwhite = false;
+		}
+		else if (bwhite)
+			start++;
+		it++;
+	}
+	if (bwhite)
+		return "";
+	return val.substr(start,itend);
 }

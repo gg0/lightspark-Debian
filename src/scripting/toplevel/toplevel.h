@@ -29,7 +29,7 @@
 #include "scripting/abcutils.h"
 #include "scripting/toplevel/Boolean.h"
 #include "scripting/toplevel/Error.h"
-//#include "scripting/toplevel/XML.h"
+#include "scripting/toplevel/XML.h"
 #include "memory_support.h"
 #include <libxml++/parsers/domparser.h>
 #include <boost/intrusive/list.hpp>
@@ -45,7 +45,7 @@ class ASString;
 class method_info;
 struct call_context;
 struct traits_info;
-class namespace_info;
+struct namespace_info;
 class Any;
 class Void;
 class Class_object;
@@ -74,7 +74,7 @@ public:
 	 * then an exception is thrown.
 	 * The caller does not own the object returned.
 	 */
-	static const Type* getTypeFromMultiname(const multiname* mn, const ABCContext* context);
+	static const Type* getTypeFromMultiname(const multiname* mn, ABCContext* context);
 	/*
 	 * Checks if the type is already in sys->classes
 	 */
@@ -136,6 +136,7 @@ public:
 };
 
 class Prototype;
+class ObjectConstructor;
 
 class Class_base: public ASObject, public Type
 {
@@ -158,9 +159,11 @@ private:
 protected:
 	void copyBorrowedTraitsFromSuper();
 	ASFUNCTION(_toString);
+	void initStandardProps();
 public:
 	variables_map borrowedVariables;
 	ASPROPERTY_GETTER(_NR<Prototype>,prototype);
+	ASPROPERTY_GETTER(_NR<ObjectConstructor>,constructorprop);
 	_NR<Class_base> super;
 	//We need to know what is the context we are referring to
 	ABCContext* context;
@@ -175,11 +178,13 @@ private:
 	//TODO: move in Class_inherit
 	bool use_protected:1;
 public:
+	void addConstructorGetter();
 	void addPrototypeGetter();
 	void addLengthGetter();
 	void setupDeclaredTraits(ASObject *target);
 	void handleConstruction(ASObject* target, ASObject* const* args, unsigned int argslen, bool buildAndLink);
 	void setConstructor(IFunction* c);
+	bool hasConstructor() { return constructor != NULL; }
 	Class_base(const QName& name, MemoryAccount* m);
 	//Special constructor for Class_object
 	Class_base(const Class_object*);
@@ -189,7 +194,7 @@ public:
 	void addImplementedInterface(const multiname& i);
 	void addImplementedInterface(Class_base* i);
 	virtual void buildInstanceTraits(ASObject* o) const=0;
-	const std::vector<Class_base*>& getInterfaces() const;
+	const std::vector<Class_base*>& getInterfaces(bool *alldefined = NULL) const;
 	virtual void linkInterface(Class_base* c) const;
 	/*
 	 * Returns true when 'this' is a subclass of 'cls',
@@ -198,7 +203,7 @@ public:
 	 */
 	bool isSubClass(const Class_base* cls, bool considerInterfaces=true) const;
 	tiny_string getQualifiedClassName() const;
-	tiny_string getName() const { return class_name.name; }
+	tiny_string getName() const { return (class_name.ns.empty() ? class_name.name : class_name.ns +"$"+ class_name.name); }
 	tiny_string toString();
 	virtual ASObject* generator(ASObject* const* args, const unsigned int argslen);
 	ASObject *describeType() const;
@@ -220,8 +225,9 @@ public:
 		super = super_;
 		copyBorrowedTraitsFromSuper();
 	}
-	const variable* findBorrowedGettable(const multiname& name) const DLL_LOCAL;
+	const variable* findBorrowedGettable(const multiname& name, NS_KIND &nskind) const DLL_LOCAL;
 	variable* findBorrowedSettable(const multiname& name, bool* has_getter=NULL) DLL_LOCAL;
+	variable* findSettableInPrototype(const multiname& name) DLL_LOCAL;
 	EARLY_BIND_STATUS resolveMultinameStatically(const multiname& name) const;
 	const multiname* resolveSlotTypeName(uint32_t slotId) const { /*TODO: implement*/ return NULL; }
 };
@@ -232,7 +238,7 @@ private:
 	QName template_name;
 public:
 	Template_base(QName name);
-	virtual Class_base* applyType(const std::vector<Type*>& t)=0;
+	virtual Class_base* applyType(const std::vector<const Type*>& t)=0;
 };
 
 class Class_object: public Class_base
@@ -247,7 +253,7 @@ private:
 	}
 	void buildInstanceTraits(ASObject* o) const
 	{
-		throw RunTimeException("Class_object::buildInstanceTraits");
+//		throw RunTimeException("Class_object::buildInstanceTraits");
 	}
 	void finalize();
 public:
@@ -284,7 +290,24 @@ public:
 	void decRef() { ASObject::decRef(); }
 	ASObject* getObj() { return this; }
 	_NR<ASObject> getVariableByMultiname(const multiname& name, GET_VARIABLE_OPTION opt=NONE);
+	bool isEqual(ASObject* r);
 };
+
+/* Special object used as constructor property for classes
+ * It has its own prototype object, but everything else is forwarded to the class object
+ */
+class ObjectConstructor: public ASObject
+{
+	Prototype* prototype;
+	uint32_t _length;
+public:
+	ObjectConstructor(Class_base* c,uint32_t length);
+	void incRef() { getClass()->incRef(); }
+	void decRef() { getClass()->decRef(); }
+	_NR<ASObject> getVariableByMultiname(const multiname& name, GET_VARIABLE_OPTION opt=NONE);
+	bool isEqual(ASObject* r);
+};
+
 
 /* Special object returned when new func() syntax is used.
  * This object looks for properties on the prototype object that is passed in the constructor
@@ -311,6 +334,8 @@ protected:
 	IFunction(Class_base *c);
 	virtual IFunction* clone()=0;
 	_NR<ASObject> closure_this;
+
+	static void sinit(Class_base* c);
 public:
 	/* If this is a method, inClass is the class this is defined in.
 	 * If this is a function, inClass == NULL
@@ -319,6 +344,7 @@ public:
 	/* returns whether this is this a method of a function */
 	bool isMethod() const { return inClass != NULL; }
 	bool isBound() const { return closure_this; }
+	bool isConstructed() const { return constructIndicator; }
 	void finalize();
 	ASFUNCTION(apply);
 	ASFUNCTION(_call);
@@ -348,6 +374,7 @@ public:
 				ret->setClass(getClass());
 			}
 			ret->closure_this=c;
+			ret->constructIndicator = true;
 			//std::cout << "Binding " << ret << std::endl;
 			return ret;
 		}
@@ -365,6 +392,8 @@ public:
  * Implements the IFunction interface for functions implemented
  * in c-code.
  */
+class FunctionPrototype;
+
 class Function : public IFunction
 {
 friend class Class<IFunction>;
@@ -381,13 +410,7 @@ protected:
 	method_info* getMethodInfo() const { return NULL; }
 public:
 	ASObject* call(ASObject* obj, ASObject* const* args, uint32_t num_args);
-	bool isEqual(ASObject* r)
-	{
-		Function* f=dynamic_cast<Function*>(r);
-		if(f==NULL)
-			return false;
-		return (val==f->val) && (closure_this==f->closure_this);
-	}
+	bool isEqual(ASObject* r);
 };
 
 /* Special object used as prototype for the Function class
@@ -469,6 +492,7 @@ public:
 	{
 		Class<IFunction>* c=Class<IFunction>::getClass();
 		Function* ret=new (c->memoryAccount) Function(c, v);
+		ret->constructIndicator = true;
 		return ret;
 	}
 	static Function* getFunction(Function::as_function v, int len)
@@ -476,18 +500,21 @@ public:
 		Class<IFunction>* c=Class<IFunction>::getClass();
 		Function* ret=new (c->memoryAccount) Function(c, v);
 		ret->length = len;
+		ret->constructIndicator = true;
 		return ret;
 	}
 	static SyntheticFunction* getSyntheticFunction(method_info* m)
 	{
 		Class<IFunction>* c=Class<IFunction>::getClass();
 		SyntheticFunction* ret=new (c->memoryAccount) SyntheticFunction(c, m);
+		ret->constructIndicator = true;
 		c->handleConstruction(ret,NULL,0,true);
 		return ret;
 	}
 	void buildInstanceTraits(ASObject* o) const
 	{
 	}
+	virtual ASObject* generator(ASObject* const* args, const unsigned int argslen);
 };
 
 class Undefined : public ASObject
@@ -525,7 +552,7 @@ public:
 
 class ASQName: public ASObject
 {
-friend class multiname;
+friend struct multiname;
 friend class Namespace;
 private:
 	bool uri_is_null;
@@ -534,6 +561,7 @@ private:
 public:
 	ASQName(Class_base* c);
 	void setByNode(xmlpp::Node* node);
+	void setByXML(XML* node);
 	static void sinit(Class_base*);
 	ASFUNCTION(_constructor);
 	ASFUNCTION(generator);
@@ -551,6 +579,7 @@ class Namespace: public ASObject
 friend class ASQName;
 friend class ABCContext;
 private:
+	NS_KIND nskind;
 	bool prefix_is_undefined;
 	tiny_string uri;
 	tiny_string prefix;
@@ -562,9 +591,10 @@ public:
 	ASFUNCTION(_constructor);
 	ASFUNCTION(generator);
 	ASFUNCTION(_getURI);
-	ASFUNCTION(_setURI);
+	// according to ECMA-357 and tamarin tests uri/prefix properties are readonly
+	//ASFUNCTION(_setURI);
 	ASFUNCTION(_getPrefix);
-	ASFUNCTION(_setPrefix);
+	//ASFUNCTION(_setPrefix);
 	ASFUNCTION(_toString);
 	ASFUNCTION(_valueOf);
 	ASFUNCTION(_ECMA_valueOf);

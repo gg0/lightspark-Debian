@@ -28,31 +28,48 @@ using namespace lightspark;
 
 void Vector::sinit(Class_base* c)
 {
-	c->setConstructor(Class<IFunction>::getFunction(_constructor));
-	c->setSuper(Class<ASObject>::getRef());
+	CLASS_SETUP(c, ASObject, _constructor, CLASS_FINAL);
 	c->setDeclaredMethodByQName("length","",Class<IFunction>::getFunction(getLength),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("length","",Class<IFunction>::getFunction(setLength),SETTER_METHOD,true);
 	c->setDeclaredMethodByQName("toString","",Class<IFunction>::getFunction(_toString),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("toString",AS3,Class<IFunction>::getFunction(_toString),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("fixed","",Class<IFunction>::getFunction(getFixed),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("fixed","",Class<IFunction>::getFunction(setFixed),SETTER_METHOD,true);
+	c->setDeclaredMethodByQName("concat","",Class<IFunction>::getFunction(_concat),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("concat",AS3,Class<IFunction>::getFunction(_concat),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("every","",Class<IFunction>::getFunction(every),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("every",AS3,Class<IFunction>::getFunction(every),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("filter","",Class<IFunction>::getFunction(filter),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("filter",AS3,Class<IFunction>::getFunction(filter),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("forEach","",Class<IFunction>::getFunction(forEach),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("forEach",AS3,Class<IFunction>::getFunction(forEach),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("indexOf","",Class<IFunction>::getFunction(indexOf),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("indexOf",AS3,Class<IFunction>::getFunction(indexOf),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("lastIndexOf","",Class<IFunction>::getFunction(lastIndexOf),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("lastIndexOf",AS3,Class<IFunction>::getFunction(lastIndexOf),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("join","",Class<IFunction>::getFunction(join),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("join",AS3,Class<IFunction>::getFunction(join),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("map","",Class<IFunction>::getFunction(_map),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("map",AS3,Class<IFunction>::getFunction(_map),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("pop","",Class<IFunction>::getFunction(_pop),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("pop",AS3,Class<IFunction>::getFunction(_pop),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("push","",Class<IFunction>::getFunction(push),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("push",AS3,Class<IFunction>::getFunction(push),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("reverse","",Class<IFunction>::getFunction(_reverse),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("reverse",AS3,Class<IFunction>::getFunction(_reverse),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("shift","",Class<IFunction>::getFunction(shift),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("shift",AS3,Class<IFunction>::getFunction(shift),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("slice","",Class<IFunction>::getFunction(slice),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("slice",AS3,Class<IFunction>::getFunction(slice),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("some","",Class<IFunction>::getFunction(some),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("some",AS3,Class<IFunction>::getFunction(some),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("sort","",Class<IFunction>::getFunction(_sort),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("sort",AS3,Class<IFunction>::getFunction(_sort),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("splice","",Class<IFunction>::getFunction(splice),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("splice",AS3,Class<IFunction>::getFunction(splice),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("toLocaleString","",Class<IFunction>::getFunction(_toString),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("toLocaleString",AS3,Class<IFunction>::getFunction(_toString),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("unshift","",Class<IFunction>::getFunction(unshift),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("unshift",AS3,Class<IFunction>::getFunction(unshift),NORMAL_METHOD,true);
 	
 
@@ -77,7 +94,7 @@ void Vector::sinit(Class_base* c)
 	c->prototype->setVariableByQName("unshift",AS3,Class<IFunction>::getFunction(unshift),DYNAMIC_TRAIT);
 }
 
-Vector::Vector(Class_base* c, Type *vtype):ASObject(c),vec_type(vtype),fixed(false),vec(reporter_allocator<ASObject*>(c->memoryAccount))
+Vector::Vector(Class_base* c, const Type *vtype):ASObject(c),vec_type(vtype),fixed(false),vec(reporter_allocator<ASObject*>(c->memoryAccount))
 {
 }
 
@@ -97,18 +114,16 @@ void Vector::finalize()
 	ASObject::finalize();
 }
 
-void Vector::setTypes(const std::vector<Type*>& types)
+void Vector::setTypes(const std::vector<const Type *> &types)
 {
 	assert(vec_type == NULL);
-	assert_and_throw(types.size() == 1);
-	vec_type = types[0];
+	if(types.size() == 1)
+		vec_type = types[0];
 }
-
-bool Vector::sameType(const std::vector<Type*>& types) const
+bool Vector::sameType(const QName& classname) const
 {
-	return (types.size() == 1) && ((types[0] == vec_type) ||
-				       (vec_type == Type::anyType) ||
-				       (types[0] == Type::anyType));
+	tiny_string clsname = this->getClass()->getQualifiedClassName();
+	return (clsname.startsWith(classname.getQualifiedName().raw_buf()));
 }
 
 ASObject* Vector::generator(TemplatedClass<Vector>* o_class, ASObject* const* args, const unsigned int argslen)
@@ -117,7 +132,7 @@ ASObject* Vector::generator(TemplatedClass<Vector>* o_class, ASObject* const* ar
 	assert_and_throw(args[0]->getClass());
 	assert_and_throw(o_class->getTypes().size() == 1);
 
-	Type* type = o_class->getTypes()[0];
+	const Type* type = o_class->getTypes()[0];
 
 	if(args[0]->getClass() == Class<Array>::getClass())
 	{
@@ -127,10 +142,10 @@ ASObject* Vector::generator(TemplatedClass<Vector>* o_class, ASObject* const* ar
 		Array* a = static_cast<Array*>(args[0]);
 		for(unsigned int i=0;i<a->size();++i)
 		{
-			ASObject* obj = a->at(i).getPtr();
+			_R<ASObject> obj = a->at(i);
 			obj->incRef();
 			//Convert the elements of the array to the type of this vector
-			ret->vec.push_back( type->coerce(obj) );
+			ret->vec.push_back( type->coerce(obj.getPtr()) );
 		}
 		return ret;
 	}
@@ -717,6 +732,45 @@ ASFUNCTIONBODY(Vector,indexOf)
 	}
 	return abstract_i(ret);
 }
+bool Vector::sortComparatorDefault::operator()(ASObject* d1, ASObject* d2)
+{
+	if(isNumeric)
+	{
+		number_t a=d1->toNumber();
+
+		number_t b=d2->toNumber();
+
+		if(std::isnan(a) || std::isnan(b))
+			throw RunTimeException("Cannot sort non number with Array.NUMERIC option");
+		if(isDescending)
+			return b>a;
+		else
+			return a<b;
+	}
+	else
+	{
+		//Comparison is always in lexicographic order
+		tiny_string s1 = d1->toString();
+		tiny_string s2 = d2->toString();
+
+		if(isDescending)
+		{
+			//TODO: unicode support
+			if(isCaseInsensitive)
+				return s1.strcasecmp(s2)>0;
+			else
+				return s1>s2;
+		}
+		else
+		{
+			//TODO: unicode support
+			if(isCaseInsensitive)
+				return s1.strcasecmp(s2)<0;
+			else
+				return s1<s2;
+		}
+	}
+}
 bool Vector::sortComparatorWrapper::operator()(ASObject* d1, ASObject* d2)
 {
 	ASObject* objs[2];
@@ -747,10 +801,44 @@ ASFUNCTIONBODY(Vector,_sort)
 		throwError<ArgumentError>(kWrongArgumentCountError, "Vector.sort", "1", Integer::toString(argslen));
 	Vector* th=static_cast<Vector*>(obj);
 	
-	IFunction* comp=static_cast<IFunction*>(args[0]);
+	IFunction* comp=NULL;
+	bool isNumeric=false;
+	bool isCaseInsensitive=false;
+	bool isDescending=false;
+	if(args[0]->getObjectType()==T_FUNCTION) //Comparison func
+	{
+		assert_and_throw(comp==NULL);
+		comp=static_cast<IFunction*>(args[0]);
+	}
+	else
+	{
+		uint32_t options=args[0]->toInt();
+		if(options&Array::NUMERIC)
+			isNumeric=true;
+		if(options&Array::CASEINSENSITIVE)
+			isCaseInsensitive=true;
+		if(options&Array::DESCENDING)
+			isDescending=true;
+		if(options&(~(Array::NUMERIC|Array::CASEINSENSITIVE|Array::DESCENDING)))
+			throw UnsupportedException("Vector::sort not completely implemented");
+	}
+	std::vector<ASObject*> tmp = vector<ASObject*>(th->vec.size());
+	int i = 0;
+	for(auto it=th->vec.begin();it != th->vec.end();++it)
+	{
+		tmp[i++]= *it;
+	}
 	
+	if(comp)
+		sort(tmp.begin(),tmp.end(),sortComparatorWrapper(comp,th->vec_type));
+	else
+		sort(tmp.begin(),tmp.end(),sortComparatorDefault(isNumeric,isCaseInsensitive,isDescending));
 
-	sort(th->vec.begin(),th->vec.end(),sortComparatorWrapper(comp,th->vec_type));
+	th->vec.clear();
+	for(auto ittmp=tmp.begin();ittmp != tmp.end();++ittmp)
+	{
+		th->vec.push_back(*ittmp);
+	}
 	obj->incRef();
 	return obj;
 }
@@ -782,10 +870,17 @@ ASFUNCTIONBODY(Vector,unshift)
 ASFUNCTIONBODY(Vector,_map)
 {
 	Vector* th=static_cast<Vector*>(obj);
-	assert_and_throw(argslen==1 && args[0]->getObjectType()==T_FUNCTION);
-	IFunction* func=static_cast<IFunction*>(args[0]);
+	_NR<IFunction> func;
+	_NR<ASObject> thisObject;
+	
+	if (argslen >= 1 && !args[0]->is<IFunction>())
+		throwError<TypeError>(kCheckTypeFailedError, args[0]->getClassName(), "Function");
+
+	ARG_UNPACK(func)(thisObject,NullRef);
+	
 	Vector* ret= (Vector*)obj->getClass()->getInstance(true,NULL,0);
 
+	ASObject* thisObj;
 	for(uint32_t i=0;i<th->size();i++)
 	{
 		ASObject* funcArgs[3];
@@ -804,7 +899,14 @@ ASFUNCTIONBODY(Vector,_map)
 		funcArgs[1]=abstract_i(i);
 		funcArgs[2]=th;
 		funcArgs[2]->incRef();
-		ASObject* funcRet=func->call(getSys()->getNullRef(), funcArgs, 3);
+		if (thisObject.isNull())
+			thisObj = getSys()->getNullRef();
+		else
+		{
+			thisObj = thisObject.getPtr();
+			thisObj->incRef();
+		}
+		ASObject* funcRet=func->call(thisObj, funcArgs, 3);
 		assert_and_throw(funcRet);
 		ret->vec.push_back(funcRet);
 	}
@@ -974,4 +1076,12 @@ bool Vector::isValidMultiname(const multiname& name, uint32_t& index)
 		throwError<RangeError>(kOutOfRangeError, name.normalizedName(), "?");
 
 	return validIndex;
+}
+
+ASObject* Vector::at(unsigned int index, ASObject *defaultValue) const
+{
+	if (index < vec.size())
+		return vec.at(index);
+	else
+		return defaultValue;
 }

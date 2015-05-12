@@ -344,7 +344,7 @@ class TextData
 {
 public:
 	/* the default values are from the spec for flash.text.TextField and flash.text.TextFormat */
-	TextData() : width(100), height(100), textWidth(0), textHeight(0), font("Times New Roman"), background(false), backgroundColor(0xFFFFFF),
+	TextData() : width(100), height(100), textWidth(0), textHeight(0), font("Times New Roman"), scrollH(0), scrollV(1), background(false), backgroundColor(0xFFFFFF),
 		border(false), borderColor(0x000000), multiline(false), textColor(0x000000),
 		autoSize(AS_NONE), fontSize(12), wordWrap(false) {}
 	uint32_t width;
@@ -353,6 +353,8 @@ public:
 	uint32_t textHeight;
 	tiny_string text;
 	tiny_string font;
+	int32_t scrollH; // pixels, 0-based
+	int32_t scrollV; // lines, 1-based
 	bool background;
 	RGB backgroundColor;
 	bool border;
@@ -365,6 +367,28 @@ public:
 	bool wordWrap;
 };
 
+class LineData {
+public:
+	LineData(int32_t x, int32_t y, int32_t _width,
+		 int32_t _height, int32_t _firstCharOffset, int32_t _length,
+		 number_t _ascent, number_t _descent, number_t _leading,
+		 number_t _indent):
+		extents(x, x+_width, y, y+_height), 
+		firstCharOffset(_firstCharOffset), length(_length),
+		ascent(_ascent), descent(_descent), leading(_leading),
+		indent(_indent) {}
+	// position and size
+	RECT extents;
+	// Offset of the first character on this line
+	int32_t firstCharOffset;
+	// length of the line in characters
+	int32_t length;
+	number_t ascent;
+	number_t descent;
+	number_t leading;
+	number_t indent;
+};
+
 class CairoPangoRenderer : public CairoRenderer
 {
 	static StaticMutex pangoMutex;
@@ -375,6 +399,7 @@ class CairoPangoRenderer : public CairoRenderer
 	TextData textData;
 	static void pangoLayoutFromData(PangoLayout* layout, const TextData& tData);
 	void applyCairoMask(cairo_t* cr, int32_t offsetX, int32_t offsetY) const;
+	static PangoRectangle lineExtents(PangoLayout *layout, int lineNumber);
 public:
 	CairoPangoRenderer(const TextData& _textData, const MATRIX& _m,
 			int32_t _x, int32_t _y, int32_t _w, int32_t _h, float _s, float _a, const std::vector<MaskData>& _ms)
@@ -385,6 +410,7 @@ public:
 		@param w,h,tw,th are the (text)width and (text)height of the textData.
 	*/
 	static bool getBounds(const TextData& _textData, uint32_t& w, uint32_t& h, uint32_t& tw, uint32_t& th);
+	static std::vector<LineData> getLineData(const TextData& _textData);
 };
 
 class InvalidateQueue

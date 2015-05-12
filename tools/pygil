@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/python2
 #This greps the source for SET_NAMESPACE, REGISTER_CLASS_NAME2,
 #sinit definition and the following ->set{Getter,Setter,Method}ByQName calls
 
@@ -13,9 +13,10 @@ import pickle
 
 #These regexp are used for finding important pieces in the source
 sinit = re.compile('.*void\s*(\w*)::sinit\(.*')
-rconstructor = re.compile('[^/]*->setConstructor\(NULL|Class<IFunction>::getFunction\([^)]*\)\).*')
+rconstructor = re.compile('[^/]*ASFUNCTIONBODY\([^,]*, *\_constructor\)')
 #looks like builtin->registerBuiltin("Capabilities","flash.system",Class<Capabilities>::getRef());
 rclass          = re.compile('.*builtin->registerBuiltin\( *"([^"]*)", *"([^"]*)", *Class<([^>]*)>::getRef\(\)\)')
+rtemplateclass  = re.compile('.*builtin->registerBuiltin\( *"([^"]*)", *"([^"]*)", *_MR\(Template<([^>]*)>::getTemplate\(\)\)\)')
 rinterfaceclass = re.compile('.*builtin->registerBuiltin\( *"([^"]*)", *"([^"]*)", *InterfaceClass<([^>]*)>::getRef\(\)\)')
 #looks like builtin->registerBuiltin("Socket","flash.net",Class<ASObject>::getStubClass(QName("Socket","flash.net")));
 rstupclass = re.compile('.*builtin->registerBuiltin\( *"([^"]*)", *"([^"]*)", *Class<ASObject>::getStubClass\(QName.*')
@@ -27,7 +28,8 @@ rget2 = re.compile('.*REGISTER_GETTER\([^,]*, *(.*)\)')
 rset2 = re.compile('.*REGISTER_SETTER\([^,]*, *(.*)\)')
 rgetset2 = re.compile('.*REGISTER_GETTER_SETTER\([^,]*, *(.*)\)')
 #Constant names do not contain lower-case letters
-rconst = re.compile('[^/]*->setVariableByQName\("([A-Z_]*)",.*_TRAIT');
+rconst = re.compile('[^/]*->setVariableByQName\("([A-Z_0-9]*)",.*_TRAIT');
+rcomment = re.compile('[ \t]*/')
 
 def getFullname(cls,name):
 	if cls != "":
@@ -54,8 +56,13 @@ curClass = ""
 f = open('../src/scripting/abc.cpp','r')
 for line in f.read().replace("\n","").replace("\t"," ").split(";"):
 	m = rclass.match(line)
-        if m:
+	if m:
 		fullname = getFullname(m.group(2),m.group(1))
+		internalToExternal[m.group(3)] = fullname
+		classes.add(fullname)
+	m = rtemplateclass.match(line)
+	if m:
+		fullname = getFullname("",m.group(1))
 		internalToExternal[m.group(3)] = fullname
 		classes.add(fullname)
 	m = rinterfaceclass.match(line)
@@ -81,7 +88,14 @@ p1 = Popen(["find", "..", "-name",'*.cpp'], stdout=PIPE)
 p2 = Popen(["xargs","cat"], stdin=p1.stdout, stdout=PIPE);
 p1.stdout.close() 
 
-for line in p2.communicate()[0].split(";"):
+ptmp =""
+for line in p2.communicate()[0].split("\n"):
+	m = rcomment.match(line)
+	if m:
+		continue
+	ptmp = ptmp + line
+	
+for line in ptmp.split(";"):
 	line = line.replace("\n","").rstrip().rstrip();
 	m = sinit.match(line)
 	if m:

@@ -40,21 +40,124 @@ public:
 class GlowFilter: public BitmapFilter
 {
 private:
-	virtual GlowFilter* cloneImpl() const;
+	ASPROPERTY_GETTER_SETTER(number_t, alpha);
+	ASPROPERTY_GETTER_SETTER(number_t, blurX);
+	ASPROPERTY_GETTER_SETTER(number_t, blurY);
+	ASPROPERTY_GETTER_SETTER(uint32_t, color);
+	ASPROPERTY_GETTER_SETTER(bool, inner);
+	ASPROPERTY_GETTER_SETTER(bool, knockout);
+	ASPROPERTY_GETTER_SETTER(int32_t, quality);
+	ASPROPERTY_GETTER_SETTER(number_t, strength);
+	virtual BitmapFilter* cloneImpl() const;
 public:
-	GlowFilter(Class_base* c):BitmapFilter(c){}
+	GlowFilter(Class_base* c);
 	static void sinit(Class_base* c);
 //	static void buildTraits(ASObject* o);
+	ASFUNCTION(_constructor);
 };
 
 class DropShadowFilter: public BitmapFilter
 {
 private:
-	virtual DropShadowFilter* cloneImpl() const;
+	ASPROPERTY_GETTER_SETTER(number_t, alpha);
+	ASPROPERTY_GETTER_SETTER(number_t, angle);
+	ASPROPERTY_GETTER_SETTER(number_t, blurX);
+	ASPROPERTY_GETTER_SETTER(number_t, blurY);
+	ASPROPERTY_GETTER_SETTER(uint32_t, color);
+	ASPROPERTY_GETTER_SETTER(number_t, distance);
+	ASPROPERTY_GETTER_SETTER(bool, hideObject);
+	ASPROPERTY_GETTER_SETTER(bool, inner);
+	ASPROPERTY_GETTER_SETTER(bool, knockout);
+	ASPROPERTY_GETTER_SETTER(int32_t, quality);
+	ASPROPERTY_GETTER_SETTER(number_t, strength);
+	virtual BitmapFilter* cloneImpl() const;
 public:
-	DropShadowFilter(Class_base* c):BitmapFilter(c){}
+	DropShadowFilter(Class_base* c);
 	static void sinit(Class_base* c);
 //	static void buildTraits(ASObject* o);
+	ASFUNCTION(_constructor);
+};
+
+class GradientGlowFilter: public BitmapFilter
+{
+private:
+	virtual BitmapFilter* cloneImpl() const;
+public:
+	GradientGlowFilter(Class_base* c);
+	static void sinit(Class_base* c);
+	ASFUNCTION(_constructor);
+};
+
+class BevelFilter: public BitmapFilter
+{
+private:
+	virtual BitmapFilter* cloneImpl() const;
+public:
+	BevelFilter(Class_base* c);
+	static void sinit(Class_base* c);
+	ASFUNCTION(_constructor);
+};
+class ColorMatrixFilter: public BitmapFilter
+{
+private:
+	virtual BitmapFilter* cloneImpl() const;
+public:
+	ColorMatrixFilter(Class_base* c);
+	static void sinit(Class_base* c);
+	ASFUNCTION(_constructor);
+	ASPROPERTY_GETTER_SETTER(_NR<Array>, matrix);
+};
+class BlurFilter: public BitmapFilter
+{
+private:
+	virtual BitmapFilter* cloneImpl() const;
+public:
+	BlurFilter(Class_base* c);
+	static void sinit(Class_base* c);
+	ASFUNCTION(_constructor);
+};
+class ConvolutionFilter: public BitmapFilter
+{
+private:
+	virtual BitmapFilter* cloneImpl() const;
+public:
+	ConvolutionFilter(Class_base* c);
+	static void sinit(Class_base* c);
+	ASFUNCTION(_constructor);
+};
+class DisplacementMapFilter: public BitmapFilter
+{
+private:
+	virtual BitmapFilter* cloneImpl() const;
+public:
+	DisplacementMapFilter(Class_base* c);
+	static void sinit(Class_base* c);
+	ASFUNCTION(_constructor);
+};
+class GradientBevelFilter: public BitmapFilter
+{
+private:
+	virtual BitmapFilter* cloneImpl() const;
+public:
+	GradientBevelFilter(Class_base* c);
+	static void sinit(Class_base* c);
+	ASFUNCTION(_constructor);
+};
+class ShaderFilter: public BitmapFilter
+{
+private:
+	virtual BitmapFilter* cloneImpl() const;
+public:
+	ShaderFilter(Class_base* c);
+	static void sinit(Class_base* c);
+	ASFUNCTION(_constructor);
+};
+
+class BitmapFilterQuality: public ASObject
+{
+public:
+	BitmapFilterQuality(Class_base* c):ASObject(c) {}
+	static void sinit(Class_base* c);
 };
 
 };

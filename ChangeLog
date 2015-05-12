@@ -1,5 +1,15 @@
 lightspark: An open source flash player implementation
 
+Version NEXT:
+
+	* Support LLVM up to version 3.6
+	* fix event dispatcher handling
+	* several fixes for object initialization
+	* partially implement AMF0 decoding
+	* complete rework of XML subsystem
+	* Support embedded audio
+	* Implement JSON parsing
+
 Version 0.7.2:
 
 	* Improved image support: alpha in palettes, abbreviated JPEGs

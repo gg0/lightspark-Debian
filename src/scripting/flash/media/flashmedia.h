@@ -34,6 +34,16 @@ namespace lightspark
 
 class AudioDecoder;
 class NetStream;
+class StreamCache;
+
+class AudioFormat
+{
+public:
+	AudioFormat(LS_AUDIO_CODEC co, int sr, int ch):codec(co),sampleRate(sr),channels(ch) {}
+	LS_AUDIO_CODEC codec;
+	int sampleRate;
+	int channels;
+};
 
 class Sound: public EventDispatcher, public ILoadable
 {
@@ -41,7 +51,12 @@ private:
 	URLInfo url;
 	std::vector<uint8_t> postData;
 	Downloader* downloader;
-	bool soundChannelCreated;
+	_R<StreamCache> soundData;
+	// If container is true, audio format is parsed from
+	// soundData. If container is false, soundData is raw samples
+	// and format is defined by format member.
+	bool container;
+	AudioFormat format;
 	ASPROPERTY_GETTER(uint32_t,bytesLoaded);
 	ASPROPERTY_GETTER(uint32_t,bytesTotal);
 	ASPROPERTY_GETTER(number_t,length);
@@ -50,6 +65,7 @@ private:
 	void setBytesLoaded(uint32_t b);
 public:
 	Sound(Class_base* c);
+	Sound(Class_base* c, _R<StreamCache> soundData, AudioFormat format);
 	~Sound();
 	static void sinit(Class_base*);
 	static void buildTraits(ASObject* o);
@@ -72,20 +88,23 @@ public:
 class SoundChannel : public EventDispatcher, public IThreadJob
 {
 private:
-	std::istream stream;
-	// owner keeps reference to the Sound object that owns the
-	// streambuf. TODO: ugly, get rid of this
-	_NR<Sound> owner;
+        _NR<StreamCache> stream;
 	Mutex mutex;
 	ACQUIRE_RELEASE_FLAG(stopped);
 	AudioDecoder* audioDecoder;
 	AudioStream* audioStream;
+	AudioFormat format;
 	ASPROPERTY_GETTER_SETTER(uint32_t,position);
+	ASPROPERTY_GETTER_SETTER(_NR<SoundTransform>,soundTransform);
+	void validateSoundTransform(_NR<SoundTransform>);
+	void playStream();
+	void playRaw();
 public:
-	SoundChannel(Class_base* c, std::streambuf *s=NULL, _NR<Sound> owner=NullRef);
+	SoundChannel(Class_base* c, _NR<StreamCache> stream=NullRef, AudioFormat format=AudioFormat(CODEC_NONE,0,0));
 	~SoundChannel();
 	static void sinit(Class_base* c);
 	static void buildTraits(ASObject* o);
+	void finalize();
 	ASFUNCTION(_constructor);
 	ASFUNCTION(stop);
 
@@ -103,6 +122,8 @@ private:
 	mutable uint32_t videoWidth, videoHeight;
 	bool initialized;
 	_NR<NetStream> netStream;
+	ASPROPERTY_GETTER_SETTER(int32_t, deblocking);
+	ASPROPERTY_GETTER_SETTER(bool, smoothing);
 public:
 	Video(Class_base* c, uint32_t w=320, uint32_t h=240);
 	void finalize();
@@ -117,6 +138,7 @@ public:
 	ASFUNCTION(_getHeight);
 	ASFUNCTION(_setHeight);
 	ASFUNCTION(attachNetStream);
+	ASFUNCTION(clear);
 	void renderImpl(RenderContext& ctxt) const;
 	bool boundsRect(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const;
 	_NR<DisplayObject> hitTestImpl(_NR<DisplayObject> last, number_t x, number_t y, DisplayObject::HIT_TYPE type);

@@ -43,6 +43,7 @@ const char* Capabilities::MANUFACTURER = "Adobe Linux";
 
 void Capabilities::sinit(Class_base* c)
 {
+	CLASS_SETUP(c, ASObject, _constructorNotInstantiatable, CLASS_SEALED | CLASS_FINAL);
 	c->setDeclaredMethodByQName("language","",Class<IFunction>::getFunction(_getLanguage),GETTER_METHOD,false);
 	c->setDeclaredMethodByQName("playerType","",Class<IFunction>::getFunction(_getPlayerType),GETTER_METHOD,false);
 	c->setDeclaredMethodByQName("version","",Class<IFunction>::getFunction(_getVersion),GETTER_METHOD,false);
@@ -55,6 +56,8 @@ void Capabilities::sinit(Class_base* c)
 	c->setDeclaredMethodByQName("serverString","",Class<IFunction>::getFunction(_getServerString),GETTER_METHOD,false);
 	c->setDeclaredMethodByQName("screenResolutionX","",Class<IFunction>::getFunction(_getScreenResolutionX),GETTER_METHOD,false);
 	c->setDeclaredMethodByQName("screenResolutionY","",Class<IFunction>::getFunction(_getScreenResolutionY),GETTER_METHOD,false);
+	c->setDeclaredMethodByQName("hasAccessibility","",Class<IFunction>::getFunction(_getHasAccessibility),GETTER_METHOD,false);
+	
 }
 
 ASFUNCTIONBODY(Capabilities,_getPlayerType)
@@ -105,8 +108,56 @@ ASFUNCTIONBODY(Capabilities,_getVersion)
 
 ASFUNCTIONBODY(Capabilities,_getServerString)
 {
-	LOG(LOG_NOT_IMPLEMENTED, "Capabilities.serverString is not implemented");
-	return Class<ASString>::getInstanceS("");
+	LOG(LOG_NOT_IMPLEMENTED,"Capabilities: not all capabilities are reported in ServerString");
+	tiny_string res = "A=t&SA=t&SV=t&MP3=t&OS=Linux&PT=PlugIn&L=en&TLS=t";
+	res +="&V=";
+	res += EMULATED_VERSION;
+	res +="&M=";
+	res += MANUFACTURER;
+
+	GdkScreen*  screen = gdk_screen_get_default();
+	gint width = gdk_screen_get_width (screen);
+	gint height = gdk_screen_get_height (screen);
+	char buf[40];
+	snprintf(buf,40,"&R=%ix%i",width,height);
+	res += buf;
+
+	/*
+	avHardwareDisable	AVD
+	hasAccessibility	ACC
+	hasAudio	A
+	hasAudioEncoder	AE
+	hasEmbeddedVideo	EV
+	hasIME	IME
+	hasMP3	MP3
+	hasPrinting	PR
+	hasScreenBroadcast	SB
+	hasScreenPlayback	SP
+	hasStreamingAudio	SA
+	hasStreamingVideo	SV
+	hasTLS	TLS
+	hasVideoEncoder	VE
+	isDebugger	DEB
+	language	L
+	localFileReadDisable	LFD
+	manufacturer	M
+	maxLevelIDC	ML
+	os	OS
+	pixelAspectRatio	AR
+	playerType	PT
+	screenColor	COL
+	screenDPI	DP
+	screenResolutionX	R
+	screenResolutionY	R
+	version	V
+	supports Dolby Digital audio	DD
+	supports Dolby Digital Plus audio	DDP
+	supports DTS audio	DTS
+	supports DTS Express audio	DTE
+	supports DTS-HD High Resolution Audio	DTH
+	supports DTS-HD Master Audio	DTM
+	*/
+	return Class<ASString>::getInstanceS(res);
 }
 ASFUNCTIONBODY(Capabilities,_getScreenResolutionX)
 {
@@ -120,14 +171,21 @@ ASFUNCTIONBODY(Capabilities,_getScreenResolutionY)
 	gint height = gdk_screen_get_height (screen);
 	return abstract_d(height);
 }
-
-ApplicationDomain::ApplicationDomain(Class_base* c, _NR<ApplicationDomain> p):ASObject(c),parentDomain(p)
+ASFUNCTIONBODY(Capabilities,_getHasAccessibility)
 {
+	LOG(LOG_NOT_IMPLEMENTED,"hasAccessibility always returns false");
+	return abstract_b(false);
+}
+
+#define MIN_DOMAIN_MEMORY_LIMIT 1024
+ApplicationDomain::ApplicationDomain(Class_base* c, _NR<ApplicationDomain> p):ASObject(c),domainMemory(Class<ByteArray>::getInstanceS()),parentDomain(p)
+{
+	domainMemory->setLength(MIN_DOMAIN_MEMORY_LIMIT);
 }
 
 void ApplicationDomain::sinit(Class_base* c)
 {
-	c->setConstructor(Class<IFunction>::getFunction(_constructor));
+	CLASS_SETUP(c, ASObject, _constructor, CLASS_SEALED | CLASS_FINAL);
 	//Static
 	c->setDeclaredMethodByQName("currentDomain","",Class<IFunction>::getFunction(_getCurrentDomain),GETTER_METHOD,false);
 	c->setDeclaredMethodByQName("MIN_DOMAIN_MEMORY_LENGTH","",Class<IFunction>::getFunction(_getMinDomainMemoryLength),GETTER_METHOD,false);
@@ -171,7 +229,7 @@ ASFUNCTIONBODY(ApplicationDomain,_constructor)
 
 ASFUNCTIONBODY(ApplicationDomain,_getMinDomainMemoryLength)
 {
-	return abstract_ui(1024);
+	return abstract_ui(MIN_DOMAIN_MEMORY_LIMIT);
 }
 
 ASFUNCTIONBODY(ApplicationDomain,_getCurrentDomain)
@@ -229,7 +287,8 @@ ASFUNCTIONBODY(ApplicationDomain,getDefinition)
 	LOG(LOG_CALLS,_("Looking for definition of ") << name);
 	ASObject* target;
 	ASObject* o=th->getVariableAndTargetByMultiname(name,target);
-	assert_and_throw(o);
+	if(o == NULL)
+		throwError<ReferenceError>(kClassNotFoundError,name.normalizedName());
 
 	//TODO: specs says that also namespaces and function may be returned
 	assert_and_throw(o->getObjectType()==T_CLASS);
@@ -329,10 +388,20 @@ ASObject* ApplicationDomain::getVariableByMultinameOpportunistic(const multiname
 	return NULL;
 }
 
+LoaderContext::LoaderContext(Class_base* c):
+	ASObject(c),allowCodeImport(true),checkPolicyFile(false)
+{
+}
+
 void LoaderContext::sinit(Class_base* c)
 {
-	c->setConstructor(Class<IFunction>::getFunction(_constructor));
+	CLASS_SETUP(c, ASObject, _constructor, CLASS_SEALED);
+	c->setDeclaredMethodByQName("allowLoadBytesCodeExecution","",Class<IFunction>::getFunction(_getter_allowCodeImport),GETTER_METHOD,false);
+	c->setDeclaredMethodByQName("allowLoadBytesCodeExecution","",Class<IFunction>::getFunction(_setter_allowCodeImport),SETTER_METHOD,false);
+	REGISTER_GETTER_SETTER(c, allowCodeImport);
 	REGISTER_GETTER_SETTER(c, applicationDomain);
+	REGISTER_GETTER_SETTER(c, checkPolicyFile);
+	REGISTER_GETTER_SETTER(c, parameters);
 	REGISTER_GETTER_SETTER(c, securityDomain);
 }
 
@@ -346,22 +415,31 @@ void LoaderContext::finalize()
 ASFUNCTIONBODY(LoaderContext,_constructor)
 {
 	LoaderContext* th=Class<LoaderContext>::cast(obj);
-	bool checkPolicy;
-	_NR<ApplicationDomain> appDomain;
-	_NR<SecurityDomain> secDomain;
-	ARG_UNPACK (checkPolicy, false) (appDomain, NullRef) (secDomain, NullRef);
-	//TODO: Support checkPolicyFile
-	th->applicationDomain=appDomain;
-	th->securityDomain=secDomain;
+	ARG_UNPACK (th->checkPolicyFile, false)
+		(th->applicationDomain, NullRef)
+		(th->securityDomain, NullRef);
 	return NULL;
 }
 
+ASFUNCTIONBODY_GETTER_SETTER(LoaderContext, allowCodeImport);
 ASFUNCTIONBODY_GETTER_SETTER(LoaderContext, applicationDomain);
+ASFUNCTIONBODY_GETTER_SETTER(LoaderContext, checkPolicyFile);
+ASFUNCTIONBODY_GETTER_SETTER(LoaderContext, parameters);
 ASFUNCTIONBODY_GETTER_SETTER(LoaderContext, securityDomain);
+
+bool LoaderContext::getCheckPolicyFile()
+{
+	return checkPolicyFile;
+}
+
+bool LoaderContext::getAllowCodeImport()
+{
+	return allowCodeImport;
+}
 
 void SecurityDomain::sinit(Class_base* c)
 {
-	c->setConstructor(Class<IFunction>::getFunction(_constructor));
+	CLASS_SETUP(c, ASObject, _constructor, CLASS_SEALED);
 	//Static
 	c->setDeclaredMethodByQName("currentDomain","",Class<IFunction>::getFunction(_getCurrentDomain),GETTER_METHOD,false);
 }
@@ -384,8 +462,8 @@ ASFUNCTIONBODY(SecurityDomain,_getCurrentDomain)
 
 void Security::sinit(Class_base* c)
 {
+	CLASS_SETUP(c, ASObject, _constructorNotInstantiatable, CLASS_SEALED | CLASS_FINAL);
 	//Fully static class
-	c->setConstructor(NULL);
 	c->setDeclaredMethodByQName("exactSettings","",Class<IFunction>::getFunction(_getExactSettings),GETTER_METHOD,false);
 	c->setDeclaredMethodByQName("exactSettings","",Class<IFunction>::getFunction(_setExactSettings),SETTER_METHOD,false);
 	c->setDeclaredMethodByQName("sandboxType","",Class<IFunction>::getFunction(_getSandboxType),GETTER_METHOD,false);
@@ -401,6 +479,7 @@ void Security::sinit(Class_base* c)
 	c->setDeclaredMethodByQName("allowInsecureDomain","",Class<IFunction>::getFunction(allowInsecureDomain),NORMAL_METHOD,false);
 	c->setDeclaredMethodByQName("loadPolicyFile","",Class<IFunction>::getFunction(loadPolicyFile),NORMAL_METHOD,false);
 	c->setDeclaredMethodByQName("showSettings","",Class<IFunction>::getFunction(showSettings),NORMAL_METHOD,false);
+	c->setDeclaredMethodByQName("pageDomain","",Class<IFunction>::getFunction(pageDomain),GETTER_METHOD,false);
 
 	getSys()->securityManager->setExactSettings(true, false);
 }
@@ -461,6 +540,12 @@ ASFUNCTIONBODY(Security, showSettings)
 	return NULL;
 }
 
+ASFUNCTIONBODY(Security, pageDomain)
+{
+	tiny_string s = getSys()->mainClip->getBaseURL().getProtocol()+"://"+getSys()->mainClip->getBaseURL().getHostname();
+	return Class<ASString>::getInstanceS(s);
+}
+
 ASFUNCTIONBODY(lightspark, fscommand)
 {
 	assert_and_throw(argslen >= 1 && argslen <= 2);
@@ -476,6 +561,7 @@ ASFUNCTIONBODY(lightspark, fscommand)
 
 void System::sinit(Class_base* c)
 {
+	CLASS_SETUP(c, ASObject, _constructorNotInstantiatable, CLASS_SEALED | CLASS_FINAL);
 	c->setDeclaredMethodByQName("totalMemory","",Class<IFunction>::getFunction(totalMemory),GETTER_METHOD,false);
 }
 
@@ -483,5 +569,24 @@ void System::sinit(Class_base* c)
 ASFUNCTIONBODY(System,totalMemory)
 {
 	LOG(LOG_NOT_IMPLEMENTED, "System.totalMemory not implemented");
-	return abstract_d(0);
+	return abstract_d(1024);
 }
+
+ASWorker::ASWorker(Class_base* c):
+	EventDispatcher(c)
+{
+	LOG(LOG_NOT_IMPLEMENTED, "Worker not implemented");
+}
+
+void ASWorker::sinit(Class_base* c)
+{
+	CLASS_SETUP(c, EventDispatcher, _constructorNotInstantiatable, CLASS_SEALED | CLASS_FINAL);
+	c->setDeclaredMethodByQName("current","",Class<IFunction>::getFunction(_getCurrent),GETTER_METHOD,false);
+}
+ASFUNCTIONBODY(ASWorker,_getCurrent)
+{
+	LOG(LOG_NOT_IMPLEMENTED, "Worker not implemented");
+	return getSys()->getUndefinedRef();
+}
+
+

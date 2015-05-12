@@ -47,6 +47,7 @@ SET(LIBSPARK_SOURCES
   backends/rendering_context.cpp
   backends/rtmputils.cpp
   backends/security.cpp
+  backends/streamcache.cpp
   backends/urlutils.cpp
   backends/xml_support.cpp
   parsing/amf3_generator.cpp
@@ -65,6 +66,8 @@ SET(LIBSPARK_SOURCES
   scripting/abc_opcodes.cpp
   scripting/abctypes.cpp
   scripting/flash/accessibility/flashaccessibility.cpp
+  scripting/flash/concurrent/Mutex.cpp
+  scripting/flash/concurrent/Condition.cpp
   scripting/flash/desktop/flashdesktop.cpp
   scripting/flash/display/BitmapContainer.cpp
   scripting/flash/display/BitmapData.cpp
@@ -72,22 +75,45 @@ SET(LIBSPARK_SOURCES
   scripting/flash/display/IBitmapDrawable.cpp
   scripting/flash/display/flashdisplay.cpp
   scripting/flash/display/TokenContainer.cpp
+  scripting/flash/display/Graphics.cpp
+  scripting/flash/display/GraphicsBitmapFill.cpp
+  scripting/flash/display/GraphicsEndFill.cpp
+  scripting/flash/display/GraphicsGradientFill.cpp
+  scripting/flash/display/GraphicsPath.cpp
+  scripting/flash/display/GraphicsShaderFill.cpp
+  scripting/flash/display/GraphicsSolidFill.cpp
+  scripting/flash/display/GraphicsStroke.cpp
+  scripting/flash/display/GraphicsTrianglePath.cpp
   scripting/flash/events/flashevents.cpp
   scripting/flash/external/ExternalInterface.cpp
   scripting/flash/filters/flashfilters.cpp
+  scripting/flash/filesystem/flashfilesystem.cpp
   scripting/flash/geom/flashgeom.cpp
   scripting/flash/media/flashmedia.cpp
   scripting/flash/net/flashnet.cpp
   scripting/flash/net/URLRequestHeader.cpp
   scripting/flash/net/URLStream.cpp
   scripting/flash/net/XMLSocket.cpp
+  scripting/flash/net/NetStreamPlayOptions.cpp
+  scripting/flash/net/NetStreamPlayTransitions.cpp
+  scripting/flash/printing/flashprinting.cpp
   scripting/flash/errors/flasherrors.cpp
   scripting/flash/sensors/flashsensors.cpp
   scripting/flash/system/flashsystem.cpp
   scripting/flash/text/flashtext.cpp
   scripting/flash/text/flashtextengine.cpp
   scripting/flash/utils/flashutils.cpp
+  scripting/flash/utils/ByteArray.cpp
+  scripting/flash/utils/Dictionary.cpp
+  scripting/flash/utils/Proxy.cpp
+  scripting/flash/utils/Timer.cpp
+  scripting/flash/utils/IntervalManager.cpp
+  scripting/flash/utils/IntervalRunner.cpp
   scripting/flash/ui/Keyboard.cpp
+  scripting/flash/ui/Mouse.cpp
+  scripting/flash/ui/ContextMenu.cpp
+  scripting/flash/ui/ContextMenuItem.cpp
+  scripting/flash/ui/ContextMenuBuiltInItems.cpp
   scripting/flash/xml/flashxml.cpp
   scripting/toplevel/Array.cpp
   scripting/toplevel/ASString.cpp
@@ -95,6 +121,7 @@ SET(LIBSPARK_SOURCES
   scripting/toplevel/Date.cpp
   scripting/toplevel/Error.cpp
   scripting/toplevel/Integer.cpp
+  scripting/toplevel/JSON.cpp
   scripting/toplevel/Math.cpp
   scripting/toplevel/Number.cpp
   scripting/toplevel/RegExp.cpp

@@ -27,9 +27,7 @@ using namespace lightspark;
 
 void NativeApplication::sinit(Class_base* c)
 {
-	c->setConstructor(Class<IFunction>::getFunction(_constructor));
-	c->setSuper(Class<ASObject>::getRef());
-
+	CLASS_SETUP(c, EventDispatcher, _constructor, CLASS_FINAL | CLASS_SEALED);
 	c->setDeclaredMethodByQName("nativeApplication", "", Class<IFunction>::getFunction(_getNativeApplication), GETTER_METHOD, false);
 	c->setDeclaredMethodByQName("addEventListener", "", Class<IFunction>::getFunction(addEventListener), NORMAL_METHOD, true);
 }
@@ -40,6 +38,7 @@ void NativeApplication::buildTraits(ASObject* o)
 
 ASFUNCTIONBODY(NativeApplication,_constructor)
 {
+	EventDispatcher::_constructor(obj, NULL, 0);
 	return NULL;
 }
 

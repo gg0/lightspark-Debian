@@ -24,6 +24,8 @@
 #include "scripting/flash/geom/flashgeom.h"
 #include "scripting/toplevel/Vector.h"
 #include "scripting/flash/errors/flasherrors.h"
+#include "scripting/flash/utils/ByteArray.h"
+#include "scripting/flash/filters/flashfilters.h"
 #include "backends/rendering_context.h"
 
 using namespace lightspark;
@@ -55,8 +57,7 @@ BitmapData::BitmapData(Class_base* c, uint32_t width, uint32_t height)
 
 void BitmapData::sinit(Class_base* c)
 {
-	c->setConstructor(Class<IFunction>::getFunction(_constructor));
-	c->setSuper(Class<ASObject>::getRef());
+	CLASS_SETUP(c, ASObject, _constructor, CLASS_SEALED);
 	c->addImplementedInterface(InterfaceClass<IBitmapDrawable>::getClass());
 	c->setDeclaredMethodByQName("draw","",Class<IFunction>::getFunction(draw),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("dispose","",Class<IFunction>::getFunction(dispose),NORMAL_METHOD,true);
@@ -80,6 +81,9 @@ void BitmapData::sinit(Class_base* c)
 	c->setDeclaredMethodByQName("getVector","",Class<IFunction>::getFunction(getVector),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("setPixels","",Class<IFunction>::getFunction(setPixels),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("setVector","",Class<IFunction>::getFunction(setVector),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("colorTransform","",Class<IFunction>::getFunction(colorTransform),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("compare","",Class<IFunction>::getFunction(compare),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("applyFilter","",Class<IFunction>::getFunction(applyFilter),NORMAL_METHOD,true);
 
 	// properties
 	c->setDeclaredMethodByQName("height","",Class<IFunction>::getFunction(_getHeight),GETTER_METHOD,true);
@@ -111,8 +115,8 @@ void BitmapData::notifyUsers() const
 
 ASFUNCTIONBODY(BitmapData,_constructor)
 {
-	uint32_t width;
-	uint32_t height;
+	int32_t width;
+	int32_t height;
 	bool transparent;
 	uint32_t fillColor;
 	BitmapData* th = obj->as<BitmapData>();
@@ -124,6 +128,10 @@ ASFUNCTIONBODY(BitmapData,_constructor)
 	//If the bitmap is already initialized, just return
 	if(width==0 || height==0 || !th->pixels->isEmpty())
 		return NULL;
+	if(width<0 || height<0)
+		throw Class<ArgumentError>::getInstanceS("invalid height or width", kInvalidArgumentError);
+	if(width>8191 || height>8191)
+		throw Class<ArgumentError>::getInstanceS("invalid height or width", kInvalidArgumentError);
 
 	uint32_t *pixelArray=new uint32_t[width*height];
 	uint32_t c=GUINT32_TO_BE(fillColor); // fromRGB expects big endian data
@@ -561,11 +569,11 @@ ASFUNCTIONBODY(BitmapData,histogram)
 		}
 	}
 
-	Vector *result = Class<Vector>::getInstanceS(Class<Vector>::getClass());
+	Vector *result = Template<Vector>::getInstanceS(Template<Vector>::getTemplateInstance(Class<Number>::getClass()).getPtr());
 	int channelOrder[4] = {2, 1, 0, 3}; // red, green, blue, alpha
 	for (int j=0; j<4; j++)
 	{
-		Vector *histogram = Class<Vector>::getInstanceS(Class<Number>::getClass());
+		Vector *histogram = Template<Vector>::getInstanceS(Class<Number>::getClass());
 		for (int level=0; level<256; level++)
 		{
 			histogram->append(abstract_d(counts[channelOrder[j]][level]));
@@ -654,7 +662,7 @@ ASFUNCTIONBODY(BitmapData,getVector)
 	if (rect.isNull())
 		throwError<TypeError>(kNullPointerError, "rect");
 
-	Vector *result = Class<Vector>::getInstanceS(Class<UInteger>::getClass());
+	Vector *result = Template<Vector>::getInstanceS(Class<UInteger>::getClass());
 	vector<uint32_t> pixelvec = th->pixels->getPixelVector(rect->getRect());
 	vector<uint32_t>::const_iterator it;
 	for (it=pixelvec.begin(); it!=pixelvec.end(); ++it)
@@ -726,5 +734,120 @@ ASFUNCTIONBODY(BitmapData,setVector)
 		}
 	}
 
+	return NULL;
+}
+
+ASFUNCTIONBODY(BitmapData,colorTransform)
+{
+	BitmapData* th = obj->as<BitmapData>();
+	
+	_NR<Rectangle> inputRect;
+	_NR<ColorTransform> inputColorTransform;
+	ARG_UNPACK (inputRect) (inputColorTransform);
+
+	if (inputRect.isNull())
+		throwError<TypeError>(kNullPointerError, "rect");
+	if (inputColorTransform.isNull())
+		throwError<TypeError>(kNullPointerError, "inputVector");
+
+	RECT rect;
+	th->pixels->clipRect(inputRect->getRect(), rect);
+	
+	vector<uint32_t> pixelvec = th->pixels->getPixelVector(rect);
+
+	unsigned int i = 0;
+	for (int32_t y=rect.Ymin; y<rect.Ymax; y++)
+	{
+		for (int32_t x=rect.Xmin; x<rect.Xmax; x++)
+		{
+
+			uint32_t pixel = pixelvec[i];
+
+			int a, r, g, b;
+			a = ((pixel >> 24 )&0xff) * inputColorTransform->alphaMultiplier + inputColorTransform->alphaOffset;
+			if (a > 255) a = 255;
+			if (a < 0) a = 0;
+			r = ((pixel >> 16 )&0xff) * inputColorTransform->redMultiplier + inputColorTransform->redOffset;
+			if (r > 255) r = 255;
+			if (r < 0) r = 0;
+			g = ((pixel >> 8 )&0xff) * inputColorTransform->greenMultiplier + inputColorTransform->greenOffset;
+			if (g > 255) g = 255;
+			if (g < 0) g = 0;
+			b = ((pixel )&0xff) * inputColorTransform->blueMultiplier + inputColorTransform->blueOffset;
+			if (b > 255) b = 255;
+			if (b < 0) b = 0;
+			
+			pixel = (a<<24) | (r<<16) | (g<<8) | b;
+			
+			th->pixels->setPixel(x, y, pixel, th->transparent);
+			i++;
+		}
+	}
+
+	return NULL;
+}
+ASFUNCTIONBODY(BitmapData,compare)
+{
+	BitmapData* th = obj->as<BitmapData>();
+	
+	_NR<BitmapData> otherBitmapData;
+	ARG_UNPACK (otherBitmapData);
+
+	if (otherBitmapData.isNull())
+		throwError<TypeError>(kNullPointerError, "otherBitmapData");
+
+	if (th->getWidth() != otherBitmapData->getWidth())
+		return abstract_d(-3);
+	if (th->getHeight() != otherBitmapData->getHeight())
+		return abstract_d(-4);
+	RECT rect;
+	rect.Xmin = 0;
+	rect.Xmax = th->getWidth();
+	rect.Ymin = 0;
+	rect.Ymax = th->getHeight();
+	
+	vector<uint32_t> pixelvec = th->pixels->getPixelVector(rect);
+	vector<uint32_t> otherpixelvec = otherBitmapData->pixels->getPixelVector(rect);
+	
+	BitmapData* res = Class<BitmapData>::getInstanceS(rect.Xmax,rect.Ymax);
+	unsigned int i = 0;
+	bool different = false;
+	for (int32_t y=rect.Ymin; y<rect.Ymax; y++)
+	{
+		for (int32_t x=rect.Xmin; x<rect.Xmax; x++)
+		{
+
+			uint32_t pixel = pixelvec[i];
+			uint32_t otherpixel = otherpixelvec[i];
+			if (pixel == otherpixel)
+				res->pixels->setPixel(x, y, 0, true);
+			else if ((pixel & 0x00FFFFFF) == (otherpixel & 0x00FFFFFF))
+			{
+				different = true;
+				res->pixels->setPixel(x, y, ((pixel & 0xFF000000) - (otherpixel & 0xFF000000)) | 0x00FFFFFF , true);
+			}
+			else 
+			{
+				different = true;
+				res->pixels->setPixel(x, y, ((pixel & 0x00FFFFFF) - (otherpixel & 0x00FFFFFF)), true);
+			}
+			i++;
+		}
+	}
+	if (!different)
+		return abstract_d(0);
+	return res;
+}
+
+ASFUNCTIONBODY(BitmapData,applyFilter)
+{
+	BitmapData* th = obj->as<BitmapData>();
+	
+	_NR<BitmapData> sourceBitmapData;
+	_NR<Rectangle> sourceRect;
+	_NR<Point> destPoint;
+	_NR<BitmapFilter> filter;
+	ARG_UNPACK (sourceBitmapData)(sourceRect)(destPoint)(filter);
+	LOG(LOG_NOT_IMPLEMENTED,"BitmapData.applyFilter not implemented");
 	return NULL;
 }

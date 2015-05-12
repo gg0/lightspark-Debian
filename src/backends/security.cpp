@@ -1001,7 +1001,7 @@ bool URLPolicyFile::retrievePolicyFile(vector<unsigned char>& outData)
 	bool ok = true;
 
 	//No caching needed for this download, we don't expect very big files
-	Downloader* downloader=getSys()->downloadManager->download(url, false, NULL);
+	Downloader* downloader=getSys()->downloadManager->download(url, _MR(new MemoryStreamCache), NULL);
 
 	//Wait until the file is fetched
 	downloader->waitForTermination();
@@ -1023,7 +1023,8 @@ bool URLPolicyFile::retrievePolicyFile(vector<unsigned char>& outData)
 
 	//Policy files must have on of the following content-types to be valid:
 	//text/*, application/xml or application/xhtml+xml
-	tiny_string contentType = downloader->getHeader("content-type");
+	std::list<tiny_string> contenttypelist = downloader->getHeader("content-type").split(';');
+	tiny_string contentType = contenttypelist.size() == 0 ? "" : contenttypelist.front();
 	if(ok && (subtype == HTTP || subtype == HTTPS) && 
 	   contentType.substr(0, 5) != "text/" &&
 	   contentType != "application/xml" &&
@@ -1052,11 +1053,13 @@ bool URLPolicyFile::retrievePolicyFile(vector<unsigned char>& outData)
 
 	if (ok)
 	{
-		istream s(downloader);
+		std::streambuf *sbuf = downloader->getCache()->createReader();
+		istream s(sbuf);
 		size_t bufLength = downloader->getLength();
 		size_t offset = outData.size();
 		outData.resize(offset+bufLength);
 		s.read((char*)&outData[offset], bufLength);
+		delete sbuf;
 	}
 
 	getSys()->downloadManager->destroy(downloader);

@@ -458,10 +458,20 @@ bool CairoTokenRenderer::cairoPathFromTokens(cairo_t* cr, const std::vector<Geom
 				cairo_stroke(stroke_cr);
 
 				const LINESTYLE2& style = tokens[i].lineStyle;
-				const RGBA& color = style.Color;
 
 				cairo_set_operator(stroke_cr, CAIRO_OPERATOR_OVER);
-				cairo_set_source_rgba(stroke_cr, color.rf(), color.gf(), color.bf(), color.af());
+				if (style.HasFillFlag)
+				{
+					cairo_pattern_t* pattern = FILLSTYLEToCairo(style.FillType, scaleCorrection);
+					if (pattern)
+					{
+						cairo_set_source(stroke_cr, pattern);
+						cairo_pattern_destroy(pattern);
+					}
+				} else {
+					const RGBA& color = style.Color;
+					cairo_set_source_rgba(stroke_cr, color.rf(), color.gf(), color.bf(), color.af());
+				}
 
 				// TODO: EndCapStyle
 				if (style.StartCapStyle == 0)
@@ -838,12 +848,6 @@ void CairoPangoRenderer::pangoLayoutFromData(PangoLayout* layout, const TextData
 		pango_layout_set_width(layout,PANGO_SCALE*tData.width);
 		pango_layout_set_wrap(layout,PANGO_WRAP_WORD);//I think this is what Adobe does
 	}
-	//In case autoSize is NONE, we also have the height
-	if(tData.autoSize == TextData::AUTO_SIZE::AS_NONE)
-	{
-		pango_layout_set_width(layout,PANGO_SCALE*tData.width);
-		pango_layout_set_height(layout,PANGO_SCALE*tData.height);//TODO:Not sure what Pango does if the text is too long to fit
-	}
 
 	/* setup font description */
 	desc = pango_font_description_new();
@@ -870,9 +874,19 @@ void CairoPangoRenderer::executeDraw(cairo_t* cr)
 		cairo_paint(cr);
 	}
 
+	/* text scroll position */
+	int32_t translateX = textData.scrollH;
+	int32_t translateY = 0;
+	if (textData.scrollV > 1)
+	{
+		translateY = -PANGO_PIXELS(lineExtents(layout, textData.scrollV-1).y);
+	}
+
 	/* draw the text */
 	cairo_set_source_rgb (cr, textData.textColor.Red/255., textData.textColor.Green/255., textData.textColor.Blue/255.);
+	cairo_translate(cr, translateX, translateY);
 	pango_cairo_show_layout(cr, layout);
+	cairo_translate(cr, -translateX, -translateY);
 
 	if(textData.border)
 	{
@@ -915,6 +929,68 @@ bool CairoPangoRenderer::getBounds(const TextData& _textData, uint32_t& w, uint3
 	}
 
 	return (h!=0) && (w!=0);
+}
+
+PangoRectangle CairoPangoRenderer::lineExtents(PangoLayout *layout, int lineNumber)
+{
+	PangoRectangle rect;
+	memset(&rect, 0, sizeof(PangoRectangle));
+	int i = 0;
+	PangoLayoutIter* lineIter = pango_layout_get_iter(layout);
+	do
+	{
+		if (i == lineNumber)
+		{
+			pango_layout_iter_get_line_extents(lineIter, NULL, &rect);
+			break;
+		}
+
+		i++;
+	} while (pango_layout_iter_next_line(lineIter));
+	pango_layout_iter_free(lineIter);
+
+	return rect;
+}
+
+std::vector<LineData> CairoPangoRenderer::getLineData(const TextData& _textData)
+{
+	//TODO:check locking
+	Locker l(pangoMutex);
+	cairo_surface_t* cairoSurface=cairo_image_surface_create_for_data(NULL, CAIRO_FORMAT_ARGB32, 0, 0, 0);
+	cairo_t *cr=cairo_create(cairoSurface);
+
+	PangoLayout* layout;
+	layout = pango_cairo_create_layout(cr);
+	pangoLayoutFromData(layout, _textData);
+
+	int XOffset = _textData.scrollH;
+	int YOffset = PANGO_PIXELS(lineExtents(layout, _textData.scrollV-1).y);
+	std::vector<LineData> data;
+	data.reserve(pango_layout_get_line_count(layout));
+	PangoLayoutIter* lineIter = pango_layout_get_iter(layout);
+	do
+	{
+		PangoRectangle rect;
+		pango_layout_iter_get_line_extents(lineIter, NULL, &rect);
+		PangoLayoutLine* line = pango_layout_iter_get_line(lineIter);
+		data.emplace_back(PANGO_PIXELS(rect.x) - XOffset,
+				  PANGO_PIXELS(rect.y) - YOffset,
+				  PANGO_PIXELS(rect.width),
+				  PANGO_PIXELS(rect.height),
+				  _textData.text.bytePosToIndex(line->start_index),
+				  _textData.text.substr_bytes(line->start_index, line->length).numChars(),
+				  PANGO_PIXELS(PANGO_ASCENT(rect)),
+				  PANGO_PIXELS(PANGO_DESCENT(rect)),
+				  PANGO_PIXELS(PANGO_LBEARING(rect)),
+				  0); // FIXME
+	} while (pango_layout_iter_next_line(lineIter));
+	pango_layout_iter_free(lineIter);
+
+	g_object_unref(layout);
+	cairo_destroy(cr);
+	cairo_surface_destroy(cairoSurface);
+
+	return data;
 }
 
 void CairoPangoRenderer::applyCairoMask(cairo_t* cr, int32_t xOffset, int32_t yOffset) const

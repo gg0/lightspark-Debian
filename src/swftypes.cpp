@@ -43,7 +43,7 @@ multiname::multiname(MemoryAccount* m):name_o(NULL),ns(reporter_allocator<nsName
 
 tiny_string multiname::qualifiedString() const
 {
-	assert_and_throw(ns.size()==1);
+	assert_and_throw(ns.size()>=1);
 	assert_and_throw(name_type==NAME_STRING);
 	const tiny_string nsName=ns[0].getImpl().name;
 	const tiny_string& name=getSys()->getStringFromUniqueId(name_s_id);
@@ -162,6 +162,7 @@ bool multiname::toUInt(uint32_t& index, bool acceptStringFractions) const
 			if(str.empty())
 				return false;
 			index=0;
+			uint64_t parsed = 0;
 			for(auto i=str.begin(); i!=str.end(); ++i)
 			{
 				if (*i == '.' && acceptStringFractions)
@@ -175,14 +176,21 @@ bool multiname::toUInt(uint32_t& index, bool acceptStringFractions) const
 					for (; i!=str.end(); ++i)
 						if (*i != '0')
 							return false;
-					return true;
+					break;
 				}
 				else if(!i.isdigit())
 					return false;
 
-				index*=10;
-				index+=i.digit_value();
+				parsed*=10;
+				parsed+=i.digit_value();
+				if (parsed > UINT32_MAX)
+					break;
 			}
+
+			if (parsed > UINT32_MAX)
+				return false;
+
+			index = (uint32_t)parsed;
 			break;
 		}
 		//This is already an int, so its good enough
@@ -192,7 +200,7 @@ bool multiname::toUInt(uint32_t& index, bool acceptStringFractions) const
 			index=name_i;
 			break;
 		case multiname::NAME_NUMBER:
-			if(!Number::isInteger(name_d) || name_d < 0)
+			if(!Number::isInteger(name_d) || name_d < 0 || name_d > UINT32_MAX)
 				return false;
 			index=name_d;
 			break;
@@ -515,10 +523,14 @@ std::istream& lightspark::operator>>(std::istream& s, FILLSTYLEARRAY& v)
 	assert(v.version!=0xff);
 	UI8 FillStyleCount;
 	s >> FillStyleCount;
+	int fsc = FillStyleCount;
 	if(FillStyleCount==0xff)
-		LOG(LOG_ERROR,_("Fill array extended not supported"));
-
-	for(int i=0;i<FillStyleCount;i++)
+	{
+		UI16_SWF ExtendedFillStyleCount;
+		s >> ExtendedFillStyleCount;
+		fsc = ExtendedFillStyleCount;
+	}
+	for(int i=0;i<fsc;i++)
 	{
 		FILLSTYLE t(v.version);
 		s >> t;
@@ -806,7 +818,7 @@ std::istream& lightspark::operator>>(std::istream& s, FILLSTYLE& v)
 	else
 	{
 		LOG(LOG_ERROR,_("Not supported fill style ") << (int)v.FillStyleType);
-		throw ParseException("Not supported fill style");
+	throw ParseException("Not supported fill style");
 	}
 	return s;
 }
@@ -1315,7 +1327,9 @@ std::istream& lightspark::operator>>(std::istream& s, CLIPACTIONS& v)
 
 ASObject* lightspark::abstract_d(number_t i)
 {
-	Number* ret=Class<Number>::getInstanceS(i);
+	Number* ret=Class<Number>::getInstanceS();
+	// we have to set the value seperately, because for i = NaN, getInstanceS will overwrite the value
+	ret->val = i;
 	return ret;
 }
 
@@ -1342,7 +1356,7 @@ void lightspark::stringToQName(const tiny_string& tmp, tiny_string& name, tiny_s
 		assert_and_throw(collon != tmp.raw_buf() && *(collon-1) == ':');
 		uint32_t collon_offset = collon-tmp.raw_buf();
 		ns = tmp.substr_bytes(0,collon_offset-1);
-		name = tmp.substr_bytes(collon_offset+1,tmp.numChars()-collon_offset-1);
+		name = tmp.substr_bytes(collon_offset+1,tmp.numBytes()-collon_offset-1);
 		return;
 	}
 	// No namespace, look for a package name
@@ -1351,7 +1365,7 @@ void lightspark::stringToQName(const tiny_string& tmp, tiny_string& name, tiny_s
 	{
 		uint32_t dot_offset = dot-tmp.raw_buf();
 		ns = tmp.substr_bytes(0,dot_offset);
-		name = tmp.substr_bytes(dot_offset+1,tmp.numChars()-dot_offset-1);
+		name = tmp.substr_bytes(dot_offset+1,tmp.numBytes()-dot_offset-1);
 		return;
 	}
 	//No namespace or package in the string
@@ -1396,6 +1410,18 @@ FILLSTYLE::FILLSTYLE(const FILLSTYLE& r):Matrix(r.Matrix),Gradient(r.Gradient),F
 
 FILLSTYLE::~FILLSTYLE()
 {
+}
+
+FILLSTYLE& FILLSTYLE::operator=(FILLSTYLE r)
+{
+	std::swap(Matrix, r.Matrix);
+	std::swap(Gradient, r.Gradient);
+	std::swap(FocalGradient, r.FocalGradient);
+	std::swap(bitmap, r.bitmap);
+	std::swap(Color, r.Color);
+	std::swap(FillStyleType, r.FillStyleType);
+	std::swap(version, r.version);
+	return *this;
 }
 
 nsNameAndKind::nsNameAndKind(const tiny_string& _name, NS_KIND _kind)
@@ -1504,3 +1530,26 @@ tiny_string RGB::toString() const
 
 	return ss.str();
 }
+
+std::istream& lightspark::operator>>(std::istream& stream, SOUNDINFO& v)
+{
+	BitStream bs(stream);
+	UB(2,bs); // reserved
+	v.SyncStop = UB(1,bs);
+	v.SyncNoMultiple = UB(1,bs);
+	v.HasEnvelope = UB(1,bs);
+	v.HasLoops = UB(1,bs);
+	v.HasOutPoint = UB(1,bs);
+	v.HasInPoint = UB(1,bs);
+	if (v.HasInPoint)
+		stream >> v.InPoint;
+	if (v.HasOutPoint)
+		stream >> v.OutPoint;
+	if (v.HasLoops)
+		stream >> v.LoopCount;
+	if (v.HasEnvelope)
+		stream >> v.EnvPoints;
+	// TODO: EnvelopeRecords
+	return stream;
+}
+

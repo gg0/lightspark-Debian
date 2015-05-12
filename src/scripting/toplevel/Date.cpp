@@ -39,9 +39,7 @@ Date::~Date()
 
 void Date::sinit(Class_base* c)
 {
-	c->isFinal=true;
-	c->setSuper(Class<ASObject>::getRef());
-	c->setConstructor(Class<IFunction>::getFunction(_constructor,7));
+	CLASS_SETUP_CONSTRUCTOR_LENGTH(c, ASObject, _constructor, 7, CLASS_FINAL);
 	c->setDeclaredMethodByQName("getTimezoneOffset",AS3,Class<IFunction>::getFunction(getTimezoneOffset),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("valueOf",AS3,Class<IFunction>::getFunction(valueOf),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("getTime",AS3,Class<IFunction>::getFunction(getTime),NORMAL_METHOD,true);
@@ -821,8 +819,13 @@ ASFUNCTIONBODY(Date,valueOf)
 
 ASObject* Date::msSinceEpoch()
 {
-	return abstract_d(milliseconds+extrayears/400*MS_IN_400_YEARS);
+	return abstract_d(getMsSinceEpoch());
 }
+number_t Date::getMsSinceEpoch()
+{
+	return milliseconds+extrayears/400*MS_IN_400_YEARS;
+}
+
 
 tiny_string Date::toString()
 {
@@ -1093,6 +1096,23 @@ number_t Date::parse(tiny_string str)
 	}
 	
 	return res;
+}
+bool Date::isEqual(ASObject* r)
+{
+	check();
+	//if we are comparing the same object the answer is true
+	if(this==r)
+		return true;
+	if (r->is<Date>())
+		return getMsSinceEpoch() == r->as<Date>()->getMsSinceEpoch();
+	return ASObject::isEqual(r);
+}
+
+TRISTATE Date::isLess(ASObject* o)
+{
+	if (o->is<Date>())
+		return (getMsSinceEpoch() < o->as<Date>()->getMsSinceEpoch())?TTRUE:TFALSE;
+	return ASObject::isLess(o);
 }
 
 void Date::serialize(ByteArray* out, std::map<tiny_string, uint32_t>& stringMap,

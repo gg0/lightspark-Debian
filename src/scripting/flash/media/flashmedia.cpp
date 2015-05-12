@@ -24,6 +24,7 @@
 #include <iostream>
 #include "backends/audio.h"
 #include "backends/rendering.h"
+#include "backends/streamcache.h"
 #include "scripting/argconv.h"
 
 using namespace lightspark;
@@ -31,8 +32,7 @@ using namespace std;
 
 void SoundTransform::sinit(Class_base* c)
 {
-	c->setConstructor(Class<IFunction>::getFunction(_constructor));
-	c->setSuper(Class<ASObject>::getRef());
+	CLASS_SETUP(c, ASObject, _constructor, CLASS_SEALED | CLASS_FINAL);
 	REGISTER_GETTER_SETTER(c,volume);
 	REGISTER_GETTER_SETTER(c,pan);
 }
@@ -55,8 +55,7 @@ ASFUNCTIONBODY(SoundTransform,_constructor)
 
 void Video::sinit(Class_base* c)
 {
-	c->setConstructor(Class<IFunction>::getFunction(_constructor));
-	c->setSuper(Class<DisplayObject>::getRef());
+	CLASS_SETUP(c, DisplayObject, _constructor, CLASS_SEALED);
 	c->setDeclaredMethodByQName("videoWidth","",Class<IFunction>::getFunction(_getVideoWidth),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("videoHeight","",Class<IFunction>::getFunction(_getVideoHeight),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("width","",Class<IFunction>::getFunction(Video::_getWidth),GETTER_METHOD,true);
@@ -64,7 +63,13 @@ void Video::sinit(Class_base* c)
 	c->setDeclaredMethodByQName("height","",Class<IFunction>::getFunction(Video::_getHeight),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("height","",Class<IFunction>::getFunction(Video::_setHeight),SETTER_METHOD,true);
 	c->setDeclaredMethodByQName("attachNetStream","",Class<IFunction>::getFunction(attachNetStream),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("clear","",Class<IFunction>::getFunction(clear),NORMAL_METHOD,true);
+	REGISTER_GETTER_SETTER(c, deblocking);
+	REGISTER_GETTER_SETTER(c, smoothing);
 }
+
+ASFUNCTIONBODY_GETTER_SETTER(Video, deblocking);
+ASFUNCTIONBODY_GETTER_SETTER(Video, smoothing);
 
 void Video::buildTraits(ASObject* o)
 {
@@ -77,7 +82,8 @@ void Video::finalize()
 }
 
 Video::Video(Class_base* c, uint32_t w, uint32_t h)
-	: DisplayObject(c),width(w),height(h),videoWidth(0),videoHeight(0),initialized(false),netStream(NullRef)
+	: DisplayObject(c),width(w),height(h),videoWidth(0),videoHeight(0),
+	  initialized(false),netStream(NullRef),deblocking(0),smoothing(false)
 {
 }
 
@@ -204,6 +210,11 @@ ASFUNCTIONBODY(Video,attachNetStream)
 	th->netStream=_MR(Class<NetStream>::cast(args[0]));
 	return NULL;
 }
+ASFUNCTIONBODY(Video,clear)
+{
+	LOG(LOG_NOT_IMPLEMENTED,"clear is not implemented");
+	return NULL;
+}
 
 _NR<DisplayObject> Video::hitTestImpl(_NR<DisplayObject> last, number_t x, number_t y, DisplayObject::HIT_TYPE type)
 {
@@ -215,7 +226,16 @@ _NR<DisplayObject> Video::hitTestImpl(_NR<DisplayObject> last, number_t x, numbe
 }
 
 Sound::Sound(Class_base* c)
- :EventDispatcher(c),downloader(NULL),soundChannelCreated(false),bytesLoaded(0),bytesTotal(0),length(60*1000)
+	:EventDispatcher(c),downloader(NULL),soundData(new MemoryStreamCache),
+	 container(true),format(CODEC_NONE, 0, 0),bytesLoaded(0),bytesTotal(0),length(60*1000)
+{
+}
+
+Sound::Sound(Class_base* c, _R<StreamCache> data, AudioFormat _format)
+	:EventDispatcher(c),downloader(NULL),soundData(data),
+	 container(false),format(_format),
+	 bytesLoaded(soundData->getReceivedLength()),
+	 bytesTotal(soundData->getReceivedLength()),length(60*1000)
 {
 }
 
@@ -227,8 +247,7 @@ Sound::~Sound()
 
 void Sound::sinit(Class_base* c)
 {
-	c->setConstructor(Class<IFunction>::getFunction(_constructor));
-	c->setSuper(Class<EventDispatcher>::getRef());
+	CLASS_SETUP(c, EventDispatcher, _constructor, CLASS_SEALED);
 	c->setDeclaredMethodByQName("load","",Class<IFunction>::getFunction(load),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("play","",Class<IFunction>::getFunction(play),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("close","",Class<IFunction>::getFunction(close),NORMAL_METHOD,true);
@@ -261,6 +280,9 @@ ASFUNCTIONBODY(Sound,load)
 	th->url = urlRequest->getRequestURL();
 	urlRequest->getPostData(th->postData);
 
+	_R<StreamCache> c(_MR(new MemoryStreamCache()));
+	th->soundData = c;
+
 	if(!th->url.isValid())
 	{
 		//Notify an error during loading
@@ -275,13 +297,13 @@ ASFUNCTIONBODY(Sound,load)
 	{
 		//This is a GET request
 		//Use disk cache our downloaded files
-		th->downloader=getSys()->downloadManager->download(th->url, true, th);
+		th->downloader=getSys()->downloadManager->download(th->url, th->soundData, th);
 	}
 	else
 	{
 		list<tiny_string> headers=urlRequest->getHeaders();
-		th->downloader=getSys()->downloadManager->downloadWithData(th->url, th->postData,
-				headers, th);
+		th->downloader=getSys()->downloadManager->downloadWithData(th->url,
+				th->soundData, th->postData, headers, th);
 		//Clean up the postData for the next load
 		th->postData.clear();
 	}
@@ -302,19 +324,11 @@ ASFUNCTIONBODY(Sound,play)
 	if(startTime!=0)
 		LOG(LOG_NOT_IMPLEMENTED,"startTime not supported in Sound::play");
 
-	if (!th->soundChannelCreated)
-	{
-		th->soundChannelCreated = true;
-		th->incRef();
-		return Class<SoundChannel>::getInstanceS(th->downloader, _MNR(th));
-	}
+	th->incRef();
+	if (th->container)
+		return Class<SoundChannel>::getInstanceS(th->soundData);
 	else
-	{
-		LOG(LOG_NOT_IMPLEMENTED,"Sound::play called more than once");
-		// should return a new independent SoundChannel for
-		// the same downloaded data
-		return getSys()->getUndefinedRef();
-	}
+		return Class<SoundChannel>::getInstanceS(th->soundData, th->format);
 }
 
 ASFUNCTIONBODY(Sound,close)
@@ -352,8 +366,7 @@ ASFUNCTIONBODY_GETTER(Sound,length);
 
 void SoundLoaderContext::sinit(Class_base* c)
 {
-	c->setConstructor(Class<IFunction>::getFunction(_constructor));
-	c->setSuper(Class<ASObject>::getRef());
+	CLASS_SETUP(c, ASObject, _constructor, CLASS_SEALED);
 	REGISTER_GETTER_SETTER(c,bufferTime);
 	REGISTER_GETTER_SETTER(c,checkPolicyFile);
 }
@@ -374,10 +387,11 @@ ASFUNCTIONBODY(SoundLoaderContext,_constructor)
 ASFUNCTIONBODY_GETTER_SETTER(SoundLoaderContext,bufferTime);
 ASFUNCTIONBODY_GETTER_SETTER(SoundLoaderContext,checkPolicyFile);
 
-SoundChannel::SoundChannel(Class_base* c, std::streambuf *s, _NR<Sound> _owner)
-  : EventDispatcher(c),stream(s),owner(_owner),stopped(false),audioDecoder(NULL),audioStream(NULL),position(0)
+SoundChannel::SoundChannel(Class_base* c, _NR<StreamCache> _stream, AudioFormat _format)
+: EventDispatcher(c),stream(_stream),stopped(false),audioDecoder(NULL),audioStream(NULL),
+  format(_format),position(0),soundTransform(_MR(Class<SoundTransform>::getInstanceS()))
 {
-	if(s)
+	if (!stream.isNull())
 	{
 		// Start playback
 		incRef();
@@ -392,17 +406,33 @@ SoundChannel::~SoundChannel()
 
 void SoundChannel::sinit(Class_base* c)
 {
-	c->setConstructor(Class<IFunction>::getFunction(_constructor));
-	c->setSuper(Class<EventDispatcher>::getRef());
+	CLASS_SETUP(c, EventDispatcher, _constructor, CLASS_SEALED | CLASS_FINAL);
 	c->setDeclaredMethodByQName("stop","",Class<IFunction>::getFunction(stop),NORMAL_METHOD,true);
 
 	REGISTER_GETTER(c,position);
+	REGISTER_GETTER_SETTER(c,soundTransform);
 }
 
 ASFUNCTIONBODY_GETTER(SoundChannel,position);
+ASFUNCTIONBODY_GETTER_SETTER_CB(SoundChannel,soundTransform,validateSoundTransform);
 
 void SoundChannel::buildTraits(ASObject* o)
 {
+}
+
+void SoundChannel::finalize()
+{
+	EventDispatcher::finalize();
+	soundTransform.reset();
+}
+
+void SoundChannel::validateSoundTransform(_NR<SoundTransform> oldValue)
+{
+	if (soundTransform.isNull())
+	{
+		soundTransform = oldValue;
+		throwError<TypeError>(kNullPointerError, "soundTransform");
+	}
 }
 
 ASFUNCTIONBODY(SoundChannel, _constructor)
@@ -421,7 +451,18 @@ ASFUNCTIONBODY(SoundChannel, stop)
 
 void SoundChannel::execute()
 {
-	stream.exceptions ( istream::eofbit | istream::failbit | istream::badbit );
+	if (format.codec == CODEC_NONE)
+		playStream();
+	else
+		playRaw();
+}
+
+void SoundChannel::playStream()
+{
+	assert(!stream.isNull());
+	std::streambuf *sbuf = stream->createReader();
+	istream s(sbuf);
+	s.exceptions ( istream::eofbit | istream::failbit | istream::badbit );
 
 	bool waitForFlush=true;
 	StreamDecoder* streamDecoder=NULL;
@@ -429,7 +470,7 @@ void SoundChannel::execute()
 	try
 	{
 #ifdef ENABLE_LIBAVCODEC
-		streamDecoder=new FFMpegStreamDecoder(stream);
+		streamDecoder=new FFMpegStreamDecoder(s);
 		if(!streamDecoder->isValid())
 			threadAbort();
 
@@ -486,6 +527,45 @@ void SoundChannel::execute()
 		audioStream=NULL;
 	}
 	delete streamDecoder;
+	delete sbuf;
+
+	if (!ACQUIRE_READ(stopped))
+	{
+		incRef();
+		getVm()->addEvent(_MR(this),_MR(Class<Event>::getInstanceS("soundComplete")));
+	}
+}
+
+void SoundChannel::playRaw()
+{
+	assert(!stream.isNull());
+	FFMpegAudioDecoder *decoder = new FFMpegAudioDecoder(format.codec,
+							     format.sampleRate,
+							     format.channels,
+							     true);
+	if (!decoder)
+		return;
+	if(!getSys()->audioManager->pluginLoaded())
+		return;
+
+	AudioStream *audioStream = NULL;
+	std::streambuf *sbuf = stream->createReader();
+	istream stream(sbuf);
+	do
+	{
+		decoder->decodeStreamSomePackets(stream, 0);
+		if (decoder->isValid())
+			audioStream=getSys()->audioManager->createStreamPlugin(decoder);
+	}
+	while (!ACQUIRE_READ(stopped) && !stream.eof() && !stream.fail() && !stream.bad());
+
+	decoder->setFlushing();
+	decoder->waitFlushed();
+	sleep(1);
+	
+	delete audioStream;
+	delete decoder;
+	delete sbuf;
 
 	if (!ACQUIRE_READ(stopped))
 	{
@@ -513,8 +593,7 @@ void SoundChannel::threadAbort()
 
 void StageVideo::sinit(Class_base *c)
 {
-	c->setConstructor(Class<IFunction>::getFunction(_constructor));
-	c->setSuper(Class<EventDispatcher>::getRef());
+	CLASS_SETUP(c, EventDispatcher, _constructor, CLASS_SEALED);
 }
 
 ASFUNCTIONBODY(StageVideo,_constructor)
@@ -525,14 +604,14 @@ ASFUNCTIONBODY(StageVideo,_constructor)
 
 void StageVideoAvailability::sinit(Class_base* c)
 {
-	c->setConstructor(Class<IFunction>::getFunction(_constructor));
+	CLASS_SETUP(c, ASObject, _constructor, CLASS_SEALED | CLASS_FINAL);
 	c->setVariableByQName("AVAILABLE","",Class<ASString>::getInstanceS("available"),DECLARED_TRAIT);
 	c->setVariableByQName("UNAVAILABLE","",Class<ASString>::getInstanceS("unavailable"),DECLARED_TRAIT);
 }
 
 void VideoStatus::sinit(Class_base* c)
 {
-	c->setConstructor(Class<IFunction>::getFunction(_constructor));
+	CLASS_SETUP(c, ASObject, _constructor, CLASS_SEALED | CLASS_FINAL);
 	c->setVariableByQName("ACCELERATED","",Class<ASString>::getInstanceS("accelerated"),DECLARED_TRAIT);
 	c->setVariableByQName("SOFTWARE","",Class<ASString>::getInstanceS("software"),DECLARED_TRAIT);
 	c->setVariableByQName("UNAVAILABLE","",Class<ASString>::getInstanceS("unavailable"),DECLARED_TRAIT);

@@ -24,6 +24,7 @@
 #include <limits>
 #include "compat.h"
 #include "parsing/amf3_generator.h"
+#include "scripting/argconv.h"
 #include "scripting/toplevel/ASString.h"
 #include "scripting/toplevel/Date.h"
 #include "scripting/toplevel/XML.h"
@@ -37,7 +38,13 @@ string ASObject::toDebugString()
 {
 	check();
 	string ret;
-	if(getClass())
+	if(this->is<Class_base>())
+	{
+		ret = "[class ";
+		ret+=this->as<Class_base>()->class_name.getQualifiedName().raw_buf();
+		ret+="]";
+	}
+	else if(getClass())
 	{
 		ret="[object ";
 		ret+=getClass()->class_name.name.raw_buf();
@@ -47,11 +54,9 @@ string ASObject::toDebugString()
 		ret = "Undefined";
 	else if(this->is<Null>())
 		ret = "Null";
-	else if(this->is<Class_base>())
+	else if(this->is<Template_base>())
 	{
-		ret = "[class ";
-		ret+=this->as<Class_base>()->class_name.getQualifiedName().raw_buf();
-		ret+="]";
+		ret = "[templated class]";
 	}
 	else
 	{
@@ -60,6 +65,33 @@ string ASObject::toDebugString()
 	return ret;
 }
 
+void ASObject::setProxyProperty(const multiname &name)
+{
+	if (this->proxyMultiName)
+		this->proxyMultiName->ns.clear();
+	else
+		this->proxyMultiName = new (getVm()->vmDataMemory) multiname(getVm()->vmDataMemory);
+	this->proxyMultiName->isAttribute = name.isAttribute;
+	this->proxyMultiName->ns.reserve(name.ns.size());
+	for(unsigned int i=0;i<name.ns.size();i++)
+	{
+		this->proxyMultiName->ns.push_back(name.ns[i]);
+	}
+	
+}
+
+void ASObject::applyProxyProperty(multiname &name)
+{
+	if (!this->proxyMultiName)
+		return;
+	name.isAttribute = this->proxyMultiName->isAttribute;
+	name.ns.clear();
+	name.ns.reserve(this->proxyMultiName->ns.size());
+	for(unsigned int i=0;i<this->proxyMultiName->ns.size();i++)
+	{
+		name.ns.push_back(this->proxyMultiName->ns[i]);
+	}
+}
 tiny_string ASObject::toString()
 {
 	check();
@@ -85,6 +117,14 @@ tiny_string ASObject::toString()
 	}
 }
 
+tiny_string ASObject::toLocaleString()
+{
+	_NR<ASObject> str = executeASMethod("toLocaleString", {""}, NULL, 0);
+	if (str.isNull())
+		return "";
+	return str->toString();
+}
+
 TRISTATE ASObject::isLess(ASObject* r)
 {
 	check();
@@ -105,7 +145,7 @@ int variables_map::getNextEnumerable(unsigned int start) const
 		++it;
 	}
 
-	while(it->second.kind!=DYNAMIC_TRAIT)
+	while(it->second.kind!=DYNAMIC_TRAIT || !it->second.isenumerable)
 	{
 		++i;
 		++it;
@@ -141,14 +181,15 @@ _R<ASObject> ASObject::nextValue(uint32_t index)
 void ASObject::sinit(Class_base* c)
 {
 	c->setDeclaredMethodByQName("hasOwnProperty",AS3,Class<IFunction>::getFunction(hasOwnProperty),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("setPropertyIsEnumerable",AS3,Class<IFunction>::getFunction(setPropertyIsEnumerable),NORMAL_METHOD,true);
 
 	c->prototype->setVariableByQName("toString","",Class<IFunction>::getFunction(_toString),DYNAMIC_TRAIT);
-	c->prototype->setVariableByQName("toLocaleString","",Class<IFunction>::getFunction(_toString),DYNAMIC_TRAIT);
+	c->prototype->setVariableByQName("toLocaleString","",Class<IFunction>::getFunction(_toLocaleString),DYNAMIC_TRAIT);
 	c->prototype->setVariableByQName("valueOf","",Class<IFunction>::getFunction(valueOf),DYNAMIC_TRAIT);
 	c->prototype->setVariableByQName("hasOwnProperty","",Class<IFunction>::getFunction(hasOwnProperty),DYNAMIC_TRAIT);
 	c->prototype->setVariableByQName("isPrototypeOf","",Class<IFunction>::getFunction(isPrototypeOf),DYNAMIC_TRAIT);
 	c->prototype->setVariableByQName("propertyIsEnumerable","",Class<IFunction>::getFunction(propertyIsEnumerable),DYNAMIC_TRAIT);
-	
+
 }
 
 void ASObject::buildTraits(ASObject* o)
@@ -166,6 +207,8 @@ bool ASObject::isEqual(ASObject* r)
 	{
 		case T_NULL:
 		case T_UNDEFINED:
+			if (!this->isConstructed() && !this->is<Class_base>())
+				return true;
 			return false;
 		case T_NUMBER:
 		case T_INTEGER:
@@ -190,6 +233,8 @@ bool ASObject::isEqual(ASObject* r)
 				return x->toString()==toString();
 		}
 	}
+	if (r->is<ObjectConstructor>())
+		return this == r->getClass();
 
 	LOG(LOG_CALLS,_("Equal comparison between type ")<<getObjectType()<< _(" and type ") << r->getObjectType());
 	if(classdef)
@@ -215,7 +260,7 @@ uint16_t ASObject::toUInt16()
 
 int32_t ASObject::toInt()
 {
-	return 0;
+	return toPrimitive()->toInt();
 }
 
 /* Implements ECMA's ToPrimitive (9.1) and [[DefaultValue]] (8.6.2.6) */
@@ -328,6 +373,46 @@ _R<ASObject> ASObject::call_toString()
 	return _MR(ret);
 }
 
+bool ASObject::has_toJSON()
+{
+	multiname toJSONName(NULL);
+	toJSONName.name_type=multiname::NAME_STRING;
+	toJSONName.name_s_id=getSys()->getUniqueStringId("toJSON");
+	toJSONName.ns.push_back(nsNameAndKind("",NAMESPACE));
+	toJSONName.ns.push_back(nsNameAndKind(AS3,NAMESPACE));
+	toJSONName.isAttribute = false;
+	return ASObject::hasPropertyByMultiname(toJSONName, true, true);
+}
+
+tiny_string ASObject::call_toJSON()
+{
+	multiname toJSONName(NULL);
+	toJSONName.name_type=multiname::NAME_STRING;
+	toJSONName.name_s_id=getSys()->getUniqueStringId("toJSON");
+	toJSONName.ns.push_back(nsNameAndKind("",NAMESPACE));
+	toJSONName.ns.push_back(nsNameAndKind(AS3,NAMESPACE));
+	toJSONName.isAttribute = false;
+	assert(ASObject::hasPropertyByMultiname(toJSONName, true, true));
+
+	_NR<ASObject> o=getVariableByMultiname(toJSONName,SKIP_IMPL);
+	assert_and_throw(o->is<IFunction>());
+	IFunction* f=o->as<IFunction>();
+
+	incRef();
+	ASObject *ret=f->call(this,NULL,0);
+	tiny_string res;
+	if (ret->is<ASString>())
+	{
+		res += "\"";
+		res += ret->toString();
+		res += "\"";
+	}
+	else 
+		res = ret->toString();
+	
+	return res;
+}
+
 bool ASObject::isPrimitive() const
 {
 	// ECMA 3, section 4.3.2, T_INTEGER and T_UINTEGER are added
@@ -336,7 +421,10 @@ bool ASObject::isPrimitive() const
 		type==T_STRING || type==T_BOOLEAN || type==T_INTEGER ||
 		type==T_UINTEGER;
 }
-
+bool ASObject::isConstructed() const
+{
+	return traitsInitialized && constructIndicator;
+}
 variables_map::variables_map(MemoryAccount* m):
 	Variables(std::less<mapType::key_type>(), reporter_allocator<mapType::value_type>(m)),slots_vars(m)
 {
@@ -376,13 +464,14 @@ bool ASObject::hasPropertyByMultiname(const multiname& name, bool considerDynami
 	if(classdef && classdef->borrowedVariables.findObjVar(name, NO_CREATE_TRAIT, DECLARED_TRAIT)!=NULL)
 		return true;
 
+	NS_KIND nskind;
 	//Check prototype inheritance chain
 	if(getClass() && considerPrototype)
 	{
 		Prototype* proto = getClass()->prototype.getPtr();
 		while(proto)
 		{
-			if(proto->getObj()->findGettable(name) != NULL)
+			if(proto->getObj()->findGettable(name,nskind) != NULL)
 				return true;
 			proto=proto->prevPrototype.getPtr();
 		}
@@ -470,7 +559,7 @@ bool ASObject::deleteVariableByMultiname(const multiname& name)
 		return true;
 	}
 	//Only dynamic traits are deletable
-	if (obj->kind != DYNAMIC_TRAIT)
+	if (obj->kind != DYNAMIC_TRAIT && obj->kind != INSTANCE_TRAIT)
 		return false;
 
 	assert(obj->getter==NULL && obj->setter==NULL && obj->var!=NULL);
@@ -537,7 +626,20 @@ void ASObject::setVariableByMultiname(const multiname& name, ASObject* o, CONST_
 		}
 	}
 
-	//Do not lookup in the prototype chain. This is tested behaviour
+	//Do not set variables in prototype chain. Still have to do
+	//lookup to throw a correct error in case a named function
+	//exists in prototype chain. See Tamarin test
+	//ecma3/Boolean/ecma4_sealedtype_1_rt
+	if(!obj && cls && cls->isSealed)
+	{
+		variable *protoObj = cls->findSettableInPrototype(name);
+		if (protoObj && 
+		    ((protoObj->var && protoObj->var->is<Function>()) ||
+		     protoObj->setter))
+		{
+			throwError<ReferenceError>(kCannotAssignToMethodError, name.normalizedName(), cls ? cls->getQualifiedClassName() : "");
+		}
+	}
 
 	if(!obj)
 	{
@@ -595,24 +697,26 @@ void ASObject::setVariableByQName(uint32_t nameId, const nsNameAndKind& ns, ASOb
 }
 
 void ASObject::initializeVariableByMultiname(const multiname& name, ASObject* o, multiname* typemname,
-		ABCContext* context, TRAIT_KIND traitKind)
+		ABCContext* context, TRAIT_KIND traitKind, bool bOverwrite)
 {
 	check();
-
-	variable* obj=findSettable(name);
-	if(obj)
+	if (!bOverwrite)
 	{
-		//Initializing an already existing variable
-		LOG(LOG_NOT_IMPLEMENTED,"Variable " << name << "already initialized");
-		o->decRef();
-		return;
+		variable* obj=findSettable(name);
+		if(obj)
+		{
+			//Initializing an already existing variable
+			LOG(LOG_NOT_IMPLEMENTED,"Variable " << name << " already initialized");
+			if (o != NULL)
+				o->decRef();
+			return;
+		}
 	}
-
-	Variables.initializeVar(name, o, typemname, context, traitKind);
+	Variables.initializeVar(name, o, typemname, context, traitKind,this);
 }
 
 variable::variable(TRAIT_KIND _k, ASObject* _v, multiname* _t, const Type* _type)
-		: var(_v),typeUnion(NULL),setter(NULL),getter(NULL),kind(_k),traitState(NO_STATE)
+		: var(_v),typeUnion(NULL),setter(NULL),getter(NULL),kind(_k),traitState(NO_STATE),isenumerable(true)
 {
 	if(_type)
 	{
@@ -731,7 +835,7 @@ variable* variables_map::findObjVar(const multiname& mname, TRAIT_KIND createKin
 	return &inserted->second;
 }
 
-const variable* variables_map::findObjVar(const multiname& mname, uint32_t traitKinds) const
+const variable* variables_map::findObjVar(const multiname& mname, uint32_t traitKinds, NS_KIND &nskind) const
 {
 	uint32_t name=mname.normalizedNameId();
 	assert(!mname.ns.empty());
@@ -746,6 +850,7 @@ const variable* variables_map::findObjVar(const multiname& mname, uint32_t trait
 		const nsNameAndKind& ns=ret->first.ns;
 		if(ns==*nsIt)
 		{
+			nskind = ns.getImpl().kind;
 			if(ret->second.kind & traitKinds)
 				return &ret->second;
 			else
@@ -764,29 +869,86 @@ const variable* variables_map::findObjVar(const multiname& mname, uint32_t trait
 	return NULL;
 }
 
-void variables_map::initializeVar(const multiname& mname, ASObject* obj, multiname* typemname, ABCContext* context, TRAIT_KIND traitKind)
+void variables_map::initializeVar(const multiname& mname, ASObject* obj, multiname* typemname, ABCContext* context, TRAIT_KIND traitKind, ASObject* mainObj)
 {
 	const Type* type = NULL;
 	 /* If typename is a builtin type, we coerce obj.
 	  * It it's not it must be a user defined class,
-	  * so we only allow Null and Undefined (which are both coerced to Null) */
-
-	type = Type::getBuiltinType(typemname);
+	  * so we try to find the class it is derived from and create an apropriate uninitialized instance */
+	if (type == NULL)
+		type = Type::getBuiltinType(typemname);
+	if (type == NULL)
+		type = Type::getTypeFromMultiname(typemname,context);
 	if(type==NULL)
 	{
-		assert_and_throw(obj->is<Null>() || obj->is<Undefined>());
-		if(obj->is<Undefined>())
+		if (obj == NULL) // create dynamic object
 		{
-			//Casting undefined to an object (of unknown class)
-			//results in Null
-			obj->decRef();
-			obj = getSys()->getNullRef();
+			obj = getSys()->getUndefinedRef();
+		}
+		else
+		{
+			assert_and_throw(obj->is<Null>() || obj->is<Undefined>());
+			if(obj->is<Undefined>())
+			{
+				//Casting undefined to an object (of unknown class)
+				//results in Null
+				obj->decRef();
+				obj = getSys()->getNullRef();
+			}
 		}
 	}
 	else
-		obj = type->coerce(obj);
-
-	assert(traitKind==DECLARED_TRAIT || traitKind==CONSTANT_TRAIT);
+	{
+		if (obj == NULL) // create dynamic object
+		{
+			if (type == Type::anyType)
+			{
+				// type could not be found, so it's stored as an uninitialized variable
+				LOG(LOG_CALLS,"add uninitialized var:"<<mname);
+				uninitializedVar v;
+				mainObj->incRef();
+				v.mainObj = mainObj;
+				v.mname = &mname;
+				v.traitKind = traitKind;
+				v.typemname = typemname;
+				context->addUninitializedVar(v);
+				obj = getSys()->getUndefinedRef();
+				obj = type->coerce(obj);
+			}
+			else if(mainObj->is<Class_base>() &&
+				mainObj->as<Class_base>()->class_name.getQualifiedName() == typemname->qualifiedString())
+			{
+				// avoid recursive construction
+				obj = getSys()->getNullRef();
+			}
+			else if (type != Class_object::getClass() &&
+					dynamic_cast<const Class_base*>(type))
+			{
+				if (!((Class_base*)type)->super)
+				{
+					// super type could not be found, so the class is stored as an uninitialized variable
+					LOG(LOG_CALLS,"add uninitialized class var:"<<mname);
+					uninitializedVar v;
+					mainObj->incRef();
+					v.mainObj = mainObj;
+					v.mname = &mname;
+					v.traitKind = traitKind;
+					v.typemname = typemname;
+					context->addUninitializedVar(v);
+					obj = getSys()->getUndefinedRef();
+					obj = type->coerce(obj);
+				}
+				else
+					obj = ((Class_base*)type)->getInstance(false,NULL,0);
+			}
+			else
+			{
+				obj = getSys()->getUndefinedRef();
+				obj = type->coerce(obj);
+			}
+		}
+	}
+	assert(traitKind==DECLARED_TRAIT || traitKind==CONSTANT_TRAIT || traitKind == INSTANCE_TRAIT);
 
 	uint32_t name=mname.normalizedNameId();
 	Variables.insert(make_pair(varName(name, mname.ns[0]), variable(traitKind, obj, typemname, type)));
@@ -824,6 +986,16 @@ ASFUNCTIONBODY(ASObject,_toString)
 		ret="[object Object]";
 
 	return Class<ASString>::getInstanceS(ret);
+}
+
+ASFUNCTIONBODY(ASObject,_toLocaleString)
+{
+	if (!obj->has_toString())
+		throwError<TypeError>(kCallNotFoundError, "toString", obj->getClassName());
+
+	_R<ASObject> res = obj->call_toString();
+	res->incRef();
+	return res.getPtr();
 }
 
 ASFUNCTIONBODY(ASObject,hasOwnProperty)
@@ -867,7 +1039,8 @@ ASFUNCTIONBODY(ASObject,isPrototypeOf)
 
 ASFUNCTIONBODY(ASObject,propertyIsEnumerable)
 {
-	assert_and_throw(argslen==1);
+	if (argslen == 0)
+		return abstract_b(false);
 	multiname name(NULL);
 	name.name_type=multiname::NAME_STRING;
 	name.name_s_id=getSys()->getUniqueStringId(args[0]->toString());
@@ -886,15 +1059,40 @@ ASFUNCTIONBODY(ASObject,propertyIsEnumerable)
 		return abstract_b(true);
 	return abstract_b(false);
 }
+ASFUNCTIONBODY(ASObject,setPropertyIsEnumerable)
+{
+	tiny_string propname;
+	bool isEnum;
+	ARG_UNPACK(propname) (isEnum, true);
+	multiname name(NULL);
+	name.name_type=multiname::NAME_STRING;
+	name.name_s_id=getSys()->getUniqueStringId(args[0]->toString());
+	name.ns.push_back(nsNameAndKind("",NAMESPACE));
+	name.isAttribute=false;
+	variable* v =obj->Variables.findObjVar(name, NO_CREATE_TRAIT,DYNAMIC_TRAIT);
+	if (v)
+		v->isenumerable = isEnum;
+	return NULL;
+}
 
 ASFUNCTIONBODY(ASObject,_constructor)
 {
 	return NULL;
 }
 
+ASFUNCTIONBODY(ASObject,_constructorNotInstantiatable)
+{
+	throwError<ArgumentError>(kCantInstantiateError, obj->getClassName());
+	return NULL;
+}
+
 void ASObject::initSlot(unsigned int n, const multiname& name)
 {
 	Variables.initSlot(n,name.name_s_id,name.ns[0]);
+}
+void ASObject::appendSlot(const multiname& name)
+{
+	Variables.appendSlot(name.name_s_id,name.ns[0]);
 }
 
 int32_t ASObject::getVariableByMultiname_i(const multiname& name)
@@ -906,9 +1104,9 @@ int32_t ASObject::getVariableByMultiname_i(const multiname& name)
 	return ret->toInt();
 }
 
-const variable* ASObject::findGettableImpl(const variables_map& map, const multiname& name)
+const variable* ASObject::findGettableImpl(const variables_map& map, const multiname& name, NS_KIND &nskind)
 {
-	const variable* ret=map.findObjVar(name,DECLARED_TRAIT|DYNAMIC_TRAIT);
+	const variable* ret=map.findObjVar(name,DECLARED_TRAIT|DYNAMIC_TRAIT,nskind);
 	if(ret)
 	{
 		//It seems valid for a class to redefine only the setter, so if we can't find
@@ -919,20 +1117,20 @@ const variable* ASObject::findGettableImpl(const variables_map& map, const multi
 	return ret;
 }
 
-const variable* ASObject::findGettable(const multiname& name) const
+const variable* ASObject::findGettable(const multiname& name, NS_KIND &nskind) const
 {
-	return findGettableImpl(Variables,name);
+	return findGettableImpl(Variables,name,nskind);
 }
 
-const variable* ASObject::findVariableByMultiname(const multiname& name, GET_VARIABLE_OPTION opt, Class_base* cls)
+const variable* ASObject::findVariableByMultiname(const multiname& name, GET_VARIABLE_OPTION opt, Class_base* cls, NS_KIND &nskind)
 {
 	//Get from the current object without considering borrowed properties
-	const variable* var=findGettable(name);
+	const variable* var=findGettable(name,nskind);
 
 	if(!var && cls)
 	{
 		//Look for borrowed traits before
-		var=cls->findBorrowedGettable(name);
+		var=cls->findBorrowedGettable(name,nskind);
 	}
 
 	if(!var && cls)
@@ -941,7 +1139,7 @@ const variable* ASObject::findVariableByMultiname(const multiname& name, GET_VAR
 		Prototype* proto = cls->prototype.getPtr();
 		while(proto)
 		{
-			var = proto->getObj()->findGettable(name);
+			var = proto->getObj()->findGettable(name,nskind);
 			if(var)
 				break;
 			proto = proto->prevPrototype.getPtr();
@@ -954,10 +1152,24 @@ _NR<ASObject> ASObject::getVariableByMultiname(const multiname& name, GET_VARIAB
 {
 	check();
 	assert(!cls || classdef->isSubClass(cls));
-	const variable* obj=findVariableByMultiname(name, opt, cls);
+	NS_KIND nskind;
+	const variable* obj=findVariableByMultiname(name, opt, cls,nskind);
 
 	if(!obj)
 		return NullRef;
+	if (this->is<Class_base>() && 
+			(!obj->var || 
+			 (obj->var->getObjectType() != T_UNDEFINED && 
+			  obj->var->getObjectType() != T_NULL && 
+			  obj->var->getObjectType() != T_FUNCTION )))
+	{
+		LOG(LOG_CALLS,"accessing class:"<<name<<" "<< this->as<Class_base>()->getQualifiedClassName()<<" "<<nskind);
+		if (obj->kind == INSTANCE_TRAIT &&
+				nskind != NAMESPACE && 
+				nskind != PACKAGE_INTERNAL_NAMESPACE && 
+				nskind != STATIC_PROTECTED_NAMESPACE)
+			throwError<TypeError>(kCallOfNonFunctionError,name.normalizedName());
+	}
 
 	if(obj->getter)
 	{
@@ -1080,6 +1292,9 @@ void variables_map::dumpVariables()
 			case CONSTANT_TRAIT:
 				kind="Declared: ";
 				break;
+			case INSTANCE_TRAIT:
+				kind="Declared (instance)";
+				break;
 			case DYNAMIC_TRAIT:
 				kind="Dynamic: ";
 				break;
@@ -1112,8 +1327,8 @@ void variables_map::destroyContents()
 	Variables.clear();
 }
 
-ASObject::ASObject(MemoryAccount* m):Variables(m),classdef(NULL),
-	type(T_OBJECT),traitsInitialized(false),implEnable(true)
+ASObject::ASObject(MemoryAccount* m):Variables(m),classdef(NULL),proxyMultiName(NULL),
+	type(T_OBJECT),traitsInitialized(false),constructIndicator(false),implEnable(true)
 {
 #ifndef NDEBUG
 	//Stuff only used in debugging
@@ -1121,8 +1336,8 @@ ASObject::ASObject(MemoryAccount* m):Variables(m),classdef(NULL),
 #endif
 }
 
-ASObject::ASObject(Class_base* c):Variables((c)?c->memoryAccount:NULL),classdef(NULL),
-	type(T_OBJECT),traitsInitialized(false),implEnable(true)
+ASObject::ASObject(Class_base* c):Variables((c)?c->memoryAccount:NULL),classdef(NULL),proxyMultiName(NULL),
+	type(T_OBJECT),traitsInitialized(false),constructIndicator(false),implEnable(true)
 {
 	setClass(c);
 #ifndef NDEBUG
@@ -1131,8 +1346,8 @@ ASObject::ASObject(Class_base* c):Variables((c)?c->memoryAccount:NULL),classdef(
 #endif
 }
 
-ASObject::ASObject(const ASObject& o):Variables((o.classdef)?o.classdef->memoryAccount:NULL),classdef(NULL),
-	type(o.type),traitsInitialized(false),implEnable(true)
+ASObject::ASObject(const ASObject& o):Variables((o.classdef)?o.classdef->memoryAccount:NULL),classdef(NULL),proxyMultiName(NULL),
+	type(o.type),traitsInitialized(false),constructIndicator(false),implEnable(true)
 {
 	if(o.classdef)
 		setClass(o.classdef);
@@ -1169,6 +1384,9 @@ void ASObject::finalize()
 		classdef->decRef();
 		classdef=NULL;
 	}
+	if (proxyMultiName)
+		delete proxyMultiName;
+	proxyMultiName = NULL;
 }
 
 ASObject::~ASObject()
@@ -1446,6 +1664,139 @@ ASObject *ASObject::describeType() const
 	return Class<XML>::getInstanceS(root);
 }
 
+tiny_string ASObject::toJSON(std::vector<ASObject *> &path, IFunction *replacer, const tiny_string &spaces,const tiny_string& filter)
+{
+	if (has_toJSON())
+	{
+		return call_toJSON();
+	}
+
+	tiny_string newline = (spaces.empty() ? "" : "\n");
+	tiny_string res;
+	if (this->isPrimitive())
+	{
+		switch(this->type)
+		{
+			case T_STRING:
+			{
+				res += "\"";
+				tiny_string sub = this->toString();
+				for (CharIterator it=sub.begin(); it!=sub.end(); it++)
+				{
+					switch (*it)
+					{
+						case '\b':
+							res += "\\b";
+							break;
+						case '\f':
+							res += "\\f";
+							break;
+						case '\n':
+							res += "\\n";
+							break;
+						case '\r':
+							res += "\\r";
+							break;
+						case '\t':
+							res += "\\t";
+							break;
+						case '\"':
+							res += "\\\"";
+							break;
+						case '\\':
+							res += "\\\\";
+							break;
+						default:
+							if (*it < 0x20 || *it > 0xff)
+							{
+								char hexstr[7];
+								sprintf(hexstr,"\\u%04x",*it);
+								res += hexstr;
+							}
+							else
+								res += *it;
+							break;
+					}
+				}
+				res += "\"";
+				break;
+			}
+			case T_UNDEFINED:
+				res += "null";
+				break;
+			default:
+				res += this->toString();
+				break;
+		}
+	}
+	else
+	{
+		res += "{";
+		const variables_map::const_var_iterator beginIt = Variables.Variables.begin();
+		const variables_map::const_var_iterator endIt = Variables.Variables.end();
+		bool bfirst = true;
+		for(variables_map::const_var_iterator varIt=beginIt; varIt != endIt; ++varIt)
+		{
+			// check for cylic reference
+			if (varIt->second.var->getObjectType() != T_UNDEFINED &&
+				varIt->second.var->getObjectType() != T_NULL &&
+				varIt->second.var->getObjectType() != T_BOOLEAN &&
+					(varIt->second.var == this ||
+					 std::find(path.begin(),path.end(), varIt->second.var) != path.end() ||
+					 std::find(path.begin(),path.end(), this) != path.end() ))
+				throwError<TypeError>(kJSONCyclicStructure);
+
+			if (replacer != NULL)
+			{
+				if (!bfirst)
+					res += ",";
+				res += newline+spaces;
+				res += "\"";
+				res += getSys()->getStringFromUniqueId(varIt->first.nameId);
+				res += "\"";
+				res += ":";
+				if (!spaces.empty())
+					res += " ";
+				ASObject* params[2];
+				
+				params[0] = Class<ASString>::getInstanceS(getSys()->getStringFromUniqueId(varIt->first.nameId));
+				params[1] = varIt->second.var;
+				params[1]->incRef();
+				ASObject *funcret=replacer->call(getSys()->getNullRef(), params, 2);
+				LOG(LOG_ERROR,"funcall:"<<res<<"|"<<funcret);
+				if (funcret)
+					res += funcret->toString();
+				else
+					res += varIt->second.var->toJSON(path,replacer,spaces+spaces,filter);
+				bfirst = false;
+			}
+			else if (filter.empty() || filter.find(tiny_string(" ")+getSys()->getStringFromUniqueId(varIt->first.nameId)+" ") != tiny_string::npos)
+			{
+				if (!bfirst)
+					res += ",";
+				res += newline+spaces;
+				res += "\"";
+				res += getSys()->getStringFromUniqueId(varIt->first.nameId);
+				res += "\"";
+				res += ":";
+				if (!spaces.empty())
+					res += " ";
+				res += varIt->second.var->toJSON(path,replacer,spaces+spaces,filter);
+				bfirst = false;
+			}
+			if (varIt->second.var->getObjectType() != T_UNDEFINED &&
+				varIt->second.var->getObjectType() != T_NULL &&
+				varIt->second.var->getObjectType() != T_BOOLEAN)
+				path.push_back(varIt->second.var);
+		}
+		if (!bfirst)
+			res += newline+spaces.substr_bytes(0,spaces.numBytes()/2);
+
+		res += "}";
+	}
+	return res;
+}
+
 bool ASObject::hasprop_prototype()
 {
 	variable* var=Variables.findObjVar(BUILTIN_STRINGS::PROTOTYPE,nsNameAndKind(BUILTIN_NAMESPACES::EMPTY_NS),
@@ -1491,7 +1842,7 @@ void ASObject::setprop_prototype(_NR<ASObject>& o)
 		ret->setVar(obj);
 }
 
-tiny_string ASObject::getClassName()
+tiny_string ASObject::getClassName() const
 {
 	if (getClass())
 		return getClass()->getQualifiedClassName();

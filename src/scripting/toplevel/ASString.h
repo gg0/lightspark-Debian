@@ -34,6 +34,7 @@ class ASString: public ASObject
 {
 private:
 	tiny_string toString_priv() const;
+	number_t parseStringInfinite(const char *s, char **end) const;
 public:
 	ASString(Class_base* c);
 	ASString(Class_base* c, const std::string& s);
@@ -62,6 +63,8 @@ public:
 	ASFUNCTION(toUpperCase);
 	ASFUNCTION(_toString);
 	ASFUNCTION(_getLength);
+	ASFUNCTION(localeCompare);
+	ASFUNCTION(localeCompare_prototype);
 	bool isEqual(ASObject* r);
 	TRISTATE isLess(ASObject* r);
 	number_t toNumber() const;
@@ -73,6 +76,8 @@ public:
 				std::map<const ASObject*, uint32_t>& objMap,
 				std::map<const Class_base*, uint32_t>& traitsMap);
 	std::string toDebugString() { return std::string("\"") + std::string(data) + "\""; }
+	static bool isEcmaSpace(uint32_t c);
+	static bool isEcmaLineTerminator(uint32_t c);
 };
 
 template<>
@@ -85,6 +90,8 @@ inline ASObject* Class<ASString>::coerce(ASObject* o) const
 		o->decRef();
 		return getSys()->getNullRef();
 	}
+	if(!o->isConstructed())
+		return o;
 	tiny_string n = o->toString();
 	o->decRef();
 	return Class<ASString>::getInstanceS(n);

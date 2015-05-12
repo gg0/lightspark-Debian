@@ -29,6 +29,7 @@
 #include "backends/audio.h"
 #include "backends/builtindecoder.h"
 #include "backends/rendering.h"
+#include "backends/streamcache.h"
 #include "scripting/argconv.h"
 
 using namespace std;
@@ -41,14 +42,15 @@ URLRequest::URLRequest(Class_base* c):ASObject(c),method(GET),contentType("appli
 
 void URLRequest::sinit(Class_base* c)
 {
-	c->setConstructor(Class<IFunction>::getFunction(_constructor));
-	c->setSuper(Class<ASObject>::getRef());
+	CLASS_SETUP(c, ASObject, _constructor, CLASS_FINAL | CLASS_SEALED);
 	c->setDeclaredMethodByQName("url","",Class<IFunction>::getFunction(_setURL),SETTER_METHOD,true);
 	c->setDeclaredMethodByQName("url","",Class<IFunction>::getFunction(_getURL),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("method","",Class<IFunction>::getFunction(_setMethod),SETTER_METHOD,true);
 	c->setDeclaredMethodByQName("method","",Class<IFunction>::getFunction(_getMethod),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("data","",Class<IFunction>::getFunction(_setData),SETTER_METHOD,true);
 	c->setDeclaredMethodByQName("data","",Class<IFunction>::getFunction(_getData),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("digest","",Class<IFunction>::getFunction(_setDigest),SETTER_METHOD,true);
+	c->setDeclaredMethodByQName("digest","",Class<IFunction>::getFunction(_getDigest),GETTER_METHOD,true);
 	REGISTER_GETTER_SETTER(c,contentType);
 	REGISTER_GETTER_SETTER(c,requestHeaders);
 }
@@ -283,12 +285,51 @@ ASFUNCTIONBODY(URLRequest,_setData)
 	return NULL;
 }
 
+ASFUNCTIONBODY(URLRequest,_getDigest)
+{
+	URLRequest* th=obj->as<URLRequest>();
+	if (th->digest.empty())
+		return getSys()->getNullRef();
+	else
+		return Class<ASString>::getInstanceS(th->digest);
+}
+
+ASFUNCTIONBODY(URLRequest,_setDigest)
+{
+	URLRequest* th=obj->as<URLRequest>();
+	tiny_string value;
+	ARG_UNPACK(value);
+
+	int numHexChars = 0;
+	bool validChars = true;
+	for (CharIterator it=value.begin(); it!=value.end(); ++it)
+	{
+		if (((*it >= 'A') && (*it <= 'F')) ||
+		    ((*it >= 'a') && (*it <= 'f')) ||
+		    ((*it >= '0') && (*it <= '9')))
+		{
+			numHexChars++;
+		}
+		else
+		{
+			validChars = false;
+			break;
+		}
+	}
+
+	if (!validChars || numHexChars != 64)
+		throw Class<ArgumentError>::getInstanceS("An invalid digest was supplied", 2034);
+
+	th->digest = value;
+	return NULL;
+}
+
 ASFUNCTIONBODY_GETTER_SETTER(URLRequest,contentType);
 ASFUNCTIONBODY_GETTER_SETTER(URLRequest,requestHeaders);
 
 void URLRequestMethod::sinit(Class_base* c)
 {
-	c->setSuper(Class<ASObject>::getRef());
+	CLASS_SETUP_NO_CONSTRUCTOR(c, ASObject, CLASS_FINAL | CLASS_SEALED);
 	c->setVariableByQName("GET","",Class<ASString>::getInstanceS("GET"),DECLARED_TRAIT);
 	c->setVariableByQName("POST","",Class<ASString>::getInstanceS("POST"),DECLARED_TRAIT);
 }
@@ -304,7 +345,8 @@ void URLLoaderThread::execute()
 
 	//TODO: support httpStatus, progress events
 
-	if(!createDownloader(false, loader, loader.getPtr()))
+	_R<MemoryStreamCache> cache(_MR(new MemoryStreamCache));
+	if(!createDownloader(cache, loader, loader.getPtr()))
 		return;
 
 	_NR<ASObject> data;
@@ -312,10 +354,12 @@ void URLLoaderThread::execute()
 	if(!downloader->hasFailed())
 	{
 		getVm()->addEvent(loader,_MR(Class<Event>::getInstanceS("open")));
-		downloader->waitForTermination();
+
+		cache->waitForTermination();
 		if(!downloader->hasFailed() && !threadAborting)
 		{
-			istream s(downloader);
+			std::streambuf *sbuf = cache->createReader();
+			istream s(sbuf);
 			uint8_t* buf=new uint8_t[downloader->getLength()+1];
 			//TODO: avoid this useless copy
 			s.read((char*)buf,downloader->getLength());
@@ -344,6 +388,7 @@ void URLLoaderThread::execute()
 				assert(false && "invalid dataFormat");
 			}
 
+			delete sbuf;
 			success=true;
 		}
 	}
@@ -381,8 +426,7 @@ void URLLoader::finalize()
 
 void URLLoader::sinit(Class_base* c)
 {
-	c->setConstructor(Class<IFunction>::getFunction(_constructor));
-	c->setSuper(Class<EventDispatcher>::getRef());
+	CLASS_SETUP(c, EventDispatcher, _constructor, CLASS_SEALED);
 	c->setDeclaredMethodByQName("dataFormat","",Class<IFunction>::getFunction(_getDataFormat),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("data","",Class<IFunction>::getFunction(_getData),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("data","",Class<IFunction>::getFunction(_setData),SETTER_METHOD,true);
@@ -539,10 +583,17 @@ ASFUNCTIONBODY(URLLoader,_setDataFormat)
 
 void URLLoaderDataFormat::sinit(Class_base* c)
 {
-	c->setSuper(Class<ASObject>::getRef());
+	CLASS_SETUP(c, ASObject, _constructorNotInstantiatable, CLASS_FINAL | CLASS_SEALED);
 	c->setVariableByQName("VARIABLES","",Class<ASString>::getInstanceS("variables"),DECLARED_TRAIT);
 	c->setVariableByQName("TEXT","",Class<ASString>::getInstanceS("text"),DECLARED_TRAIT);
 	c->setVariableByQName("BINARY","",Class<ASString>::getInstanceS("binary"),DECLARED_TRAIT);
+}
+
+void SharedObjectFlushStatus::sinit(Class_base* c)
+{
+	CLASS_SETUP_NO_CONSTRUCTOR(c, ASObject, CLASS_FINAL);
+	c->setVariableByQName("FLUSHED","",Class<ASString>::getInstanceS("flushed"),DECLARED_TRAIT);
+	c->setVariableByQName("PENDING","",Class<ASString>::getInstanceS("pending"),DECLARED_TRAIT);
 }
 
 SharedObject::SharedObject(Class_base* c):EventDispatcher(c)
@@ -552,10 +603,12 @@ SharedObject::SharedObject(Class_base* c):EventDispatcher(c)
 
 void SharedObject::sinit(Class_base* c)
 {
-	c->setSuper(Class<EventDispatcher>::getRef());
+	// TODO: Use _constructorNotInstantiatable after getLocal is
+	// implemented
+	CLASS_SETUP_NO_CONSTRUCTOR(c, EventDispatcher, CLASS_SEALED);
 	c->setDeclaredMethodByQName("getLocal","",Class<IFunction>::getFunction(getLocal),NORMAL_METHOD,false);
 	REGISTER_GETTER(c,data);
-};
+}
 
 ASFUNCTIONBODY_GETTER(SharedObject,data);
 
@@ -567,20 +620,21 @@ ASFUNCTIONBODY(SharedObject,getLocal)
 
 void ObjectEncoding::sinit(Class_base* c)
 {
-	c->setSuper(Class<ASObject>::getRef());
+	CLASS_SETUP(c, ASObject, _constructorNotInstantiatable, CLASS_FINAL | CLASS_SEALED);
 	c->setVariableByQName("AMF0","",abstract_i(AMF0),DECLARED_TRAIT);
 	c->setVariableByQName("AMF3","",abstract_i(AMF3),DECLARED_TRAIT);
 	c->setVariableByQName("DEFAULT","",abstract_i(DEFAULT),DECLARED_TRAIT);
 };
 
-NetConnection::NetConnection(Class_base* c):EventDispatcher(c),_connected(false),downloader(NULL),messageCount(0)
+NetConnection::NetConnection(Class_base* c):
+	EventDispatcher(c),_connected(false),downloader(NULL),messageCount(0),
+	proxyType(PT_NONE)
 {
 }
 
 void NetConnection::sinit(Class_base* c)
 {
-	c->setConstructor(Class<IFunction>::getFunction(_constructor));
-	c->setSuper(Class<EventDispatcher>::getRef());
+	CLASS_SETUP(c, EventDispatcher, _constructor, CLASS_SEALED);
 	c->setDeclaredMethodByQName("connect","",Class<IFunction>::getFunction(connect),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("call","",Class<IFunction>::getFunction(call),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("connected","",Class<IFunction>::getFunction(_getConnected),GETTER_METHOD,true);
@@ -590,7 +644,10 @@ void NetConnection::sinit(Class_base* c)
 	c->setDeclaredMethodByQName("objectEncoding","",Class<IFunction>::getFunction(_getObjectEncoding),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("objectEncoding","",Class<IFunction>::getFunction(_setObjectEncoding),SETTER_METHOD,true);
 	c->setDeclaredMethodByQName("protocol","",Class<IFunction>::getFunction(_getProtocol),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("proxyType","",Class<IFunction>::getFunction(_getProxyType),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("proxyType","",Class<IFunction>::getFunction(_setProxyType),SETTER_METHOD,true);
 	c->setDeclaredMethodByQName("uri","",Class<IFunction>::getFunction(_getURI),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("close","",Class<IFunction>::getFunction(close),GETTER_METHOD,true);
 	REGISTER_GETTER_SETTER(c,client);
 }
 
@@ -607,6 +664,7 @@ void NetConnection::finalize()
 
 ASFUNCTIONBODY(NetConnection, _constructor)
 {
+	EventDispatcher::_constructor(obj, NULL, 0);
 	NetConnection* th=Class<NetConnection>::cast(obj);
 	th->objectEncoding = getSys()->staticNetConnectionDefaultObjectEncoding;
 	return NULL;
@@ -683,22 +741,25 @@ void NetConnection::execute()
 	assert(!messageData.empty());
 	std::list<tiny_string> headers;
 	headers.push_back("Content-Type: application/x-amf");
-	downloader=getSys()->downloadManager->downloadWithData(uri, messageData,
-			headers, NULL);
+	_R<MemoryStreamCache> cache(_MR(new MemoryStreamCache));
+	downloader=getSys()->downloadManager->downloadWithData(uri, cache,
+			messageData, headers, NULL);
 	//Get the whole answer
-	downloader->waitForTermination();
-	if(downloader->hasFailed()) //Check to see if the download failed for some reason
+	cache->waitForTermination();
+	if(cache->hasFailed()) //Check to see if the download failed for some reason
 	{
 		LOG(LOG_ERROR, "NetConnection::execute(): Download of URL failed: " << uri);
 //		getVm()->addEvent(contentLoaderInfo,_MR(Class<IOErrorEvent>::getInstanceS()));
 		getSys()->downloadManager->destroy(downloader);
 		return;
 	}
-	istream s(downloader);
+	std::streambuf *sbuf = cache->createReader();
+	istream s(sbuf);
 	_R<ByteArray> message=_MR(Class<ByteArray>::getInstanceS());
 	uint8_t* buf=message->getBuffer(downloader->getLength(), true);
 	s.read((char*)buf,downloader->getLength());
 	//Download is done, destroy it
+	delete sbuf;
 	{
 		//Acquire the lock to ensure consistency in threadAbort
 		SpinlockLocker l(downloaderLock);
@@ -743,7 +804,9 @@ ASFUNCTIONBODY(NetConnection,connect)
 	//bool isRPC = false;
 
 	//Null argument means local file or web server, the spec only mentions NULL, but youtube uses UNDEFINED, so supporting that too.
-	if(args[0]->getObjectType()==T_NULL || args[0]->getObjectType()==T_UNDEFINED)
+	if(args[0]->getObjectType()==T_NULL || 
+			args[0]->getObjectType()==T_UNDEFINED ||
+			!args[0]->isConstructed())
 	{
 		th->_connected = false;
 		isNull = true;
@@ -798,6 +861,14 @@ ASFUNCTIONBODY(NetConnection,_getConnected)
 	return abstract_b(th->_connected);
 }
 
+ASFUNCTIONBODY(NetConnection,_getConnectedProxyType)
+{
+	NetConnection* th=Class<NetConnection>::cast(obj);
+	if (!th->_connected)
+		throw Class<ArgumentError>::getInstanceS("NetConnection object must be connected.", 2126);
+	return Class<ASString>::getInstanceS("none");
+}
+
 ASFUNCTIONBODY(NetConnection,_getDefaultObjectEncoding)
 {
 	return abstract_i(getSys()->staticNetConnectionDefaultObjectEncoding);
@@ -847,6 +918,59 @@ ASFUNCTIONBODY(NetConnection,_getProtocol)
 		throw Class<ArgumentError>::getInstanceS("get NetConnection.protocol before connect");
 }
 
+ASFUNCTIONBODY(NetConnection,_getProxyType)
+{
+	NetConnection* th=Class<NetConnection>::cast(obj);
+	tiny_string name;
+	switch(th->proxyType)
+	{
+		case PT_NONE:
+			name = "NONE";
+			break;
+		case PT_HTTP:
+			name = "HTTP";
+			break;
+		case PT_CONNECT_ONLY:
+			name = "CONNECTOnly";
+			break;
+		case PT_CONNECT:
+			name = "CONNECT";
+			break;
+		case PT_BEST:
+			name = "best";
+			break;
+		default:
+			assert(false && "Invalid proxy type");
+			name = "";
+			break;
+	}
+	return Class<ASString>::getInstanceS(name);
+}
+
+ASFUNCTIONBODY(NetConnection,_setProxyType)
+{
+	NetConnection* th=Class<NetConnection>::cast(obj);
+	tiny_string value;
+	ARG_UNPACK(value);
+	if (value == "NONE")
+		th->proxyType = PT_NONE;
+	else if (value == "HTTP")
+		th->proxyType = PT_HTTP;
+	else if (value == "CONNECTOnly")
+		th->proxyType = PT_CONNECT_ONLY;
+	else if (value == "CONNECT")
+		th->proxyType = PT_CONNECT;
+	else if (value == "best")
+		th->proxyType = PT_BEST;
+	else
+		throwError<ArgumentError>(kInvalidEnumError, "proxyType");
+
+	if (th->proxyType != PT_NONE)
+		LOG(LOG_NOT_IMPLEMENTED, "Unimplemented proxy type " << value);
+
+	return NULL;
+}
+
 ASFUNCTIONBODY(NetConnection,_getURI)
 {
 	NetConnection* th=Class<NetConnection>::cast(obj);
@@ -859,7 +983,27 @@ ASFUNCTIONBODY(NetConnection,_getURI)
 	}
 }
 
+ASFUNCTIONBODY(NetConnection,close)
+{
+	NetConnection* th=Class<NetConnection>::cast(obj);
+	if(th->_connected)
+	{
+		th->threadAbort();
+		th->_connected = false;
+	}
+	return NULL;
+}
+
 ASFUNCTIONBODY_GETTER_SETTER(NetConnection, client);
+
+void NetStreamAppendBytesAction::sinit(Class_base* c)
+{
+	CLASS_SETUP_NO_CONSTRUCTOR(c, ASObject, CLASS_FINAL);
+	c->setVariableByQName("END_SEQUENCE","",Class<ASString>::getInstanceS("endSequence"),CONSTANT_TRAIT);
+	c->setVariableByQName("RESET_BEGIN","",Class<ASString>::getInstanceS("resetBegin"),CONSTANT_TRAIT);
+	c->setVariableByQName("RESET_SEEK","",Class<ASString>::getInstanceS("resetSeek"),CONSTANT_TRAIT);
+}
+
 
 NetStream::NetStream(Class_base* c):EventDispatcher(c),tickStarted(false),paused(false),closed(true),
 	streamTime(0),frameRate(0),connection(),downloader(NULL),videoDecoder(NULL),
@@ -888,8 +1032,7 @@ NetStream::~NetStream()
 
 void NetStream::sinit(Class_base* c)
 {
-	c->setConstructor(Class<IFunction>::getFunction(_constructor));
-	c->setSuper(Class<EventDispatcher>::getRef());
+	CLASS_SETUP(c, EventDispatcher, _constructor, CLASS_SEALED);
 	c->setVariableByQName("CONNECT_TO_FMS","",Class<ASString>::getInstanceS("connectToFMS"),DECLARED_TRAIT);
 	c->setVariableByQName("DIRECT_CONNECTIONS","",Class<ASString>::getInstanceS("directConnections"),DECLARED_TRAIT);
 	c->setDeclaredMethodByQName("play","",Class<IFunction>::getFunction(play),NORMAL_METHOD,true);
@@ -906,6 +1049,9 @@ void NetStream::sinit(Class_base* c)
 	c->setDeclaredMethodByQName("client","",Class<IFunction>::getFunction(_setClient),SETTER_METHOD,true);
 	c->setDeclaredMethodByQName("checkPolicyFile","",Class<IFunction>::getFunction(_getCheckPolicyFile),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("checkPolicyFile","",Class<IFunction>::getFunction(_setCheckPolicyFile),SETTER_METHOD,true);
+	c->setDeclaredMethodByQName("attach","",Class<IFunction>::getFunction(attach),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("appendBytes","",Class<IFunction>::getFunction(appendBytes),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("appendBytesAction","",Class<IFunction>::getFunction(appendBytesAction),NORMAL_METHOD,true);
 	REGISTER_GETTER(c, backBufferLength);
 	REGISTER_GETTER_SETTER(c, backBufferTime);
 	REGISTER_GETTER(c, bufferLength);
@@ -969,40 +1115,31 @@ ASFUNCTIONBODY(NetStream,_setCheckPolicyFile)
 
 ASFUNCTIONBODY(NetStream,_constructor)
 {
-	obj->incRef();
-	_R<NetStream> th=_MR(Class<NetStream>::cast(obj));
+	EventDispatcher::_constructor(obj, NULL, 0);
+	NetStream* th=obj->as<NetStream>();
 
 	LOG(LOG_CALLS,_("NetStream constructor"));
-	assert_and_throw(argslen>=1 && argslen <=2);
-	assert_and_throw(args[0]->getClass()==Class<NetConnection>::getClass());
+	tiny_string value;
+	_NR<NetConnection> netConnection;
 
-	args[0]->incRef();
-	_R<NetConnection> netConnection = _MR(Class<NetConnection>::cast(args[0]));
-	if(argslen == 2)
-	{
-		if(args[1]->getObjectType() == T_STRING)
-		{
-			tiny_string value = Class<ASString>::cast(args[1])->toString();
-			if(value == "directConnections")
-				th->peerID = DIRECT_CONNECTIONS;
-			else
-				th->peerID = CONNECT_TO_FMS;
-		}
-		else if(args[1]->getObjectType() == T_NULL)
-			th->peerID = CONNECT_TO_FMS;
-		else
-			throw Class<ArgumentError>::getInstanceS("NetStream constructor: peerID");
-	}
+	ARG_UNPACK(netConnection)(value, "connectToFMS");
 
-	th->client = th;
+	if(value == "directConnections")
+		th->peerID = DIRECT_CONNECTIONS;
+	else
+		th->peerID = CONNECT_TO_FMS;
+
+	th->incRef();
+	netConnection->incRef();
 	th->connection=netConnection;
+	th->client = _NR<ASObject>(th);
 
 	return NULL;
 }
 
 ASFUNCTIONBODY(NetStream,play)
 {
-	NetStream* th=Class<NetStream>::cast(obj);
+	NetStream* th=obj->as<NetStream>();
 
 	//Make sure the stream is restarted properly
 	if(th->closed)
@@ -1013,8 +1150,10 @@ ASFUNCTIONBODY(NetStream,play)
 	//Reset the paused states
 	th->paused = false;
 //	th->audioPaused = false;
-	assert(!th->connection.isNull());
 
+	if (th->connection.isNull())
+		throwError<ASError>(0,"not connected");
+	
 	if(th->connection->uri.getProtocol()=="http")
 	{
 		//Remoting connection used, this should not happen
@@ -1070,9 +1209,8 @@ ASFUNCTIONBODY(NetStream,play)
 	}
 	else //The URL is valid so we can start the download and add ourself as a job
 	{
-		//Cahe the download only if it is not RTMP based
-		bool cached=!th->url.isRTMP();
-		th->downloader=getSys()->downloadManager->download(th->url, cached, NULL);
+		StreamCache *cache = new FileStreamCache;
+		th->downloader=getSys()->downloadManager->download(th->url, _MR(cache), NULL);
 		th->streamTime=0;
 		//To be decreffed in jobFence
 		th->incRef();
@@ -1149,6 +1287,35 @@ ASFUNCTIONBODY(NetStream,close)
 ASFUNCTIONBODY(NetStream,seek)
 {
 	//NetStream* th=Class<NetStream>::cast(obj);
+	LOG(LOG_NOT_IMPLEMENTED,"NetStream.seek is not implemented yet");
+	assert_and_throw(argslen == 1);
+	return NULL;
+}
+
+ASFUNCTIONBODY(NetStream,attach)
+{
+	NetStream* th=obj->as<NetStream>();
+	_NR<NetConnection> netConnection;
+	ARG_UNPACK(netConnection);
+
+	netConnection->incRef();
+	th->connection=netConnection;
+	return NULL;
+}
+ASFUNCTIONBODY(NetStream,appendBytes)
+{
+	NetStream* th=Class<NetStream>::cast(obj);
+	_NR<ByteArray> bytearray;
+	ARG_UNPACK(bytearray);
+	
+	if(!bytearray.isNull())
+		th->downloader->append(bytearray->getBuffer(bytearray->getLength(),false),bytearray->getLength());
+	return NULL;
+}
+ASFUNCTIONBODY(NetStream,appendBytesAction)
+{
+	//NetStream* th=Class<NetStream>::cast(obj);
+	LOG(LOG_NOT_IMPLEMENTED,"NetStream.appendBytesAction is not implemented yet");
 	assert_and_throw(argslen == 1);
 	return NULL;
 }
@@ -1232,7 +1399,8 @@ void NetStream::execute()
 
 	//The downloader hasn't failed yet at this point
 
-	istream s(downloader);
+	std::streambuf *sbuf = downloader->getCache()->createReader();
+	istream s(sbuf);
 	s.exceptions(istream::goodbit);
 
 	ThreadProfile* profile=getSys()->allocateProfiler(RGB(0,0,200));
@@ -1307,6 +1475,7 @@ void NetStream::execute()
 	}
 	catch(JobTerminationException& e)
 	{
+		LOG(LOG_ERROR, "JobTerminationException in NetStream ");
 		waitForFlush=false;
 	}
 	catch(exception& e)
@@ -1349,6 +1518,7 @@ void NetStream::execute()
 		audioStream=NULL;
 	}
 	delete streamDecoder;
+	delete sbuf;
 }
 
 void NetStream::threadAbort()
@@ -1605,8 +1775,7 @@ void URLVariables::decode(const tiny_string& s)
 
 void URLVariables::sinit(Class_base* c)
 {
-	c->setConstructor(Class<IFunction>::getFunction(_constructor));
-	c->setSuper(Class<ASObject>::getRef());
+	CLASS_SETUP(c, ASObject, _constructor, CLASS_DYNAMIC_NOT_FINAL);
 	c->setDeclaredMethodByQName("decode","",Class<IFunction>::getFunction(decode),NORMAL_METHOD,true);
 	c->prototype->setVariableByQName("toString","",Class<IFunction>::getFunction(_toString),DYNAMIC_TRAIT);
 }
@@ -1734,12 +1903,7 @@ ASFUNCTIONBODY(lightspark,sendToURL)
 	//TODO: should we disallow accessing local files in a directory above 
 	//the current one like we do with NetStream.play?
 
-	vector<uint8_t> postData;
-	urlRequest->getPostData(postData);
-	assert_and_throw(postData.empty());
-
-	//Don't cache our downloaded files
-	Downloader* downloader=getSys()->downloadManager->download(url, false, NULL);
+	Downloader* downloader=getSys()->downloadManager->download(url, _MR(new MemoryStreamCache), NULL);
 	//TODO: make the download asynchronous instead of waiting for an unused response
 	downloader->waitForTermination();
 	getSys()->downloadManager->destroy(downloader);
@@ -1783,8 +1947,7 @@ ASFUNCTIONBODY(lightspark,navigateToURL)
 
 void Responder::sinit(Class_base* c)
 {
-	c->setConstructor(Class<IFunction>::getFunction(_constructor));
-	c->setSuper(Class<ASObject>::getRef());
+	CLASS_SETUP(c, ASObject, _constructor, CLASS_SEALED);
 	c->setDeclaredMethodByQName("onResult","",Class<IFunction>::getFunction(onResult),NORMAL_METHOD,true);
 }
 
@@ -1819,6 +1982,90 @@ ASFUNCTIONBODY(Responder, onResult)
 	ret->decRef();
 	return NULL;
 }
+
+LocalConnection::LocalConnection(Class_base* c):
+	EventDispatcher(c),isSupported(false)
+{
+}
+
+void LocalConnection::sinit(Class_base* c)
+{
+	CLASS_SETUP(c, EventDispatcher, _constructor, CLASS_SEALED);
+	c->setDeclaredMethodByQName("allowDomain","",Class<IFunction>::getFunction(allowDomain),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("allowInsecureDomain","",Class<IFunction>::getFunction(allowInsecureDomain),NORMAL_METHOD,true);
+	REGISTER_GETTER(c,isSupported);
+}
+ASFUNCTIONBODY_GETTER(LocalConnection, isSupported);
+
+ASFUNCTIONBODY(LocalConnection, _constructor)
+{
+	EventDispatcher::_constructor(obj, NULL, 0);
+	LocalConnection* th=Class<LocalConnection>::cast(obj);
+	LOG(LOG_NOT_IMPLEMENTED,"LocalConnection is not implemented");
+	return NULL;
+}
+ASFUNCTIONBODY(LocalConnection, allowDomain)
+{
+	LocalConnection* th=Class<LocalConnection>::cast(obj);
+	LOG(LOG_NOT_IMPLEMENTED,"LocalConnection::allowDomain is not implemented");
+	return NULL;
+}
+ASFUNCTIONBODY(LocalConnection, allowInsecureDomain)
+{
+	EventDispatcher::_constructor(obj, NULL, 0);
+	LocalConnection* th=Class<LocalConnection>::cast(obj);
+	LOG(LOG_NOT_IMPLEMENTED,"LocalConnection::allowInsecureDomain is not implemented");
+	return NULL;
+}
+
+NetGroup::NetGroup(Class_base* c):
+	EventDispatcher(c)
+{
+}
+
+void NetGroup::sinit(Class_base* c)
+{
+	CLASS_SETUP(c, EventDispatcher, _constructor, CLASS_SEALED);
+}
+
+ASFUNCTIONBODY(NetGroup, _constructor)
+{
+	EventDispatcher::_constructor(obj, NULL, 0);
+	NetGroup* th=Class<NetGroup>::cast(obj);
+	LOG(LOG_NOT_IMPLEMENTED,"NetGroup is not implemented");
+	return NULL;
+}
+
+
+ASSocket::ASSocket(Class_base* c):
+	EventDispatcher(c)
+{
+}
+
+void ASSocket::sinit(Class_base* c)
+{
+	CLASS_SETUP(c, EventDispatcher, _constructor, CLASS_SEALED);
+}
+
+ASFUNCTIONBODY(ASSocket, _constructor)
+{
+	EventDispatcher::_constructor(obj, NULL, 0);
+	ASSocket* th=Class<ASSocket>::cast(obj);
+	LOG(LOG_NOT_IMPLEMENTED,"ASSocket is not implemented");
+	return NULL;
+}
+
+DRMManager::DRMManager(Class_base* c):
+	EventDispatcher(c),isSupported(false)
+{
+}
+
+void DRMManager::sinit(Class_base* c)
+{
+	CLASS_SETUP(c, EventDispatcher, _constructorNotInstantiatable, CLASS_SEALED);
+	REGISTER_GETTER(c,isSupported);
+}
+ASFUNCTIONBODY_GETTER(DRMManager, isSupported);
 
 ASFUNCTIONBODY(lightspark,registerClassAlias)
 {

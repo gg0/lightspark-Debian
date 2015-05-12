@@ -48,19 +48,17 @@ struct sorton_field
 	sorton_field(const multiname& sortfieldname):isNumeric(false),isCaseInsensitive(false),isDescending(false),fieldname(sortfieldname){}
 };
 
-
 class Array: public ASObject
 {
 friend class ABCVm;
 protected:
-	uint32_t currentsize;
+	uint64_t currentsize;
 	typedef std::map<uint32_t,data_slot,std::less<uint32_t>,
 		reporter_allocator<std::pair<const uint32_t, data_slot>>> arrayType;
 	arrayType data;
-	void outofbounds() const;
+	void outofbounds(unsigned int index) const;
 	~Array();
 private:
-	enum SORTTYPE { CASEINSENSITIVE=1, DESCENDING=2, UNIQUESORT=4, RETURNINDEXEDARRAY=8, NUMERIC=16 };
 	class sortComparatorDefault
 	{
 	private:
@@ -87,9 +85,12 @@ private:
 		sortOnComparator(const std::vector<sorton_field>& sf):fields(sf){}
 		bool operator()(const data_slot& d1, const data_slot& d2);
 	};
-	tiny_string toString_priv() const;
+	void constructorImpl(ASObject* const* args, const unsigned int argslen);
+	tiny_string toString_priv(bool localized=false) const;
 	int capIndex(int i) const;
+	static bool isIntegerWithoutLeadingZeros(const tiny_string& value);
 public:
+	enum SORTTYPE { CASEINSENSITIVE=1, DESCENDING=2, UNIQUESORT=4, RETURNINDEXEDARRAY=8, NUMERIC=16 };
 	Array(Class_base* c);
 	void finalize();
 	//These utility methods are also used by ByteArray
@@ -120,33 +121,21 @@ public:
 	ASFUNCTION(lastIndexOf);
 	ASFUNCTION(_map);
 	ASFUNCTION(_toString);
+	ASFUNCTION(_toLocaleString);
 	ASFUNCTION(slice);
 	ASFUNCTION(every);
 	ASFUNCTION(some);
 
 	_R<ASObject> at(unsigned int index) const;
-	void set(unsigned int index, _R<ASObject> o)
-	{
-		if(index<currentsize)
-		{
-			if(!data.count(index))
-				data[index]=data_slot();
-			o->incRef();
-			data[index].data=o.getPtr();
-			data[index].type=DATA_OBJECT;
-		}
-		else
-			outofbounds();
-	}
+	void set(unsigned int index, _R<ASObject> o);
 	uint64_t size() const
 	{
 		return currentsize;
 	}
 	void push(_R<ASObject> o)
 	{
-		o->incRef();
-		data[currentsize] = data_slot(o.getPtr());
 		currentsize++;
+		set(currentsize-1,o);
 	}
 	void resize(uint64_t n);
 	_NR<ASObject> getVariableByMultiname(const multiname& name, GET_VARIABLE_OPTION opt);
@@ -163,6 +152,7 @@ public:
 	void serialize(ByteArray* out, std::map<tiny_string, uint32_t>& stringMap,
 				std::map<const ASObject*, uint32_t>& objMap,
 				std::map<const Class_base*, uint32_t>& traitsMap);
+	virtual tiny_string toJSON(std::vector<ASObject *> &path,IFunction* replacer, const tiny_string &spaces,const tiny_string& filter);
 };
 
 

@@ -145,8 +145,7 @@ class NetStatusEvent: public Event
 private:
 	virtual Event* cloneImpl() const;
 public:
-	NetStatusEvent(Class_base* c):Event(c, "netStatus"){}
-	NetStatusEvent(Class_base* cb, const tiny_string& l, const tiny_string& c);
+	NetStatusEvent(Class_base* cb, const tiny_string& l="", const tiny_string& c="");
 	static void sinit(Class_base*);
 	static void buildTraits(ASObject* o)
 	{
@@ -223,6 +222,18 @@ public:
 	ASFUNCTION(_constructor);
 };
 
+class UncaughtErrorEvent: public ErrorEvent
+{
+public:
+	UncaughtErrorEvent(Class_base* c);
+	static void sinit(Class_base*);
+	static void buildTraits(ASObject* o)
+	{
+	}
+	ASFUNCTION(_constructor);
+};
+
+
 class ProgressEvent: public Event
 {
 private:
@@ -273,7 +284,8 @@ public:
 	ASFUNCTION_GETTER_SETTER(shiftKey);
 	ASPROPERTY_GETTER(number_t,stageX);
 	ASPROPERTY_GETTER(number_t,stageY);
-	ASPROPERTY_GETTER(_NR<InteractiveObject>,relatedObject);	
+	ASPROPERTY_GETTER(_NR<InteractiveObject>,relatedObject);
+	ASFUNCTION(updateAfterEvent);
 };
 
 class InvokeEvent: public Event
@@ -494,6 +506,17 @@ public:
 	ASFUNCTION(_constructor);
 };
 
+class VideoEvent: public Event
+{
+private:
+	Event* cloneImpl() const;
+public:
+	VideoEvent(Class_base* c);
+	static void sinit(Class_base*);
+	ASFUNCTION(_constructor);
+	ASPROPERTY_GETTER(tiny_string,status);
+};
+
 class StageVideoEvent: public Event
 {
 private:
@@ -517,5 +540,52 @@ public:
 	ASPROPERTY_GETTER(tiny_string,availability);
 };
 
+class ContextMenuEvent: public Event
+{
+public:
+	ContextMenuEvent(Class_base* c) : Event(c, "ContextMenuEvent") {}
+	static void sinit(Class_base*);
+	static void buildTraits(ASObject* o) {}
 };
+
+class TouchEvent: public Event
+{
+public:
+	TouchEvent(Class_base* c) : Event(c, "TouchEvent") {}
+	static void sinit(Class_base*);
+	static void buildTraits(ASObject* o) {}
+};
+
+class GestureEvent: public Event
+{
+public:
+	GestureEvent(Class_base* c, const tiny_string& t = "GestureEvent") : Event(c, t) {}
+	static void sinit(Class_base*);
+	static void buildTraits(ASObject* o) {}
+};
+
+class PressAndTapGestureEvent: public GestureEvent
+{
+public:
+	PressAndTapGestureEvent(Class_base* c) : GestureEvent(c, "PressAndTapGestureEvent") {}
+	static void sinit(Class_base*);
+	static void buildTraits(ASObject* o) {}
+};
+class TransformGestureEvent: public GestureEvent
+{
+public:
+	TransformGestureEvent(Class_base* c) : GestureEvent(c, "TransformGestureEvent") {}
+	static void sinit(Class_base*);
+	static void buildTraits(ASObject* o) {}
+};
+
+class UncaughtErrorEvents: public EventDispatcher
+{
+public:
+	UncaughtErrorEvents(Class_base* c);
+	static void sinit(Class_base*);
+	ASFUNCTION(_constructor);
+};
+
+}
 #endif /* SCRIPTING_FLASH_EVENTS_FLASHEVENTS_H */

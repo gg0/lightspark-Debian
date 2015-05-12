@@ -17,15 +17,20 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
+#include <cmath>
 #include "parsing/amf3_generator.h"
 #include "scripting/argconv.h"
 #include "scripting/toplevel/Integer.h"
+#include "scripting/flash/utils/ByteArray.h"
 
 using namespace std;
 using namespace lightspark;
 
 ASFUNCTIONBODY(Integer,_toString)
 {
+	if(Class<Integer>::getClass()->prototype->getObj() == obj)
+		return Class<ASString>::getInstanceS("0");
+
 	Integer* th=static_cast<Integer*>(obj);
 	int radix=10;
 	if(argslen==1)
@@ -190,13 +195,19 @@ tiny_string Integer::toString(int32_t val)
 
 void Integer::sinit(Class_base* c)
 {
-	c->isFinal = true;
-	c->setSuper(Class<ASObject>::getRef());
-	c->setConstructor(Class<IFunction>::getFunction(_constructor));
-	c->setVariableByQName("MAX_VALUE","",new (c->memoryAccount) Integer(c,numeric_limits<int32_t>::max()),CONSTANT_TRAIT);
-	c->setVariableByQName("MIN_VALUE","",new (c->memoryAccount) Integer(c,numeric_limits<int32_t>::min()),CONSTANT_TRAIT);
-	c->prototype->setVariableByQName("toString",AS3,Class<IFunction>::getFunction(Integer::_toString),DYNAMIC_TRAIT);
-	c->prototype->setVariableByQName("valueOf",AS3,Class<IFunction>::getFunction(_valueOf),DYNAMIC_TRAIT);
+	CLASS_SETUP(c, ASObject, _constructor, CLASS_SEALED | CLASS_FINAL);
+	c->setVariableByQName("MAX_VALUE","",abstract_i(numeric_limits<int32_t>::max()),CONSTANT_TRAIT);
+	c->setVariableByQName("MIN_VALUE","",abstract_i(numeric_limits<int32_t>::min()),CONSTANT_TRAIT);
+	c->setDeclaredMethodByQName("toString",AS3,Class<IFunction>::getFunction(_toString),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("toFixed",AS3,Class<IFunction>::getFunction(_toFixed,1),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("toExponential",AS3,Class<IFunction>::getFunction(_toExponential,1),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("toPrecision",AS3,Class<IFunction>::getFunction(_toPrecision,1),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("valueOf",AS3,Class<IFunction>::getFunction(_valueOf),NORMAL_METHOD,true);
+	c->prototype->setVariableByQName("toExponential","",Class<IFunction>::getFunction(Integer::_toExponential, 1),DYNAMIC_TRAIT);
+	c->prototype->setVariableByQName("toFixed","",Class<IFunction>::getFunction(Integer::_toFixed, 1),DYNAMIC_TRAIT);
+	c->prototype->setVariableByQName("toPrecision","",Class<IFunction>::getFunction(Integer::_toPrecision, 1),DYNAMIC_TRAIT);
+	c->prototype->setVariableByQName("toString","",Class<IFunction>::getFunction(Integer::_toString),DYNAMIC_TRAIT);
+	c->prototype->setVariableByQName("valueOf","",Class<IFunction>::getFunction(_valueOf),DYNAMIC_TRAIT);
 }
 
 void Integer::serialize(ByteArray* out, std::map<tiny_string, uint32_t>& stringMap,
@@ -213,7 +224,7 @@ void Integer::serialize(ByteArray* out, std::map<tiny_string, uint32_t>& stringM
 bool Integer::fromStringFlashCompatible(const char* cur, int64_t& ret, int radix)
 {
 	//Skip whitespace chars
-	while(g_unichar_isspace(g_utf8_get_char(cur)))
+	while(ASString::isEcmaSpace(g_utf8_get_char(cur)))
 		cur = g_utf8_next_char(cur);
 
 	int64_t multiplier=1;
@@ -251,8 +262,42 @@ int32_t Integer::stringToASInteger(const char* cur, int radix)
 	int64_t value;
 	bool valid=Integer::fromStringFlashCompatible(cur, value, 0);
 
-	if(valid==false || value<INT32_MIN || value>INT32_MAX)
+	if (!valid)
 		return 0;
 	else
-		return static_cast<int32_t>(value);
+		return static_cast<int32_t>(value & 0xFFFFFFFF);
+}
+
+ASFUNCTIONBODY(Integer,_toExponential)
+{
+	Integer *th=obj->as<Integer>();
+	double v = (double)th->val;
+	int32_t fractionDigits;
+	ARG_UNPACK(fractionDigits, 0);
+	if (argslen == 0 || args[0]->is<Undefined>())
+	{
+		if (v == 0)
+			fractionDigits = 1;
+		else
+			fractionDigits = imin(imax((int32_t)ceil(::log10(::fabs(v))), 1), 20);
+	}
+	return Class<ASString>::getInstanceS(Number::toExponentialString(v, fractionDigits));
+}
+
+ASFUNCTIONBODY(Integer,_toFixed)
+{
+	Integer *th=obj->as<Integer>();
+	int fractiondigits;
+	ARG_UNPACK (fractiondigits, 0);
+	return Class<ASString>::getInstanceS(Number::toFixedString(th->val, fractiondigits));
+}
+
+ASFUNCTIONBODY(Integer,_toPrecision)
+{
+	Integer *th=obj->as<Integer>();
+	if (argslen == 0 || args[0]->is<Undefined>())
+		return Class<ASString>::getInstanceS(th->toString());
+	int precision;
+	ARG_UNPACK (precision);
+	return Class<ASString>::getInstanceS(Number::toPrecisionString(th->val, precision));
 }

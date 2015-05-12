@@ -23,12 +23,21 @@
 
 #include "compat.h"
 
-#include <llvm/Module.h>
 #include <llvm/ExecutionEngine/ExecutionEngine.h>
+#ifndef LLVM_36
 #include <llvm/ExecutionEngine/JIT.h>
+#endif
 #include <llvm/PassManager.h>
-#include <llvm/LLVMContext.h>
-#ifdef HAVE_DATALAYOUT_H
+#ifdef HAVE_IR_DATALAYOUT_H
+#  include <llvm/IR/Module.h>
+#  include <llvm/IR/LLVMContext.h>
+#else
+#  include <llvm/Module.h>
+#  include <llvm/LLVMContext.h>
+#endif
+#ifdef HAVE_IR_DATALAYOUT_H
+#  include <llvm/IR/DataLayout.h>
+#elif defined HAVE_DATALAYOUT_H
 #  include <llvm/DataLayout.h>
 #else
 #  include <llvm/Target/TargetData.h>
@@ -39,7 +48,11 @@
 #include <llvm/Target/TargetSelect.h>
 #endif
 #include <llvm/Target/TargetOptions.h>
-#include <llvm/Analysis/Verifier.h>
+#ifdef HAVE_IR_VERIFIER_H
+#  include <llvm/IR/Verifier.h>
+#else
+#  include <llvm/Analysis/Verifier.h>
+#endif
 #include <llvm/Transforms/Scalar.h> 
 #include "logger.h"
 #include "swftypes.h"
@@ -49,24 +62,47 @@
 #include "swf.h"
 #include "scripting/toplevel/ASString.h"
 #include "scripting/toplevel/Date.h"
+#include "scripting/toplevel/JSON.h"
 #include "scripting/toplevel/Math.h"
 #include "scripting/toplevel/RegExp.h"
 #include "scripting/toplevel/Vector.h"
 #include "scripting/toplevel/XML.h"
 #include "scripting/toplevel/XMLList.h"
 #include "scripting/flash/accessibility/flashaccessibility.h"
+#include "scripting/flash/concurrent/Mutex.h"
+#include "scripting/flash/concurrent/Condition.h"
 #include "scripting/flash/desktop/flashdesktop.h"
 #include "scripting/flash/display/flashdisplay.h"
 #include "scripting/flash/display/BitmapData.h"
+#include "scripting/flash/display/Graphics.h"
+#include "scripting/flash/display/GraphicsBitmapFill.h"
+#include "scripting/flash/display/GraphicsEndFill.h"
+#include "scripting/flash/display/GraphicsGradientFill.h"
+#include "scripting/flash/display/GraphicsPath.h"
+#include "scripting/flash/display/GraphicsShaderFill.h"
+#include "scripting/flash/display/GraphicsSolidFill.h"
+#include "scripting/flash/display/GraphicsStroke.h"
+#include "scripting/flash/display/GraphicsTrianglePath.h"
+#include "scripting/flash/display/IGraphicsData.h"
+#include "scripting/flash/display/IGraphicsFill.h"
+#include "scripting/flash/display/IGraphicsPath.h"
+#include "scripting/flash/display/IGraphicsStroke.h"
 #include "scripting/flash/events/flashevents.h"
+#include "scripting/flash/filesystem/flashfilesystem.h"
 #include "scripting/flash/filters/flashfilters.h"
 #include "scripting/flash/net/flashnet.h"
 #include "scripting/flash/net/URLRequestHeader.h"
 #include "scripting/flash/net/URLStream.h"
 #include "scripting/flash/net/XMLSocket.h"
+#include "scripting/flash/net/NetStreamPlayOptions.h"
+#include "scripting/flash/net/NetStreamPlayTransitions.h"
+#include "scripting/flash/printing/flashprinting.h"
 #include "scripting/flash/system/flashsystem.h"
 #include "scripting/flash/sensors/flashsensors.h"
 #include "scripting/flash/utils/flashutils.h"
+#include "scripting/flash/utils/Dictionary.h"
+#include "scripting/flash/utils/Proxy.h"
+#include "scripting/flash/utils/Timer.h"
 #include "scripting/flash/geom/flashgeom.h"
 #include "scripting/flash/external/ExternalInterface.h"
 #include "scripting/flash/media/flashmedia.h"
@@ -75,6 +111,10 @@
 #include "scripting/flash/text/flashtext.h"
 #include "scripting/flash/text/flashtextengine.h"
 #include "scripting/flash/ui/Keyboard.h"
+#include "scripting/flash/ui/Mouse.h"
+#include "scripting/flash/ui/ContextMenu.h"
+#include "scripting/flash/ui/ContextMenuItem.h"
+#include "scripting/flash/ui/ContextMenuBuiltInItems.h"
 #include "scripting/class.h"
 #include "exceptions.h"
 #include "scripting/abc.h"
@@ -82,10 +122,10 @@
 using namespace std;
 using namespace lightspark;
 
-static GStaticPrivate is_vm_thread = G_STATIC_PRIVATE_INIT; /* TLS */
+DEFINE_AND_INITIALIZE_TLS(is_vm_thread);
 bool lightspark::isVmThread()
 {
-	return g_static_private_get(&is_vm_thread);
+	return GPOINTER_TO_INT(tls_get(&is_vm_thread));
 }
 
 DoABCTag::DoABCTag(RECORDHEADER h, std::istream& in):ControlTag(h)
@@ -196,13 +236,11 @@ void ABCVm::registerClasses()
 	builtin->registerBuiltin("Namespace","",Class<Namespace>::getRef());
 	builtin->registerBuiltin("AS3","",_MR(Class<Namespace>::getInstanceS(AS3)));
 	builtin->registerBuiltin("Date","",Class<Date>::getRef());
+	builtin->registerBuiltin("JSON","",Class<JSON>::getRef());
 	builtin->registerBuiltin("RegExp","",Class<RegExp>::getRef());
 	builtin->registerBuiltin("QName","",Class<ASQName>::getRef());
 	builtin->registerBuiltin("uint","",Class<UInteger>::getRef());
 	builtin->registerBuiltin("Vector","__AS3__.vec",_MR(Template<Vector>::getTemplate()));
-	//Some instances must be included, they are not created by AS3 code
-	builtin->registerBuiltin("Vector$Object","__AS3__.vec",Template<Vector>::getTemplateInstance(Class<ASObject>::getClass()));
-	builtin->registerBuiltin("Vector$Number","__AS3__.vec",Template<Vector>::getTemplateInstance(Class<Number>::getClass()));
 	builtin->registerBuiltin("Error","",Class<ASError>::getRef());
 	builtin->registerBuiltin("SecurityError","",Class<SecurityError>::getRef());
 	builtin->registerBuiltin("ArgumentError","",Class<ArgumentError>::getRef());
@@ -234,6 +272,10 @@ void ABCVm::registerClasses()
 
 	builtin->registerBuiltin("AccessibilityProperties","flash.accessibility",Class<AccessibilityProperties>::getRef());
 	builtin->registerBuiltin("AccessibilityImplementation","flash.accessibility",Class<AccessibilityImplementation>::getRef());
+	builtin->registerBuiltin("Accessibility","flash.accessibility",Class<Accessibility>::getRef());
+
+	builtin->registerBuiltin("Mutex","flash.concurrent",Class<ASMutex>::getRef());
+	builtin->registerBuiltin("Condition","flash.concurrent",Class<ASCondition>::getRef());
 
 	builtin->registerBuiltin("MovieClip","flash.display",Class<MovieClip>::getRef());
 	builtin->registerBuiltin("DisplayObject","flash.display",Class<DisplayObject>::getRef());
@@ -246,6 +288,20 @@ void ABCVm::registerClasses()
 	builtin->registerBuiltin("Shape","flash.display",Class<Shape>::getRef());
 	builtin->registerBuiltin("Stage","flash.display",Class<Stage>::getRef());
 	builtin->registerBuiltin("Graphics","flash.display",Class<Graphics>::getRef());
+	builtin->registerBuiltin("GraphicsBitmapFill","flash.display",Class<GraphicsBitmapFill>::getRef());
+	builtin->registerBuiltin("GraphicsEndFill","flash.display",Class<GraphicsEndFill>::getRef());
+	builtin->registerBuiltin("GraphicsGradientFill","flash.display",Class<GraphicsGradientFill>::getRef());
+	builtin->registerBuiltin("GraphicsPath","flash.display",Class<GraphicsPath>::getRef());
+	builtin->registerBuiltin("GraphicsPathCommand","flash.display",Class<GraphicsPathCommand>::getRef());
+	builtin->registerBuiltin("GraphicsPathWinding","flash.display",Class<GraphicsPathWinding>::getRef());
+	builtin->registerBuiltin("GraphicsShaderFill","flash.display",Class<GraphicsShaderFill>::getRef());
+	builtin->registerBuiltin("GraphicsSolidFill","flash.display",Class<GraphicsSolidFill>::getRef());
+	builtin->registerBuiltin("GraphicsStroke","flash.display",Class<GraphicsStroke>::getRef());
+	builtin->registerBuiltin("GraphicsTrianglePath","flash.display",Class<GraphicsTrianglePath>::getRef());
+	builtin->registerBuiltin("IGraphicsData","flash.display",InterfaceClass<IGraphicsData>::getRef());
+	builtin->registerBuiltin("IGraphicsFill","flash.display",InterfaceClass<IGraphicsFill>::getRef());
+	builtin->registerBuiltin("IGraphicsPath","flash.display",InterfaceClass<IGraphicsPath>::getRef());
+	builtin->registerBuiltin("IGraphicsStroke","flash.display",InterfaceClass<IGraphicsStroke>::getRef());
 	builtin->registerBuiltin("GradientType","flash.display",Class<GradientType>::getRef());
 	builtin->registerBuiltin("BlendMode","flash.display",Class<BlendMode>::getRef());
 	builtin->registerBuiltin("LineScaleMode","flash.display",Class<LineScaleMode>::getRef());
@@ -256,10 +312,6 @@ void ABCVm::registerClasses()
 	builtin->registerBuiltin("BitmapData","flash.display",Class<BitmapData>::getRef());
 	builtin->registerBuiltin("Bitmap","flash.display",Class<Bitmap>::getRef());
 	builtin->registerBuiltin("IBitmapDrawable","flash.display",InterfaceClass<IBitmapDrawable>::getRef());
-	builtin->registerBuiltin("GraphicsGradientFill","flash.display",
-			Class<ASObject>::getStubClass(QName("GraphicsGradientFill","flash.display")));
-	builtin->registerBuiltin("GraphicsPath","flash.display",
-			Class<ASObject>::getStubClass(QName("GraphicsPath","flash.display")));
 	builtin->registerBuiltin("MorphShape","flash.display",Class<MorphShape>::getRef());
 	builtin->registerBuiltin("SpreadMethod","flash.display",Class<SpreadMethod>::getRef());
 	builtin->registerBuiltin("InterpolationMethod","flash.display",Class<InterpolationMethod>::getRef());
@@ -270,24 +322,17 @@ void ABCVm::registerClasses()
 	builtin->registerBuiltin("BitmapDataChannel","flash.display",Class<BitmapDataChannel>::getRef());
 
 	builtin->registerBuiltin("BitmapFilter","flash.filters",Class<BitmapFilter>::getRef());
+	builtin->registerBuiltin("BitmapFilterQuality","flash.filters",Class<BitmapFilterQuality>::getRef());
 	builtin->registerBuiltin("DropShadowFilter","flash.filters",Class<DropShadowFilter>::getRef());
 	builtin->registerBuiltin("GlowFilter","flash.filters",Class<GlowFilter>::getRef());
-	builtin->registerBuiltin("GradientGlowFilter","flash.filters",
-			Class<ASObject>::getStubClass(QName("GradientGlowFilter","flash.filters"), Class<BitmapFilter>::getRef()));
-	builtin->registerBuiltin("BevelFilter","flash.filters",
-			Class<ASObject>::getStubClass(QName("BevelFilter","flash.filters"), Class<BitmapFilter>::getRef()));
-	builtin->registerBuiltin("ColorMatrixFilter","flash.filters",
-			Class<ASObject>::getStubClass(QName("ColorMatrixFilter","flash.filters"), Class<BitmapFilter>::getRef()));
-	builtin->registerBuiltin("BlurFilter","flash.filters",
-			Class<ASObject>::getStubClass(QName("BlurFilter","flash.filters"), Class<BitmapFilter>::getRef()));
-	builtin->registerBuiltin("ConvolutionFilter","flash.filters",
-			Class<ASObject>::getStubClass(QName("ConvolutionFilter","flash.filters"), Class<BitmapFilter>::getRef()));
-	builtin->registerBuiltin("DisplacementMapFilter","flash.filters",
-			Class<ASObject>::getStubClass(QName("DisplacementMapFilter","flash.filters"), Class<BitmapFilter>::getRef()));
-	builtin->registerBuiltin("GradientBevelFilter","flash.filters",
-			Class<ASObject>::getStubClass(QName("GradientBevelFilter","flash.filters"), Class<BitmapFilter>::getRef()));
-	builtin->registerBuiltin("ShaderFilter","flash.filters",
-			Class<ASObject>::getStubClass(QName("ShaderFilter","flash.filters"), Class<BitmapFilter>::getRef()));
+	builtin->registerBuiltin("GradientGlowFilter","flash.filters",Class<GradientGlowFilter>::getRef());
+	builtin->registerBuiltin("BevelFilter","flash.filters",Class<BevelFilter>::getRef());
+	builtin->registerBuiltin("ColorMatrixFilter","flash.filters",Class<ColorMatrixFilter>::getRef());
+	builtin->registerBuiltin("BlurFilter","flash.filters",Class<BlurFilter>::getRef());
+	builtin->registerBuiltin("ConvolutionFilter","flash.filters",Class<ConvolutionFilter>::getRef());
+	builtin->registerBuiltin("DisplacementMapFilter","flash.filters",Class<DisplacementMapFilter>::getRef());
+	builtin->registerBuiltin("GradientBevelFilter","flash.filters",Class<GradientBevelFilter>::getRef());
+	builtin->registerBuiltin("ShaderFilter","flash.filters",Class<ShaderFilter>::getRef());
 
 	builtin->registerBuiltin("AntiAliasType","flash.text",Class<AntiAliasType>::getRef());
 	builtin->registerBuiltin("Font","flash.text",Class<ASFont>::getRef());
@@ -303,15 +348,25 @@ void ABCVm::registerClasses()
 	builtin->registerBuiltin("TextFormat","flash.text",Class<TextFormat>::getRef());
 	builtin->registerBuiltin("TextFormatAlign","flash.text",Class<TextFormatAlign>::getRef());
 	builtin->registerBuiltin("TextLineMetrics","flash.text",Class<TextLineMetrics>::getRef());
+	builtin->registerBuiltin("TextInteractionMode","flash.text",Class<TextInteractionMode>::getRef());
 	builtin->registerBuiltin("StaticText","flash.text",Class<StaticText>::getRef());
 
 	builtin->registerBuiltin("ContentElement","flash.text.engine",Class<ContentElement>::getRef());
 	builtin->registerBuiltin("ElementFormat","flash.text.engine",Class<ElementFormat>::getRef());
 	builtin->registerBuiltin("FontDescription","flash.text.engine",Class<FontDescription>::getRef());
+	builtin->registerBuiltin("FontMetrics","flash.text.engine",Class<FontMetrics>::getRef());
+	builtin->registerBuiltin("FontLookup","flash.text.engine",Class<FontLookup>::getRef());
 	builtin->registerBuiltin("FontWeight","flash.text.engine",Class<FontWeight>::getRef());
+	builtin->registerBuiltin("Kerning","flash.text.engine",Class<Kerning>::getRef());
+	builtin->registerBuiltin("LineJustification","flash.text.engine",Class<LineJustification>::getRef());
+	builtin->registerBuiltin("TextBaseline","flash.text.engine",Class<TextBaseline>::getRef());
 	builtin->registerBuiltin("TextBlock","flash.text.engine",Class<TextBlock>::getRef());
 	builtin->registerBuiltin("TextElement","flash.text.engine",Class<TextElement>::getRef());
 	builtin->registerBuiltin("TextLine","flash.text.engine",Class<TextLine>::getRef());
+	builtin->registerBuiltin("TextLineValidity","flash.text.engine",Class<TextLineValidity>::getRef());
+	builtin->registerBuiltin("TextJustifier","flash.text.engine",Class<TextJustifier>::getRef());
+	builtin->registerBuiltin("SpaceJustifier","flash.text.engine",Class<SpaceJustifier>::getRef());
+	builtin->registerBuiltin("EastAsianJustifier","flash.text.engine",Class<EastAsianJustifier>::getRef());
 
 	builtin->registerBuiltin("XMLDocument","flash.xml",Class<XMLDocument>::getRef());
 	builtin->registerBuiltin("XMLNode","flash.xml",Class<XMLNode>::getRef());
@@ -323,10 +378,8 @@ void ABCVm::registerClasses()
 	builtin->registerBuiltin("Dictionary","flash.utils",Class<Dictionary>::getRef());
 	builtin->registerBuiltin("Proxy","flash.utils",Class<Proxy>::getRef());
 	builtin->registerBuiltin("Timer","flash.utils",Class<Timer>::getRef());
-	builtin->registerBuiltin("getQualifiedClassName","flash.utils",
-			_MR(Class<IFunction>::getFunction(getQualifiedClassName)));
-	builtin->registerBuiltin("getQualifiedSuperclassName","flash.utils",
-			_MR(Class<IFunction>::getFunction(getQualifiedSuperclassName)));
+	builtin->registerBuiltin("getQualifiedClassName","flash.utils",_MR(Class<IFunction>::getFunction(getQualifiedClassName)));
+	builtin->registerBuiltin("getQualifiedSuperclassName","flash.utils",_MR(Class<IFunction>::getFunction(getQualifiedSuperclassName)));
 	builtin->registerBuiltin("getDefinitionByName","flash.utils",_MR(Class<IFunction>::getFunction(getDefinitionByName)));
 	builtin->registerBuiltin("getTimer","flash.utils",_MR(Class<IFunction>::getFunction(getTimer)));
 	builtin->registerBuiltin("setInterval","flash.utils",_MR(Class<IFunction>::getFunction(setInterval)));
@@ -334,6 +387,8 @@ void ABCVm::registerClasses()
 	builtin->registerBuiltin("clearInterval","flash.utils",_MR(Class<IFunction>::getFunction(clearInterval)));
 	builtin->registerBuiltin("clearTimeout","flash.utils",_MR(Class<IFunction>::getFunction(clearTimeout)));
 	builtin->registerBuiltin("describeType","flash.utils",_MR(Class<IFunction>::getFunction(describeType)));
+	builtin->registerBuiltin("escapeMultiByte","flash.utils",_MR(Class<IFunction>::getFunction(escapeMultiByte)));
+	builtin->registerBuiltin("unescapeMultiByte","flash.utils",_MR(Class<IFunction>::getFunction(unescapeMultiByte)));
 	builtin->registerBuiltin("IExternalizable","flash.utils",InterfaceClass<IExternalizable>::getRef());
 	builtin->registerBuiltin("IDataInput","flash.utils",InterfaceClass<IDataInput>::getRef());
 	builtin->registerBuiltin("IDataOutput","flash.utils",InterfaceClass<IDataOutput>::getRef());
@@ -344,7 +399,8 @@ void ABCVm::registerClasses()
 	builtin->registerBuiltin("Transform","flash.geom",Class<Transform>::getRef());
 	builtin->registerBuiltin("Point","flash.geom",Class<Point>::getRef());
 	builtin->registerBuiltin("Vector3D","flash.geom",Class<Vector3D>::getRef());
-	builtin->registerBuiltin("Matrix3D","flash.geom",Class<ASObject>::getStubClass(QName("Matrix3D", "flash.geom")));
+	builtin->registerBuiltin("Matrix3D","flash.geom",Class<Matrix3D>::getRef());
+	builtin->registerBuiltin("PerspectiveProjection","flash.geom",Class<PerspectiveProjection>::getRef());
 
 	builtin->registerBuiltin("EventDispatcher","flash.events",Class<EventDispatcher>::getRef());
 	builtin->registerBuiltin("Event","flash.events",Class<Event>::getRef());
@@ -369,13 +425,24 @@ void ABCVm::registerClasses()
 	builtin->registerBuiltin("DRMStatusEvent","flash.events",Class<DRMStatusEvent>::getRef());
 	builtin->registerBuiltin("StageVideoEvent","flash.events",Class<StageVideoEvent>::getRef());
 	builtin->registerBuiltin("StageVideoAvailabilityEvent","flash.events",Class<StageVideoAvailabilityEvent>::getRef());
+	builtin->registerBuiltin("TouchEvent","flash.events",Class<TouchEvent>::getRef());
+	builtin->registerBuiltin("GestureEvent","flash.events",Class<GestureEvent>::getRef());
+	builtin->registerBuiltin("PressAndTapGestureEvent","flash.events",Class<PressAndTapGestureEvent>::getRef());
+	builtin->registerBuiltin("TransformGestureEvent","flash.events",Class<TransformGestureEvent>::getRef());
+	builtin->registerBuiltin("ContextMenuEvent","flash.events",Class<ContextMenuEvent>::getRef());
+	builtin->registerBuiltin("UncaughtErrorEvent","flash.events",Class<UncaughtErrorEvent>::getRef());
+	builtin->registerBuiltin("UncaughtErrorEvents","flash.events",Class<UncaughtErrorEvents>::getRef());
+	builtin->registerBuiltin("VideoEvent","flash.events",Class<VideoEvent>::getRef());
 
 	builtin->registerBuiltin("navigateToURL","flash.net",_MR(Class<IFunction>::getFunction(navigateToURL)));
 	builtin->registerBuiltin("sendToURL","flash.net",_MR(Class<IFunction>::getFunction(sendToURL)));
-	builtin->registerBuiltin("LocalConnection","flash.net",Class<ASObject>::getStubClass(QName("LocalConnection","flash.net")));
+	builtin->registerBuiltin("LocalConnection","flash.net",Class<LocalConnection>::getRef());
 	builtin->registerBuiltin("NetConnection","flash.net",Class<NetConnection>::getRef());
+	builtin->registerBuiltin("NetGroup","flash.net",Class<NetGroup>::getRef());
 	builtin->registerBuiltin("NetStream","flash.net",Class<NetStream>::getRef());
-	builtin->registerBuiltin("NetStreamPlayOptions","flash.net",Class<ASObject>::getStubClass(QName("NetStreamPlayOptions","flash.net")));
+	builtin->registerBuiltin("NetStreamAppendBytesAction","flash.net",Class<NetStreamAppendBytesAction>::getRef());
+	builtin->registerBuiltin("NetStreamPlayOptions","flash.net",Class<NetStreamPlayOptions>::getRef());
+	builtin->registerBuiltin("NetStreamPlayTransitions","flash.net",Class<NetStreamPlayTransitions>::getRef());
 	builtin->registerBuiltin("URLLoader","flash.net",Class<URLLoader>::getRef());
 	builtin->registerBuiltin("URLStream","flash.net",Class<URLStream>::getRef());
 	builtin->registerBuiltin("URLLoaderDataFormat","flash.net",Class<URLLoaderDataFormat>::getRef());
@@ -384,12 +451,16 @@ void ABCVm::registerClasses()
 	builtin->registerBuiltin("URLRequestMethod","flash.net",Class<URLRequestMethod>::getRef());
 	builtin->registerBuiltin("URLVariables","flash.net",Class<URLVariables>::getRef());
 	builtin->registerBuiltin("SharedObject","flash.net",Class<SharedObject>::getRef());
+	builtin->registerBuiltin("SharedObjectFlushStatus","flash.net",Class<SharedObjectFlushStatus>::getRef());
 	builtin->registerBuiltin("ObjectEncoding","flash.net",Class<ObjectEncoding>::getRef());
-	builtin->registerBuiltin("Socket","flash.net",Class<ASObject>::getStubClass(QName("Socket","flash.net")));
+	builtin->registerBuiltin("Socket","flash.net",Class<ASSocket>::getRef());
 	builtin->registerBuiltin("Responder","flash.net",Class<Responder>::getRef());
 	builtin->registerBuiltin("XMLSocket","flash.net",Class<XMLSocket>::getRef());
 	builtin->registerBuiltin("registerClassAlias","flash.net",_MR(Class<IFunction>::getFunction(registerClassAlias)));
 	builtin->registerBuiltin("getClassByAlias","flash.net",_MR(Class<IFunction>::getFunction(getClassByAlias)));
+
+	builtin->registerBuiltin("DRMManager","flash.net.drm",Class<DRMManager>::getRef());
+
 
 	builtin->registerBuiltin("fscommand","flash.system",_MR(Class<IFunction>::getFunction(fscommand)));
 	builtin->registerBuiltin("Capabilities","flash.system",Class<Capabilities>::getRef());
@@ -398,6 +469,7 @@ void ABCVm::registerClasses()
 	builtin->registerBuiltin("SecurityDomain","flash.system",Class<SecurityDomain>::getRef());
 	builtin->registerBuiltin("LoaderContext","flash.system",Class<LoaderContext>::getRef());
 	builtin->registerBuiltin("System","flash.system",Class<System>::getRef());
+	builtin->registerBuiltin("Worker","flash.system",Class<ASWorker>::getRef());
 
 	builtin->registerBuiltin("SoundTransform","flash.media",Class<SoundTransform>::getRef());
 	builtin->registerBuiltin("Video","flash.media",Class<Video>::getRef());
@@ -411,8 +483,10 @@ void ABCVm::registerClasses()
 	builtin->registerBuiltin("Keyboard","flash.ui",Class<Keyboard>::getRef());
 	builtin->registerBuiltin("KeyboardType","flash.ui",Class<KeyboardType>::getRef());
 	builtin->registerBuiltin("KeyLocation","flash.ui",Class<KeyLocation>::getRef());
-	builtin->registerBuiltin("ContextMenu","flash.ui",Class<ASObject>::getStubClass(QName("ContextMenu","flash.ui")));
-	builtin->registerBuiltin("ContextMenuItem","flash.ui",Class<ASObject>::getStubClass(QName("ContextMenuItem","flash.ui")));
+	builtin->registerBuiltin("ContextMenu","flash.ui",Class<ContextMenu>::getRef());
+	builtin->registerBuiltin("ContextMenuItem","flash.ui",Class<ContextMenuItem>::getRef());
+	builtin->registerBuiltin("ContextMenuBuiltInItems","flash.ui",Class<ContextMenuBuiltInItems>::getRef());
+	builtin->registerBuiltin("Mouse","flash.ui",Class<Mouse>::getRef());
 
 	builtin->registerBuiltin("Accelerometer", "flash.sensors",Class<Accelerometer>::getRef());
 
@@ -424,14 +498,14 @@ void ABCVm::registerClasses()
 	builtin->registerBuiltin("ScriptTimeoutError","flash.errors",Class<ScriptTimeoutError>::getRef());
 	builtin->registerBuiltin("StackOverflowError","flash.errors",Class<StackOverflowError>::getRef());
 
-	builtin->registerBuiltin("PrintJob","flash.printing",
-				 Class<ASObject>::getStubClass(QName("PrintJob","flash.printing"), Class<EventDispatcher>::getRef()));
-	builtin->registerBuiltin("PrintJobOptions","flash.printing",Class<ASObject>::getStubClass(QName("PrintJobOptions","flash.printing")));
-	builtin->registerBuiltin("PrintJobOrientation","flash.printing",Class<ASObject>::getStubClass(QName("PrintJobOrientation","flash.printing")));
+	builtin->registerBuiltin("PrintJob","flash.printing",Class<PrintJob>::getRef());
+	builtin->registerBuiltin("PrintJobOptions","flash.printing",Class<PrintJobOptions>::getRef());
+	builtin->registerBuiltin("PrintJobOrientation","flash.printing",Class<PrintJobOrientation>::getRef());
 
 	builtin->registerBuiltin("isNaN","",_MR(Class<IFunction>::getFunction(isNaN)));
 	builtin->registerBuiltin("isFinite","",_MR(Class<IFunction>::getFunction(isFinite)));
 	builtin->registerBuiltin("isXMLName","",_MR(Class<IFunction>::getFunction(_isXMLName)));
+
 
 	//If needed add AIR definitions
 	if(getSys()->flashMode==SystemState::AIR)
@@ -440,9 +514,11 @@ void ABCVm::registerClasses()
 
 		builtin->registerBuiltin("InvokeEvent","flash.events",Class<InvokeEvent>::getRef());
 
-		builtin->registerBuiltin("FileStream","flash.filesystem",
-				Class<ASObject>::getStubClass(QName("FileStream","flash.filestream")));
+		builtin->registerBuiltin("FileStream","flash.filesystem",Class<FileStream>::getRef());
 	}
+
+	Class_object::getRef()->getClass()->prototype = _MNR(new_objectPrototype());
+	Class_object::getRef()->getClass()->initStandardProps();
 
 	getSys()->systemDomain->registerGlobalScope(builtin);
 }
@@ -623,6 +699,8 @@ multiname* ABCContext::s_getMultiname(ABCContext* th, ASObject* n, ASObject* n2,
  */
 multiname* ABCContext::getMultinameImpl(ASObject* n, ASObject* n2, unsigned int midx)
 {
+	if (constant_pool.multiname_count == 0)
+		return NULL;
 	multiname* ret;
 	multiname_info* m=&constant_pool.multinames[midx];
 
@@ -701,6 +779,16 @@ multiname* ABCContext::getMultinameImpl(ASObject* n, ASObject* n2, unsigned int 
 				{
 					multiname_info* p=&constant_pool.multinames[m->param_types[i]];
 					name += "$";
+					tiny_string nsname;
+					if (p->ns < constant_pool.namespaces.size())
+					{
+						// TODO there's no documentation about how to handle derived classes
+						// We just prepend the namespace to the template class, so we can find it when needed
+						namespace_info nsi = constant_pool.namespaces[p->ns];
+						nsname = getString(nsi.name);
+						if (nsname != "")
+							name += nsname+"$";
+					}
 					name += getString(p->name);
 				}
 				ret->ns.push_back(nsNameAndKind(this, td->ns));
@@ -740,10 +828,16 @@ multiname* ABCContext::getMultinameImpl(ASObject* n, ASObject* n2, unsigned int 
 			if (n->is<ASQName>())
 			{
 				ASQName *qname = n->as<ASQName>();
+				// don't overwrite any static parts
+				if (!m->dynamic)
+					m->dynamic=new (getVm()->vmDataMemory) multiname(getVm()->vmDataMemory);
+				ret=m->dynamic;
+				ret->isAttribute=m->cached->isAttribute;
 				ret->ns.clear();
 				ret->ns.push_back(nsNameAndKind(qname->getURI(),NAMESPACE));
 			}
-
+			else
+				n->applyProxyProperty(*ret);
 			ret->setName(n);
 			n->decRef();
 			break;
@@ -754,9 +848,8 @@ multiname* ABCContext::getMultinameImpl(ASObject* n, ASObject* n2, unsigned int 
 			assert(n && !n2);
 			assert_and_throw(n->classdef==Class<Namespace>::getClass());
 			Namespace* tmpns=static_cast<Namespace*>(n);
-			//TODO: What is the right kind?
 			ret->ns.clear();
-			ret->ns.push_back(nsNameAndKind(tmpns->uri,NAMESPACE));
+			ret->ns.push_back(nsNameAndKind(tmpns->uri,tmpns->nskind));
 			n->decRef();
 			break;
 		}
@@ -767,7 +860,7 @@ multiname* ABCContext::getMultinameImpl(ASObject* n, ASObject* n2, unsigned int 
 			assert_and_throw(n2->classdef==Class<Namespace>::getClass());
 			Namespace* tmpns=static_cast<Namespace*>(n2);
 			ret->ns.clear();
-			ret->ns.push_back(nsNameAndKind(tmpns->uri,NAMESPACE));
+			ret->ns.push_back(nsNameAndKind(tmpns->uri,tmpns->nskind));
 			ret->setName(n);
 			n->decRef();
 			n2->decRef();
@@ -1254,7 +1347,7 @@ Class_inherit* ABCVm::findClassInherit(const string& s, RootMovieClip* root)
 	Class_inherit* derived_class_tmp=static_cast<Class_inherit*>(derived_class);
 	if(derived_class_tmp->isBinded())
 	{
-		LOG(LOG_ERROR, "Class already binded to a tag. Not binding");
+		LOG(LOG_ERROR, "Class already binded to a tag. Not binding:"<<s<< " class:"<<derived_class_tmp->getQualifiedClassName());
 		return NULL;
 	}
 	return derived_class_tmp;
@@ -1450,6 +1543,19 @@ void ABCContext::runScriptInit(unsigned int i, ASObject* g)
 		ret->decRef();
 
 	entry->decRef();
+	
+	// initialize vars where type was not known during script init
+	// this may happen for variables of private classes defined in this script
+	LOG(LOG_CALLS,"initialize uninitialized vars");
+	auto it = uninitializedVars.begin();
+	while (it != uninitializedVars.end())
+	{
+		uninitializedVar v = *it;
+		v.mainObj->initializeVariableByMultiname(*v.mname,NULL,v.typemname,this,v.traitKind,true);
+		v.mainObj->decRef();
+		uninitializedVars.pop_front();
+		it = uninitializedVars.begin();
+	}
 	LOG(LOG_CALLS, "Finished script init for script " << i );
 }
 
@@ -1460,13 +1566,15 @@ void ABCVm::Run(ABCVm* th)
 	while(getVm()!=th);
 
 	/* set TLS variable for isVmThread() */
-        g_static_private_set(&is_vm_thread,(void*)1,NULL);
+        tls_set(&is_vm_thread, GINT_TO_POINTER(1));
 
 	if(th->m_sys->useJit)
 	{
 #ifdef LLVM_31
 		llvm::TargetOptions Opts;
+#ifndef LLVM_34
 		Opts.JITExceptionHandling = true;
+#endif
 #else
 		llvm::JITExceptionHandling = true;
 #endif
@@ -1479,7 +1587,11 @@ void ABCVm::Run(ABCVm* th)
 #endif
 		llvm::InitializeNativeTarget();
 		th->module=new llvm::Module(llvm::StringRef("abc jit"),th->llvm_context());
+#ifdef LLVM_36
+		llvm::EngineBuilder eb(std::unique_ptr<llvm::Module>(th->module));
+#else
 		llvm::EngineBuilder eb(th->module);
+#endif
 		eb.setEngineKind(llvm::EngineKind::JIT);
 #ifdef LLVM_31
 		eb.setTargetOptions(Opts);
@@ -1489,10 +1601,16 @@ void ABCVm::Run(ABCVm* th)
 		assert_and_throw(th->ex);
 
 		th->FPM=new llvm::FunctionPassManager(th->module);
-#ifdef HAVE_DATALAYOUT_H
+#ifdef LLVM_36
+		th->FPM->add(new llvm::DataLayoutPass());
+#else
+#ifdef LLVM_35
+		th->FPM->add(new llvm::DataLayoutPass(*th->ex->getDataLayout()));
+#elif defined HAVE_DATALAYOUT_H || defined HAVE_IR_DATALAYOUT_H
 		th->FPM->add(new llvm::DataLayout(*th->ex->getDataLayout()));
 #else
 		th->FPM->add(new llvm::TargetData(*th->ex->getTargetData()));
+#endif
 #endif
 #ifdef EXPENSIVE_DEBUG
 		//This is pretty heavy, do not enable in release
@@ -1848,8 +1966,13 @@ ASObject* ABCContext::getConstant(int kind, int index)
 		case 0x06: //Double
 			return abstract_d(constant_pool.doubles[index]);
 		case 0x08: //Namespace
+		{
 			assert_and_throw(constant_pool.namespaces[index].name);
-			return Class<Namespace>::getInstanceS(getString(constant_pool.namespaces[index].name));
+			Namespace* ret = Class<Namespace>::getInstanceS(getString(constant_pool.namespaces[index].name));
+			if (constant_pool.namespaces[index].kind != 0)
+				ret->nskind =(NS_KIND)(int)(constant_pool.namespaces[index].kind);
+			return ret;
+		}
 		case 0x0a: //False
 			return abstract_b(false);
 		case 0x0b: //True
@@ -1864,6 +1987,23 @@ ASObject* ABCContext::getConstant(int kind, int index)
 	}
 }
 
+void ABCContext::addUninitializedVar(uninitializedVar &v)
+{
+	auto it = uninitializedVars.begin();
+	bool bfound = false;
+	while (it != uninitializedVars.end())
+	{
+		if (it->mainObj == v.mainObj && it->mname == v.mname)
+		{
+			bfound = true;
+			break;
+		}
+		it++;
+	}
+	if (!bfound)
+		uninitializedVars.push_back(v);
+}
+
 void ABCContext::buildTrait(ASObject* obj, const traits_info* t, bool isBorrowed, int scriptid)
 {
 	multiname* mname=getMultiname(t->name,NULL);
@@ -1873,7 +2013,7 @@ void ABCContext::buildTrait(ASObject* obj, const traits_info* t, bool isBorrowed
 		LOG(LOG_CALLS,_("Next slot has flags ") << (t->kind>>4));
 
 	if(t->kind&traits_info::Metadata)
-        {
+	{
 		for(unsigned int i=0;i<t->metadata_count;i++)
 		{
 			metadata_info& minfo = metadata[t->metadata[i]];
@@ -1894,10 +2034,10 @@ void ABCContext::buildTrait(ASObject* obj, const traits_info* t, bool isBorrowed
 				return;
 			ASObject* ret;
 
+			QName className(getSys()->getStringFromUniqueId(mname->name_s_id),mname->ns[0].getImpl().name);
 			//check if this class has the 'interface' flag, i.e. it is an interface
 			if((instances[t->classi].flags)&0x04)
 			{
-				QName className(getSys()->getStringFromUniqueId(mname->name_s_id),mname->ns[0].getImpl().name);
 
 				MemoryAccount* memoryAccount = getSys()->allocateMemoryAccount(className.name);
 				Class_inherit* ci=new (getSys()->unaccountedMemory) Class_inherit(className, memoryAccount);
@@ -1938,13 +2078,27 @@ void ABCContext::buildTrait(ASObject* obj, const traits_info* t, bool isBorrowed
 				//do interfaces have cinit methods?
 				//TODO: call them, set constructor property, do something
 				if(classes[t->classi].cinit != 0)
-					LOG(LOG_NOT_IMPLEMENTED,"Interface cinit (static)");
+				{
+					method_info* m=&methods[classes[t->classi].cinit];
+					if (m->body)
+						LOG(LOG_NOT_IMPLEMENTED,"Interface cinit (static):"<<className);
+				}
 				if(instances[t->classi].init != 0)
-					LOG(LOG_NOT_IMPLEMENTED,"Interface cinit (constructor)");
+				{
+					method_info* m=&methods[instances[t->classi].init];
+					if (m->body)
+						LOG(LOG_NOT_IMPLEMENTED,"Interface cinit (constructor):"<<className);
+				}
 				ret = ci;
 			}
 			else
-				ret=getSys()->getUndefinedRef();
+			{
+				MemoryAccount* memoryAccount = getSys()->allocateMemoryAccount(className.name);
+				Class_inherit* c=new (getSys()->unaccountedMemory) Class_inherit(className, memoryAccount);
+				root->applicationDomain->classesBeingDefined.insert(make_pair(mname, c));
+				ret=c;
+			}
+
 
 			obj->setVariableByQName(mname->name_s_id,mname->ns[0],ret,DECLARED_TRAIT);
 
@@ -1957,7 +2111,7 @@ void ABCContext::buildTrait(ASObject* obj, const traits_info* t, bool isBorrowed
 		case traits_info::Setter:
 		case traits_info::Method:
 		{
-			//methods can also be defined at toplevel (not only traits_info::Function!)
+		//methods can also be defined at toplevel (not only traits_info::Function!)
 			if(kind == traits_info::Getter)
 				LOG(LOG_CALLS,"Getter trait: " << *mname << _(" #") << t->method);
 			else if(kind == traits_info::Setter)
@@ -2020,10 +2174,12 @@ void ABCContext::buildTrait(ASObject* obj, const traits_info* t, bool isBorrowed
 
 			LOG(LOG_CALLS,_("Const ") << *mname <<_(" type ")<< *tname<< " = " << ret->toDebugString());
 
-			obj->initializeVariableByMultiname(*mname, ret, tname, this, CONSTANT_TRAIT);
+			obj->initializeVariableByMultiname(*mname, ret, tname, this, CONSTANT_TRAIT,false);
 
 			if(t->slot_id)
 				obj->initSlot(t->slot_id, *mname);
+			//else // slot_id 0 seems to mean appending new slot
+			//	obj->appendSlot(*mname);
 			break;
 		}
 		case traits_info::Slot:
@@ -2038,20 +2194,21 @@ void ABCContext::buildTrait(ASObject* obj, const traits_info* t, bool isBorrowed
 			if(t->vindex)
 			{
 				ret=getConstant(t->vkind,t->vindex);
-				LOG(LOG_CALLS,_("Slot ") << t->slot_id << ' ' << *mname <<_(" type ")<<*tname<< " = " << ret->toDebugString() );
+				LOG(LOG_CALLS,_("Slot ") << t->slot_id << ' ' << *mname <<_(" type ")<<*tname<< " = " << ret->toDebugString() <<" "<<isBorrowed);
 			}
 			else
 			{
-				LOG(LOG_CALLS,_("Slot ")<< t->slot_id<<  _(" vindex 0 ") << *mname <<_(" type ")<<*tname);
-				//The Undefined is coerced to the right type by the initializeVar..
-				ret = getSys()->getUndefinedRef();
+				LOG(LOG_CALLS,_("Slot ")<< t->slot_id<<  _(" vindex 0 ") << *mname <<_(" type ")<<*tname<<" "<<isBorrowed);
+				ret = NULL;
 			}
 
-			obj->initializeVariableByMultiname(*mname, ret, tname, this, DECLARED_TRAIT);
+			obj->initializeVariableByMultiname(*mname, ret, tname, this, isBorrowed ? INSTANCE_TRAIT : DECLARED_TRAIT,false);
 
 			if(t->slot_id)
 				obj->initSlot(t->slot_id, *mname);
-
+			//else // slot_id 0 seems to mean appending new slot
+			//	obj->appendSlot(*mname);
+			
 			break;
 		}
 		default:

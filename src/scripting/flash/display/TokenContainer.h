@@ -24,6 +24,7 @@
 #include "backends/geometry.h"
 #include "backends/graphics.h"
 #include "scripting/flash/display/DisplayObject.h"
+#include "scripting/flash/display/Graphics.h"
 
 namespace lightspark
 {
@@ -49,7 +50,8 @@ public:
 	static void FromShaperecordListToShapeVector(const std::vector<SHAPERECORD>& shapeRecords,
 					 tokensVector& tokens, const std::list<FILLSTYLE>& fillStyles,
 					 const MATRIX& matrix = MATRIX());
-	void getTextureSize(int *width, int *height) const;
+	static void getTextureSize(std::vector<GeomToken>& tokens, int *width, int *height);
+	uint16_t getCurrentLineWidth() const;
 	float scaling;
 protected:
 	TokenContainer(DisplayObject* _o);

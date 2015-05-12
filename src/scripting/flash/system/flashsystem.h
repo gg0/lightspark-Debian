@@ -22,7 +22,9 @@
 
 #include "compat.h"
 #include "asobject.h"
-#include "scripting/flash/utils/flashutils.h"
+#include "scripting/flash/utils/ByteArray.h"
+#include "scripting/toplevel/toplevel.h"
+#include "scripting/flash/events/flashevents.h"
 
 namespace lightspark
 {
@@ -48,6 +50,7 @@ public:
 	ASFUNCTION(_getServerString);
 	ASFUNCTION(_getScreenResolutionX);
 	ASFUNCTION(_getScreenResolutionY);
+	ASFUNCTION(_getHasAccessibility);
 };
 
 class ApplicationDomain: public ASObject
@@ -57,6 +60,8 @@ private:
 public:
 	ApplicationDomain(Class_base* c, _NR<ApplicationDomain> p=NullRef);
 	void finalize();
+	std::map<const multiname*, Class_base*> classesBeingDefined;
+
 	static void sinit(Class_base* c);
 	static void buildTraits(ASObject* o);
 	void registerGlobalScope(Global* scope);
@@ -102,12 +107,17 @@ public:
 class LoaderContext: public ASObject
 {
 public:
-	LoaderContext(Class_base* c):ASObject(c){};
+	LoaderContext(Class_base* c);
 	static void sinit(Class_base* c);
 	ASFUNCTION(_constructor);
+	ASPROPERTY_GETTER_SETTER(bool, allowCodeImport);
 	ASPROPERTY_GETTER_SETTER(_NR<ApplicationDomain>, applicationDomain);
+	ASPROPERTY_GETTER_SETTER(bool, checkPolicyFile);
+	ASPROPERTY_GETTER_SETTER(_NR<ASObject>, parameters);
 	ASPROPERTY_GETTER_SETTER(_NR<SecurityDomain>, securityDomain);
 	void finalize();
+	bool getAllowCodeImport();
+	bool getCheckPolicyFile();
 };
 
 class SecurityDomain: public ASObject
@@ -132,6 +142,7 @@ public:
 	ASFUNCTION(allowInsecureDomain);
 	ASFUNCTION(loadPolicyFile);
 	ASFUNCTION(showSettings);
+	ASFUNCTION(pageDomain);
 };
 
 ASObject* fscommand(ASObject* obj,ASObject* const* args, const unsigned int argslen);
@@ -143,6 +154,13 @@ public:
 	static void sinit(Class_base* c);
 	ASFUNCTION(totalMemory);
 };
-
+class ASWorker: public EventDispatcher
+{
+public:
+	ASWorker(Class_base* c);
+	static void sinit(Class_base*);
+	ASFUNCTION(_getCurrent);
 };
+
+}
 #endif /* SCRIPTING_FLASH_SYSTEM_FLASHSYSTEM_H */

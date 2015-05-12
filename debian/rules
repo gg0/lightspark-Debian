@@ -8,6 +8,8 @@ ifeq ($(DEB_HOST_ARCH),powerpcspe)
 	CONFFLAGS += -DDISABLE_ALTIVEC=TRUE
 endif
 
+UVER := $(shell dpkg-parsechangelog|sed -n '/^Version/{s/Version: \(.*\)/\1/p}'|cut -f1 -d-)
+
 %:
 	dh $@ --parallel
 
@@ -30,3 +32,12 @@ override_dh_shlibdeps:
 
 override_dh_makeshlibs:
 	dh_makeshlibs -X/usr/lib/lightspark
+
+VER = $(UVER)+git$(shell date -u '+%Y%m%d')
+TMPDIR = lightspark-$(VER)
+get-orig-source:
+	@echo Git cloning lightspark $(VER)...
+	git clone --depth 1 https://github.com/lightspark/lightspark.git $(TMPDIR)
+	@echo Generating tarball...
+	cd $(TMPDIR) && tar --exclude .git -Jcf ../../lightspark_$(VER).orig.tar.xz .
+	rm -rf $(TMPDIR) && dch -v $(VER)-1 "New upstream snapshot."

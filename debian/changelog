@@ -1,6 +1,7 @@
 lightspark (0.7.2+git20150512-1) UNRELEASED; urgency=medium
 
   * New upstream snapshot.
+  * Add libedit-dev build dependency.
   * Remove fix-for-llvm3[345] and libav10 patches.
   * Add patch to fix build, undefined var in assertion.
 

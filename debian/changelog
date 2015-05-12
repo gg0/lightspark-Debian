@@ -1,6 +1,8 @@
 lightspark (0.7.2+git20150512-1) UNRELEASED; urgency=medium
 
   * New upstream snapshot.
+  * Remove fix-for-llvm3[345] and libav10 patches.
+  * Add patch to fix build, undefined var in assertion.
 
  -- Gabriele Giacone <1o5g4r8o@gmail.com>  Tue, 12 May 2015 15:03:34 +0200
 

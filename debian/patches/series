@@ -1,4 +1,5 @@
-fix-for-llvm33.patch
-fix-for-llvm34.patch
-fix-for-llvm35.patch
-libav10.patch
+#fix-for-llvm33.patch
+#fix-for-llvm34.patch
+#fix-for-llvm35.patch
+#libav10.patch
+assert.patch

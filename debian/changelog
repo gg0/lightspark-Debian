@@ -1,5 +1,6 @@
-lightspark (0.7.2+git20150512-1) UNRELEASED; urgency=medium
+lightspark (0.7.2+git20150512-1) unstable; urgency=medium
 
+  * Team upload.
   * New upstream snapshot.
   * Add libedit-dev build dependency.
   * Bump Standards-Version to 3.9.6 (no changes).
